@@ -270,7 +270,7 @@ bash ralph/ralph-afk.sh <prd-folder-a> <prd-folder-b>
 bash ralph/ralph-afk.sh --help
 ```
 
-This runs each iteration inside a **Docker sandbox** (isolated filesystem, no footguns) via `docker sandbox run copilot . -- --yolo --output-format json -p "..."`. The loop:
+This runs each iteration inside a **Docker Sandbox** (isolated microVM — own daemon, filesystem, and network) via `sbx run copilot . -- --yolo --output-format json -p "..."`. The loop:
 1. Picks next unblocked AFK issue
 2. Implements with TDD in a git work tree (isolated branch)
 3. Runs an automated **reviewer** pass in a fresh context (smart zone review, not dumb zone)
@@ -411,7 +411,7 @@ The runner scripts are intentionally thin. The two places that encode stack assu
 Beyond that, the scripts only assume:
 - `git` is available and the repo has at least one commit
 - `copilot` CLI is on your `PATH`
-- For `ralph-afk.sh`: `docker sandbox run copilot ...` is configured
+- For `ralph-afk.sh`: [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/get-started/) (`sbx`) is installed, the `sandboxd` daemon is running, you've signed in (`sbx login`), and a GitHub token is stored as the `github` secret (`echo "$(gh auth token)" | sbx secret set -g github`)
 - For `ralph-afk.sh`: `jq` is on your `PATH` (used for streaming + sentinel detection)
 
 ---
@@ -439,6 +439,8 @@ Don't stuff it with 250k tokens of context — you'll start every session alread
 | Type errors on every commit | Schema migration ran but app tables not updated | Run your project's migrate command before running the app |
 | PRD doc rot influencing bad agent decisions | Old PRD left in `prds/` after feature shipped | Mark as closed/archive; don't let stale docs accumulate |
 | `ralph-afk.sh` exits immediately with "No issues found" | `issues/` doesn't exist or all issues are under `done/` | Run `/prd-to-issues` first, or pass an explicit `<prd-folder>` that has open issues |
+| `ralph-afk.sh` fails with `sbx: command not found` or `daemon not reachable` | Docker Sandboxes not installed or daemon not running | `brew install docker/tap/sbx`, then `sbx daemon start -d` (or set up a launchd agent for auto-start), then `sbx login` |
+| Copilot CLI inside the sandbox can't auth | No GitHub token in sandbox secrets | `echo "$(gh auth token)" | sbx secret set -g github` (host token is injected via proxy, never stored inside the sandbox) |
 
 ---
 

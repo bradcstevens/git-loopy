@@ -62,7 +62,7 @@ while true; do
   [ -z "$issues" ] && issues="No issues found"
   prompt=$(cat ralph/prompt.md)
 
-  docker sandbox run copilot . -- \
+  sbx run copilot . -- \
     --model claude-opus-4.7-xhigh \
     --yolo \
     --output-format json \
