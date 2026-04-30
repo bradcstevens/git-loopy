@@ -307,13 +307,12 @@ Both scripts shell out to the GitHub Copilot CLI, which lets you pin a model wit
 |---|---|
 | `gpt-5.5` | Strong, fast generalist. Good default for `ralph-once.sh` when you want quick TDD iterations and don't need Opus-level long-form reasoning. Use for issue triage, scaffolding, and small vertical slices where latency matters more than depth. |
 | `claude-opus-4.7` | Baseline Opus 4.7. Best general-purpose **AFK implementer** — deep reasoning over a normal context window with predictable cost. Solid choice for `ralph-afk.sh` when issues are well-scoped and individually fit inside the smart zone (~100k tokens). |
-| `claude-opus-4.7-1m-internal` | 1M-token context window (internal). Use when a single iteration genuinely needs to ingest a huge surface — e.g. a kanban scoped to many PRDs at once, large monorepos, big migrations, or sweeping refactors that touch many modules. Remember: 1M ≠ smart zone. Treat the extra context as recall, not reasoning headroom. |
 | `claude-opus-4.7-high` | Opus 4.7 with **high reasoning effort**. Use for the **automated reviewer pass** in `ralph-afk.sh`, gnarly debugging iterations, or issues with non-trivial architecture decisions where you'd rather burn tokens than ship a wrong design. |
 | `claude-opus-4.7-xhigh` | Opus 4.7 with **extra-high reasoning effort** (current default in both scripts). Pull this out for the hardest iterations — first vertical slice of a feature, schema/migration design, deep-module redesigns, or when an earlier iteration produced subtly wrong output and you want maximum think-time on the retry. Slowest and most expensive; use deliberately. |
 
 Rules of thumb:
 - **Implementer ≠ reviewer.** If you can afford it, run the implementer on `claude-opus-4.7` and the reviewer on `claude-opus-4.7-high` so the reviewer is structurally smarter than the code it's reviewing.
-- **Match model to context size.** Don't reach for `-1m-internal` unless the prompt actually requires it; bigger context = slower response and more dumb-zone risk.
+- **Match model to context size.** Bigger context windows mean slower responses and more dumb-zone risk; only escalate when the prompt actually requires it.
 - **Escalate, don't camp.** Start `ralph-once.sh` runs on `gpt-5.5` or `claude-opus-4.7`; only graduate to `-high` / `-xhigh` for iterations that fail or for genuinely hard issues.
 - **Tag the model in the prompt.** When you change models, mention it in the AFK prompt so the agent's self-talk matches its capability ceiling.
 
