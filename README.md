@@ -67,8 +67,9 @@ You don't need to use every phase. The skills are independent — pick what help
 │   └── tdd/SKILL.md
 ├── ralph/
 │   ├── once.sh         # Single sandboxed pass; raw Copilot output (use to debug or for the first run)
-│   ├── afk.sh          # Autonomous loop in Docker Sandboxes; exits on <promise>NO MORE TASKS</promise> or iteration cap
-│   └── prompt.md             # Shared agent prompt used by both scripts
+│   ├── afk.sh          # Autonomous loop on the local host; exits on <promise>NO MORE TASKS</promise> or iteration cap
+│   ├── grill.sh        # Autonomous /grill-me → /write-prd → /prd-to-issues runner on the local host
+│   └── prompt.md             # Shared agent prompt used by once.sh / afk.sh
 └── README.md
 ```
 
@@ -220,6 +221,69 @@ This is cheap to do and important. Look for:
 - **Parallelizability** — can issues 2 and 3 run simultaneously after issue 1?
 
 Correct horizontal slices before proceeding. The kanban structure turns your sequential plan into a DAG — that's what enables parallel agents later.
+
+---
+
+## Automating Phases 1–3 (`ralph/grill.sh`)
+
+`ralph/grill.sh` runs the full alignment-to-kanban path (`/grill-me` → `/write-prd` → `/prd-to-issues`) end-to-end, autonomously, in a single command. The agent acts as both interviewer and answerer — it presents its recommended answer for every branch of the design tree and accepts it as the chosen direction.
+
+Use it when you want an unattended first pass on a well-formed brief. Use the manual phases above when you actually need your own taste in the loop.
+
+### How it maps to the manual phases
+
+| Manual phase | `grill.sh` step | Session strategy |
+|---|---|---|
+| Phase 1 — `/grill-me` | Looped, exits on `<promise>GRILLING COMPLETE</promise>` | **Same** named session every iteration so design context accumulates |
+| (extra) Validation turn | One resume turn asking the agent to list/resolve any open decisions before producing the PRD | Same session — guards against a premature `GRILLING COMPLETE` |
+| Phase 2 — `/write-prd` | Single turn; agent emits `<prd-path>/abs/path.md</prd-path>` | Same session — grill context still loaded |
+| Phase 3 — `/prd-to-issues` | Looped, exits on `<promise>ISSUES COMPLETE</promise>` | **New** session — fresh Memento-Model start for the kanban step, same as the manual workflow |
+
+### How to run it
+
+```bash
+# From a starting brief file
+bash ralph/grill.sh client-brief.md
+
+# Or from a literal quote
+bash ralph/grill.sh "Build a recipes app for amateur chefs"
+
+# Cap the grill loop at 30 iterations (default is unlimited)
+bash ralph/grill.sh client-brief.md 30
+
+# Override model / reasoning effort (same env vars as afk.sh)
+MODEL=gpt-5.4 EFFORT=high bash ralph/grill.sh client-brief.md
+
+# Cap the /prd-to-issues loop too (env, default unlimited)
+MAX_ISSUES_ITERS=10 bash ralph/grill.sh client-brief.md
+```
+
+If `<file-or-quote>` resolves to an existing file, the agent is told to read it for context. Otherwise the value is treated as a verbatim quote and embedded in the kickoff prompt.
+
+### What gets written
+
+- One PRD at `prds/<YYYY-MM-DD>-<core-name>-prd.md` (path chosen by `/write-prd`'s output rules; the script captures the absolute path the agent emits and verifies the file exists).
+- One folder of issue files at `issues/<core-name>/NNN-*.md`, written by `/prd-to-issues`.
+
+### Recovery
+
+If a cap is hit before completion, the script exits non-zero and prints the session name. Resume manually:
+
+```bash
+copilot --resume="grill-20260501-153012-12345"
+```
+
+A single-run lock (`.ralph-grill.lock`) prevents two concurrent runs from racing on `prds/` and `issues/`. Remove the directory by hand if a previous run was killed and left it behind.
+
+### When to fall back to the manual workflow
+
+`grill.sh` deliberately strips the human-in-the-loop safety. Stay on the manual phases when:
+
+- The brief is fuzzy and you genuinely don't know the answers — let `/grill-me` interview *you*, not itself.
+- Slice boundaries in the kanban are non-obvious and you want to review the proposed cut before issue files land.
+- You're working in an unfamiliar codebase and want the agent's exploration to surface as questions for you, not as silent auto-accepts.
+
+The output from `grill.sh` is still cheap to review — scan the PRD's modules section and the issue list before kicking off `afk.sh`, same as you would after the manual workflow.
 
 ---
 
@@ -491,7 +555,8 @@ Beyond that, the scripts only assume:
 - `git` is available and the repo has at least one commit
 - `copilot` CLI is on your `PATH`
 - For both `once.sh` and `afk.sh`: [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/get-started/) (`sbx`) is installed, the `sandboxd` daemon is running, you've signed in (`sbx login`), and a working GitHub Copilot credential is stored as the sbx `github` secret. **Verify before running ralph:** `sbx run copilot . -- --yolo -p 'say hi'`. If that fails, see the Docker Sandboxes docs for setup options. The scripts never touch this secret — set it once and leave it alone.
-- For `afk.sh`: `jq` is on your `PATH` (used for streaming + sentinel detection)
+- For `afk.sh` and `grill.sh`: `jq` is on your `PATH` (used for streaming and sentinel detection)
+- `grill.sh` runs `copilot` directly on the local host — no `sbx` dependency. The design phase doesn't mutate code, so sandbox isolation isn't required.
 
 ---
 
@@ -521,6 +586,9 @@ Don't stuff it with 250k tokens of context — you'll start every session alread
 | `afk.sh` or `once.sh` fails with `sbx: command not found` or `daemon not reachable` | Docker Sandboxes not installed or daemon not running | `brew install docker/tap/sbx`, then `sbx daemon start -d` (or set up a launchd agent for auto-start), then `sbx login` |
 | Copilot CLI inside the sandbox can't auth | No working GitHub Copilot credential in the sbx `github` secret (or a previous version of `afk.sh` overwrote it) | Verify with `sbx run copilot . -- --yolo -p 'say hi'`. If that fails, follow the Docker Sandboxes auth setup. The current scripts never touch this secret. |
 | `afk.sh` aborts mid-pipeline with a `grep` or `jq` failure | Copilot produced no JSON events (likely an inner copilot crash; sbx swallows the exit code) | Re-run the iteration with `bash ralph/once.sh` to see Copilot's raw output and diagnose |
+| `grill.sh` exits with "another ralph/grill.sh run appears to be in progress" | The `.ralph-grill.lock` directory is left over from a killed run | `rmdir .ralph-grill.lock` and re-run |
+| `grill.sh` exits 1 with "Validation turn did not re-emit" | Agent emitted `GRILLING COMPLETE` prematurely and couldn't re-confirm | Resume the printed session (`copilot --resume="grill-..."`) and finish grilling manually before re-running |
+| `grill.sh` exits 1 with "could not locate a generated PRD" | `/write-prd` never wrote the file (or wrote it outside `prds/`) | Resume the printed session with `copilot --resume="grill-..."`, finish the PRD by hand, then run `/prd-to-issues` directly |
 
 ---
 
