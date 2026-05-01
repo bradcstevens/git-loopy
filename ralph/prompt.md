@@ -38,10 +38,17 @@ Use /tdd to complete the task.
 
 # FEEDBACK LOOPS
 
-Before committing, run the feedback loops:
+Before committing, run the project's feedback loops (defined in `AGENTS.md`):
 
-- `npm run test` to run the tests
-- `npm run typecheck` to run the type checker
+- **Backend tests:** `uv run pytest tests/ --ignore=tests/integration -v`
+- **Frontend tests:** `cd frontend && npx playwright test`
+- **Frontend build:** `cd frontend && npm run build`
+- **Frontend lint:** `cd frontend && npx next lint`
+
+Run only the loops relevant to the files you changed. If your change is
+backend-only, skip the frontend loops; if frontend-only, skip the backend
+loop. Save Playwright reports to `tests/playwright/<YYYY-MM-DD-HHMMSS>/`
+when running them.
 
 # COMMIT
 
