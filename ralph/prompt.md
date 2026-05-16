@@ -1,69 +1,105 @@
 # ISSUES
 
-Local issue files from `issues/` are provided at start of context. Issues are grouped per PRD into subfolders named after that PRD's core name, e.g. `issues/<core-name>/NNN-short-title.md`. The core name is derived from the PRD filename in `prds/` by stripping the date prefix (`YYYY-MM-DD-`) and the trailing `-prd` suffix. Files under any `done/` subfolder are excluded — those are archived. Parse the provided content to understand the open issues and which PRD each one belongs to.
+Issues for this iteration are provided at the start of context. They come from one of two sources, distinguishable by the delimiter used in each block:
 
-Each issue references its `Parent PRD` by a path relative to the project root (e.g. `prds/<YYYY-MM-DD>-<core-name>-prd.md`). PRDs live directly in `prds/` — there is no per-feature subfolder. Read the parent PRD when you need broader context, design decisions, or user stories.
+- **GitHub Issues** (default — see `docs/agents/issue-tracker.md`): each block is headed `=== Issue #N: <title> [labels: ...] ===` and may include a `--- Recent comments (newest first, up to 5) ---` section. The `gh` CLI is the contract for reading/commenting/closing — never edit issues by URL or web UI.
+- **Local markdown** (legacy `ISSUE_SOURCE=prds`): each block is headed `=== <path> ===` where the path is `prds/<feature>/NNN-*.md`, sibling to a `prd.md`. Archived issues live in `prds/<feature>/done/`.
 
-You will work on the AFK issues only, not the HITL ones.
+Every issue you receive is **AFK-ready** — the wrapper script has already filtered to issues that carry the `ready-for-agent` label and have a `## Parent` plus `## Acceptance criteria` section. Do not pick up anything else. Do not work on the parent PRD itself.
 
-You've also been passed a file containing the last few commits. Review these to understand what work has been done.
+You've also been passed the last few commits. Read them to understand what work has been done in prior iterations and avoid redoing it.
 
-If all AFK tasks are complete, output <promise>NO MORE TASKS</promise>.
+If after filtering AFK-ready issues you genuinely have no work, output `<promise>NO MORE TASKS</promise>` and stop.
+
+# DOMAIN AWARENESS
+
+Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. If `CONTEXT.md` (root) exists, treat it as the glossary; if `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, invoke `/zoom-out` to get a higher-level map before drilling in.
 
 # TASK SELECTION
 
-Pick the next task. Prioritize tasks in this order:
+Pick exactly one task. Prioritise in this order — and at each priority, use the skill noted in parentheses if applicable:
 
-1. Critical bugfixes
-2. Development infrastructure
+1. **Critical bugfixes** — use `/diagnose` to build a feedback loop, reproduce, hypothesise, instrument, and only then fix. Never patch a hard bug without a reproducing signal.
+2. **Development infrastructure** (tests, types, dev scripts, CI) — no specific skill; just get the loop healthy. This unblocks every later task, so it outranks features.
+3. **Tracer bullets for new features** — for non-trivial state/data-model or UI decisions, sketch with `/prototype` first (LOGIC branch for state, UI branch for visuals), then implement the slice with `/tdd`. A tracer bullet is a thin, end-to-end vertical slice through every layer.
+4. **Polish and quick wins** — implement with `/tdd`.
+5. **Refactors** — use `/improve-codebase-architecture` to surface deepening candidates first, then implement the agreed change with `/tdd`.
 
-Getting development infrastructure like tests and types and dev scripts ready is an important precursor to building features.
+If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and run `/grill-with-docs` against your plan first. Cheap stress-test, big save when you're wrong.
 
-3. Tracer bullets for new features
+# SKILLS NOT TO INVOKE
 
-Tracer bullets are small slices of functionality that go through all layers of the system, allowing you to test and validate your approach early. This helps in identifying potential issues and ensures that the overall architecture is sound before investing significant time in development.
+These skills exist but are **out of scope for this autonomous loop** — they're either upstream/setup or session-management tools meant for a human-driven session:
 
-TL;DR - build a tiny, end-to-end slice of the feature first, then expand it out.
-
-4. Polish and quick wins
-5. Refactors
+- `/triage`, `/to-prd`, `/to-issues` — these create or relabel issues. The loop only works tickets that humans (or `/triage`) have already marked `ready-for-agent`.
+- `/handoff` — pointless in this loop because each iteration is a fresh one-shot `copilot -p` invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
+- `/caveman` — reviewability of your output matters more than token compression while running unattended.
 
 # EXPLORATION
 
-Explore the repo.
+Explore the repo for the task you've selected. Stay within the area the issue touches; don't grand-tour the codebase. Use `/zoom-out` if you're unfamiliar with an area.
 
 # IMPLEMENTATION
 
-Use /tdd to complete the task.
+Use `/tdd` to complete the task. Vertical slices only — one test, one minimal implementation, repeat. No horizontal slicing (don't write all tests then all code).
 
 # FEEDBACK LOOPS
 
-Before committing, run the project's feedback loops (defined in `AGENTS.md`):
+Before committing, run the feedback loops defined in `AGENTS.md` that are relevant to what you changed. AGENTS.md is loaded into your context — read its **Feedback loops** table for the exact commands for this repo.
 
-- **Backend tests:** `uv run pytest tests/ --ignore=tests/integration -v`
-- **Frontend tests:** `cd frontend && npx playwright test`
-- **Frontend build:** `cd frontend && npm run build`
-- **Frontend lint:** `cd frontend && npx next lint`
-
-Run only the loops relevant to the files you changed. If your change is
-backend-only, skip the frontend loops; if frontend-only, skip the backend
-loop. Save Playwright reports to `tests/playwright/<YYYY-MM-DD-HHMMSS>/`
-when running them.
+Run only the loops your change touched. If a loop's tooling doesn't exist yet (the repo is pre-scaffold), the only loops you can verify are the acceptance criteria on the issue itself. Once a loop is wired up, use it.
 
 # COMMIT
 
 Make a git commit. The commit message must:
 
-1. Include key decisions made
-2. Include files changed
-3. Blockers or notes for next iteration
+1. Reference the issue with a **GitHub closing keyword** (`Closes #N`, `Fixes #N`, or `Resolves #N`) for GitHub mode, or include the issue path for `prds` mode. The wrapper relies on this exact form (case-insensitive `close[sd]?|fix(es|ed)?|resolve[sd]?` directly followed by `#N`) as a backstop — if you forget to call `gh issue close`, it will close the issue for you, but only if the commit message uses one of those keywords.
+2. Include key decisions made
+3. Include files changed
+4. Note any blockers or follow-ups for the next iteration
 
 # THE ISSUE
 
-If the task is complete, move the issue file to a `done/` subfolder **inside the same per-PRD issues folder** (e.g. `issues/<core-name>/001-foo.md` → `issues/<core-name>/done/001-foo.md`). Create the `done/` folder if it doesn't exist. Do NOT move issues across PRD folders.
+## GitHub mode (default)
 
-If the task is not complete, add a note to the issue file with what was done.
+When the task is complete, run this **FINAL SEQUENCE** in order. Do NOT end the turn until every step has succeeded:
+
+1. **Re-fetch state.** `gh issue view <N> --json state,labels -q '{state,labels}'`. If state is already `CLOSED` or the issue has been moved off `ready-for-agent`, do nothing — someone else worked it — and end the turn.
+2. **Close the issue** with a single wrap-up comment that links the commit SHA(s):
+
+   ```bash
+   gh issue close <N> --comment "$(cat <<'EOF'
+   Implemented in <commit-sha>.
+
+   <one-paragraph summary of the change in domain-language terms>
+
+   Follow-ups (if any):
+   - …
+   EOF
+   )"
+   ```
+
+3. **Verify the closure landed.** `gh issue view <N> --json state -q .state` must print `CLOSED`. If it doesn't, retry the close once. If it still fails, post a `gh issue comment <N> --body "..."` describing the failure and end the turn — the wrapper will pick up the closure on the next iteration as long as the commit message contains `Closes #<N>`.
+4. **Do NOT** modify labels. The closure is the signal.
+
+When the task is **not** complete and you want to record substantive progress (a real partial step, a discovered blocker, or a design pivot):
+
+- Post **at most one** comment per iteration with `gh issue comment <N> --body-file <path>`.
+- Comment only when there's genuinely new information for the next iteration to read. Never comment merely to say "no progress" or to narrate exploration.
+- Prefer rolling all wrap-up content into the eventual close comment over leaving a trail of progress chatter.
+- Do **not** write `Closes #N` in any partial-progress commit message — the wrapper will auto-close. Use `Refs #N` or `Progress on #N` instead.
+
+Never modify the parent PRD issue (typically `#1`, but always identifiable from each slice's `## Parent` section). Never relabel any issue.
+
+## Local-markdown mode (legacy)
+
+If issues were passed in `=== <path> ===` form:
+
+- On completion: move the issue file from `prds/<feature>/NNN-*.md` to `prds/<feature>/done/NNN-*.md` (create `done/` if needed). Do not renumber, do not touch the sibling `prd.md`, do not move across feature folders.
+- On partial progress: append a brief note to the bottom of the issue file describing what was done and what's blocking.
 
 # FINAL RULES
 
-ONLY WORK ON A SINGLE TASK.
+- ONLY WORK ON A SINGLE TASK per iteration.
+- After completing a task, do **not** emit `<promise>NO MORE TASKS</promise>`. Just end the turn — the wrapper's next iteration will re-collect the AFK-ready pool and decide whether anything is left. Emitting NMT in an iteration where you did work is treated by the wrapper as a signal that you're confused, not as a clean termination.
+- If after triaging the provided issues you genuinely have nothing actionable (e.g., every issue is blocked on a dependency you can't satisfy without picking another one first), output `<promise>NO MORE TASKS</promise>` and stop. The wrapper tolerates this only if no work was done; if you repeatedly emit NMT while AFK-ready issues remain, the wrapper will abort with a non-zero exit so a human can investigate.
