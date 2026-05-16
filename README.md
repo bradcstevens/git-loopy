@@ -6,7 +6,11 @@ A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on top 
 
 **What you get:**
 
-- A pure-bash autonomous loop, [`ralph/afk.sh`](ralph/afk.sh), that pulls AFK-ready GitHub Issues, runs `copilot --yolo -p` against [`ralph/prompt.md`](ralph/prompt.md), terminates cleanly when the AFK-ready pool is empty, and aborts non-zero after `MAX_NMT_STRIKES` (default 3) consecutive no-progress iterations so a stuck agent surfaces fast. Every iteration also backstops the agent's `gh issue close` step by walking new commits for `Closes/Fixes/Resolves #N` references. No Python, no Docker, no sandbox — just `gh`, `jq`, `git`, and `copilot` on your PATH.
+- **Two interchangeable AFK runners** — pick whichever fits your environment:
+  - [`ralph/afk.sh`](ralph/afk.sh) — pure-bash, minimum dependencies (`gh`, `jq`, `git`, `copilot`).
+  - [`ralph/python/`](ralph/python/) — Python peer variant on the GitHub Copilot Python SDK, richer terminal UX (frozen iteration `Panel`s, per-iteration token + estimated-cost signal, JSONL replay log, run-summary JSON, opt-in OpenTelemetry tracing). See [`ralph/python/README.md`](ralph/python/README.md).
+
+  Both runners share [`ralph/PROMPT.md`](ralph/PROMPT.md) and the same wrapper contract — same `ready-for-agent` filter, same `## Parent` + `## Acceptance criteria` discriminator, same `Closes/Fixes/Resolves #N` auto-close backstop, same env-var surface (`MODEL`, `ISSUE_SOURCE`, `MAX_NMT_STRIKES`), same clean-exit-on-empty / abort-on-stuck termination model. Pick the one that suits your environment; the workflow around it is identical.
 - Per-repo configuration templates: [`AGENTS.md`](AGENTS.md) (loaded into every agent invocation), [`CONTEXT.md`](CONTEXT.md) (the domain glossary, normally created lazily by `/grill-with-docs`), and [`templates/BRIEF.template.md`](templates/BRIEF.template.md) (the brief that `/to-prd` consumes).
 - A vendored copy of every Copilot CLI skill the loop knows how to route to, under [`.copilot/skills/`](.copilot/skills) — alignment (`/grill-me`, `/grill-with-docs`), planning (`/to-prd`, `/to-issues`, `/triage`), implementation (`/diagnose`, `/prototype`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`), and meta (`/find-skills`, `/setup-agent-skills`, `/write-a-skill`, `/handoff`, `/caveman`).
 
@@ -34,10 +38,21 @@ Every iteration starts from zero (system prompt + `AGENTS.md` + the issue). The 
 
 ## Prerequisites
 
+**Shared by both runners:**
+
 - [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in: `npm install -g @github/copilot` then run `copilot` once to authenticate.
 - [`gh`](https://cli.github.com/) on PATH and signed in (`gh auth login`).
-- [`jq`](https://jqlang.org/) and `git` on PATH.
+- `git` on PATH.
 - A GitHub repository for your project (the loop's default issue source).
+
+**`ralph/afk.sh` (bash variant) additionally needs:**
+
+- [`jq`](https://jqlang.org/) on PATH. (The Python variant parses JSON directly; it does **not** require `jq`.)
+
+**`ralph/python/` (Python variant) additionally needs:**
+
+- Python **≥ 3.11** on PATH.
+- [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip` **≥ 24** for the one-time `uv sync --project ralph/python` bootstrap. See [`ralph/python/README.md`](ralph/python/README.md) for details.
 
 ---
 
@@ -72,6 +87,34 @@ You don't need to use every phase. The skills are independent — pick what help
 
 ---
 
+## Pick a Runner: `ralph/afk.sh` vs `ralph/python/`
+
+Both runners implement the **same wrapper contract** — same `ready-for-agent` filter, same `## Parent` + `## Acceptance criteria` discriminator, same `Closes/Fixes/Resolves #N` auto-close backstop, same env-var surface, same termination model. Pick the one that suits your environment.
+
+| Surface                          | `ralph/afk.sh` (bash)                                                | `ralph/python/` (Python SDK)                                                                                                                  |
+| -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Invocation                       | `bash ralph/afk.sh`                                                  | `uv run --project ralph/python ralph-afk`                                                                                                      |
+| Positional arg (iteration cap)   | `bash ralph/afk.sh 50` (0 / omitted = unlimited)                     | `uv run --project ralph/python ralph-afk 50` (0 / omitted = unlimited)                                                                         |
+| `MODEL`                          | env var (default `claude-opus-4.7-xhigh`)                            | env var (same default)                                                                                                                         |
+| `ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                | env var; same                                                                                                                                  |
+| `MAX_NMT_STRIKES`                | env var (default `3`)                                                | env var (same default)                                                                                                                         |
+| Exit `0` — clean                 | empty AFK-ready pool **or** iteration cap reached                    | empty AFK-ready pool **or** iteration cap reached                                                                                              |
+| Exit `1` — aborted               | `MAX_NMT_STRIKES` tripped **or** stale worktree                      | `MAX_NMT_STRIKES` tripped **or** stale worktree **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.)   |
+| Observability artefacts          | stdout/stderr only                                                   | `.ralph/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.ralph/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.ralph/logs/<iso>-<run_id>.log` (stderr mirror) |
+| Terminal UX                      | streamed text                                                        | Rich-rendered iteration `Panel`s, per-iteration token + estimated-cost signal, run-end summary table                                           |
+| OpenTelemetry tracing            | n/a                                                                  | opt-in via `uv sync --project ralph/python --extra otel` + `RALPH_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
+| Extra prerequisites              | `jq`                                                                 | Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                                            |
+
+### When to use which
+
+**Use `ralph/afk.sh` when** you want the smallest possible dependency footprint — `gh`, `jq`, `git`, `copilot` and nothing else. The bash runner is stack-agnostic (it doesn't care that your project happens to be Python, Node, Rust, or something else) and is the right default for repos that deliberately chose a zero-Python, zero-npm toolchain.
+
+**Use `ralph/python/` when** you want the richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.ralph/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. The extra dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `ralph/python/` — they do not touch your project's runtime.
+
+The cost figure surfaced by the Python runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`ralph/python/README.md`](ralph/python/README.md) for the full caveat.
+
+---
+
 ## Repo Structure Reference
 
 ```
@@ -100,8 +143,9 @@ You don't need to use every phase. The skills are independent — pick what help
 │   ├── microsoft-foundry/          # Azure AI Foundry helpers (delete if not on Microsoft tech).
 │   └── caveman/                    # Token-compressed output mode (off by default in the loop).
 └── ralph/
-    ├── afk.sh                      # Autonomous loop. Clean exit on empty queue; aborts on MAX_NMT_STRIKES consecutive no-progress iterations; auto-close backstop for forgotten `gh issue close` calls.
-    └── prompt.md                   # Shared agent prompt loaded each iteration.
+    ├── afk.sh                      # Autonomous loop (bash). Clean exit on empty queue; aborts on MAX_NMT_STRIKES consecutive no-progress iterations; auto-close backstop for forgotten `gh issue close` calls.
+    ├── PROMPT.md                   # Shared agent prompt loaded each iteration (both runners).
+    └── python/                     # Python peer variant of the AFK runner on the GitHub Copilot Python SDK — same wrapper contract, richer terminal UX. See ralph/python/README.md.
 ```
 
 When you adopt this in a real project, you'll typically add:
@@ -171,7 +215,9 @@ The skill re-explores the codebase, quizzes you on slice boundaries, and creates
 
 Walks the open issues through the five-label state machine (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `ready-for-agent` issues are picked up by the AFK loop. The canonical label list lives in `docs/agents/triage-labels.md`.
 
-### Phase 6 — AFK Loop (`ralph/afk.sh`)
+### Phase 6 — AFK Loop (`ralph/afk.sh` or `ralph/python/`)
+
+Pick a runner — see [Pick a Runner](#pick-a-runner-ralphafksh-vs-ralphpython) above. The flow below describes `ralph/afk.sh`; the Python peer variant implements the **same** per-iteration flow and **same** exit conditions. For Python-specific bootstrap, env vars, and observability artefacts, see [`ralph/python/README.md`](ralph/python/README.md).
 
 ```bash
 # Unlimited iterations, default model (claude-opus-4.7-xhigh).

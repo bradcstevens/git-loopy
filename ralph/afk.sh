@@ -8,6 +8,8 @@
 # `Closes|Fixes|Resolves #N` references whose N was in the iteration's
 # AFK-ready pool and auto-closes any issue the agent forgot to close itself.
 #
+# Peer variant: a Python implementation of the same wrapper contract lives at ralph/python/ — see ralph/python/README.md.
+#
 # Termination:
 #   - Clean exit (0): the AFK-ready pool is empty at the start of an iteration.
 #   - Aborted exit (1): MAX_NMT_STRIKES (default 3) consecutive iterations made
