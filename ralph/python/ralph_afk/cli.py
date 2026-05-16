@@ -30,7 +30,8 @@ deep-module knobs:
 Env vars:
 
 * ``MODEL`` — Copilot model id override.
-* ``ISSUE_SOURCE`` — ``github`` (default) or ``prds`` (lands in #11).
+* ``ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
+  ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
 * ``RALPH_DENY_TOOLS`` — comma-separated tool denylist (set-unioned
   with ``--deny-tool`` flags).
@@ -135,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Environment variables:\n"
             "  MODEL                       Copilot model id override.\n"
             "  ISSUE_SOURCE                'github' (default) or 'prds' "
-            "(lands in #11).\n"
+            "(legacy local-markdown).\n"
             "  MAX_NMT_STRIKES             Strike threshold (default: 3).\n"
             "  RALPH_DENY_TOOLS            Comma-separated tool denylist.\n"
             "  RALPH_DENY_SKILLS           Comma-separated skill denylist.\n"

@@ -476,13 +476,252 @@ def test_loop_stale_worktree_exits_one(tmp_path, monkeypatch) -> None:
     assert len(fake_client.created) == 0
 
 
-def test_loop_prds_returns_two_with_clear_stderr(tmp_path, capsys) -> None:
-    """``ISSUE_SOURCE='prds'`` short-circuits with exit 2 and a clear stderr."""
-    cfg = RunConfig(issue_source="prds")
+def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
+    """One PRDs iteration end-to-end: discovery → SDK → commit → no auto-close.
+
+    Drives the local-markdown collector against a fixture tree:
+
+    * ``prds/featA/001-ready.md`` — AFK-ready discriminator present.
+    * ``prds/featA/002-not-ready.md`` — missing discriminator (filter).
+    * ``prds/featA/done/000-archived.md`` — under ``done/`` (filter).
+    * ``prds/featA/prd.md`` — no NNN prefix (filter).
+
+    Asserts:
+
+    * Exit code 0.
+    * SDK saw a prompt containing the ready file's path + body but NOT
+      the filtered files.
+    * One commit recorded, ``auto_closures == 0`` (PRDs is detection-only).
+    * Run-summary JSON shape matches the github variant.
+    * ``gh.issue_close`` was never called (gh isn't touched in PRDs mode).
+    * The worktree (``prds/`` tree) is unchanged after the run —
+      detection-only completion semantics.
+    """
+    # -- 1) Fake repo on disk with a PRDs fixture tree --------------------
+    (tmp_path / "ralph").mkdir()
+    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+
+    ready_md = tmp_path / "prds" / "featA" / "001-ready.md"
+    not_ready_md = tmp_path / "prds" / "featA" / "002-not-ready.md"
+    archived_md = tmp_path / "prds" / "featA" / "done" / "000-archived.md"
+    prd_md = tmp_path / "prds" / "featA" / "prd.md"
+    for p in (ready_md, not_ready_md, archived_md, prd_md):
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    afk_body = (
+        "# 001 — Ready\n\n## Parent\nfeatA\n\n## Acceptance criteria\n- impl\n"
+    )
+    ready_md.write_text(afk_body, encoding="utf-8")
+    not_ready_md.write_text("Just words, no sections.\n", encoding="utf-8")
+    archived_md.write_text(afk_body, encoding="utf-8")
+    prd_md.write_text(afk_body, encoding="utf-8")
+
+    # Snapshot the prds tree BEFORE the run for the post-run no-mutation
+    # assertion (detection-only semantics).
+    files_before = {
+        p.relative_to(tmp_path).as_posix()
+        for p in (tmp_path / "prds").rglob("*")
+        if p.is_file()
+    }
+
+    # -- 2) git stubs ------------------------------------------------------
+    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
+    head_sequence = iter(["pre-sha-prds", "post-sha-prds"])
+    monkeypatch.setattr(
+        git_module, "head_sha", lambda start=None: next(head_sequence)
+    )
+    monkeypatch.setattr(
+        git_module,
+        "recent_commits",
+        lambda n, start=None: [
+            _FakeCommit(
+                sha="0" * 40, subject="prior", body=""
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        git_module,
+        "commits_between",
+        lambda pre, head, start=None: [
+            _FakeCommit(
+                sha="a" * 40,
+                subject="feat(featA/001): implement",
+                # NOTE: even if the commit message contained the path
+                # literally, PrdsIssueSource.handle_completions returns
+                # [] — the agent owns the `git mv`. Test that no
+                # auto_close fires.
+                body=f"Refs prds/featA/001-ready.md",
+            )
+        ],
+    )
+
+    # -- 3) gh MUST NOT be called in PRDs mode ----------------------------
+    # If anything in the loop reaches for gh.* in PRDs mode, the test
+    # should fail loudly. We replace each accessed symbol with a
+    # function that records the call.
+    gh_calls: list[str] = []
+
+    def boom_auth_status() -> bool:
+        gh_calls.append("auth_status")
+        raise AssertionError("gh.auth_status must not be called in PRDs mode")
+
+    def boom_repo_view() -> gh_module.Repo:
+        gh_calls.append("repo_view")
+        raise AssertionError("gh.repo_view must not be called in PRDs mode")
+
+    def boom_issue_list(*_a: Any, **_kw: Any) -> list[gh_module.Issue]:
+        gh_calls.append("issue_list")
+        raise AssertionError("gh.issue_list must not be called in PRDs mode")
+
+    def boom_issue_view(*_a: Any, **_kw: Any) -> gh_module.Issue:
+        gh_calls.append("issue_view")
+        raise AssertionError("gh.issue_view must not be called in PRDs mode")
+
+    def boom_issue_close(*_a: Any, **_kw: Any) -> None:
+        gh_calls.append("issue_close")
+        raise AssertionError("gh.issue_close must not be called in PRDs mode")
+
+    monkeypatch.setattr(gh_module, "auth_status", boom_auth_status)
+    monkeypatch.setattr(gh_module, "repo_view", boom_repo_view)
+    monkeypatch.setattr(gh_module, "issue_list", boom_issue_list)
+    monkeypatch.setattr(gh_module, "issue_view", boom_issue_view)
+    monkeypatch.setattr(gh_module, "issue_close", boom_issue_close)
+
+    # -- 4) SDK stub: minimal scripted flow --------------------------------
+    scripted = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(content="working on it", message_id="m1"),
+        ),
+        _sdk_event(
+            SessionEventType.ASSISTANT_USAGE,
+            AssistantUsageData(
+                input_tokens=100,
+                output_tokens=50,
+                model="claude-opus-4.7-xhigh",
+            ),
+        ),
+    ]
+    fake_client = FakeCopilotClient(scripted_events=scripted)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    # -- 5) Run loop with issue_source=prds --------------------------------
+    cfg = RunConfig(
+        model="claude-opus-4.7-xhigh",
+        issue_source="prds",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
     exit_code = asyncio.run(loop_module.run(cfg))
-    assert exit_code == 2
-    captured = capsys.readouterr()
-    assert "prds" in captured.err
+
+    # -- 6) Assertions -----------------------------------------------------
+    assert exit_code == 0, f"expected exit 0; got {exit_code}"
+    assert gh_calls == [], (
+        f"PRDs mode must not touch gh; got calls: {gh_calls}"
+    )
+
+    # SDK lifecycle: one session, one prompt, no further calls.
+    assert len(fake_client.created) == 1, (
+        "expected exactly one SDK session in PRDs mode"
+    )
+    sdk_session = fake_client.created[0]
+    assert len(sdk_session.send_and_wait_calls) == 1
+    prompt, _timeout = sdk_session.send_and_wait_calls[0]
+
+    # The ready file must be in the prompt; the filtered files must NOT.
+    assert "prds/featA/001-ready.md" in prompt, (
+        "AFK-ready PRDs file should appear in the prompt"
+    )
+    assert "002-not-ready" not in prompt, (
+        "non-AFK PRDs file should be filtered out"
+    )
+    assert "000-archived" not in prompt, (
+        "done/* PRDs files should be filtered out"
+    )
+    assert "prd.md" not in prompt or "001-ready" in prompt, (
+        "loose prd.md should be filtered out by NNN-prefix discriminator"
+    )
+
+    # Worktree untouched (detection-only semantics).
+    files_after = {
+        p.relative_to(tmp_path).as_posix()
+        for p in (tmp_path / "prds").rglob("*")
+        if p.is_file()
+    }
+    assert files_before == files_after, (
+        "PRDs handle_completions must not move/delete files; "
+        f"before={files_before} after={files_after}"
+    )
+
+    # JSONL log contains the expected wrapper events but NO auto_close.
+    logs_dir = tmp_path / ".ralph" / "logs"
+    log_files = list(logs_dir.glob("*.jsonl"))
+    assert len(log_files) == 1
+    types_seen = [
+        json.loads(line)["type"]
+        for line in log_files[0].read_text(encoding="utf-8").splitlines()
+    ]
+    for expected in (
+        "wrapper.run.start",
+        "wrapper.iteration.start",
+        "wrapper.afk_ready.collected",
+        "wrapper.commit.recorded",
+        "wrapper.iteration.end",
+        "wrapper.run.end",
+    ):
+        assert expected in types_seen, (
+            f"expected {expected} in JSONL; saw: {types_seen}"
+        )
+    assert "wrapper.auto_close" not in types_seen, (
+        "PRDs mode must not emit wrapper.auto_close — handle_completions returns []"
+    )
+
+    # Run-summary JSON.
+    json_files = list((tmp_path / ".ralph" / "runs").glob("*.json"))
+    assert len(json_files) == 1
+    payload = json.loads(json_files[0].read_text(encoding="utf-8"))
+    assert len(payload["iterations"]) == 1
+    iter_row = payload["iterations"][0]
+    assert iter_row["iter"] == 1
+    assert iter_row["commits"] == 1
+    assert iter_row["auto_closures"] == 0, (
+        "PRDs mode must report zero auto-closures"
+    )
+
+
+def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
+    """An absent ``prds/`` directory short-circuits with exit 0 — no SDK call."""
+    (tmp_path / "ralph").mkdir()
+    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    # NB: no `prds/` directory created.
+
+    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
+    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "deadbeef")
+    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
+
+    # PRDs mode must not touch gh.
+    def boom(*_a: Any, **_kw: Any) -> Any:
+        raise AssertionError("gh must not be called in PRDs mode")
+
+    monkeypatch.setattr(gh_module, "auth_status", boom)
+    monkeypatch.setattr(gh_module, "repo_view", boom)
+    monkeypatch.setattr(gh_module, "issue_list", boom)
+
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="prds", max_iterations=1)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    # No SDK session created on empty-pool fast path.
+    assert len(fake_client.created) == 0
+    assert fake_client.stop_call_count == 1
 
 
 def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> None:

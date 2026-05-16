@@ -12,6 +12,12 @@ together into a working ``ralph-afk`` invocation. It owns:
 * The per-run :class:`~ralph_afk.ui.RunSummary` and
   :class:`~ralph_afk.ui.Renderer`.
 * The :class:`~ralph_afk.wrapper.NMTStrikeStateMachine`.
+* The :class:`~ralph_afk.sources.IssueSource` — the per-invocation
+  backend that discovers AFK-ready work and applies the
+  source-specific completion backstop. Constructed from
+  :attr:`RunConfig.issue_source` via the module-level
+  :func:`_make_issue_source` factory so the loop body is unaware
+  whether it is feeding off GitHub issues or local-markdown PRDs.
 
 The per-iteration :class:`~ralph_afk.session.IterationSession` is opened
 inside :func:`run` once per iteration.
@@ -20,34 +26,40 @@ Per-iteration sequence (parity with ``ralph/afk.sh:305-433``):
 
 1. Cap check on ``max_iterations``.
 2. **Stale-worktree guard** via :func:`ralph_afk.git.is_dirty`.
-3. Collect AFK-ready pool: :func:`ralph_afk.gh.issue_list` filtered by
-   body discriminators (``## Parent`` AND ``## Acceptance criteria``).
+3. Collect AFK-ready pool via :meth:`IssueSource.collect_afk_ready`.
 4. Clean-exit on empty pool.
-5. Per-issue :func:`ralph_afk.gh.issue_view` to fetch comments
-   (parity with bash line 151).
-6. Build prompt: ``"Previous commits: <last5> Issues: <blocks> " + prompt_md``.
-7. Capture ``pre_sha`` *immediately* before invoking the SDK — so a slow
+5. Build prompt: ``"Previous commits: <last5> Issues: <blocks> " + prompt_md``
+   where each ``<block>`` is the source-rendered
+   :attr:`AfkReadyItem.rendered_block`.
+6. Capture ``pre_sha`` *immediately* before invoking the SDK — so a slow
    ``gh issue_view`` call before this point cannot affect the
    ``commits_between(pre_sha, head)`` accounting after.
-8. Open :class:`~ralph_afk.session.IterationSession`,
+7. Open :class:`~ralph_afk.session.IterationSession`,
    ``await session.send_and_wait(prompt, timeout=long)``.
-9. ``head_sha = git.head_sha()``; ``commits = git.commits_between(pre, head)``.
-10. Emit one ``wrapper.commit.recorded`` per new commit so the renderer
-    increments the iteration's commit count.
-11. **Auto-close backstop**: extract closure refs from concatenated
-    commit messages via :func:`ralph_afk.wrapper.extract_close_refs`,
-    filter to the iteration's pool via
-    :func:`ralph_afk.wrapper.filter_to_pool`, re-check each surviving
-    issue's state, and close any that are still ``OPEN``.
-12. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
+8. ``head_sha = git.head_sha()``; ``commits = git.commits_between(pre, head)``.
+9. Emit one ``wrapper.commit.recorded`` per new commit so the renderer
+   increments the iteration's commit count.
+10. **Completion backstop** via
+    :meth:`IssueSource.handle_completions`. Each returned
+    :class:`~ralph_afk.sources.Completion` produces one
+    ``wrapper.auto_close`` event. The GitHub backend closes issues via
+    ``gh issue close``; the PRDs backend returns an empty list (the
+    agent owns ``git mv ... prds/<feat>/done/``).
+11. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
     resets strikes; no-progress increments, possibly tripping the
     abort threshold.
-13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
+12. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
     persist :class:`~ralph_afk.persist.IterationCounters` from the
     closed snapshot.
 
 Design notes:
 
+* **Source-agnostic loop body.** The loop holds one
+  :class:`IssueSource` and dispatches the three Protocol methods
+  through it. Issue #11 lifts the PRDs backend; #10 introduced the
+  GitHub backend. Adding a new backend (e.g. a remote API) means
+  adding one ``IssueSource`` impl and one factory branch — the
+  iteration body never changes.
 * **Inter-module fan-out via the renderer.** Every wrapper-level event
   (``wrapper.run.start``, ``wrapper.iteration.start``, etc.) goes through
   :meth:`_emit_wrapper_event` which:
@@ -55,20 +67,17 @@ Design notes:
   2. Writes the JSONL line via the event log writer (scrubber pipeline).
   3. Hands it to the renderer for the Rich-driven terminal output and
      RunSummary accumulator updates.
-* **SDK + gh failure containment.** ``send_and_wait`` failures are
+* **SDK + source failure containment.** ``send_and_wait`` failures are
   caught and treated as no-progress (matching bash's ``copilot`` exit-rc
   handling at lines 365-367). Per-issue ``gh.issue_close`` failures are
-  logged via the diagnostics logger and the loop continues — losing one
-  closure is preferable to skipping the rest of the iteration's
-  bookkeeping.
+  logged via the diagnostics logger inside the source impl and the
+  loop continues — losing one closure is preferable to skipping the
+  rest of the iteration's bookkeeping.
 * **One ``CopilotClient`` per invocation.** Constructed lazily inside
   :func:`run` via the module-level :func:`_make_client` factory (which
   tests monkeypatch). Disconnected via ``await client.stop()`` in a
   ``finally`` block so even an early-loop crash releases the SDK's
   subprocess.
-* **``ISSUE_SOURCE=prds`` is not implemented in this slice.** The
-  config dataclass accepts it; the loop raises
-  :class:`NotImplementedError` at entry. Issue #11 lifts that.
 """
 
 from __future__ import annotations
@@ -76,7 +85,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -84,7 +92,6 @@ from typing import Any, Iterable
 from copilot import CopilotClient
 
 from ralph_afk import events as events_module
-from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
 from ralph_afk.config import RunConfig
 from ralph_afk.persist import (
@@ -94,12 +101,14 @@ from ralph_afk.persist import (
 )
 from ralph_afk.pricing import Pricing, PricingError, load_pricing
 from ralph_afk.session import IterationSession
-from ralph_afk.ui import Renderer, RunSummary, get_console
-from ralph_afk.wrapper import (
-    NMTStrikeStateMachine,
-    extract_close_refs,
-    filter_to_pool,
+from ralph_afk.sources import (
+    AfkReadyItem,
+    GitHubIssueSource,
+    IssueSource,
+    PrdsIssueSource,
 )
+from ralph_afk.ui import Renderer, RunSummary, get_console
+from ralph_afk.wrapper import NMTStrikeStateMachine
 
 __all__ = ["run"]
 
@@ -108,12 +117,6 @@ __all__ = ["run"]
 # via the ``RALPH_SEND_TIMEOUT_SECONDS`` env var so an operator can
 # tighten it when debugging a wedged session.
 _DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
-
-# Bash uses ``grep -q '^## Parent'`` (line-anchored). Match the literal
-# semantics here so we never accept a body that mentions ``## Parent``
-# inside a code fence or quoted block.
-_RE_PARENT = re.compile(r"^## Parent", re.MULTILINE)
-_RE_AC = re.compile(r"^## Acceptance criteria", re.MULTILINE)
 
 
 def _make_client() -> CopilotClient:
@@ -125,6 +128,35 @@ def _make_client() -> CopilotClient:
     construction.
     """
     return CopilotClient()
+
+
+def _make_issue_source(
+    config: RunConfig,
+    repo_root: Path,
+    diag: logging.Logger,
+) -> IssueSource:
+    """Construct the per-invocation :class:`IssueSource`.
+
+    Dispatches on :attr:`RunConfig.issue_source`. Factored to module
+    scope so tests can monkeypatch it for end-to-end fakes. Returns a
+    :class:`GitHubIssueSource` for ``"github"`` and a
+    :class:`PrdsIssueSource` for ``"prds"``.
+
+    Raises:
+        ValueError: If ``config.issue_source`` is neither known value.
+            Should not happen in practice — :class:`RunConfig` rejects
+            unknown values at construction time — but defence-in-depth
+            in case the config grows new variants without a matching
+            branch here.
+    """
+    if config.issue_source == "github":
+        return GitHubIssueSource(diag)
+    if config.issue_source == "prds":
+        return PrdsIssueSource(repo_root, diag)
+    raise ValueError(
+        f"unknown issue_source {config.issue_source!r}; expected "
+        f"'github' or 'prds'"
+    )
 
 
 def _send_timeout_seconds() -> float:
@@ -162,34 +194,6 @@ def _read_prompt(repo_root: Path) -> str:
     )
 
 
-def _format_issue_block(issue: gh_module.Issue) -> str:
-    """Render one AFK-ready issue as the agent-facing prompt block.
-
-    Mirrors the jq filter at ``ralph/afk.sh:137-144``: header, body,
-    then up to 5 recent comments sorted newest-first.
-    """
-    labels_str = ", ".join(issue.labels)
-    header = f"=== Issue #{issue.number}: {issue.title} [labels: {labels_str}] ==="
-    body = issue.body or ""
-
-    recent = sorted(
-        issue.comments,
-        key=lambda c: c.created_at,
-        reverse=True,
-    )[:5]
-    if not recent:
-        return f"{header}\n{body}"
-
-    comment_lines = [
-        f"[{c.created_at} @{c.author}] {c.body}" for c in recent
-    ]
-    return (
-        f"{header}\n{body}\n\n"
-        f"--- Recent comments (newest first, up to 5) ---\n"
-        + "\n\n".join(comment_lines)
-    )
-
-
 def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     """Render the last-5-commits block fed into the prompt prefix.
 
@@ -204,22 +208,14 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     return "\n".join(parts)
 
 
-def _is_afk_ready(body: str) -> bool:
-    """Return True iff the issue body satisfies the AFK-ready discriminator.
-
-    Mirrors the bash double-grep at ``ralph/afk.sh:154-155``: body must
-    contain BOTH ``^## Parent`` and ``^## Acceptance criteria`` (line-anchored).
-    """
-    return bool(_RE_PARENT.search(body)) and bool(_RE_AC.search(body))
-
-
 class _Loop:
     """Stateful orchestrator for one ``ralph-afk`` invocation.
 
     Bundles the long-lived per-run state — writers, summary, renderer,
-    SDK client, strike state machine — so the public :func:`run`
-    function stays small and the per-iteration helper methods can read
-    self instead of threading every value through their signatures.
+    SDK client, source, strike state machine — so the public
+    :func:`run` function stays small and the per-iteration helper
+    methods can read self instead of threading every value through
+    their signatures.
     """
 
     def __init__(
@@ -233,6 +229,7 @@ class _Loop:
         renderer: Renderer,
         summary: RunSummary,
         client: CopilotClient,
+        source: IssueSource,
         diag: logging.Logger,
     ) -> None:
         self._config = config
@@ -243,6 +240,7 @@ class _Loop:
         self._renderer = renderer
         self._summary = summary
         self._client = client
+        self._source = source
         self._diag = diag
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
@@ -273,66 +271,6 @@ class _Loop:
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning("renderer failed on %s: %s", event_type, exc)
         return envelope
-
-    # -- preflight / collection --------------------------------------------
-
-    def _preflight_github(self) -> int | None:
-        """Validate ``gh`` posture before the first iteration.
-
-        Mirrors the bash preflight at ``ralph/afk.sh:87-102``. Returns
-        ``None`` on success or a non-zero exit code on failure.
-        """
-        try:
-            authed = gh_module.auth_status()
-        except gh_module.GhError as exc:
-            self._diag.error(
-                "gh preflight failed: %s. Install `gh` from https://cli.github.com/.",
-                exc,
-            )
-            return 1
-        if not authed:
-            self._diag.error(
-                "gh is not authenticated. Run `gh auth login` and re-run ralph-afk."
-            )
-            return 1
-        try:
-            repo = gh_module.repo_view()
-        except gh_module.GhError as exc:
-            self._diag.error(
-                "gh repo view failed: %s. Ralph-afk must be run from inside a "
-                "clone of a GitHub repository.",
-                exc,
-            )
-            return 1
-        self._diag.info("preflight ok: %s", repo.nwo)
-        return None
-
-    def _collect_afk_ready(self) -> list[gh_module.Issue]:
-        """Fetch the AFK-ready pool with per-issue ``issue_view`` enrichment."""
-        try:
-            candidates = gh_module.issue_list("ready-for-agent")
-        except gh_module.GhError as exc:
-            self._diag.error("gh issue list failed: %s", exc)
-            return []
-
-        # Cheap filter on bodies BEFORE the N+1 issue_view fetch — saves
-        # a round-trip on PRDs and other ready-for-agent issues that
-        # don't satisfy the AFK discriminator.
-        ready_candidates = [i for i in candidates if _is_afk_ready(i.body or "")]
-
-        enriched: list[gh_module.Issue] = []
-        for issue in ready_candidates:
-            try:
-                full = gh_module.issue_view(issue.number)
-            except gh_module.GhError as exc:
-                self._diag.warning(
-                    "gh issue view #%s failed: %s; skipping for this iteration",
-                    issue.number, exc,
-                )
-                continue
-            if _is_afk_ready(full.body or ""):
-                enriched.append(full)
-        return enriched
 
     # -- iteration body ----------------------------------------------------
 
@@ -368,13 +306,13 @@ class _Loop:
             self._record_counters(iter_num)
             return ("stale_worktree", 0, 0)
 
-        # 2) Collect AFK-ready pool.
-        pool = self._collect_afk_ready()
-        pool_numbers = [i.number for i in pool]
+        # 2) Collect AFK-ready pool via the source.
+        pool = self._source.collect_afk_ready()
+        pool_refs: list[int | str] = [item.ref for item in pool]
         self._emit(
             events_module.WRAPPER_AFK_READY_COLLECTED,
             iter_num=iter_num,
-            issues=pool_numbers,
+            issues=pool_refs,
         )
         if not pool:
             # Close the iteration cleanly so the snapshot lifecycle is
@@ -386,22 +324,22 @@ class _Loop:
             self._record_counters(iter_num)
             return ("empty_pool", 0, 0)
 
-        # 3) Build prompt (last-5 commits + AFK-ready issue blocks + prompt body).
+        # 3) Build prompt (last-5 commits + AFK-ready item blocks + prompt body).
         try:
             recent = git_module.recent_commits(5, self._repo_root)
         except git_module.GitError as exc:
             self._diag.warning("recent_commits failed: %s; using empty prefix", exc)
             recent = []
         commits_block = _format_recent_commits(recent)
-        issues_block = "\n\n".join(_format_issue_block(i) for i in pool)
+        issues_block = "\n\n".join(item.rendered_block for item in pool)
         prompt = (
             f"Previous commits: {commits_block} "
             f"Issues: {issues_block} {self._prompt_text}"
         )
 
-        # 4) Capture pre_sha *after* the slow gh fetch so any commit
-        #    that landed while we were enriching the pool isn't
-        #    incorrectly attributed to this iteration.
+        # 4) Capture pre_sha *after* the slow source-collection step so
+        #    any commit that landed while we were enriching the pool
+        #    isn't incorrectly attributed to this iteration.
         try:
             pre_sha = git_module.head_sha(self._repo_root)
         except git_module.GitError as exc:
@@ -475,15 +413,19 @@ class _Loop:
                 date=c.date,
             )
 
-        # 7) Auto-close backstop.
-        auto_closures = 0
-        if new_commits:
-            concatenated = "\n".join(c.message for c in new_commits)
-            refs = extract_close_refs(concatenated)
-            surviving = filter_to_pool(refs, set(pool_numbers))
-            for ref in surviving:
-                if self._try_auto_close(ref, new_commits, iter_num):
-                    auto_closures += 1
+        # 7) Completion backstop — source-specific. The GitHub backend
+        #    closes the issue via gh; the PRDs backend always returns
+        #    [] (the agent owns the `git mv ... done/` step).
+        completions = self._handle_completions_safely(pool, new_commits)
+        for completion in completions:
+            self._emit(
+                events_module.WRAPPER_AUTO_CLOSE,
+                iter_num=iter_num,
+                issue=completion.ref,
+                sha=completion.sha,
+                shas=list(completion.shas),
+            )
+        auto_closures = len(completions)
 
         # 8) Strike state machine + emit appropriate events.
         outcome = self._strike_machine.tick(
@@ -512,82 +454,31 @@ class _Loop:
             return ("aborted", len(new_commits), auto_closures)
         return ("continue", len(new_commits), auto_closures)
 
-    def _try_auto_close(
+    def _handle_completions_safely(
         self,
-        issue_number: int,
+        pool: list[AfkReadyItem],
         new_commits: list[git_module.Commit],
-        iter_num: int,
-    ) -> bool:
-        """Re-verify state and close the issue; return True on success.
+    ) -> list[Any]:
+        """Call ``source.handle_completions`` with crash containment.
 
-        Mirrors bash auto-close logic at ``ralph/afk.sh:230-267``.
+        A source-level crash inside ``handle_completions`` must not
+        abort the iteration — the commit accounting and strike
+        bookkeeping still need to run. Returns an empty list on
+        failure (logged at WARNING via the diagnostics logger).
         """
         try:
-            current = gh_module.issue_view(issue_number)
-        except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue view #%s during auto-close failed: %s",
-                issue_number, exc,
+            return list(
+                self._source.handle_completions(
+                    pool=pool, new_commits=new_commits
+                )
             )
-            return False
-        if current.state == "CLOSED":
-            return False
-        if current.state != "OPEN":
+        except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
-                "issue #%s has unexpected state %r; not auto-closing",
-                issue_number, current.state,
+                "source.handle_completions raised %s: %s; "
+                "continuing iteration with zero completions",
+                type(exc).__name__, exc,
             )
-            return False
-
-        # Collect SHAs whose commit message contains a *closing* keyword
-        # for this issue — uses the same parser as the pool whitelist
-        # (``wrapper.extract_close_refs``) so we don't drift between
-        # the two seams.
-        ref_shas = [
-            c.sha
-            for c in new_commits
-            if issue_number in extract_close_refs(c.message)
-        ]
-        if not ref_shas:
-            # Defence-in-depth — should not happen in practice because
-            # we only enter this branch for issues in ``surviving``,
-            # which was derived from the same parser. But if a future
-            # parser drift introduced an asymmetry, skipping the close
-            # is safer than misattributing it to an arbitrary commit.
-            self._diag.warning(
-                "auto-close #%s: no commit in this iteration explicitly "
-                "closes the issue via the closing-keyword parser; "
-                "skipping to avoid misattribution",
-                issue_number,
-            )
-            return False
-        shas_str = " ".join(ref_shas)
-
-        comment = (
-            f"Implemented in {shas_str}.\n\n"
-            f"Closed by the ralph_afk loop because the agent did not run "
-            f"`gh issue close` itself this iteration (commit messages did "
-            f"reference `Closes #{issue_number}`).\n\n"
-            f"If this closure looks wrong, reopen with `gh issue reopen "
-            f"{issue_number}` — the loop will not re-close it without a "
-            f"new commit that references it."
-        )
-        try:
-            gh_module.issue_close(issue_number, comment)
-        except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue close #%s failed: %s; issue remains open",
-                issue_number, exc,
-            )
-            return False
-        self._emit(
-            events_module.WRAPPER_AUTO_CLOSE,
-            iter_num=iter_num,
-            issue=issue_number,
-            sha=ref_shas[0] if ref_shas else "",
-            shas=ref_shas,
-        )
-        return True
+            return []
 
     def _record_counters(self, iter_num: int) -> None:
         """Persist the iteration's counter row.
@@ -624,12 +515,12 @@ class _Loop:
 
     async def drive(self) -> int:
         """Drive the iteration loop to its terminal outcome."""
-        # Preflight only the GitHub backend; PRDs would need its own
-        # preflight (e.g. ``prds/`` directory existence) when #11 lands.
-        if self._config.issue_source == "github":
-            rc = self._preflight_github()
-            if rc is not None:
-                return rc
+        # Preflight via the source — GitHub validates gh + repo; PRDs
+        # is a no-op (returns None) so an empty / missing prds/ dir is
+        # not a preflight failure, just an empty pool.
+        rc = self._source.preflight()
+        if rc is not None:
+            return rc
 
         self._emit(
             events_module.WRAPPER_RUN_START,
@@ -702,8 +593,8 @@ async def run(config: RunConfig) -> int:
     """Drive one ``ralph-afk`` invocation to completion.
 
     Constructs the long-lived per-run state (writers, summary, renderer,
-    client), drives the iteration loop, and returns the appropriate
-    process exit code.
+    client, source), drives the iteration loop, and returns the
+    appropriate process exit code.
 
     Args:
         config: The frozen :class:`RunConfig` composed by
@@ -717,15 +608,6 @@ async def run(config: RunConfig) -> int:
         * ``1`` — abort (stale worktree, NMT strike threshold,
           preflight / setup failure).
     """
-    if config.issue_source == "prds":
-        # ISSUE_SOURCE=prds support lives in #11.
-        print(
-            "ralph-afk: ISSUE_SOURCE=prds is not implemented in this "
-            "release (lands in issue #11). Use ISSUE_SOURCE=github.",
-            file=sys.stderr,
-        )
-        return 2
-
     # 1) Repo root + prompt file.
     try:
         repo_root = git_module.repo_root()
@@ -770,7 +652,22 @@ async def run(config: RunConfig) -> int:
     )
     diag = writers.diagnostics
 
-    # 4) SDK client (lazy via the factory the tests monkeypatch). If
+    # 4) IssueSource (factory dispatches on config.issue_source). A
+    #    ValueError here means the config carried a value the loop
+    #    doesn't recognise — surface a clean exit 1 rather than letting
+    #    the exception escape.
+    try:
+        source = _make_issue_source(config, repo_root, diag)
+    except ValueError as exc:
+        diag.error("issue source construction failed: %s", exc)
+        print(f"ralph-afk: {exc}", file=sys.stderr)
+        try:
+            writers.run_summary.flush()
+        except Exception:
+            pass
+        return 1
+
+    # 5) SDK client (lazy via the factory the tests monkeypatch). If
     #    construction itself raises (SDK install broken, port already
     #    held by another process, etc.) we must surface a clean error
     #    rather than letting the traceback escape ``asyncio.run``.
@@ -804,6 +701,7 @@ async def run(config: RunConfig) -> int:
         renderer=renderer,
         summary=summary,
         client=client,
+        source=source,
         diag=diag,
     )
 

@@ -172,8 +172,14 @@ class Renderer:
         if count != 1:
             text.append("s", style=STYLES["panel_title"])
         if count > 0:
+            # GitHub refs are ints — render as "#42"; PRDs refs are str
+            # file paths — render as the path (no leading "#").
             text.append(
-                "  (" + ", ".join(f"#{i}" for i in issues) + ")",
+                "  ("
+                + ", ".join(
+                    f"#{i}" if isinstance(i, int) else str(i) for i in issues
+                )
+                + ")",
                 style=STYLES["meta"],
             )
         self.console.print(text)

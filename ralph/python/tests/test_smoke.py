@@ -129,14 +129,17 @@ def test_ralph_afk_rejects_unknown_max_nmt_strikes(tmp_path, monkeypatch) -> Non
     )
 
 
-def test_ralph_afk_prds_is_not_implemented(tmp_path, monkeypatch) -> None:
-    """``ISSUE_SOURCE=prds`` is accepted by the CLI but rejected by the loop.
+def test_ralph_afk_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
+    """``ISSUE_SOURCE=prds`` with no ``prds/`` directory exits 0 cleanly.
 
-    Issue #11 lifts this restriction; until then, the loop returns exit
-    2 with a clear stderr message rather than silently running
-    GitHub-mode logic.
+    PRDs mode is now implemented (issue #11). Without a ``prds/``
+    directory, :meth:`PrdsIssueSource.collect_afk_ready` returns ``[]``
+    which the loop treats as the empty-pool fast path → exit 0.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    # Provide a prompt file so we don't fail on prompt resolution.
+    (tmp_path / "ralph").mkdir()
+    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
     monkeypatch.setenv("ISSUE_SOURCE", "prds")
     result = subprocess.run(
         _ralph_afk_command(),
@@ -146,12 +149,9 @@ def test_ralph_afk_prds_is_not_implemented(tmp_path, monkeypatch) -> None:
         check=False,
         timeout=30,
     )
-    assert result.returncode == 2, (
-        f"expected exit 2 for unimplemented prds; "
+    assert result.returncode == 0, (
+        f"expected exit 0 on empty PRDs pool; "
         f"got exit={result.returncode} stderr={result.stderr!r}"
-    )
-    assert "prds" in result.stderr, (
-        f"expected prds message on stderr; stderr was:\n{result.stderr}"
     )
 
 
