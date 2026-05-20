@@ -204,7 +204,7 @@ def test_is_dirty_false_on_untracked_file_matches_bash_semantics(
 ) -> None:
     """Bash uses ``diff --quiet`` only — untracked files do NOT make it dirty.
 
-    This is a deliberate parity choice: ``ralph/afk.sh:315`` uses
+    This is a deliberate parity choice: ``ralph/sh-afk.sh:315`` uses
     ``! git diff --quiet || ! git diff --cached --quiet`` which ignores
     untracked files. Our Python wrapper mirrors that.
     """
@@ -220,6 +220,70 @@ def test_is_dirty_raises_when_git_returns_error_exit_code(
     """``git diff`` outside a repo returns rc > 1 — we raise GitError."""
     with pytest.raises(GitError):
         is_dirty(start=tmp_path)
+
+
+def test_stash_worktree_changes_stashes_tracked_and_untracked_changes(
+    tmp_path: Path,
+) -> None:
+    """Post-iteration cleanup preserves dirty leftovers without contaminating HEAD."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init", file_name="a.txt", content="v1")
+    (tmp_path / "a.txt").write_text("v2")
+    (tmp_path / "new file.txt").write_text("new")
+
+    result = git.stash_worktree_changes(
+        "ralph-afk stale worktree leftovers", start=tmp_path
+    )
+
+    assert result.created is True
+    assert result.file_count == 2
+    assert len(result.ref) == 40
+    assert is_dirty(start=tmp_path) is False
+    status = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--porcelain=v1", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+    shown = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "--no-pager",
+            "stash",
+            "show",
+            "--include-untracked",
+            "--name-only",
+            "stash@{0}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert shown.stdout.splitlines() == ["a.txt", "new file.txt"]
+
+
+def test_stash_worktree_changes_noops_on_clean_tree(tmp_path: Path) -> None:
+    """The cleanup helper is safe to call when no tracked changes remain."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init")
+
+    result = git.stash_worktree_changes(
+        "ralph-afk stale worktree leftovers", start=tmp_path
+    )
+
+    assert result.created is False
+    assert result.file_count == 0
+    assert result.ref == ""
+    stash_list = subprocess.run(
+        ["git", "-C", str(tmp_path), "stash", "list"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert stash_list.stdout == ""
 
 
 # --------------------------------------------------------------------------- #

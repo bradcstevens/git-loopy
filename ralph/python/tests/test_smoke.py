@@ -84,7 +84,7 @@ def test_ralph_afk_rejects_negative_iterations() -> None:
 def test_ralph_afk_rejects_unknown_issue_source(tmp_path, monkeypatch) -> None:
     """An unsupported ``ISSUE_SOURCE`` value is rejected with a clear error.
 
-    Matches the bash runner's behaviour at ``ralph/afk.sh:68-73``. The
+    Matches the bash runner's behaviour at ``ralph/sh-afk.sh:68-73``. The
     validation fires inside the CLI before the loop even runs.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -139,7 +139,7 @@ def test_ralph_afk_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     # Provide a prompt file so we don't fail on prompt resolution.
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
     monkeypatch.setenv("ISSUE_SOURCE", "prds")
     result = subprocess.run(
         _ralph_afk_command(),
@@ -184,7 +184,7 @@ def test_ralph_afk_outside_git_repo_fails_cleanly(tmp_path) -> None:
 
 
 def test_ralph_afk_missing_prompt_fails_cleanly(tmp_path) -> None:
-    """``ralph-afk`` inside a repo that lacks ``ralph/prompt.md`` fails with a clean message."""
+    """``ralph-afk`` inside a repo that lacks ``ralph/PROMPT.md`` fails with a clean message."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     # No ralph/ directory.
     result = subprocess.run(

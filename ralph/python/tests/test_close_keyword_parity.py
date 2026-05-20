@@ -1,7 +1,7 @@
 """Cross-runner regex parity test.
 
 This is the single most load-bearing test in the suite. The bash runner
-at ``ralph/afk.sh:192-196`` and the Python runner share one contract:
+at ``ralph/sh-afk.sh:192-196`` and the Python runner share one contract:
 the set of issue numbers extracted from a corpus of commit messages MUST
 be identical. If this test ever fails, **the failure is the spec** — bash
 or Python has drifted and the failing corpus case tells you which.
@@ -50,7 +50,7 @@ import pytest
 
 from ralph_afk.wrapper import extract_close_refs
 
-# The bash regex byte-for-byte from ralph/afk.sh:193.
+# The bash regex byte-for-byte from ralph/sh-afk.sh:193.
 _BASH_KEYWORD_RE = (
     "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+"
 )

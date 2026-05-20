@@ -547,6 +547,62 @@ async def test_iteration_session_passes_model_through(
     assert fake_client.create_calls[0]["model"] == "gpt-5.4"
 
 
+async def test_iteration_session_passes_reasoning_effort_through(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """``reasoning_effort`` is forwarded verbatim to ``create_session``.
+
+    Load-bearing: the kit's default model (``claude-opus-4.7-xhigh``)
+    rejects the service-side default of ``medium`` with a CAPI 400, so
+    the loop must be able to pin the effort per iteration. The SDK's
+    ``client.create_session`` only sends the ``reasoningEffort`` field
+    when this kwarg is set, so we assert the exact kwarg propagates.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            renderer=renderer,
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+            model="claude-opus-4.7-xhigh",
+            reasoning_effort="xhigh",
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["reasoning_effort"] == "xhigh"
+
+
+async def test_iteration_session_omits_reasoning_effort_by_default(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """When ``reasoning_effort`` is not specified, ``None`` flows through.
+
+    Preserves today's behaviour for non-pinned models: the SDK skips
+    the ``reasoningEffort`` payload field when the value is falsy, so
+    the backend keeps applying its own default.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            renderer=renderer,
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["reasoning_effort"] is None
+
+
 async def test_iteration_session_does_not_register_user_input_handler(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,

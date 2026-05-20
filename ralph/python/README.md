@@ -1,21 +1,24 @@
-# `ralph-afk` — Python peer variant of `ralph/afk.sh`
+# `ralph-afk` — Python peer variant of `ralph/sh-afk.sh`
 
 `ralph/python/` is a peer variant of the bash AFK runner at
-[`ralph/afk.sh`](../afk.sh), built on the
+[`ralph/sh-afk.sh`](../sh-afk.sh), built on the
 [GitHub Copilot Python SDK](https://github.com/github/copilot-sdk/tree/main/python).
 Both runners share [`ralph/PROMPT.md`](../PROMPT.md) and the **same wrapper
 contract** — same `ready-for-agent` filter, same `## Parent` +
 `## Acceptance criteria` discriminator, same `Closes/Fixes/Resolves #N`
 auto-close backstop, same env-var surface (`MODEL`, `ISSUE_SOURCE`,
 `MAX_NMT_STRIKES`), same clean-exit-on-empty / abort-on-stuck termination
-model.
+model. The Python runner adds one safety extension: after an iteration, any
+remaining tracked dirty worktree changes are preserved in `git stash` before
+the next iteration starts; untracked files present at that point are included
+in the same stash entry.
 
 The Python variant adds a richer terminal UX over the bash variant —
 frozen iteration `Panel`s, per-iteration token + estimated-cost signal,
 a JSONL replay log under `.ralph/logs/`, a run-summary JSON under
 `.ralph/runs/`, and opt-in OpenTelemetry tracing — at the cost of a
 one-time `uv sync` bootstrap. See the kit root
-[`README.md`](../../README.md#pick-a-runner-ralphafksh-vs-ralphpython)
+[`README.md`](../../README.md#pick-a-runner-ralphsh-afksh-vs-ralphpython)
 for the side-by-side comparison and "when to use which" guidance.
 
 > **Why a peer variant?** See ADR
@@ -54,7 +57,7 @@ the cached environment under `ralph/python/.venv/`.
 # Unlimited iterations, default model (claude-opus-4.7-xhigh).
 uv run --project ralph/python ralph-afk
 
-# Cap at 50 iterations (mirrors `bash ralph/afk.sh 50`).
+# Cap at 50 iterations (mirrors `bash ralph/sh-afk.sh 50`).
 uv run --project ralph/python ralph-afk 50
 
 # Pick a different model.
@@ -81,11 +84,31 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | Exit                  | Code | When                                                                                                                                                                                                                                                |
 | --------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty (mirrors `ralph/afk.sh`).                                                                                                                                                                      |
-| Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination (mirrors `ralph/afk.sh`).                                                                                                                                                          |
-| Aborted — stuck       | `1`  | `MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress (mirrors `ralph/afk.sh`).                                                                                                                                                      |
-| Aborted — stale       | `1`  | Working tree was dirty at the start of an iteration (mirrors `ralph/afk.sh`).                                                                                                                                                                       |
-| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, prompt file missing, malformed `RALPH_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `ISSUE_SOURCE`. Python-only — surfaces cleanly via stderr. |
+| Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty (mirrors `ralph/sh-afk.sh`).                                                                                                                                                                      |
+| Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination (mirrors `ralph/sh-afk.sh`).                                                                                                                                                          |
+| Aborted — stuck       | `1`  | `MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress (mirrors `ralph/sh-afk.sh`).                                                                                                                                                      |
+| Aborted — stale       | `1`  | Working tree was dirty at the start of an iteration, or post-iteration dirty-leftover stashing failed. Dirty leftovers after a completed iteration are normally auto-stashed instead of tripping the next iteration.                                |
+| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, prompt file missing, malformed `RALPH_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `ISSUE_SOURCE`. Live pricing fetch failures warn and fall back instead of aborting. |
+
+---
+
+## Dirty-leftover handling
+
+The start-of-iteration stale-worktree guard still aborts on pre-existing
+tracked changes, matching `ralph/sh-afk.sh`. After a successful SDK iteration,
+the Python runner checks again. If the agent left tracked staged or unstaged
+changes behind after making a partial commit, the runner runs:
+
+```bash
+git stash push -u -m "ralph-afk run=<run_id> iter=<N> stale worktree leftovers"
+```
+
+That keeps the next iteration clean without committing unrelated or incomplete
+files. The `-u` flag also captures untracked files present when tracked
+leftovers are being stashed. Each stash emits a `wrapper.worktree.stashed`
+JSONL event with `stash_ref` and `file_count`; recover with
+`git stash list | grep ralph-afk` and
+`git stash show --include-untracked --name-only <stash>`.
 
 ---
 
@@ -93,12 +116,13 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | Env var                           | Honoured | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | -------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MODEL`                           | shared   | `claude-opus-4.7-xhigh`        | Copilot CLI model id (matches `ralph/afk.sh`).                                                                                                                                                                   |
-| `ISSUE_SOURCE`                    | shared   | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files (matches `ralph/afk.sh`).                                                                                                                       |
+| `MODEL`                           | shared   | `claude-opus-4.7-xhigh`        | Copilot CLI model id (matches `ralph/sh-afk.sh`).                                                                                                                                                                   |
+| `REASONING_EFFORT`                | Python   | auto-derived from `MODEL`      | One of `low` / `medium` / `high` / `xhigh`. Unset → derived from the trailing `-<effort>` segment of the model id (e.g. `claude-opus-4.7-xhigh` → `xhigh`), so the kit's default model avoids a CAPI 400 reject. |
+| `ISSUE_SOURCE`                    | shared   | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files (matches `ralph/sh-afk.sh`).                                                                                                                       |
 | `MAX_NMT_STRIKES`                 | shared   | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `RALPH_DENY_TOOLS`                | Python   | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `RALPH_DENY_SKILLS`               | Python   | _(empty)_                      | Comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags.                                                                                   |
-| `RALPH_PRICING_FILE`              | Python   | packaged `pricing.toml`        | Explicit `pricing.toml` path. A malformed file aborts the run with exit `1` (no silent fallback — operator intent is preserved).                                                                                 |
+| `RALPH_PRICING_FILE`              | Python   | _(unset)_                      | Optional explicit `pricing.toml` override. When unset, pricing comes from the live LiteLLM catalog with a 24-hour cache and packaged fallback. A malformed override file aborts with exit `1`.                  |
 | `RALPH_OTEL_ENABLED`              | Python   | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | Python   | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
 | `RALPH_SEND_TIMEOUT_SECONDS`      | Python   | `7200` (2 h)                   | Per-iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for AFK iterations that frequently run 30+ minutes.                                                                            |
@@ -137,21 +161,23 @@ The run-summary JSON schema is documented at the top of
 
 The Python runner surfaces an **estimated cost in USD per iteration** in
 each iteration `Panel` and in the run-end summary table. This figure is
-an **estimate based on provider list prices** — it is **not** the
-amount GitHub Copilot will bill you. The Copilot CLI is billed on a
-premium-request quota that the SDK does not expose; the figures the
-renderer shows are useful for **cost-shape signal only** (which model
-is heavier than which, how iteration cost trends over a run).
+an **estimate based on provider list prices** — it is **not** necessarily
+the amount GitHub Copilot will bill you. The figures are useful for
+**cost-shape signal only**: which model is heavier than which, and how
+iteration cost trends over a run.
 
-- The packaged pricing table at
-  [`ralph_afk/pricing.toml`](ralph_afk/pricing.toml) is dated
-  **2026-05-16**. Pricing drifts; update the file or override via the
-  env var below.
-- Override the packaged table at runtime via
-  `RALPH_PRICING_FILE=/path/to/your.toml`. Schema and example entries
-  are in the packaged file.
+- By default, the runner queries the live LiteLLM model pricing/context
+  catalog over HTTPS and caches the JSON under `~/.cache/ralph-afk/` for
+  24 hours. Fresh cache entries avoid a network call on every run.
+- If the live fetch fails, the runner warns on stderr and falls back to a
+  stale cache or the packaged [`ralph_afk/pricing.toml`](ralph_afk/pricing.toml)
+  snapshot. Pricing failures do **not** abort AFK work unless an explicit
+  `RALPH_PRICING_FILE` override is malformed.
+- Use `RALPH_PRICING_FILE=/path/to/your.toml` only when you need pinned,
+  private, or offline pricing. Schema and example entries are in the
+  packaged fallback file.
 - The cost figure renders `—` (em dash) for any model not present in
-  the active pricing table — **never** `$0.00`, so downstream consumers
+  the active pricing catalog — **never** `$0.00`, so downstream consumers
   can distinguish "unknown" from "free".
 
 ---
@@ -190,7 +216,7 @@ runner pays **zero observability cost**.
 - Kit root [`README.md`](../../README.md) — overview, prerequisites,
   human-driven workflow phases (`/grill-me`, `/to-prd`, `/to-issues`,
   `/triage`), and the side-by-side runner comparison.
-- [`ralph/afk.sh`](../afk.sh) — bash variant of the AFK runner. The
+- [`ralph/sh-afk.sh`](../sh-afk.sh) — bash variant of the AFK runner. The
   source of truth for the wrapper-semantic rules both runners implement.
 - [`ralph/PROMPT.md`](../PROMPT.md) — the shared prompt loaded into
   every iteration by both runners.

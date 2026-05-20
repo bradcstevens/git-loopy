@@ -7,7 +7,7 @@
 
 ## Context
 
-The kit ships `ralph/afk.sh` as a pure-bash autonomous loop on top of the
+The kit ships `ralph/sh-afk.sh` as a pure-bash autonomous loop on top of the
 GitHub Copilot CLI's `--output-format json` event stream. The bash runner
 is austere by design — no Python, no Docker, no sandbox — and serves the
 minimal-dependency audience well. With the Copilot CLI now publishing an
@@ -26,7 +26,7 @@ wonders why), and the result of a real trade-off.
 
 ## Decision 1: Peer variant — not replacement, not subprocess wrapper
 
-`ralph/python/` is a peer to `ralph/afk.sh`. The bash runner stays
+`ralph/python/` is a peer to `ralph/sh-afk.sh`. The bash runner stays
 first-class and fully supported. Both runners read `ralph/PROMPT.md` and
 honour the same wrapper contract:
 
@@ -43,6 +43,11 @@ honour the same wrapper contract:
 | Positional `<max-iterations>` | Identical (`0` / omitted = unlimited). |
 | Env vars `MODEL` / `ISSUE_SOURCE` / `MAX_NMT_STRIKES` | Identical. |
 | `ISSUE_SOURCE=github` (default) + `ISSUE_SOURCE=prds` (legacy) | Both supported. |
+
+Python-specific safety extension: after an SDK iteration completes, tracked
+dirty leftovers are preserved with `git stash push -u` before the next
+iteration starts. The bash runner still surfaces the same situation by
+aborting on the next iteration's stale-worktree guard.
 
 Two alternatives were rejected:
 
@@ -67,7 +72,7 @@ bash or Python has drifted and the corpus tells you which case broke.
 
 ### Consequence: future wrapper-rule changes are paired changes
 
-A rule change that lands in `ralph/afk.sh` without a matching change in
+A rule change that lands in `ralph/sh-afk.sh` without a matching change in
 `ralph/python/ralph_afk/wrapper.py` (and vice versa) is a regression in
 the cross-runner contract. The parity test catches close-keyword drift;
 non-regex rule changes (e.g. AFK-ready discriminator) must be paired by

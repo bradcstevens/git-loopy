@@ -1,8 +1,8 @@
-"""ralph_afk — Python peer variant of ralph/afk.sh.
+"""ralph_afk — Python peer variant of ralph/sh-afk.sh.
 
 This package is the autonomous AFK loop built on top of the GitHub Copilot
-Python SDK. It is a peer to the bash runner at ``ralph/afk.sh``; both runners
-share ``ralph/prompt.md`` and honour the same wrapper contract.
+Python SDK. It is a peer to the bash runner at ``ralph/sh-afk.sh``; both runners
+share ``ralph/PROMPT.md`` and honour the same wrapper contract.
 
 See ADR ``docs/adr/0001-python-sdk-peer-variant.md`` for the load-bearing
 decisions (peer-variant choice; Memento Model preserved at the session level).

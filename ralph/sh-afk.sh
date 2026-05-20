@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# ralph/afk.sh — autonomous ralph loop running entirely on the local host.
+# ralph/sh-afk.sh — autonomous ralph loop running entirely on the local host.
 #
-# Each iteration runs `copilot ...` against ralph/prompt.md plus every AFK-ready
+# Each iteration runs `copilot ...` against ralph/PROMPT.md plus every AFK-ready
 # open issue from the configured issue source. Streams Copilot's text output to
 # the terminal. After every iteration, the wrapper walks new commits for
 # `Closes|Fixes|Resolves #N` references whose N was in the iteration's
@@ -20,11 +20,11 @@
 #     otherwise it is ignored (the next iteration's pool decides what's next).
 #
 # Usage:
-#   bash ralph/afk.sh                       # unlimited iterations
-#   bash ralph/afk.sh 50                    # cap at 50 iterations
-#   MODEL=claude-opus-4.7-1m-internal bash ralph/afk.sh
-#   ISSUE_SOURCE=prds bash ralph/afk.sh     # legacy local-markdown mode
-#   MAX_NMT_STRIKES=5 bash ralph/afk.sh     # tolerate more no-progress iters
+#   bash ralph/sh-afk.sh                    # unlimited iterations
+#   bash ralph/sh-afk.sh 50                 # cap at 50 iterations
+#   MODEL=claude-opus-4.7-1m-internal bash ralph/sh-afk.sh
+#   ISSUE_SOURCE=prds bash ralph/sh-afk.sh  # legacy local-markdown mode
+#   MAX_NMT_STRIKES=5 bash ralph/sh-afk.sh  # tolerate more no-progress iters
 #
 # Env:
 #   MODEL             Copilot CLI model id (default: claude-opus-4.7-xhigh)
@@ -42,7 +42,7 @@
 # Skills:
 #   This loop is designed to cooperate with the skills installed under
 #   ~/.agents/skills (matt pocock's engineering + productivity skills plus
-#   vercel-labs/find-skills). The companion prompt at ralph/prompt.md routes
+#   vercel-labs/find-skills). The companion prompt at ralph/PROMPT.md routes
 #   work to /diagnose, /prototype, /tdd, /improve-codebase-architecture,
 #   /zoom-out, and /grill-with-docs at the appropriate phase.
 
@@ -51,7 +51,7 @@ set -euo pipefail
 on_err() {
   local rc=$?
   local line=${BASH_LINENO[0]:-?}
-  printf '\nralph/afk.sh aborted at line %s (exit %s): %s\n' \
+  printf '\nralph/sh-afk.sh aborted at line %s (exit %s): %s\n' \
     "$line" "$rc" "${BASH_COMMAND}" >&2
 }
 trap on_err ERR
@@ -60,7 +60,7 @@ trap 'echo "interrupted" >&2; exit 130' INT TERM
 # Optional positional: max iterations (0 / omitted = unlimited).
 MAX_ITERATIONS="${1:-0}"
 if ! [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
-  echo "Usage: bash ralph/afk.sh [<iterations>]   (default: unlimited)" >&2
+  echo "Usage: bash ralph/sh-afk.sh [<iterations>]   (default: unlimited)" >&2
   exit 2
 fi
 
@@ -103,8 +103,8 @@ if [ "$ISSUE_SOURCE" = "github" ]; then
   fi
 fi
 
-if [ ! -f ralph/prompt.md ]; then
-  echo "Error: ralph/prompt.md not found. Run this script from the repo root." >&2
+if [ ! -f ralph/PROMPT.md ]; then
+  echo "Error: ralph/PROMPT.md not found. Run this script from the repo root." >&2
   exit 1
 fi
 
@@ -249,7 +249,7 @@ enforce_issue_closures() {
     [ -z "$shas" ] && shas="$head_sha"
     comment_body="Implemented in $shas.
 
-Closed by ralph/afk.sh wrapper because the agent did not run \`gh issue close\` itself
+Closed by ralph/sh-afk.sh wrapper because the agent did not run \`gh issue close\` itself
 this iteration (commit messages did reference \`Closes #$n\`).
 
 If this closure looks wrong, reopen with \`gh issue reopen $n\` — the wrapper
@@ -344,7 +344,7 @@ while true; do
   fi
   echo "  Passing $issue_count AFK-ready issue(s) to the agent."
 
-  prompt="$(cat ralph/prompt.md)"
+  prompt="$(cat ralph/PROMPT.md)"
 
   pre_sha="$(git rev-parse HEAD 2>/dev/null || echo '')"
 

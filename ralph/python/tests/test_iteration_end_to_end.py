@@ -34,6 +34,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -50,7 +51,9 @@ from copilot.generated.session_events import (
 from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
 from ralph_afk import loop as loop_module
+from ralph_afk import pricing as pricing_module
 from ralph_afk.config import RunConfig
+from ralph_afk.pricing import ModelPricing, Pricing
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +185,27 @@ def _make_issue(
     )
 
 
+@pytest.fixture(autouse=True)
+def _offline_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep loop tests deterministic while preserving explicit-file failures."""
+
+    def fake_load_pricing(path: Path | None = None) -> Pricing:
+        if path is not None:
+            return pricing_module.load_pricing(path)
+        return Pricing(
+            models={
+                "claude-opus-4.7-xhigh": ModelPricing(
+                    input_per_mtok=Decimal("5.00"),
+                    output_per_mtok=Decimal("25.00"),
+                    context_window=1_000_000,
+                )
+            },
+            source="test-fixture",
+        )
+
+    monkeypatch.setattr(loop_module, "load_pricing", fake_load_pricing)
+
+
 # ---------------------------------------------------------------------------
 # The end-to-end test
 # ---------------------------------------------------------------------------
@@ -192,7 +216,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
 
     Wires:
 
-    * tmp_path as the repo root with a ``ralph/prompt.md`` and a
+    * tmp_path as the repo root with a ``ralph/PROMPT.md`` and a
       pre-existing ``.gitignore``.
     * Two issues in the AFK-ready pool (#42 OPEN with discriminator;
       #43 OPEN without — should be filtered out at the body-discriminator
@@ -206,7 +230,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     """
     # -- 1) Fake repo on disk ---------------------------------------------
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text(
+    (tmp_path / "ralph" / "PROMPT.md").write_text(
         "You are ralph. Implement the AFK-ready issues.\n",
         encoding="utf-8",
     )
@@ -419,7 +443,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
 def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     """An empty AFK-ready pool short-circuits with exit code 0 — no SDK call."""
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
@@ -452,7 +476,7 @@ def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
 def test_loop_stale_worktree_exits_one(tmp_path, monkeypatch) -> None:
     """A dirty worktree on iteration 1 aborts with exit code 1."""
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
@@ -474,6 +498,142 @@ def test_loop_stale_worktree_exits_one(tmp_path, monkeypatch) -> None:
 
     assert exit_code == 1
     assert len(fake_client.created) == 0
+
+
+def test_loop_stashes_dirty_leftovers_before_next_iteration(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Dirty leftovers after an iteration are preserved and cleared before continuing."""
+    (tmp_path / "ralph").mkdir()
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
+    ready_md = tmp_path / "prds" / "featA" / "001-ready.md"
+    ready_md.parent.mkdir(parents=True)
+    ready_md.write_text(
+        "# Ready\n\n## Parent\nfeatA\n\n## Acceptance criteria\n- impl\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    dirty_values = iter([False, True, False, False])
+    dirty_calls: list[int] = []
+
+    def fake_is_dirty(start: Any = None) -> bool:
+        dirty_calls.append(len(dirty_calls) + 1)
+        return next(dirty_values)
+
+    monkeypatch.setattr(git_module, "is_dirty", fake_is_dirty)
+    head_values = iter(["pre-1", "post-1", "pre-2", "post-2"])
+    monkeypatch.setattr(
+        git_module, "head_sha", lambda start=None: next(head_values)
+    )
+    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
+    monkeypatch.setattr(git_module, "commits_between", lambda pre, head, start=None: [])
+
+    @dataclass(frozen=True)
+    class FakeStashResult:
+        created: bool
+        ref: str
+        file_count: int
+        message: str
+
+    stash_calls: list[tuple[str, Any]] = []
+
+    def fake_stash_worktree_changes(
+        message: str,
+        *,
+        start: Any = None,
+    ) -> FakeStashResult:
+        stash_calls.append((message, start))
+        return FakeStashResult(
+            created=True,
+            ref="f" * 40,
+            file_count=2,
+            message=message,
+        )
+
+    monkeypatch.setattr(
+        git_module,
+        "stash_worktree_changes",
+        fake_stash_worktree_changes,
+        raising=False,
+    )
+
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="prds", max_iterations=2, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert len(fake_client.created) == 2
+    assert dirty_calls == [1, 2, 3, 4]
+    assert len(stash_calls) == 1
+    stash_message, stash_start = stash_calls[0]
+    assert stash_message.startswith("ralph-afk run=")
+    assert " iter=1 " in stash_message
+    assert stash_message.endswith("stale worktree leftovers")
+    assert stash_start == tmp_path
+
+    logs_dir = tmp_path / ".ralph" / "logs"
+    log_lines = next(logs_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+    stashed_events = [
+        json.loads(raw)
+        for raw in log_lines
+        if json.loads(raw)["type"] == "wrapper.worktree.stashed"
+    ]
+    assert len(stashed_events) == 1
+    stashed = stashed_events[0]
+    assert stashed["type"] == "wrapper.worktree.stashed"
+    assert stashed["iter"] == 1
+    assert stashed["stash_ref"] == "f" * 40
+    assert stashed["file_count"] == 2
+
+
+def test_loop_aborts_when_dirty_leftover_stash_fails(tmp_path, monkeypatch) -> None:
+    """If cleanup cannot preserve leftovers, abort before opening another session."""
+    (tmp_path / "ralph").mkdir()
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
+    ready_md = tmp_path / "prds" / "featA" / "001-ready.md"
+    ready_md.parent.mkdir(parents=True)
+    ready_md.write_text(
+        "# Ready\n\n## Parent\nfeatA\n\n## Acceptance criteria\n- impl\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    dirty_values = iter([False, True])
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: next(dirty_values))
+    head_values = iter(["pre-1", "post-1"])
+    monkeypatch.setattr(
+        git_module, "head_sha", lambda start=None: next(head_values)
+    )
+    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
+    monkeypatch.setattr(git_module, "commits_between", lambda pre, head, start=None: [])
+
+    def fail_stash_worktree_changes(message: str, *, start: Any = None) -> None:
+        raise git_module.GitError(["git", "stash", "push"], 1, "stash failed")
+
+    monkeypatch.setattr(
+        git_module,
+        "stash_worktree_changes",
+        fail_stash_worktree_changes,
+        raising=False,
+    )
+
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="prds", max_iterations=2, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 1
+    assert len(fake_client.created) == 1
+
+    logs_dir = tmp_path / ".ralph" / "logs"
+    log_lines = next(logs_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+    types_seen = [json.loads(raw)["type"] for raw in log_lines]
+    assert "wrapper.stale_worktree.aborted" in types_seen
 
 
 def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
@@ -499,7 +659,7 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
     """
     # -- 1) Fake repo on disk with a PRDs fixture tree --------------------
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
     ready_md = tmp_path / "prds" / "featA" / "001-ready.md"
@@ -696,7 +856,7 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
 def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     """An absent ``prds/`` directory short-circuits with exit 0 — no SDK call."""
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
     # NB: no `prds/` directory created.
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
@@ -727,7 +887,7 @@ def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
 def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> None:
     """If ``gh auth status`` is not authenticated, the loop aborts with exit 1."""
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(gh_module, "auth_status", lambda: False)
@@ -750,7 +910,7 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     aborts on iteration 3.
     """
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
@@ -803,10 +963,10 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     The post-iteration accounting (commits_between, auto-close backstop,
     strike tick, iteration.end emit, counters persist) still runs — the
     SDK failure is contained to "no progress" semantics matching bash
-    parity at ``ralph/afk.sh:365-367``.
+    parity at ``ralph/sh-afk.sh:365-367``.
     """
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
@@ -867,7 +1027,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     strike machine from running.
     """
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
@@ -921,7 +1081,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
 def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> None:
     """If ``_make_client()`` raises, ``run()`` returns 1 with no traceback escape."""
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
@@ -949,7 +1109,7 @@ def test_loop_bad_pricing_file_returns_exit_one(tmp_path, monkeypatch) -> None:
     packaged default, because that hides the operator's intent.
     """
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     # Write a broken TOML file to point pricing_file at.
     bad_pricing = tmp_path / "bad-pricing.toml"
@@ -977,7 +1137,7 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     strikes), so the cap is the only stopping condition.
     """
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "ralph" / "PROMPT.md").write_text("be ralph", encoding="utf-8")
 
     monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
     monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
@@ -1081,7 +1241,7 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
 
     # -- 1) Fake repo on disk ---------------------------------------------
     (tmp_path / "ralph").mkdir()
-    (tmp_path / "ralph" / "prompt.md").write_text(
+    (tmp_path / "ralph" / "PROMPT.md").write_text(
         "You are ralph.\n",
         encoding="utf-8",
     )

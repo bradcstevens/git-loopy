@@ -50,6 +50,7 @@ from ralph_afk.events import (
     WRAPPER_RUN_START,
     WRAPPER_STALE_WORKTREE_ABORTED,
     WRAPPER_STRIKE,
+    WRAPPER_WORKTREE_STASHED,
     make_event,
 )
 from ralph_afk.pricing import ModelPricing, Pricing
@@ -457,6 +458,21 @@ def test_wrapper_stale_worktree_aborted_renders_error() -> None:
     renderer.render({"type": WRAPPER_STALE_WORKTREE_ABORTED})
     out = buf.getvalue()
     assert "stale" in out.lower() or "worktree" in out.lower() or "dirty" in out.lower()
+
+
+def test_wrapper_worktree_stashed_renders_recovery_hint() -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_WORKTREE_STASHED,
+            "stash_ref": "abcdef1234567890",
+            "file_count": 2,
+        }
+    )
+    out = buf.getvalue()
+    assert "stashed" in out.lower()
+    assert "2" in out
+    assert "abcdef1234" in out
 
 
 def test_wrapper_ask_user_attempted_renders_warning() -> None:

@@ -430,7 +430,7 @@ def test_issue_close_verifies_state_after_close(monkeypatch) -> None:
 def test_issue_close_raises_when_verify_state_is_not_closed(monkeypatch) -> None:
     """If ``gh issue close`` returns success but state is still OPEN, raise.
 
-    This mirrors the bash check at ``ralph/afk.sh:255-263``: a successful
+    This mirrors the bash check at ``ralph/sh-afk.sh:255-263``: a successful
     close subprocess that did not actually close the issue must be surfaced
     so the loop does not miscount closures.
     """

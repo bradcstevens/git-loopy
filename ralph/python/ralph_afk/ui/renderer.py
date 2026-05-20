@@ -62,6 +62,7 @@ from ralph_afk.events import (
     WRAPPER_RUN_START,
     WRAPPER_STALE_WORKTREE_ABORTED,
     WRAPPER_STRIKE,
+    WRAPPER_WORKTREE_STASHED,
 )
 
 from .console import STYLES
@@ -191,6 +192,22 @@ class Renderer:
             "stale worktree — aborting (commit or stash before re-running)",
             style=STYLES["error"],
         )
+        self.console.print(text)
+
+    def _on_worktree_stashed(self, event: dict[str, Any]) -> None:
+        stash_ref = event.get("stash_ref", "")
+        file_count = event.get("file_count", 0)
+        short_ref = stash_ref[:10] if isinstance(stash_ref, str) else ""
+        text = Text()
+        text.append("↷ ", style=STYLES["warning"])
+        text.append("stashed dirty worktree leftovers", style=STYLES["warning"])
+        text.append(f" ({file_count} file", style=STYLES["meta"])
+        if file_count != 1:
+            text.append("s", style=STYLES["meta"])
+        text.append(")", style=STYLES["meta"])
+        if short_ref:
+            text.append(" at ", style=STYLES["meta"])
+            text.append(short_ref, style=STYLES["meta"])
         self.console.print(text)
 
     def _on_commit_recorded(self, event: dict[str, Any]) -> None:
@@ -428,6 +445,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_STALE_WORKTREE_ABORTED: Renderer._on_stale_worktree_aborted,
+    WRAPPER_WORKTREE_STASHED: Renderer._on_worktree_stashed,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
     WRAPPER_STRIKE: Renderer._on_strike,

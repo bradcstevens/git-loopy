@@ -18,9 +18,10 @@ Design notes:
 
 * **Frozen.** The loop reuses the same config across every iteration;
   freezing makes accidental mid-run mutation impossible.
-* **No I/O at construction time.** ``pricing_file`` is a :class:`Path`
-  reference — actually opening it is :func:`ralph_afk.pricing.load_pricing`'s
-  job and only happens inside :func:`ralph_afk.loop.run`.
+* **No I/O at construction time.** ``pricing_file`` is an optional
+  :class:`Path` override — file reads or live catalog fetches are
+  :func:`ralph_afk.pricing.load_pricing`'s job and only happen inside
+  :func:`ralph_afk.loop.run`.
 * **``otel_enabled`` is plumbed but inert in this slice.** Issue #12
   wires it; this slice just makes sure the flag survives the CLI →
   RunConfig → loop pipe so #12 doesn't have to re-touch the dataclass.
@@ -34,7 +35,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-__all__ = ["RunConfig"]
+__all__ = ["RunConfig", "REASONING_EFFORTS"]
+
+#: Reasoning-effort values the Copilot SDK's ``ReasoningEffort`` literal
+#: accepts. Kept as a module-level constant so :mod:`ralph_afk.cli`'s
+#: auto-derivation helper and ``__post_init__`` validation share one
+#: source of truth. The list mirrors
+#: ``copilot.session.ReasoningEffort`` (a stdlib ``Literal``); a future
+#: SDK version that adds an effort will need this set updated in lockstep.
+REASONING_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh"})
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,16 @@ class RunConfig:
     Attributes:
         model: Optional Copilot model id override. ``None`` lets the SDK
             pick its default (which respects ``~/.copilot`` config).
+        reasoning_effort: Optional reasoning-effort override forwarded to
+            ``copilot.CopilotClient.create_session``. Must be one of
+            ``"low"`` / ``"medium"`` / ``"high"`` / ``"xhigh"`` or
+            ``None`` (let the SDK / service pick). Some model variants
+            pin reasoning effort to a single value — e.g.
+            ``claude-opus-4.7-xhigh`` only accepts ``"xhigh"`` — and the
+            service rejects mismatched defaults with a CAPI 400. The
+            CLI auto-derives a safe default from the model id suffix so
+            the kit's default model works out-of-the-box; the
+            ``REASONING_EFFORT`` env var overrides the auto-derived value.
         issue_source: ``"github"`` (default) for the GitHub-issue-backed
             collector or ``"prds"`` for the legacy local-markdown layout.
             This slice (#10) only implements ``"github"``; ``"prds"``
@@ -51,7 +70,7 @@ class RunConfig:
             for it.
         max_iterations: Cap on iterations. ``0`` (the default) means
             unlimited — mirrors the bash positional arg semantics at
-            ``ralph/afk.sh:307-310``.
+            ``ralph/sh-afk.sh:307-310``.
         max_nmt_strikes: Consecutive no-progress iterations tolerated
             before the loop aborts non-zero. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
@@ -66,10 +85,11 @@ class RunConfig:
             itself lands in issue #12; this slice just plumbs the flag.
         pricing_file: Optional explicit path to a ``pricing.toml``.
             ``None`` lets :func:`ralph_afk.pricing.load_pricing` resolve
-            from ``RALPH_PRICING_FILE`` or the packaged default.
+            from ``RALPH_PRICING_FILE`` or the default live catalog/cache.
     """
 
     model: str | None = None
+    reasoning_effort: str | None = None
     issue_source: Literal["github", "prds"] = "github"
     max_iterations: int = 0
     max_nmt_strikes: int = 3
@@ -98,4 +118,13 @@ class RunConfig:
         if self.verbosity < 0 or self.verbosity > 3:
             raise ValueError(
                 f"verbosity must be in 0..3, got {self.verbosity}"
+            )
+        if (
+            self.reasoning_effort is not None
+            and self.reasoning_effort not in REASONING_EFFORTS
+        ):
+            raise ValueError(
+                f"reasoning_effort must be one of "
+                f"{sorted(REASONING_EFFORTS)} or None, got "
+                f"{self.reasoning_effort!r}"
             )

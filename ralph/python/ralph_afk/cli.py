@@ -17,7 +17,7 @@ Precedence rules:
   overridden by an absent CLI flag. To remove an env baseline, unset
   the env var or use ``-E`` semantics in the wrapper script.
 
-CLI surface — mirrors ``ralph/afk.sh`` and extends it with the new
+CLI surface — mirrors ``ralph/sh-afk.sh`` and extends it with the new
 deep-module knobs:
 
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
@@ -30,14 +30,19 @@ deep-module knobs:
 Env vars:
 
 * ``MODEL`` — Copilot model id override.
+* ``REASONING_EFFORT`` — Optional reasoning-effort override
+  (``low`` / ``medium`` / ``high`` / ``xhigh``). When unset, the runner
+  auto-derives a safe default from the resolved model id's suffix —
+  e.g. ``claude-opus-4.7-xhigh`` → ``xhigh`` — so the kit's default
+  model works out-of-the-box without a 400 from the backend.
 * ``ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
 * ``RALPH_DENY_TOOLS`` — comma-separated tool denylist (set-unioned
   with ``--deny-tool`` flags).
 * ``RALPH_DENY_SKILLS`` — comma-separated skill denylist.
-* ``RALPH_PRICING_FILE`` — explicit ``pricing.toml`` path (overrides
-  the packaged default).
+* ``RALPH_PRICING_FILE`` — optional explicit ``pricing.toml`` path
+  (overrides the default live pricing catalog/cache path).
 * ``RALPH_OTEL_ENABLED`` — truthy ``"1"`` enables OTel plumbing
   (operative wiring lands in issue #12).
 * ``OTEL_EXPORTER_OTLP_ENDPOINT`` — presence enables OTel.
@@ -52,12 +57,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ralph_afk.config import RunConfig
+from ralph_afk.config import REASONING_EFFORTS, RunConfig
 
 __all__ = ["main", "build_parser", "resolve_repo_root"]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
-# Mirrors bash ``ralph/afk.sh:65`` so a wrapper script calling either
+# Mirrors bash ``ralph/sh-afk.sh:65`` so a wrapper script calling either
 # variant with no ``MODEL`` set produces parity behaviour.
 _DEFAULT_MODEL = "claude-opus-4.7-xhigh"
 
@@ -129,18 +134,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ralph-afk",
         description=(
             "Autonomous AFK loop on the GitHub Copilot Python SDK. "
-            "Peer variant of ralph/afk.sh — same wrapper contract, "
+            "Peer variant of ralph/sh-afk.sh — same wrapper contract, "
             "richer terminal UX."
         ),
         epilog=(
             "Environment variables:\n"
             "  MODEL                       Copilot model id override.\n"
+            "  REASONING_EFFORT            Reasoning-effort override "
+            "(low|medium|high|xhigh).\n"
+            "                              When unset, auto-derived "
+            "from the model id suffix\n"
+            "                              (e.g. "
+            "claude-opus-4.7-xhigh → xhigh).\n"
             "  ISSUE_SOURCE                'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
             "  MAX_NMT_STRIKES             Strike threshold (default: 3).\n"
             "  RALPH_DENY_TOOLS            Comma-separated tool denylist.\n"
             "  RALPH_DENY_SKILLS           Comma-separated skill denylist.\n"
-            "  RALPH_PRICING_FILE          Explicit pricing.toml path.\n"
+            "  RALPH_PRICING_FILE          Optional pricing.toml override.\n"
             "  RALPH_OTEL_ENABLED          Truthy '1' enables OTel.\n"
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
             "  RALPH_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
@@ -157,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Cap the number of iterations (0 or omitted = unlimited; "
             "default: 0). Mirrors the positional arg accepted by "
-            "ralph/afk.sh."
+            "ralph/sh-afk.sh."
         ),
     )
     parser.add_argument(
@@ -269,6 +280,60 @@ def _resolve_pricing_file() -> Path | None:
     return Path(raw)
 
 
+def _derive_reasoning_effort_from_model(model: str | None) -> str | None:
+    """Derive a default ``reasoning_effort`` from a model id suffix.
+
+    Some Copilot model ids pin the supported reasoning effort to a
+    single value and surface that pin via the trailing ``-<effort>``
+    segment of the model id — for example ``claude-opus-4.7-xhigh``
+    only accepts ``"xhigh"`` and the backend rejects the service-default
+    ``"medium"`` with a CAPI 400. Returning the suffix matches the only
+    supported value for such variants so the SDK call goes through
+    on the very first iteration.
+
+    Models without a recognised suffix return ``None`` so the SDK
+    sends no ``reasoningEffort`` field and the backend applies its own
+    default — preserving today's behaviour for non-pinned models.
+
+    Args:
+        model: The resolved model id, or ``None``.
+
+    Returns:
+        One of ``"low"`` / ``"medium"`` / ``"high"`` / ``"xhigh"`` if
+        the model id ends with that suffix, otherwise ``None``.
+    """
+    if not model:
+        return None
+    for effort in REASONING_EFFORTS:
+        if model.endswith(f"-{effort}"):
+            return effort
+    return None
+
+
+def _resolve_reasoning_effort(model: str | None) -> str | None:
+    """Resolve ``reasoning_effort`` from env-var override or model suffix.
+
+    Precedence:
+
+    1. ``REASONING_EFFORT`` env var (must be one of the documented
+       literals; an invalid value is a hard ``SystemExit`` because the
+       SDK would otherwise raise mid-iteration).
+    2. Auto-derived from the model id (see
+       :func:`_derive_reasoning_effort_from_model`).
+    3. ``None`` (let the backend pick).
+    """
+    raw = os.environ.get("REASONING_EFFORT")
+    if raw is not None and raw.strip():
+        candidate = raw.strip().lower()
+        if candidate not in REASONING_EFFORTS:
+            raise SystemExit(
+                f"ralph-afk: error: REASONING_EFFORT must be one of "
+                f"{sorted(REASONING_EFFORTS)}, got {raw!r}"
+            )
+        return candidate
+    return _derive_reasoning_effort_from_model(model)
+
+
 def _build_config(args: argparse.Namespace) -> RunConfig:
     """Compose a :class:`RunConfig` from parsed CLI args + env vars."""
     # CLI flags + env-var union for the denylists.
@@ -284,8 +349,12 @@ def _build_config(args: argparse.Namespace) -> RunConfig:
     issue_source = _resolve_issue_source()
     max_nmt_strikes = _resolve_max_nmt_strikes()
 
+    model = os.environ.get("MODEL") or _DEFAULT_MODEL
+    reasoning_effort = _resolve_reasoning_effort(model)
+
     return RunConfig(
-        model=os.environ.get("MODEL") or _DEFAULT_MODEL,
+        model=model,
+        reasoning_effort=reasoning_effort,
         issue_source=issue_source,  # type: ignore[arg-type]
         max_iterations=int(args.max_iterations),
         max_nmt_strikes=max_nmt_strikes,

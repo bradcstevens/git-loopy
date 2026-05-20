@@ -3,7 +3,7 @@
 Covers the deep, pure pricing module:
 
 * Resolution order in :func:`load_pricing` (explicit path beats env var beats
-  packaged default).
+  live catalog fetch/cache/fallback).
 * Parse-failure error messages name the offending file and field.
 * Decimal-not-float precision (the canonical ``0.1 + 0.2 == 0.3`` trap).
 * :func:`estimate_cost` and :func:`context_utilisation` return ``None`` for
@@ -16,6 +16,7 @@ Covers the deep, pure pricing module:
 from __future__ import annotations
 
 import ast
+import json
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -34,20 +35,146 @@ from ralph_afk.pricing import (
 
 
 # ---------------------------------------------------------------------------
-# load_pricing — resolution order and parsing
+# load_pricing — live catalog, resolution order, and parsing
 # ---------------------------------------------------------------------------
 
 
-def test_load_pricing_packaged_default_contains_kit_default_model():
-    """The packaged pricing.toml must include ``claude-opus-4.7-xhigh``."""
-    p = load_pricing()
-    assert "claude-opus-4.7-xhigh" in p.models
+def _live_catalog_bytes() -> bytes:
+    return json.dumps(
+        {
+            "gpt-5.4": {
+                "input_cost_per_token": 2.5e-06,
+                "output_cost_per_token": 1.5e-05,
+                "max_input_tokens": 1_050_000,
+                "max_output_tokens": 128_000,
+                "mode": "chat",
+            },
+            "gpt-5-mini": {
+                "input_cost_per_token": 2.5e-07,
+                "output_cost_per_token": 2e-06,
+                "max_input_tokens": 272_000,
+                "max_output_tokens": 128_000,
+                "mode": "chat",
+            },
+            "anthropic.claude-opus-4-7": {
+                "input_cost_per_token": 5e-06,
+                "output_cost_per_token": 2.5e-05,
+                "max_input_tokens": 1_000_000,
+                "max_output_tokens": 128_000,
+                "mode": "chat",
+            },
+            "anthropic.claude-sonnet-4-6": {
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.5e-05,
+                "max_tokens": 1_000_000,
+                "mode": "chat",
+            },
+            "image-model": {
+                "mode": "image_generation",
+                "output_cost_per_image": 0.06,
+            },
+        }
+    ).encode("utf-8")
 
 
-def test_load_pricing_packaged_default_has_at_least_three_models():
-    """Packaged file: kit default plus at least two others (per PRD/issue)."""
-    p = load_pricing()
+def test_load_pricing_live_default_contains_kit_default_model(tmp_path: Path) -> None:
+    """Default pricing comes from the live catalog shape, not packaged TOML."""
+    calls: list[tuple[str, float]] = []
+
+    def fake_fetcher(url: str, timeout: float) -> bytes:
+        calls.append((url, timeout))
+        return _live_catalog_bytes()
+
+    p = load_pricing(fetcher=fake_fetcher, cache_path=tmp_path / "prices.json")
+
+    assert calls, "live catalog must be queried on a cold cache"
+    assert p.get("claude-opus-4.7-xhigh") is not None
+    assert p.get("gpt-5.4") is not None
+    assert p.source.startswith("live:")
+    assert p.source_error is None
+
+
+def test_load_pricing_live_default_has_at_least_three_models(tmp_path: Path) -> None:
+    """The live catalog parser keeps token-priced chat entries and ignores other modes."""
+    p = load_pricing(
+        fetcher=lambda _url, _timeout: _live_catalog_bytes(),
+        cache_path=tmp_path / "prices.json",
+    )
     assert len(p.models) >= 3
+    assert "image-model" not in p.models
+
+
+def test_load_pricing_converts_litellm_per_token_to_per_mtok(
+    tmp_path: Path,
+) -> None:
+    p = load_pricing(
+        fetcher=lambda _url, _timeout: _live_catalog_bytes(),
+        cache_path=tmp_path / "prices.json",
+    )
+
+    m = p.models["gpt-5.4"]
+    assert m.input_per_mtok == Decimal("2.5")
+    assert m.output_per_mtok == Decimal("15.0")
+    assert m.context_window == 1_050_000
+
+
+def test_load_pricing_resolves_copilot_claude_reasoning_alias(
+    tmp_path: Path,
+) -> None:
+    p = load_pricing(
+        fetcher=lambda _url, _timeout: _live_catalog_bytes(),
+        cache_path=tmp_path / "prices.json",
+    )
+
+    opus = p.get("claude-opus-4.7-xhigh")
+    assert opus is not None
+    assert opus.input_per_mtok == Decimal("5.0")
+    assert opus.output_per_mtok == Decimal("25.0")
+
+
+def test_load_pricing_uses_fresh_cache_without_network(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "prices.json"
+    cache.write_bytes(_live_catalog_bytes())
+
+    def unexpected_fetch(_url: str, _timeout: float) -> bytes:
+        raise AssertionError("fresh cache should avoid network")
+
+    p = load_pricing(fetcher=unexpected_fetch, cache_path=cache)
+
+    assert p.get("gpt-5-mini") is not None
+    assert p.source.startswith("cache:")
+
+
+def test_load_pricing_ignores_corrupt_fresh_cache_and_fetches_live(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "prices.json"
+    cache.write_text("{not json", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_fetcher(url: str, _timeout: float) -> bytes:
+        calls.append(url)
+        return _live_catalog_bytes()
+
+    p = load_pricing(fetcher=fake_fetcher, cache_path=cache)
+
+    assert calls
+    assert p.source.startswith("live:")
+    assert p.get("gpt-5.4") is not None
+
+
+def test_load_pricing_live_failure_falls_back_without_aborting(
+    tmp_path: Path,
+) -> None:
+    def failing_fetch(_url: str, _timeout: float) -> bytes:
+        raise PricingError("network unavailable")
+
+    p = load_pricing(fetcher=failing_fetch, cache_path=tmp_path / "missing.json")
+
+    assert "live pricing unavailable" in (p.source_error or "")
+    assert p.get("claude-opus-4.7-xhigh") is not None
 
 
 def test_load_pricing_explicit_path(tmp_path: Path) -> None:
@@ -101,11 +228,15 @@ def test_load_pricing_explicit_path_beats_env_var(
 
 def test_load_pricing_env_var_empty_string_falls_through_to_packaged(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """An unset env var is conventional in tests; verify empty-string behaves the same."""
+    """An empty file override falls through to the live pricing source."""
     monkeypatch.setenv("RALPH_PRICING_FILE", "")
-    p = load_pricing()
-    assert "claude-opus-4.7-xhigh" in p.models
+    p = load_pricing(
+        fetcher=lambda _url, _timeout: _live_catalog_bytes(),
+        cache_path=tmp_path / "prices.json",
+    )
+    assert p.get("claude-opus-4.7-xhigh") is not None
 
 
 def test_load_pricing_malformed_toml_raises_with_path(tmp_path: Path) -> None:
@@ -327,11 +458,12 @@ def test_packaged_pricing_toml_has_iso_date_comment() -> None:
     )
 
 
-def test_packaged_pricing_toml_warns_about_premium_request_billing() -> None:
-    """The PRD wording: 'PROVIDER LIST PRICES, not GitHub Copilot's premium-request billing.'"""
+def test_packaged_pricing_toml_documents_fallback_role() -> None:
+    """The packaged file is now a fallback/schema sample, not the default source."""
     text = _packaged_pricing_toml_text()
     assert "PROVIDER LIST PRICES" in text
-    assert "premium-request" in text
+    assert "fallback" in text.lower()
+    assert "live LiteLLM pricing" in text
 
 
 def test_packaged_pricing_toml_documents_env_var_override() -> None:
@@ -343,7 +475,7 @@ def test_packaged_pricing_kit_default_model_has_realistic_values() -> None:
     """Sanity-bound: an accidental units mistake (dollars-per-token, bytes-not-tokens)
     trips this without requiring a brittle exact-value match against drifting list prices.
     """
-    p = load_pricing()
+    p = load_pricing(Path(pricing_module.__file__).parent / "pricing.toml")
     m = p.models["claude-opus-4.7-xhigh"]
     assert Decimal("0.01") < m.input_per_mtok < Decimal("1000")
     assert Decimal("0.01") < m.output_per_mtok < Decimal("1000")
@@ -368,8 +500,12 @@ def test_pricing_module_imports_only_stdlib() -> None:
     tree = ast.parse(source)
     stdlib_allow = {
         "__future__",
+        "json",
         "os",
+        "time",
         "tomllib",
+        "urllib.error",
+        "urllib.request",
         "dataclasses",
         "decimal",
         "importlib",

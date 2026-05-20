@@ -14,10 +14,12 @@ Public surface:
 * :func:`repo_root` — top-level directory via ``git rev-parse --show-toplevel``.
 * :func:`head_sha` — current HEAD SHA via ``git rev-parse HEAD``.
 * :func:`is_dirty` — mirrors the bash stale-worktree guard at
-  ``ralph/afk.sh:315``: returns ``True`` if either ``git diff --quiet`` or
+  ``ralph/sh-afk.sh:315``: returns ``True`` if either ``git diff --quiet`` or
   ``git diff --cached --quiet`` exits with code 1. Codes ``> 1`` indicate a
   real git failure (corrupted index, etc.) and raise :exc:`GitError` rather
   than being conflated with "dirty".
+* :func:`stash_worktree_changes` — preserves post-iteration dirty leftovers
+  in ``git stash`` so the next AFK iteration starts from a clean tree.
 * :func:`commits_between` — list of :class:`Commit` for ``pre..head``.
 * :func:`recent_commits` — last ``n`` commits, newest-first.
 * :func:`range_count` — ``git rev-list --count`` for ``pre..head``.
@@ -44,9 +46,11 @@ from typing import Final, Sequence
 __all__ = [
     "GitError",
     "Commit",
+    "StashResult",
     "repo_root",
     "head_sha",
     "is_dirty",
+    "stash_worktree_changes",
     "commits_between",
     "recent_commits",
     "range_count",
@@ -118,6 +122,24 @@ class Commit:
         if not self.body:
             return self.subject
         return f"{self.subject}\n{self.body}"
+
+
+@dataclass(frozen=True)
+class StashResult:
+    """Result of preserving dirty worktree leftovers in ``git stash``.
+
+    Attributes:
+        created: ``True`` when a stash entry was created. ``False`` means the
+            tree was already clean.
+        ref: Full SHA for the created stash commit, or ``""`` on no-op.
+        file_count: Number of porcelain status entries captured.
+        message: Stash message passed to ``git stash push``.
+    """
+
+    created: bool
+    ref: str
+    file_count: int
+    message: str
 
 
 def _run(
@@ -205,7 +227,7 @@ def head_sha(start: Path | str | None = None) -> str:
 def is_dirty(start: Path | str | None = None) -> bool:
     """Return ``True`` if the working tree has uncommitted staged or unstaged changes.
 
-    Mirrors the bash stale-worktree guard at ``ralph/afk.sh:315``::
+    Mirrors the bash stale-worktree guard at ``ralph/sh-afk.sh:315``::
 
         if ! git diff --quiet || ! git diff --cached --quiet; then
             # dirty
@@ -248,6 +270,69 @@ def is_dirty(start: Path | str | None = None) -> bool:
                 cmd, completed.returncode, _stderr_tail(completed.stderr)
             )
     return False
+
+
+def stash_worktree_changes(
+    message: str,
+    *,
+    start: Path | str | None = None,
+) -> StashResult:
+    """Stash tracked and untracked worktree changes.
+
+    The AFK loop calls this after an iteration leaves tracked dirty changes
+    behind. ``git stash push -u`` also captures untracked files present at that
+    point, preventing them from bleeding into the next issue's commit.
+
+    Args:
+        message: Human-readable stash message.
+        start: Directory inside the repo to run from. Defaults to cwd.
+
+    Returns:
+        A :class:`StashResult`. Clean trees return ``created=False`` instead
+        of shelling out to ``git stash push``.
+
+    Raises:
+        GitError: If ``git status``, ``git stash push``, or stash ref
+            resolution fails.
+    """
+    entries = _status_entries(start=start, include_untracked=True)
+    if not entries:
+        return StashResult(
+            created=False,
+            ref="",
+            file_count=0,
+            message=message,
+        )
+
+    _run(["stash", "push", "-u", "-m", message], cwd=start)
+    ref = _run(["rev-parse", "--verify", "stash@{0}"], cwd=start).strip()
+    return StashResult(
+        created=True,
+        ref=ref,
+        file_count=len(entries),
+        message=message,
+    )
+
+
+def _status_entries(
+    *,
+    start: Path | str | None = None,
+    include_untracked: bool,
+) -> list[str]:
+    args = ["status", "--porcelain=v1", "-z"]
+    args.append(
+        "--untracked-files=all" if include_untracked else "--untracked-files=no"
+    )
+    raw = _run(args, cwd=start)
+    parts = [part for part in raw.split("\0") if part]
+    entries: list[str] = []
+    i = 0
+    while i < len(parts):
+        record = parts[i]
+        entries.append(record)
+        xy = record[:2]
+        i += 2 if ("R" in xy or "C" in xy) and i + 1 < len(parts) else 1
+    return entries
 
 
 def commits_between(

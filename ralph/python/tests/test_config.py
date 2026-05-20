@@ -21,6 +21,7 @@ def test_run_config_defaults_are_safe() -> None:
     """A default :class:`RunConfig` constructs and exposes the expected fields."""
     cfg = RunConfig()
     assert cfg.model is None
+    assert cfg.reasoning_effort is None
     assert cfg.issue_source == "github"
     assert cfg.max_iterations == 0
     assert cfg.max_nmt_strikes == 3
@@ -65,6 +66,9 @@ def test_run_config_satisfies_session_config_protocol() -> None:
         ("max_nmt_strikes", 0),
         ("verbosity", 4),
         ("verbosity", -1),
+        ("reasoning_effort", "medium-high"),
+        ("reasoning_effort", "XHIGH"),
+        ("reasoning_effort", ""),
     ],
 )
 def test_run_config_validation_rejects_invalid_values(field: str, value: object) -> None:
@@ -72,6 +76,13 @@ def test_run_config_validation_rejects_invalid_values(field: str, value: object)
     kwargs: dict[str, object] = {field: value}
     with pytest.raises(ValueError):
         RunConfig(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+def test_run_config_accepts_valid_reasoning_effort(effort: str) -> None:
+    """The four documented reasoning-effort literals construct without raising."""
+    cfg = RunConfig(reasoning_effort=effort)
+    assert cfg.reasoning_effort == effort
 
 
 def test_run_config_accepts_explicit_pricing_path() -> None:

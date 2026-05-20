@@ -16,7 +16,7 @@ ways the runner discovers AFK-ready work:
   performs **no** wrapper-side filesystem mutation on completion
   — the agent owns the ``git mv prds/<feat>/NNN-*.md
   prds/<feat>/done/`` per ``ralph/PROMPT.md``. Bash parity exactly
-  (``ralph/afk.sh`` has no PRDs-side completion backstop either).
+  (``ralph/sh-afk.sh`` has no PRDs-side completion backstop either).
 
 Design notes:
 
@@ -28,7 +28,7 @@ Design notes:
   wrapper-side ``os.replace`` to move completed PRDs to ``done/``.
   The rubber-duck pass at design time flagged a hard bug: the move
   dirties the working tree, which then trips the *next* iteration's
-  stale-worktree guard (``ralph/afk.sh:315`` / ``git.is_dirty``). The
+  stale-worktree guard (``ralph/sh-afk.sh:315`` / ``git.is_dirty``). The
   agent owns the move-and-commit; the wrapper just discovers the
   resulting state on the next iteration.
 * **stdlib + ``gh``/``git``/``wrapper`` modules only.** No SDK, no
@@ -61,7 +61,7 @@ __all__ = [
 ]
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
-# Mirrors the bash double-grep at ``ralph/afk.sh:154-155``: body must
+# Mirrors the bash double-grep at ``ralph/sh-afk.sh:154-155``: body must
 # contain BOTH ``^## Parent`` and ``^## Acceptance criteria`` to be
 # considered AFK-ready.
 _RE_PARENT: re.Pattern[str] = re.compile(r"^## Parent", re.MULTILINE)
@@ -103,7 +103,7 @@ class AfkReadyItem:
         rendered_block: The full prompt block as the agent sees it —
             header + body + (GitHub) up-to-5 recent comments or (PRDs)
             file content. Mirrors the bash collector output at
-            ``ralph/afk.sh:137-144`` (GitHub) and ``286`` (PRDs).
+            ``ralph/sh-afk.sh:137-144`` (GitHub) and ``286`` (PRDs).
     """
 
     ref: int | str
@@ -195,8 +195,8 @@ class IssueSource(Protocol):
 class GitHubIssueSource:
     """AFK-ready items backed by GitHub issues via the ``gh`` CLI.
 
-    Mirrors the bash collector at ``ralph/afk.sh:122-172`` and the
-    auto-close backstop at ``ralph/afk.sh:199-268``. The single
+    Mirrors the bash collector at ``ralph/sh-afk.sh:122-172`` and the
+    auto-close backstop at ``ralph/sh-afk.sh:199-268``. The single
     divergence from bash: this backend deliberately parses commit
     closure keywords using :func:`ralph_afk.wrapper.extract_close_refs`
     so the parser is shared between the pool whitelist and the SHA
@@ -210,7 +210,7 @@ class GitHubIssueSource:
     def preflight(self) -> int | None:
         """Verify ``gh`` is on PATH, authenticated, and resolves a repo.
 
-        Mirrors the bash preflight at ``ralph/afk.sh:87-102``.
+        Mirrors the bash preflight at ``ralph/sh-afk.sh:87-102``.
         """
         try:
             authed = gh_module.auth_status()
@@ -381,7 +381,7 @@ class GitHubIssueSource:
 def _format_github_issue_block(issue: gh_module.Issue) -> str:
     """Render one GitHub issue as the prompt block.
 
-    Mirrors the jq filter at ``ralph/afk.sh:137-144`` exactly:
+    Mirrors the jq filter at ``ralph/sh-afk.sh:137-144`` exactly:
     header line, blank line, body, then up to 5 newest-first comments
     behind a separator.
     """
@@ -413,7 +413,7 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
 class PrdsIssueSource:
     """AFK-ready items backed by local-markdown ``prds/<feature>/<NNN>-*.md`` files.
 
-    Mirrors the bash collector at ``ralph/afk.sh:273-290`` with one
+    Mirrors the bash collector at ``ralph/sh-afk.sh:273-290`` with one
     deliberate strengthening: the AFK-ready body discriminator
     (``^## Parent`` AND ``^## Acceptance criteria``) is applied
     identically to the GitHub backend, per issue #11 acceptance
@@ -443,7 +443,7 @@ class PrdsIssueSource:
     prds/<feat>/done/`` per ``ralph/PROMPT.md``'s local-markdown mode
     contract. :meth:`handle_completions` always returns ``[]``. Active
     wrapper-side moves would dirty the working tree, which would trip
-    the next iteration's stale-worktree guard (``ralph/afk.sh:315`` /
+    the next iteration's stale-worktree guard (``ralph/sh-afk.sh:315`` /
     :func:`git.is_dirty`). The agent's ``git mv`` commit IS the
     closure signal; next iteration's discovery automatically excludes
     ``done/``.
@@ -466,7 +466,7 @@ class PrdsIssueSource:
         """No-op for PRDs mode.
 
         Bash variant gates ``gh`` preflight on github mode
-        (``ralph/afk.sh:87``) and has no PRDs-specific preflight.
+        (``ralph/sh-afk.sh:87``) and has no PRDs-specific preflight.
         The Python variant mirrors that: an empty / missing
         ``prds/`` directory is not a preflight failure — it just
         produces an empty pool from :meth:`collect_afk_ready`, which

@@ -373,6 +373,7 @@ class IterationSession:
             run_id=run_id,
             iter_num=3,
             model="claude-opus-4.7-xhigh",
+            reasoning_effort="xhigh",
         ) as session:
             await session.send_and_wait(prompt)
 
@@ -396,6 +397,14 @@ class IterationSession:
         run_id: 26-char ULID for the run.
         iter_num: 1-based iteration index.
         model: Optional model override; forwarded to the SDK.
+        reasoning_effort: Optional reasoning-effort override forwarded to
+            the SDK as ``create_session(reasoning_effort=...)``. ``None``
+            means *do not send* the ``reasoningEffort`` field — the
+            service then applies its own default. The loop derives the
+            default from the model id (see
+            :mod:`ralph_afk.cli`); load-bearing for model variants like
+            ``claude-opus-4.7-xhigh`` whose service-side default
+            (``medium``) is rejected by the model itself with a CAPI 400.
     """
 
     def __init__(
@@ -408,6 +417,7 @@ class IterationSession:
         run_id: str,
         iter_num: int,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -416,6 +426,7 @@ class IterationSession:
         self._run_id = run_id
         self._iter_num = iter_num
         self._model = model
+        self._reasoning_effort = reasoning_effort
         self._sdk_session: CopilotSession | None = None
 
     @property
@@ -453,6 +464,7 @@ class IterationSession:
             on_permission_request=handler,
             on_event=self._on_sdk_event,
             model=self._model,
+            reasoning_effort=self._reasoning_effort,
             # NB: on_user_input_request is intentionally NOT set.
             # Leaving it None tells the SDK to not enable ask_user; the
             # permission handler is the second line of defence.
