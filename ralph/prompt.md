@@ -81,6 +81,7 @@ When the task is complete, run this **FINAL SEQUENCE** in order. Do NOT end the 
 
 3. **Verify the closure landed.** `gh issue view <N> --json state -q .state` must print `CLOSED`. If it doesn't, retry the close once. If it still fails, post a `gh issue comment <N> --body "..."` describing the failure and end the turn — the wrapper will pick up the closure on the next iteration as long as the commit message contains `Closes #<N>`.
 4. **Do NOT** modify labels. The closure is the signal.
+5. **Commit and Push** local changes to GitHub each time you complete and close an issue.
 
 When the task is **not** complete and you want to record substantive progress (a real partial step, a discovered blocker, or a design pivot):
 
@@ -90,13 +91,6 @@ When the task is **not** complete and you want to record substantive progress (a
 - Do **not** write `Closes #N` in any partial-progress commit message — the wrapper will auto-close. Use `Refs #N` or `Progress on #N` instead.
 
 Never modify the parent PRD issue (typically `#1`, but always identifiable from each slice's `## Parent` section). Never relabel any issue.
-
-## Local-markdown mode (legacy)
-
-If issues were passed in `=== <path> ===` form:
-
-- On completion: move the issue file from `prds/<feature>/NNN-*.md` to `prds/<feature>/done/NNN-*.md` (create `done/` if needed). Do not renumber, do not touch the sibling `prd.md`, do not move across feature folders.
-- On partial progress: append a brief note to the bottom of the issue file describing what was done and what's blocking.
 
 # FINAL RULES
 

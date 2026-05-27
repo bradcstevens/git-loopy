@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Test-driven development with red-green-refactor loop. Use when user wants to build features or fix bugs using TDD, mentions "red-green-refactor", wants integration tests, or asks for test-first development.
+description: Test-driven development with red-green-refactor loop. Use when user wants to build features or fix bugs using TDD, mentions "red-green-refactor", wants integration tests, or asks for test-first development. For any UI/UX testing or validation in the browser, drives the test cycle through the playwright-cli skill.
 ---
 
 # Test-Driven Development
@@ -13,7 +13,7 @@ description: Test-driven development with red-green-refactor loop. Use when user
 
 **Bad tests** are coupled to implementation. They mock internal collaborators, test private methods, or verify through external means (like querying a database directly instead of using the interface). The warning sign: your test breaks when you refactor, but behavior hasn't changed. If you rename an internal function and tests fail, those tests were testing implementation, not behavior.
 
-See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
+See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines. For any browser-based UI/UX work, see [ui-testing.md](ui-testing.md), which drives the cycle through the [playwright-cli](../playwright-cli/SKILL.md) skill.
 
 ## Anti-Pattern: Horizontal Slices
 
@@ -53,6 +53,7 @@ Before writing any code:
 - [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
 - [ ] Design interfaces for [testability](interface-design.md)
 - [ ] List the behaviors to test (not implementation steps)
+- [ ] For any UI/UX work, plan the test through the [playwright-cli](../playwright-cli/SKILL.md) skill per [ui-testing.md](ui-testing.md)
 - [ ] Get user approval on the plan
 
 Ask: "What should the public interface look like? Which behaviors are most important to test?"
@@ -69,6 +70,8 @@ GREEN: Write minimal code to pass → test passes
 ```
 
 This is your tracer bullet - proves the path works end-to-end.
+
+For UI/UX work, the tracer bullet is a Playwright test driving a real browser through a user-visible flow via the [playwright-cli](../playwright-cli/SKILL.md) skill. See [ui-testing.md](ui-testing.md) for the UI-specific RED/GREEN/REFACTOR loop, locator strategy, and flakiness guardrails.
 
 ### 3. Incremental Loop
 
@@ -95,6 +98,7 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 - [ ] Apply SOLID principles where natural
 - [ ] Consider what new code reveals about existing code
 - [ ] Run tests after each refactor step
+- [ ] For UI refactors (markup, CSS, framework swap), the semantic test should keep passing; if it doesn't and no user-visible behavior changed, the test is over-coupled to implementation — see [ui-testing.md](ui-testing.md)
 
 **Never refactor while RED.** Get to GREEN first.
 
@@ -107,3 +111,5 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 [ ] Code is minimal for this test
 [ ] No speculative features added
 ```
+
+For UI/UX cycles, also apply the UI-specific checklist in [ui-testing.md](ui-testing.md) (semantic locators, no ephemeral refs, targeted assertions, boundary-only mocking, committed Playwright test rather than ad-hoc CLI session).
