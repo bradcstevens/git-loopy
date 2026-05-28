@@ -107,6 +107,10 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
+from copilot.generated.rpc import (
+    PermissionDecisionApproveOnce,
+    PermissionDecisionReject,
+)
 from copilot.generated.session_events import (
     PermissionRequest,
     SessionEvent,
@@ -237,6 +241,49 @@ def _safe_record(
         pass
 
 
+def _request_identity(req: PermissionRequest) -> tuple[str, Any, str | None]:
+    """Extract ``(tool_name, tool_args, tool_call_id)`` from a request.
+
+    SDK 1.0 replaced the single flat ``PermissionRequest`` dataclass with
+    a discriminated union of per-category variants
+    (``PermissionRequestShell``, ``PermissionRequestWrite``,
+    ``PermissionRequestCustomTool``, ``PermissionRequestMcp``,
+    ``PermissionRequestHook``, …). The fields the deny-list logic needs
+    are spread unevenly across those variants:
+
+    * ``tool_call_id`` — present on every variant.
+    * ``tool_name`` — present only on the ``Mcp`` / ``CustomTool`` /
+      ``Hook`` variants. The built-in tool variants (shell, write, read,
+      url, memory) are identified by their *type*, not a name string, so
+      they expose **no** ``tool_name``.
+    * tool arguments — the ``Hook`` variant calls the field ``tool_args``;
+      ``Mcp`` / ``CustomTool`` call it ``args``; the built-in variants
+      carry neither (their parameters live in variant-specific fields
+      like ``commands`` or ``diff``).
+
+    Reading defensively via :func:`getattr` keeps the two operationally
+    important deny pathways intact across the union:
+
+    * **skill deny** — the ``skill`` meta-tool surfaces as a
+      ``CustomTool`` with ``tool_name == "skill"`` and an ``args`` dict,
+      both of which this extractor recovers.
+    * **named-tool deny** — any tool that carries a ``tool_name``.
+
+    **Known degradation:** ``--deny-tool``/``RALPH_DENY_TOOLS`` entries
+    that name a *built-in* tool (e.g. ``bash``) no longer match, because
+    those requests arrive as nameless variants. Approve-all remains the
+    documented default (the loop is ``--yolo``-equivalent) and the deny
+    lists are opt-in, so this is an accepted behaviour change rather than
+    a fragile attempt to re-derive synthetic built-in tool names.
+    """
+    tool_name = getattr(req, "tool_name", None) or ""
+    tool_args = getattr(req, "tool_args", None)
+    if tool_args is None:
+        tool_args = getattr(req, "args", None)
+    tool_call_id = getattr(req, "tool_call_id", None)
+    return tool_name, tool_args, tool_call_id
+
+
 # ---------------------------------------------------------------------------
 # Permission handler factory
 # ---------------------------------------------------------------------------
@@ -283,9 +330,7 @@ def build_permission_handler(
     def handler(
         req: PermissionRequest, _invocation: dict[str, str]
     ) -> PermissionRequestResult:
-        tool_name = req.tool_name or ""
-        tool_args = req.tool_args
-        tool_call_id = req.tool_call_id
+        tool_name, tool_args, tool_call_id = _request_identity(req)
         iter_num = iter_provider()
         scrubbed_args = _scrub_permission_args(tool_args, tool_name)
 
@@ -302,7 +347,7 @@ def build_permission_handler(
                 arguments=scrubbed_args,
             )
             _safe_record(record_event, envelope)
-            return PermissionRequestResult(kind="reject")
+            return PermissionDecisionReject()
 
         # 2) explicit tool deny list
         if tool_name in deny_tools:
@@ -316,7 +361,7 @@ def build_permission_handler(
                 reason=_REASON_TOOL_DENY,
             )
             _safe_record(record_event, envelope)
-            return PermissionRequestResult(kind="reject")
+            return PermissionDecisionReject()
 
         # 3) skill deny list — only applies when tool_name == "skill"
         #    and the skill argument is in the deny set.
@@ -334,7 +379,7 @@ def build_permission_handler(
                     skill=skill_name,
                 )
                 _safe_record(record_event, envelope)
-                return PermissionRequestResult(kind="reject")
+                return PermissionDecisionReject()
 
         # 4) default — approve and audit-log
         envelope = events.make_event(
@@ -346,7 +391,7 @@ def build_permission_handler(
             arguments=scrubbed_args,
         )
         _safe_record(record_event, envelope)
-        return PermissionRequestResult(kind="approve-once")
+        return PermissionDecisionApproveOnce()
 
     return handler
 
@@ -530,7 +575,33 @@ class IterationSession:
         Every other event goes through :func:`events.map_sdk_event`;
         a ``None`` return drops the event (streaming deltas,
         permission lifecycle events, etc.).
+
+        Text streaming deltas (``assistant.reasoning_delta`` /
+        ``assistant.message_delta``) are intercepted *before*
+        :func:`events.map_sdk_event` and forwarded straight to the renderer
+        for live terminal output. They are deliberately NOT routed through
+        :meth:`_record`, so they never reach the JSONL writer — the
+        replay-grade log carries only the final, scrubbed
+        :data:`ASSISTANT_REASONING` / :data:`ASSISTANT_MESSAGE` events.
+        (``assistant.streaming_delta`` carries only a byte count, no text, so
+        it falls through to the drop path.) Renderer failures are swallowed:
+        a broken renderer must not crash SDK event dispatch.
         """
+        if sdk_event.type is SessionEventType.ASSISTANT_REASONING_DELTA:
+            try:
+                delta: Any = getattr(sdk_event.data, "delta_content", "") or ""
+                self._renderer.stream_reasoning(delta)
+            except Exception:
+                pass
+            return
+        if sdk_event.type is SessionEventType.ASSISTANT_MESSAGE_DELTA:
+            try:
+                delta = getattr(sdk_event.data, "delta_content", "") or ""
+                self._renderer.stream_message(delta)
+            except Exception:
+                pass
+            return
+
         if sdk_event.type is SessionEventType.USER_INPUT_REQUESTED:
             data = sdk_event.data
             question = getattr(data, "question", "") or ""

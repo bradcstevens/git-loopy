@@ -24,7 +24,7 @@ from __future__ import annotations
 import ast
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -37,9 +37,8 @@ from copilot.generated.session_events import (
     AssistantReasoningData,
     AssistantReasoningDeltaData,
     AssistantUsageData,
+    PermissionApproved,
     PermissionCompletedData,
-    PermissionCompletedKind,
-    PermissionCompletedResult,
     SessionEvent,
     SessionEventType,
     SessionIdleData,
@@ -78,7 +77,6 @@ from ralph_afk.events import (
     WRAPPER_RUN_START,
     WRAPPER_STALE_WORKTREE_ABORTED,
     WRAPPER_STRIKE,
-    WRAPPER_WORKTREE_STASHED,
     make_event,
     map_sdk_event,
     scrub,
@@ -98,7 +96,6 @@ def test_wrapper_event_constants_are_literal_strings() -> None:
     assert WRAPPER_ITERATION_END == "wrapper.iteration.end"
     assert WRAPPER_AFK_READY_COLLECTED == "wrapper.afk_ready.collected"
     assert WRAPPER_STALE_WORKTREE_ABORTED == "wrapper.stale_worktree.aborted"
-    assert WRAPPER_WORKTREE_STASHED == "wrapper.worktree.stashed"
     assert WRAPPER_COMMIT_RECORDED == "wrapper.commit.recorded"
     assert WRAPPER_AUTO_CLOSE == "wrapper.auto_close"
     assert WRAPPER_STRIKE == "wrapper.strike"
@@ -206,8 +203,6 @@ def test_make_event_ts_naive_datetime_assumed_utc() -> None:
 
 def test_make_event_ts_aware_non_utc_converted_to_utc() -> None:
     """A non-UTC aware datetime is converted to UTC before formatting."""
-    from datetime import timedelta
-
     eastern = timezone(timedelta(hours=-5))
     ts = datetime(2026, 5, 15, 20, 0, 0, 0, tzinfo=eastern)
     e = make_event(type=WRAPPER_RUN_END, run_id="r", iter=None, ts=ts)
@@ -712,14 +707,13 @@ def test_map_sdk_event_session_shutdown_returns_session_deleted() -> None:
         SessionShutdownData(
             code_changes=ShutdownCodeChanges(
                 files_modified=[],
-                lines_added=0.0,
-                lines_removed=0.0,
+                lines_added=0,
+                lines_removed=0,
             ),
             model_metrics={},
-            session_start_time=0.0,
+            session_start_time=0,
             shutdown_type=ShutdownType.ROUTINE,
-            total_api_duration_ms=0.0,
-            total_premium_requests=0.0,
+            total_api_duration=timedelta(0),
         ),
     )
     out = map_sdk_event(sdk)
@@ -846,7 +840,7 @@ def test_map_sdk_event_permission_completed_returns_none() -> None:
         SessionEventType.PERMISSION_COMPLETED,
         PermissionCompletedData(
             request_id="req-1",
-            result=PermissionCompletedResult(kind=PermissionCompletedKind.APPROVED),
+            result=PermissionApproved(),
         ),
     )
     assert map_sdk_event(sdk) is None
@@ -895,13 +889,12 @@ def _minimal_permission_requested_data() -> Any:
     :func:`SessionEvent`'s typed fields without dragging the SDK's full
     permission-request constructor into the test."""
     from copilot.generated.session_events import (
-        PermissionRequest,
         PermissionRequestedData,
-        PermissionRequestKind,
+        PermissionRequestRead,
     )
 
     return PermissionRequestedData(
-        permission_request=PermissionRequest(kind=PermissionRequestKind.READ),
+        permission_request=PermissionRequestRead(intention="read", path="/tmp/x"),
         request_id="req-1",
     )
 

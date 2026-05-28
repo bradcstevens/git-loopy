@@ -1,7 +1,7 @@
 [project]
 name = "ralph-afk"
 version = "0.0.1"
-description = "Autonomous AFK loop on the GitHub Copilot Python SDK — peer variant of ralph/sh-afk.sh."
+description = "Autonomous AFK loop on the GitHub Copilot Python SDK — peer variant of ralph/afk.sh."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -13,10 +13,19 @@ keywords = ["github-copilot", "afk", "autonomous", "agent", "ralph"]
 # breaking ways" (see PRD #1, "Further Notes"), so future slices should bump
 # this pin deliberately rather than tracking `main`.
 #
+# Pinned to the 1.0.0 beta line: the bundled Copilot CLI advanced to a
+# protocol the 0.3.0 SDK can no longer drive (it hangs waiting for
+# `session.idle` and rejects the current `list_models` billing payload),
+# and 1.0.0b9 is the first release that both speaks the live protocol and
+# exposes the `claude-opus-4.8` model the AFK loop targets. It is a beta:
+# the permission-request and client-construction surfaces changed in
+# breaking ways from 0.3.0, so treat any further bump as a deliberate,
+# tested migration rather than a routine version float.
+#
 # Rich is the renderer for the Python variant's terminal experience
 # (streaming prints + frozen iteration Panels + a frozen run-end Table).
 dependencies = [
-    "github-copilot-sdk==0.3.0",
+    "github-copilot-sdk==1.0.0b9",
     "rich>=13.7.0,<14",
 ]
 
@@ -30,14 +39,19 @@ otel = [
     "opentelemetry-exporter-otlp>=1.20,<2",
 ]
 
-[project.scripts]
-ralph-afk = "ralph_afk.cli:main"
-
-[dependency-groups]
+# Development tooling. Exposed as an extra (not a PEP 735 dependency-group) so
+# it can be installed with `uv pip install -e ".[dev]"` / `pip install -e ".[dev]"`.
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0.0",
+    "ruff>=0.1.0",
+    "ty>=0.0.2,<0.0.25",
+    "httpx>=0.24.0",
 ]
+
+[project.scripts]
+ralph-afk = "ralph_afk.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.24"]

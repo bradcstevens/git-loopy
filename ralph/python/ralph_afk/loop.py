@@ -22,7 +22,7 @@ together into a working ``ralph-afk`` invocation. It owns:
 The per-iteration :class:`~ralph_afk.session.IterationSession` is opened
 inside :func:`run` once per iteration.
 
-Per-iteration sequence (parity with ``ralph/sh-afk.sh:305-433``):
+Per-iteration sequence (parity with ``ralph/afk.sh:305-433``):
 
 1. Cap check on ``max_iterations``.
 2. **Stale-worktree guard** via :func:`ralph_afk.git.is_dirty`.
@@ -46,13 +46,11 @@ Per-iteration sequence (parity with ``ralph/sh-afk.sh:305-433``):
     ``gh issue close``; the PRDs backend returns an empty list (the
     agent owns ``git mv ... prds/<feat>/done/``).
 11. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
-     resets strikes; no-progress increments, possibly tripping the
-     abort threshold.
-12. Preserve any tracked dirty leftovers in ``git stash`` before the next
-    iteration starts, including untracked files present at that point.
-13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
-     persist :class:`~ralph_afk.persist.IterationCounters` from the
-     closed snapshot.
+    resets strikes; no-progress increments, possibly tripping the
+    abort threshold.
+12. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
+    persist :class:`~ralph_afk.persist.IterationCounters` from the
+    closed snapshot.
 
 Design notes:
 
@@ -91,7 +89,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-from copilot import CopilotClient, SubprocessConfig
+from copilot import CopilotClient
 
 from ralph_afk import events as events_module
 from ralph_afk import git as git_module
@@ -122,8 +120,8 @@ __all__ = ["run"]
 _DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
 
 
-def _build_subprocess_config() -> SubprocessConfig:
-    """Construct the SDK :class:`SubprocessConfig` used by :func:`_make_client`.
+def _build_telemetry_config() -> dict[str, Any] | None:
+    """Construct the SDK telemetry config used by :func:`_make_client`.
 
     Factored out so the OTel telemetry seam is the **single switch** —
     the loop body and the production :func:`_make_client` do not contain
@@ -134,16 +132,15 @@ def _build_subprocess_config() -> SubprocessConfig:
     when present.
 
     Returns:
-        A :class:`SubprocessConfig` with at most one populated field
-        (``telemetry``). All other knobs (``cli_path``, ``log_level``,
-        etc.) are left at SDK defaults; operators who need custom
-        values can set the SDK's documented env vars (e.g.
-        ``COPILOT_CLI_PATH``) — the SDK reads them in
-        ``client._resolve_cli_path``.
+        A :class:`~copilot.client.TelemetryConfig`-shaped dict (or
+        ``None`` when OTel is disabled) passed verbatim to the
+        ``telemetry`` keyword of :class:`copilot.CopilotClient`. All
+        other client knobs (``connection``, ``log_level``, etc.) are
+        left at SDK defaults; operators who need custom values can set
+        the SDK's documented env vars (e.g. ``COPILOT_CLI_PATH``) — the
+        SDK reads them during subprocess setup.
     """
-    return SubprocessConfig(
-        telemetry=telemetry.build_sdk_telemetry_config(),
-    )
+    return telemetry.build_sdk_telemetry_config()
 
 
 def _make_client() -> CopilotClient:
@@ -152,11 +149,11 @@ def _make_client() -> CopilotClient:
     Factored to its own module-level function so tests can monkeypatch
     it (``monkeypatch.setattr("ralph_afk.loop._make_client", ...)``) to
     return a fake. Production callers get the SDK's default
-    construction wrapped with the telemetry config produced by
-    :func:`_build_subprocess_config` — which is a no-op when OTel is
-    disabled (``SubprocessConfig.telemetry is None``).
+    construction with the telemetry config produced by
+    :func:`_build_telemetry_config` — which is ``None`` (a no-op) when
+    OTel is disabled.
     """
-    return CopilotClient(_build_subprocess_config())
+    return CopilotClient(telemetry=_build_telemetry_config())
 
 
 def _make_issue_source(
@@ -205,13 +202,14 @@ def _send_timeout_seconds() -> float:
 def _read_prompt(repo_root: Path) -> str:
     """Load the runner's prompt file.
 
-    Checks ``<repo>/ralph/PROMPT.md`` first, then the legacy lowercase path.
-    The kit ships the uppercase variant; the lowercase fallback preserves
-    compatibility with older clones.
+    Checks ``<repo>/ralph/prompt.md`` first, then ``<repo>/ralph/PROMPT.md``.
+    The kit ships the uppercase variant; on case-insensitive filesystems
+    (HFS+ default on macOS) either lookup succeeds, but case-sensitive
+    filesystems (most Linux setups) need the explicit fallback.
     """
     candidates = (
-        repo_root / "ralph" / "PROMPT.md",
         repo_root / "ralph" / "prompt.md",
+        repo_root / "ralph" / "PROMPT.md",
     )
     for cand in candidates:
         if cand.exists():
@@ -225,7 +223,7 @@ def _read_prompt(repo_root: Path) -> str:
 def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     """Render the last-5-commits block fed into the prompt prefix.
 
-    Mirrors the bash format at ``ralph/sh-afk.sh:324``: one line per commit
+    Mirrors the bash format at ``ralph/afk.sh:324``: one line per commit
     (sha, date, then the message body terminated by ``---``).
     """
     parts: list[str] = []
@@ -314,8 +312,7 @@ class _Loop:
 
             * ``"continue"`` — iteration completed, loop should keep going.
             * ``"empty_pool"`` — AFK-ready pool was empty; clean exit 0.
-            * ``"stale_worktree"`` — dirty worktree or cleanup failure;
-              abort exit 1.
+            * ``"stale_worktree"`` — dirty worktree; abort exit 1.
             * ``"aborted"`` — NMT strike machine tripped; abort exit 1.
 
         OTel span tree: opens ``ralph_afk.iteration`` for the entire body,
@@ -497,68 +494,13 @@ class _Loop:
                     outcome=("abort" if outcome == "aborted" else "warn"),
                 )
 
-            # 9) Preserve dirty leftovers before the next iteration can absorb them.
-            if not self._stash_dirty_leftovers(iter_num):
-                self._emit(
-                    events_module.WRAPPER_STALE_WORKTREE_ABORTED,
-                    iter_num=iter_num,
-                )
-                self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
-                self._record_counters(iter_num)
-                return ("stale_worktree", len(new_commits), auto_closures)
-
-            # 10) Close the iteration snapshot, persist counters.
+            # 9) Close the iteration snapshot, persist counters.
             self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
             self._record_counters(iter_num)
 
             if outcome == "aborted":
                 return ("aborted", len(new_commits), auto_closures)
             return ("continue", len(new_commits), auto_closures)
-
-    def _stash_dirty_leftovers(self, iter_num: int) -> bool:
-        """Preserve post-iteration dirty leftovers in ``git stash``.
-
-        Returns ``True`` when the tree is clean or cleanup succeeded. Returns
-        ``False`` when git failed; the caller turns that into the stale-worktree
-        abort path so unattended runs do not continue with contaminated state.
-        """
-        try:
-            dirty = git_module.is_dirty(self._repo_root)
-        except git_module.GitError as exc:
-            self._diag.error(
-                "post-iteration dirty check failed: %s; aborting before next iteration",
-                exc,
-            )
-            return False
-        if not dirty:
-            return True
-
-        message = (
-            f"ralph-afk run={self._writers.run_id} iter={iter_num} "
-            "stale worktree leftovers"
-        )
-        try:
-            result = git_module.stash_worktree_changes(
-                message,
-                start=self._repo_root,
-            )
-        except git_module.GitError as exc:
-            self._diag.error(
-                "failed to stash dirty leftovers after iteration %d: %s",
-                iter_num,
-                exc,
-            )
-            return False
-
-        if result.created:
-            self._emit(
-                events_module.WRAPPER_WORKTREE_STASHED,
-                iter_num=iter_num,
-                stash_ref=result.ref,
-                file_count=result.file_count,
-                message=result.message,
-            )
-        return True
 
     def _handle_completions_safely(
         self,
@@ -730,15 +672,13 @@ async def run(config: RunConfig) -> int:
         print(f"ralph-afk: {exc}", file=sys.stderr)
         return 1
 
-    # 2) Pricing — explicit file override errors abort; live-source failures
-    #    continue with a warning because pricing is advisory.
+    # 2) Pricing — bail out loudly on a malformed override (rubber-duck
+    #    feedback: silent fallback hides operator intent).
     try:
         pricing = load_pricing(config.pricing_file)
     except PricingError as exc:
         print(f"ralph-afk: pricing load failed: {exc}", file=sys.stderr)
         return 1
-    if pricing.source_error:
-        print(f"ralph-afk: pricing warning: {pricing.source_error}", file=sys.stderr)
 
     # 3) Writers + diagnostics logger + renderer.
     try:
@@ -819,7 +759,7 @@ async def run(config: RunConfig) -> int:
             with writers.event_log, writers.run_summary:
                 # Root OTel span for the entire iteration loop. The
                 # SDK's subprocess telemetry (configured via
-                # _build_subprocess_config) nests under this span's
+                # _build_telemetry_config) nests under this span's
                 # W3C trace context — see ralph_afk.telemetry.otel
                 # module docstring for the propagation contract.
                 with telemetry.span("ralph_afk.run"):

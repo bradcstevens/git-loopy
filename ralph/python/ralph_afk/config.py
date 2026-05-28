@@ -18,10 +18,9 @@ Design notes:
 
 * **Frozen.** The loop reuses the same config across every iteration;
   freezing makes accidental mid-run mutation impossible.
-* **No I/O at construction time.** ``pricing_file`` is an optional
-  :class:`Path` override — file reads or live catalog fetches are
-  :func:`ralph_afk.pricing.load_pricing`'s job and only happen inside
-  :func:`ralph_afk.loop.run`.
+* **No I/O at construction time.** ``pricing_file`` is a :class:`Path`
+  reference — actually opening it is :func:`ralph_afk.pricing.load_pricing`'s
+  job and only happens inside :func:`ralph_afk.loop.run`.
 * **``otel_enabled`` is plumbed but inert in this slice.** Issue #12
   wires it; this slice just makes sure the flag survives the CLI →
   RunConfig → loop pipe so #12 doesn't have to re-touch the dataclass.
@@ -70,7 +69,7 @@ class RunConfig:
             for it.
         max_iterations: Cap on iterations. ``0`` (the default) means
             unlimited — mirrors the bash positional arg semantics at
-            ``ralph/sh-afk.sh:307-310``.
+            ``ralph/afk.sh:307-310``.
         max_nmt_strikes: Consecutive no-progress iterations tolerated
             before the loop aborts non-zero. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
@@ -85,7 +84,7 @@ class RunConfig:
             itself lands in issue #12; this slice just plumbs the flag.
         pricing_file: Optional explicit path to a ``pricing.toml``.
             ``None`` lets :func:`ralph_afk.pricing.load_pricing` resolve
-            from ``RALPH_PRICING_FILE`` or the default live catalog/cache.
+            from ``RALPH_PRICING_FILE`` or the packaged default.
     """
 
     model: str | None = None

@@ -32,7 +32,7 @@ def test_close_keyword_regex_is_pattern_specified_by_prd() -> None:
     """The compiled regex pattern is byte-for-byte the PRD-mandated string.
 
     Drift here implies the cross-runner contract has been broken — the bash
-    regex at ``ralph/sh-afk.sh:193`` is the other half of the contract and
+    regex at ``ralph/afk.sh:193`` is the other half of the contract and
     cannot be reformulated either.
     """
     assert CLOSE_KEYWORD_RE.pattern == (
@@ -215,7 +215,7 @@ def test_strike_machine_starts_running_with_zero_strikes() -> None:
 
 
 def test_strike_machine_default_max_strikes_is_three() -> None:
-    """Mirrors ``MAX_NMT_STRIKES`` default in ``ralph/sh-afk.sh:297``."""
+    """Mirrors ``MAX_NMT_STRIKES`` default in ``ralph/afk.sh:297``."""
     sm = NMTStrikeStateMachine()
     assert sm.max_strikes == 3
 
@@ -251,7 +251,7 @@ def test_strike_machine_aborts_at_max_strikes() -> None:
 def test_strike_machine_ignores_nmt_sentinel_when_progress_was_made() -> None:
     """The NMT sentinel is informational only — it never affects outcome.
 
-    Mirrors ``ralph/sh-afk.sh:409-412``: if the iteration produced work, the
+    Mirrors ``ralph/afk.sh:409-412``: if the iteration produced work, the
     sentinel is ignored and strikes reset.
     """
     sm = NMTStrikeStateMachine(max_strikes=3)
@@ -263,7 +263,7 @@ def test_strike_machine_ignores_nmt_sentinel_when_progress_was_made() -> None:
 
 
 def test_strike_machine_counts_no_progress_iteration_even_without_sentinel() -> None:
-    """Mirrors ``ralph/sh-afk.sh:418-420``: a silent no-progress iteration also
+    """Mirrors ``ralph/afk.sh:418-420``: a silent no-progress iteration also
     counts as a strike — the sentinel is not required.
     """
     sm = NMTStrikeStateMachine(max_strikes=2)
@@ -277,7 +277,7 @@ def test_strike_machine_counts_no_progress_iteration_even_without_sentinel() -> 
 def test_strike_machine_is_terminal_after_abort() -> None:
     """Once ``aborted``, the state machine is frozen.
 
-    Mirrors ``ralph/sh-afk.sh:427`` (the loop exits immediately on abort).
+    Mirrors ``ralph/afk.sh:427`` (the loop exits immediately on abort).
     A reused state machine object — e.g. if a future caller leaks one
     across runs — must not silently un-abort itself when given a
     progress tick or keep counting strikes past the abort threshold.

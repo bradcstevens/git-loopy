@@ -92,6 +92,13 @@ When the task is **not** complete and you want to record substantive progress (a
 
 Never modify the parent PRD issue (typically `#1`, but always identifiable from each slice's `## Parent` section). Never relabel any issue.
 
+## Local-markdown mode (legacy)
+
+If issues were passed in `=== <path> ===` form:
+
+- On completion: move the issue file from `prds/<feature>/NNN-*.md` to `prds/<feature>/done/NNN-*.md` (create `done/` if needed). Do not renumber, do not touch the sibling `prd.md`, do not move across feature folders.
+- On partial progress: append a brief note to the bottom of the issue file describing what was done and what's blocking.
+
 # FINAL RULES
 
 - ONLY WORK ON A SINGLE TASK per iteration.

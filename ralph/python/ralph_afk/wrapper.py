@@ -1,7 +1,7 @@
 """``ralph_afk.wrapper`` — cross-runner contract logic, deep and pure.
 
 This module is the single source of truth for the wrapper-level behaviour
-shared between the bash runner (``ralph/sh-afk.sh``) and the Python runner
+shared between the bash runner (``ralph/afk.sh``) and the Python runner
 (this package). Its load-bearing surface is intentionally small:
 
 * :data:`CLOSE_KEYWORD_RE` — the GitHub closing-keyword regex.
@@ -44,7 +44,7 @@ __all__ = [
 ]
 
 # Byte-for-byte the PRD-specified pattern. Mirrors the BRE used at
-# ``ralph/sh-afk.sh:193`` (``[[:space:]]`` ≈ ``\s``, ``[0-9]`` ≈ ``\d``).
+# ``ralph/afk.sh:193`` (``[[:space:]]`` ≈ ``\s``, ``[0-9]`` ≈ ``\d``).
 # Drift here is detected by the parity test.
 CLOSE_KEYWORD_RE: re.Pattern[str] = re.compile(
     r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)",
@@ -110,7 +110,7 @@ def did_iteration_make_progress(
 ) -> bool:
     """Decide whether an iteration counts as work.
 
-    Mirrors the bash truth function at ``ralph/sh-afk.sh:403-406``: an
+    Mirrors the bash truth function at ``ralph/afk.sh:403-406``: an
     iteration "made progress" if either at least one commit landed OR the
     wrapper auto-closed at least one issue.
 
@@ -136,7 +136,7 @@ class NMTStrikeStateMachine:
     """Tracks consecutive no-progress iterations against a configurable cap.
 
     The state machine mirrors the bash strikes logic at
-    ``ralph/sh-afk.sh:297-298`` and ``409-429``:
+    ``ralph/afk.sh:297-298`` and ``409-429``:
 
     * Start in ``running`` with zero strikes.
     * Each call to :meth:`tick` represents one completed iteration.
@@ -183,7 +183,7 @@ class NMTStrikeStateMachine:
                 ``<promise>NO MORE TASKS</promise>`` sentinel this
                 iteration. Informational only — the state machine never
                 consults it. The renderer uses it to pick which warning
-                line to print (matching ``ralph/sh-afk.sh:411-412`` vs
+                line to print (matching ``ralph/afk.sh:411-412`` vs
                 ``416-417``). Accepted as a keyword arg so future
                 consumers can be wired in via :func:`asdict`-style
                 passing without changing call sites.
@@ -197,7 +197,7 @@ class NMTStrikeStateMachine:
         _ = saw_nmt_sentinel
 
         # Terminal state. The bash runner exits immediately on abort
-        # (``ralph/sh-afk.sh:427``); the Python state machine mirrors that by
+        # (``ralph/afk.sh:427``); the Python state machine mirrors that by
         # freezing — further ticks neither reset strikes nor flip outcome.
         if self.outcome == "aborted":
             return self.outcome

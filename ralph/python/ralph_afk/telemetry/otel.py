@@ -49,11 +49,11 @@ The runner emits this tree::
        └─ ralph_afk.enforce_closures
 
 SDK-emitted spans nest under ``ralph_afk.session`` because the Copilot
-Python SDK's :class:`SubprocessConfig` carries a
-:class:`~copilot.client.TelemetryConfig` that, when populated, both (a)
-configures the spawned SDK subprocess to emit its own OTel spans via the
-configured exporter, and (b) propagates the active W3C trace context
-through JSON-RPC ``traceparent`` headers (see
+Python SDK's :class:`~copilot.client.TelemetryConfig` (passed to the
+``telemetry`` keyword of :class:`copilot.CopilotClient`), when populated,
+both (a) configures the spawned SDK subprocess to emit its own OTel spans
+via the configured exporter, and (b) propagates the active W3C trace
+context through JSON-RPC ``traceparent`` headers (see
 ``copilot/client.py``). The runner does not duplicate any span the SDK
 already emits — we only wrap entry points where we have business-level
 knowledge the SDK doesn't (iteration boundaries, source collection,
@@ -72,7 +72,7 @@ Call-site usage
         sp.set_attribute("issue", first_ref)
 
     config = telemetry.build_sdk_telemetry_config()
-    # Pass to SubprocessConfig.telemetry — None when disabled.
+    # Pass to CopilotClient(telemetry=...) — None when disabled.
 
     telemetry.force_flush()
     # Flush the configured processors. No-op when disabled.
@@ -318,11 +318,11 @@ def span(name: str, **attrs: Any) -> Iterator[Any]:
 def build_sdk_telemetry_config() -> Optional[dict[str, Any]]:
     """Return a :class:`TelemetryConfig`-shaped dict for the SDK, or None.
 
-    Returned dict is passed verbatim to :class:`SubprocessConfig.telemetry`
-    on :class:`copilot.CopilotClient` construction. When OTel is disabled,
-    returns ``None`` so the SDK skips its telemetry env-var setup
-    entirely (the spawned subprocess does not see any
-    ``COPILOT_OTEL_ENABLED`` / ``OTEL_*`` env vars from us).
+    Returned dict is passed verbatim to the ``telemetry`` keyword of
+    :class:`copilot.CopilotClient`. When OTel is disabled, returns
+    ``None`` so the SDK skips its telemetry env-var setup entirely (the
+    spawned subprocess does not see any ``COPILOT_OTEL_ENABLED`` /
+    ``OTEL_*`` env vars from us).
 
     When OTel is enabled, returns a dict that may be empty:
 
@@ -331,8 +331,8 @@ def build_sdk_telemetry_config() -> Optional[dict[str, Any]]:
       subprocess's exporter.
     * If only ``RALPH_OTEL_ENABLED=1`` is set (no endpoint), the dict
       is **empty** ``{}``. An empty dict is *not* falsy at the SDK seam
-      (``SubprocessConfig.telemetry is not None`` is what triggers the
-      SDK to set ``COPILOT_OTEL_ENABLED=true`` on the subprocess) — see
+      (``telemetry is not None`` is what triggers the SDK to set
+      ``COPILOT_OTEL_ENABLED=true`` on the subprocess) — see
       :mod:`copilot.client`'s subprocess setup at the
       ``if telemetry is not None`` branch.
 

@@ -50,7 +50,6 @@ from ralph_afk.events import (
     WRAPPER_RUN_START,
     WRAPPER_STALE_WORKTREE_ABORTED,
     WRAPPER_STRIKE,
-    WRAPPER_WORKTREE_STASHED,
     make_event,
 )
 from ralph_afk.pricing import ModelPricing, Pricing
@@ -273,6 +272,101 @@ def test_assistant_message_renders_content_once() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Live streaming (assistant.*_delta forwarded to the renderer)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_reasoning_prints_prefix_once_and_accumulates() -> None:
+    """Streamed reasoning prints the '✻ Thinking:' prefix once, then chunks."""
+    renderer, _summary, buf = _make_renderer(render_reasoning=True)
+    renderer.stream_reasoning("Let me ")
+    renderer.stream_reasoning("think ")
+    renderer.stream_reasoning("carefully.")
+    out = buf.getvalue()
+    assert out.count("✻ Thinking:") == 1, f"prefix not printed once:\n{out}"
+    assert "Let me think carefully." in out.replace("\n", "")
+
+
+def test_stream_reasoning_then_final_event_does_not_duplicate() -> None:
+    """The final ASSISTANT_REASONING after streaming must not re-print the block."""
+    renderer, _summary, buf = _make_renderer(render_reasoning=True)
+    renderer.stream_reasoning("deliberating")
+    renderer.render(
+        {
+            "type": ASSISTANT_REASONING,
+            "content": "deliberating",
+            "reasoning_id": "r1",
+        }
+    )
+    out = buf.getvalue()
+    assert out.count("deliberating") == 1, f"reasoning duplicated:\n{out}"
+    assert out.count("✻ Thinking:") == 1, f"prefix duplicated:\n{out}"
+    assert out.endswith("\n"), "streamed reasoning line should be terminated"
+
+
+def test_stream_message_then_final_event_does_not_duplicate() -> None:
+    """The final ASSISTANT_MESSAGE after streaming must not re-print the block."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.stream_message("Hello ")
+    renderer.stream_message("world")
+    renderer.render(
+        {"type": ASSISTANT_MESSAGE, "content": "Hello world", "message_id": "m1"}
+    )
+    out = buf.getvalue()
+    assert out.count("Hello world") == 1, f"message duplicated:\n{out}"
+    assert out.endswith("\n"), "streamed message line should be terminated"
+
+
+def test_stream_reasoning_suppressed_when_render_reasoning_false() -> None:
+    """``render_reasoning=False`` suppresses streamed reasoning entirely."""
+    renderer, _summary, buf = _make_renderer(render_reasoning=False)
+    renderer.stream_reasoning("secret thoughts")
+    assert buf.getvalue() == "", f"streamed reasoning leaked:\n{buf.getvalue()}"
+
+
+def test_final_event_without_streaming_still_prints_full_content() -> None:
+    """When no deltas arrive, the final events print full content (fallback)."""
+    renderer, _summary, buf = _make_renderer(render_reasoning=True)
+    renderer.render(
+        {"type": ASSISTANT_REASONING, "content": "whole block", "reasoning_id": "r1"}
+    )
+    renderer.render(
+        {"type": ASSISTANT_MESSAGE, "content": "whole answer", "message_id": "m1"}
+    )
+    out = buf.getvalue()
+    assert "whole block" in out
+    assert "whole answer" in out
+
+
+def test_full_line_event_closes_open_stream() -> None:
+    """A full-line event mid-stream terminates the open streamed line first."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.stream_message("partial")
+    renderer.render(
+        {"type": TOOL_CALL, "tool_name": "bash", "arguments": {"command": "ls"}}
+    )
+    out = buf.getvalue()
+    # The streamed chunk and the tool-call line must be on separate lines.
+    assert "partial\n" in out, f"open stream not closed before tool call:\n{out}"
+    assert "bash" in out
+
+
+def test_two_reasoning_blocks_each_get_their_own_prefix() -> None:
+    """Each separate reasoning block re-prints the prefix after its final event."""
+    renderer, _summary, buf = _make_renderer(render_reasoning=True)
+    renderer.stream_reasoning("block A")
+    renderer.render(
+        {"type": ASSISTANT_REASONING, "content": "block A", "reasoning_id": "r1"}
+    )
+    renderer.stream_reasoning("block B")
+    renderer.render(
+        {"type": ASSISTANT_REASONING, "content": "block B", "reasoning_id": "r2"}
+    )
+    out = buf.getvalue()
+    assert out.count("✻ Thinking:") == 2, f"expected one prefix per block:\n{out}"
+
+
+# ---------------------------------------------------------------------------
 # Tool calls + skill highlighting
 # ---------------------------------------------------------------------------
 
@@ -458,21 +552,6 @@ def test_wrapper_stale_worktree_aborted_renders_error() -> None:
     renderer.render({"type": WRAPPER_STALE_WORKTREE_ABORTED})
     out = buf.getvalue()
     assert "stale" in out.lower() or "worktree" in out.lower() or "dirty" in out.lower()
-
-
-def test_wrapper_worktree_stashed_renders_recovery_hint() -> None:
-    renderer, _summary, buf = _make_renderer()
-    renderer.render(
-        {
-            "type": WRAPPER_WORKTREE_STASHED,
-            "stash_ref": "abcdef1234567890",
-            "file_count": 2,
-        }
-    )
-    out = buf.getvalue()
-    assert "stashed" in out.lower()
-    assert "2" in out
-    assert "abcdef1234" in out
 
 
 def test_wrapper_ask_user_attempted_renders_warning() -> None:

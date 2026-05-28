@@ -17,7 +17,7 @@ Precedence rules:
   overridden by an absent CLI flag. To remove an env baseline, unset
   the env var or use ``-E`` semantics in the wrapper script.
 
-CLI surface — mirrors ``ralph/sh-afk.sh`` and extends it with the new
+CLI surface — mirrors ``ralph/afk.sh`` and extends it with the new
 deep-module knobs:
 
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
@@ -41,8 +41,8 @@ Env vars:
 * ``RALPH_DENY_TOOLS`` — comma-separated tool denylist (set-unioned
   with ``--deny-tool`` flags).
 * ``RALPH_DENY_SKILLS`` — comma-separated skill denylist.
-* ``RALPH_PRICING_FILE`` — optional explicit ``pricing.toml`` path
-  (overrides the default live pricing catalog/cache path).
+* ``RALPH_PRICING_FILE`` — explicit ``pricing.toml`` path (overrides
+  the packaged default).
 * ``RALPH_OTEL_ENABLED`` — truthy ``"1"`` enables OTel plumbing
   (operative wiring lands in issue #12).
 * ``OTEL_EXPORTER_OTLP_ENDPOINT`` — presence enables OTel.
@@ -62,7 +62,7 @@ from ralph_afk.config import REASONING_EFFORTS, RunConfig
 __all__ = ["main", "build_parser", "resolve_repo_root"]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
-# Mirrors bash ``ralph/sh-afk.sh:65`` so a wrapper script calling either
+# Mirrors bash ``ralph/afk.sh:65`` so a wrapper script calling either
 # variant with no ``MODEL`` set produces parity behaviour.
 _DEFAULT_MODEL = "claude-opus-4.7-xhigh"
 
@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ralph-afk",
         description=(
             "Autonomous AFK loop on the GitHub Copilot Python SDK. "
-            "Peer variant of ralph/sh-afk.sh — same wrapper contract, "
+            "Peer variant of ralph/afk.sh — same wrapper contract, "
             "richer terminal UX."
         ),
         epilog=(
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  MAX_NMT_STRIKES             Strike threshold (default: 3).\n"
             "  RALPH_DENY_TOOLS            Comma-separated tool denylist.\n"
             "  RALPH_DENY_SKILLS           Comma-separated skill denylist.\n"
-            "  RALPH_PRICING_FILE          Optional pricing.toml override.\n"
+            "  RALPH_PRICING_FILE          Explicit pricing.toml path.\n"
             "  RALPH_OTEL_ENABLED          Truthy '1' enables OTel.\n"
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
             "  RALPH_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Cap the number of iterations (0 or omitted = unlimited; "
             "default: 0). Mirrors the positional arg accepted by "
-            "ralph/sh-afk.sh."
+            "ralph/afk.sh."
         ),
     )
     parser.add_argument(
@@ -385,41 +385,12 @@ def main(argv: list[str] | None = None) -> int:
     # message before we pay the cost of importing the loop module
     # (which transitively pulls in the SDK and Rich).
     try:
-        repo_root = resolve_repo_root()
+        resolve_repo_root()
     except RuntimeError as exc:
         print(f"ralph-afk: error: {exc}", file=sys.stderr)
         return 1
 
-    # _build_config runs cheap env-var validations (ISSUE_SOURCE,
-    # MAX_NMT_STRIKES, REASONING_EFFORT, …) that may raise SystemExit.
-    # We want those argparse-style failures to surface before the
-    # agent-skills preflight so an operator who set ``ISSUE_SOURCE=gitlab``
-    # sees the unknown-source error rather than a "config missing" red
-    # herring.
     config = _build_config(args)
-
-    # Preflight: the AFK loop cannot safely run /setup-agent-skills itself
-    # (the skill is interactive — it asks the operator to pick an issue
-    # tracker, label vocabulary, and context-doc layout, then shows a draft
-    # for confirmation before writing). Under ``copilot --yolo -p`` the
-    # agent would have to invent those answers, baking the wrong defaults
-    # into ``docs/agents/*.md``. So we refuse to start until a human has
-    # run ``/setup-agent-skills`` in an interactive copilot session and
-    # produced the config files. Detection signal: existence of
-    # ``docs/agents/issue-tracker.md`` (the first of the triplet
-    # ``/setup-agent-skills`` writes). Mirrors the bash runner's preflight
-    # at ``ralph/sh-afk.sh``.
-    issue_tracker_doc = repo_root / "docs" / "agents" / "issue-tracker.md"
-    if not issue_tracker_doc.is_file():
-        print(
-            "ralph-afk: error: docs/agents/issue-tracker.md not found.\n"
-            "  This repo has not been configured with /setup-agent-skills yet.\n"
-            "  In an interactive 'copilot' session from the repo root, run:\n"
-            "    > /setup-agent-skills\n"
-            "  Then re-run ralph-afk. See docs/customization.md for details.",
-            file=sys.stderr,
-        )
-        return 1
 
     # Import here so the SDK / Rich / pricing only load if we're
     # actually going to run. Keeps `ralph-afk --help` snappy.

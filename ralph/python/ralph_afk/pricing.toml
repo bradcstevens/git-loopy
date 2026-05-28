@@ -1,9 +1,9 @@
-# Packaged fallback pricing estimates as of 2026-05-16. PROVIDER LIST PRICES,
-# not GitHub Copilot billing. The runner defaults to the live LiteLLM pricing
-# catalog and uses this file only as a fallback or as the schema example for
-# explicit RALPH_PRICING_FILE overrides.
+# Pricing estimates as of 2026-05-16. PROVIDER LIST PRICES, not GitHub Copilot's
+# premium-request billing. The Copilot CLI bills on a premium-request quota that
+# the SDK does not expose; the figures below are useful for cost-shape signal
+# only. The renderer surfaces every cost figure with this caveat alongside.
 #
-# Override live pricing at runtime via the environment variable
+# Override this packaged file at runtime via the environment variable
 # RALPH_PRICING_FILE=/path/to/your.toml (see ralph_afk.pricing.load_pricing).
 #
 # Schema: every entry under [models."<name>"] must define:

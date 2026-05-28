@@ -62,7 +62,6 @@ from ralph_afk.events import (
     WRAPPER_RUN_START,
     WRAPPER_STALE_WORKTREE_ABORTED,
     WRAPPER_STRIKE,
-    WRAPPER_WORKTREE_STASHED,
 )
 
 from .console import STYLES
@@ -100,6 +99,18 @@ class Renderer:
     verbosity: int = 0
     render_reasoning: bool = True
 
+    # -- live-streaming state ----------------------------------------------
+    # The SDK emits ``*_delta`` events carrying incremental text. The
+    # session module forwards their ``delta_content`` to :meth:`stream_reasoning`
+    # / :meth:`stream_message` (bypassing :meth:`render`, since deltas are not
+    # JSONL artefacts). ``_stream_open`` tracks whether the cursor is sitting
+    # mid-line on an unterminated streamed chunk; ``_streamed_reasoning`` /
+    # ``_streamed_message`` record that the *current* block was streamed so the
+    # matching final event finalises instead of re-printing the whole block.
+    _stream_open: bool = False
+    _streamed_reasoning: bool = False
+    _streamed_message: bool = False
+
     def render(self, event: dict[str, Any]) -> None:
         """Dispatch ``event`` to its per-type handler.
 
@@ -110,6 +121,10 @@ class Renderer:
         et = event.get("type")
         if not isinstance(et, str):
             return
+        # Terminate any open streamed line before a full-line event prints,
+        # so a tool call / panel / final message never glues onto a streamed
+        # reasoning or message chunk.
+        self._close_open_line()
         handler = _HANDLERS.get(et)
         if handler is None:
             if self.verbosity >= 3:
@@ -118,6 +133,59 @@ class Renderer:
         handler(self, event)
         if self.verbosity >= 3:
             self._raw_dump(event)
+
+    # -- live streaming ----------------------------------------------------
+
+    def stream_reasoning(self, delta: str) -> None:
+        """Stream one incremental reasoning chunk to the terminal.
+
+        Called directly by the session module for each
+        ``assistant.reasoning_delta`` event (not via :meth:`render`, since
+        deltas are UX-only and never written to JSONL). On the first chunk
+        of a block the ``✻ Thinking:`` prefix is printed once; subsequent
+        chunks append in place. ``soft_wrap=True`` is required: each
+        ``end=""`` print wraps independently of cursor column, so Rich's
+        own wrapping would mis-break a mid-stream line — we let the terminal
+        wrap instead.
+
+        ``render_reasoning=False`` suppresses streamed reasoning entirely,
+        mirroring the final-event handler's opt-out.
+        """
+        if not self.render_reasoning or not delta:
+            return
+        if not self._streamed_reasoning:
+            self._close_open_line()
+            self.console.print(
+                Text(f"{_THINKING_PREFIX} ", style=STYLES["reasoning"]),
+                end="",
+                soft_wrap=True,
+            )
+            self._streamed_reasoning = True
+        self.console.print(
+            Text(delta, style=STYLES["reasoning"]), end="", soft_wrap=True
+        )
+        self._stream_open = True
+
+    def stream_message(self, delta: str) -> None:
+        """Stream one incremental assistant-message chunk to the terminal.
+
+        Called directly by the session module for each
+        ``assistant.message_delta`` event. See :meth:`stream_reasoning` for
+        the ``soft_wrap`` rationale.
+        """
+        if not delta:
+            return
+        if not self._streamed_message:
+            self._close_open_line()
+            self._streamed_message = True
+        self.console.print(delta, end="", soft_wrap=True)
+        self._stream_open = True
+
+    def _close_open_line(self) -> None:
+        """Terminate an open streamed line with a newline, if one is open."""
+        if self._stream_open:
+            self.console.print()
+            self._stream_open = False
 
     # -- handler bodies ----------------------------------------------------
 
@@ -194,22 +262,6 @@ class Renderer:
         )
         self.console.print(text)
 
-    def _on_worktree_stashed(self, event: dict[str, Any]) -> None:
-        stash_ref = event.get("stash_ref", "")
-        file_count = event.get("file_count", 0)
-        short_ref = stash_ref[:10] if isinstance(stash_ref, str) else ""
-        text = Text()
-        text.append("↷ ", style=STYLES["warning"])
-        text.append("stashed dirty worktree leftovers", style=STYLES["warning"])
-        text.append(f" ({file_count} file", style=STYLES["meta"])
-        if file_count != 1:
-            text.append("s", style=STYLES["meta"])
-        text.append(")", style=STYLES["meta"])
-        if short_ref:
-            text.append(" at ", style=STYLES["meta"])
-            text.append(short_ref, style=STYLES["meta"])
-        self.console.print(text)
-
     def _on_commit_recorded(self, event: dict[str, Any]) -> None:
         sha = event.get("sha", "")
         subject = event.get("subject", "")
@@ -271,6 +323,12 @@ class Renderer:
         self.console.print(text)
 
     def _on_assistant_reasoning(self, event: dict[str, Any]) -> None:
+        # If this block was streamed delta-by-delta, render() already closed
+        # the open line; just reset the per-block flag so the next block's
+        # first delta re-prints the prefix. No re-print — that would duplicate.
+        if self._streamed_reasoning:
+            self._streamed_reasoning = False
+            return
         if not self.render_reasoning:
             return
         content = event.get("content", "")
@@ -285,8 +343,13 @@ class Renderer:
         content = event.get("content", "")
         if not isinstance(content, str):
             return
-        # No in-place re-render: events.map_sdk_event filters deltas out
-        # upstream so this is the one and only print for the final message.
+        # If the message was streamed delta-by-delta, render() already closed
+        # the open line; finalise without re-printing (would duplicate).
+        if self._streamed_message:
+            self._streamed_message = False
+            return
+        # No in-place re-render: when deltas are absent this is the one and
+        # only print for the final message.
         self.console.print(content)
 
     def _on_tool_call(self, event: dict[str, Any]) -> None:
@@ -445,7 +508,6 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_STALE_WORKTREE_ABORTED: Renderer._on_stale_worktree_aborted,
-    WRAPPER_WORKTREE_STASHED: Renderer._on_worktree_stashed,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
     WRAPPER_STRIKE: Renderer._on_strike,

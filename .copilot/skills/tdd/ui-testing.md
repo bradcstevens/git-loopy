@@ -22,6 +22,163 @@ playwright-cli plays two distinct roles in UI TDD. Don't conflate them.
 
 The playwright-cli skill's [test-generation reference](../playwright-cli/references/test-generation.md) helps convert a CLI session into committed test code.
 
+## Reconnaissance: understand the page before you write tests
+
+Before you can write a meaningful RED test for an existing or in-progress UI, you have to know what the page actually does. This is especially true when **testing a third-party flow, regression-testing a complex page, or building a replica of an existing site**. Skipping reconnaissance means you'll write tests for behavior that doesn't exist, or miss the behavior that does — and you'll commit to the wrong interaction model before you understand the real one.
+
+This reconnaissance work happens inside the **exploration & authoring driver** role of playwright-cli (Role 1 above). The output is notes that inform your RED tests; the tests themselves stay semantic and behavior-focused.
+
+### Understand how it looks AND how it behaves
+
+A website is not a screenshot — it's a living thing. Elements move, change, appear, and disappear in response to scrolling, hovering, clicking, resizing, and time.
+
+For every element you plan to test, extract its **appearance** (exact computed CSS via `getComputedStyle()`) AND its **behavior** (what changes, what triggers the change, and how the transition happens). Not "it looks like 16px" — extract the actual computed value. Not "the nav changes on scroll" — document the exact trigger (scroll position, IntersectionObserver threshold, viewport intersection), the before and after states (both sets of CSS values), and the transition (duration, easing, CSS transition vs. JS-driven vs. CSS `animation-timeline`).
+
+Examples of behaviors to watch for — illustrative, not exhaustive. The page may do things not on this list, and your tests must cover those too:
+
+- A navbar that shrinks, changes background, or gains a shadow after scrolling past a threshold
+- Elements that animate into view when they enter the viewport (fade-up, slide-in, stagger delays)
+- Sections that snap into place on scroll (`scroll-snap-type`)
+- Parallax layers that move at different rates than the scroll
+- Hover states that animate (not just change — the transition duration and easing matter)
+- Dropdowns, modals, accordions with enter/exit animations
+- Scroll-driven progress indicators or opacity transitions
+- Auto-playing carousels or cycling content
+- Dark-to-light (or any theme) transitions between page sections
+- **Tabbed/pill content that cycles** — buttons that switch visible card sets with transitions
+- **Scroll-driven tab/accordion switching** — sidebars where the active item auto-changes as content scrolls past (IntersectionObserver, NOT click handlers)
+- **Smooth scroll libraries** (Lenis, Locomotive Scroll) — check for `.lenis` class or scroll container wrappers
+
+### Identify the interaction model before writing tests
+
+This is the single most expensive mistake in UI testing: writing a click-based test when the section is scroll-driven, or vice versa. Before authoring a RED test for an interactive section, you must definitively answer: **Is this section driven by clicks, scrolls, hovers, time, or some combination?**
+
+How to determine this:
+
+1. **Don't click first.** Scroll through the section slowly and observe if things change on their own as you scroll.
+2. If they do, it's scroll-driven. Extract the mechanism: `IntersectionObserver`, `scroll-snap`, `position: sticky`, `animation-timeline`, or JS scroll listeners.
+3. If nothing changes on scroll, THEN click/hover to test for click/hover-driven interactivity.
+4. Document the interaction model explicitly in the test (in a comment or `describe` block): "INTERACTION MODEL: scroll-driven with IntersectionObserver" or "INTERACTION MODEL: click-to-switch with opacity transition."
+
+A section with a sticky sidebar and scrolling content panels is fundamentally different from a tabbed interface where clicking switches content. Getting this wrong means a complete test rewrite, not a one-line tweak.
+
+### Extract every state, not just the default
+
+Many components have multiple visual states — a tab bar shows different cards per tab, a header looks different at scroll position 0 vs 100, a card has hover effects. You must extract ALL states, not just whatever is visible on page load, so each state gets its own RED test.
+
+For tabbed/stateful content:
+
+- Click each tab/button via the playwright-cli session
+- Extract the content, images, and card data for EACH state
+- Record which content belongs to which state
+- Note the transition animation between states (opacity, slide, fade, etc.)
+- Write a test per state
+
+For scroll-dependent elements:
+
+- Capture computed styles at scroll position 0 (initial state)
+- Scroll past the trigger threshold and capture computed styles again (scrolled state)
+- Diff the two to identify exactly which CSS properties change
+- Record the transition CSS (duration, easing, properties)
+- Record the exact trigger threshold (scroll position in px, or viewport intersection ratio)
+- Write tests for both states (before threshold and after)
+
+### Mandatory interaction sweep
+
+A dedicated reconnaissance pass that runs AFTER you take baseline screenshots and BEFORE you write any tests. Its purpose is to discover every behavior on the page — many of which are invisible in a static screenshot.
+
+**Scroll sweep:** Scroll the page slowly from top to bottom via playwright-cli. At each section, pause and observe:
+
+- Does the header change appearance? Record the scroll position where it triggers.
+- Do elements animate into view? Record which ones and the animation type.
+- Does a sidebar or tab indicator auto-switch as you scroll? Record the mechanism.
+- Are there scroll-snap points? Record which containers.
+- Is there a smooth scroll library active? Check for non-native scroll behavior.
+
+**Click sweep:** Click every element that looks interactive:
+
+- Every button, tab, pill, link, card
+- Record what happens: does content change? Does a modal open? Does a dropdown appear?
+- For tabs/pills: click EACH ONE and record the content that appears for each state
+
+**Hover sweep:** Hover over every element that might have hover states:
+
+- Buttons, cards, links, images, nav items
+- Record what changes: color, scale, shadow, underline, opacity
+
+**Responsive sweep:** Test at 3 viewport widths via playwright-cli:
+
+- Desktop: 1440px
+- Tablet: 768px
+- Mobile: 390px
+- At each width, note which sections change layout (column → stack, sidebar disappears, etc.) and at approximately which breakpoint the change occurs.
+
+Save all findings to a reconnaissance document (e.g., `docs/research/BEHAVIORS.md`). This is your behavior bible — reference it when writing every test.
+
+### Page topology
+
+Map every distinct section of the page from top to bottom. Give each a working name. Document:
+
+- Their visual order
+- Which are fixed/sticky overlays vs. flow content
+- The overall page layout (scroll container, column structure, z-index layers)
+- Dependencies between sections (e.g., a floating nav that overlays everything)
+- **The interaction model** of each section (static, click-driven, scroll-driven, time-driven)
+
+Save this alongside the behavior notes (e.g., `docs/research/PAGE_TOPOLOGY.md`) — it becomes your test assembly blueprint.
+
+### Reconnaissance for cloning an existing site
+
+If you're testing a replica you're building of a third-party site, capture these global details up front so your tests can assert them:
+
+**Screenshots** — Take full-page screenshots at desktop (1440px) and mobile (390px) viewports. Save to `docs/design-references/` with descriptive names. These are your master reference — builders will receive section-specific crops/screenshots later.
+
+**Fonts** — Inspect `<link>` tags for Google Fonts or self-hosted fonts. Check computed `font-family` on key elements (headings, body, code, labels). Document every family, weight, and style actually used. Configure them in your app entry point (e.g., `src/app/layout.tsx` using `next/font/google` or `next/font/local` for Next.js projects).
+
+**Colors** — Extract the site's color palette from computed styles across the page. Update your global stylesheet (e.g., `src/app/globals.css`) with the target's actual colors in the `:root` and `.dark` CSS variable blocks. Map them to your design system's token names (background, foreground, primary, muted, etc.) where they fit. Add custom properties for colors that don't map cleanly.
+
+**Favicons & meta** — Download favicons, apple-touch-icons, OG images, webmanifest to `public/seo/` (or your equivalent). Update document metadata accordingly.
+
+**Global UI patterns** — Identify any site-wide CSS or JS: custom scrollbar hiding, scroll-snap on the page container, global keyframe animations, backdrop filters, gradients used as overlays, **smooth scroll libraries** (Lenis, Locomotive Scroll — check for `.lenis`, `.locomotive-scroll`, or custom scroll container classes). Add these to your global stylesheet and note any libraries that need to be installed.
+
+### Asset discovery script pattern
+
+Use playwright-cli's `evaluate` (or the equivalent browser MCP) to enumerate all assets on the page so you know what to test for:
+
+```javascript
+// Run this via playwright-cli evaluate to discover all assets
+JSON.stringify({
+  images: [...document.querySelectorAll('img')].map(img => ({
+    src: img.src || img.currentSrc,
+    alt: img.alt,
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+    // Include parent info to detect layered compositions
+    parentClasses: img.parentElement?.className,
+    siblings: img.parentElement ? [...img.parentElement.querySelectorAll('img')].length : 0,
+    position: getComputedStyle(img).position,
+    zIndex: getComputedStyle(img).zIndex
+  })),
+  videos: [...document.querySelectorAll('video')].map(v => ({
+    src: v.src || v.querySelector('source')?.src,
+    poster: v.poster,
+    autoplay: v.autoplay,
+    loop: v.loop,
+    muted: v.muted
+  })),
+  backgroundImages: [...document.querySelectorAll('*')].filter(el => {
+    const bg = getComputedStyle(el).backgroundImage;
+    return bg && bg !== 'none';
+  }).map(el => ({
+    url: getComputedStyle(el).backgroundImage,
+    element: el.tagName + '.' + el.className?.split(' ')[0]
+  })),
+  svgCount: document.querySelectorAll('svg').length,
+  fonts: [...new Set([...document.querySelectorAll('*')].slice(0, 200).map(el => getComputedStyle(el).fontFamily))],
+  favicons: [...document.querySelectorAll('link[rel*="icon"]')].map(l => ({ href: l.href, sizes: l.sizes?.toString() }))
+});
+```
+
 ## RED → GREEN → REFACTOR for UI
 
 The same vertical-slice loop from the [main workflow](SKILL.md) applies to UI work:
@@ -122,6 +279,7 @@ Browser tests fail in ways unit tests don't. To keep them reliable:
 ## Per-cycle checklist for UI work
 
 ```
+[ ] Interaction model identified (click/scroll/hover/time) before authoring this test
 [ ] Test exercises a user-visible behavior end-to-end through the browser
 [ ] Locators are semantic (role/label/text), not ephemeral refs, CSS, or DOM paths
 [ ] Assertions are targeted on user-observable outcomes, not whole-snapshot diffs

@@ -39,9 +39,10 @@ from uuid import UUID, uuid4
 import pytest
 from copilot.generated.session_events import (
     AssistantMessageData,
+    AssistantMessageDeltaData,
     AssistantReasoningDeltaData,
     PermissionRequest,
-    PermissionRequestKind,
+    PermissionRequestCustomTool,
     SessionEvent,
     SessionEventType,
     SessionStartData,
@@ -184,12 +185,15 @@ def _make_permission_request(
     tool_name: str | None = "edit",
     tool_args: Any = None,
     tool_call_id: str = "call-1",
-    kind: PermissionRequestKind = PermissionRequestKind.WRITE,
 ) -> PermissionRequest:
-    return PermissionRequest(
-        kind=kind,
-        tool_name=tool_name,
-        tool_args=tool_args,
+    # SDK 1.0 replaced the flat PermissionRequest dataclass with a union of
+    # per-category variants. The CustomTool variant is the one that carries a
+    # ``tool_name`` plus an ``args`` payload, which is exactly the shape the
+    # handler's deny-list logic inspects (named tools + the ``skill`` meta-tool).
+    return PermissionRequestCustomTool(
+        tool_description="test tool",
+        tool_name=tool_name,  # type: ignore[arg-type]
+        args=tool_args,
         tool_call_id=tool_call_id,
     )
 
@@ -795,6 +799,53 @@ async def test_iteration_session_drops_streaming_delta_events(
             assert all("thinking..." not in json.dumps(l) for l in lines)
 
 
+async def test_iteration_session_streams_deltas_to_renderer_not_jsonl(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """Text deltas reach the renderer (live output) but never the JSONL log."""
+    renderer, buf = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            renderer=renderer,
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+        ) as sdk_session:
+            sdk_session.emit(
+                _sdk_event(
+                    SessionEventType.ASSISTANT_REASONING_DELTA,
+                    AssistantReasoningDeltaData(
+                        delta_content="weighing options", reasoning_id="r1"
+                    ),
+                )
+            )
+            sdk_session.emit(
+                _sdk_event(
+                    SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                    AssistantMessageDeltaData(
+                        delta_content="here is the answer", message_id="m1"
+                    ),
+                )
+            )
+
+    # Renderer received the live text.
+    out = buf.getvalue()
+    assert "weighing options" in out
+    assert "here is the answer" in out
+
+    # ...but the JSONL log never carries the delta text.
+    if event_log.path.exists():
+        log_text = event_log.path.read_text()
+        if log_text.strip():
+            lines = [json.loads(ln) for ln in log_text.strip().splitlines()]
+            assert all("weighing options" not in json.dumps(ln) for ln in lines)
+            assert all("here is the answer" not in json.dumps(ln) for ln in lines)
+
+
 async def test_iteration_session_translates_user_input_requested_to_wrapper_event(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
@@ -1046,6 +1097,7 @@ def test_session_module_imports_are_constrained() -> None:
         # SDK
         "copilot",
         "copilot.session",
+        "copilot.generated.rpc",
         "copilot.generated.session_events",
         # peer ralph_afk modules — strictly the deep ones we integrate
         # with. NO loop / cli / config / gh / git / wrapper / pricing.
