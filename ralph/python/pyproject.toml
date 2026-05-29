@@ -1,7 +1,7 @@
 [project]
 name = "ralph-afk"
 version = "0.0.1"
-description = "Autonomous AFK loop on the GitHub Copilot Python SDK — peer variant of ralph/afk.sh."
+description = "Autonomous AFK loop on the GitHub Copilot Python SDK."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

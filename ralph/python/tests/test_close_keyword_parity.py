@@ -1,14 +1,16 @@
-"""Cross-runner regex parity test.
+"""Close-keyword regex oracle test.
 
-This is the single most load-bearing test in the suite. The bash runner
-at ``ralph/afk.sh:192-196`` and the Python runner share one contract:
-the set of issue numbers extracted from a corpus of commit messages MUST
-be identical. If this test ever fails, **the failure is the spec** — bash
-or Python has drifted and the failing corpus case tells you which.
+This is the single most load-bearing test in the suite. The runner's
+:func:`ralph_afk.wrapper.extract_close_refs` and a canonical POSIX
+``grep`` pipeline MUST extract an identical set of issue numbers from a
+corpus of commit messages. ``grep`` is used here as an independent oracle
+for the close-keyword convention; if this test ever fails, **the failure
+is the spec** — the Python implementation has drifted and the failing
+corpus case tells you how.
 
 Mechanics:
 
-* The bash side invokes the exact pipeline ``afk.sh`` uses:
+* The oracle side invokes the canonical pipeline:
 
   .. code-block:: bash
 
@@ -24,20 +26,20 @@ Mechanics:
 * The Python side calls :func:`ralph_afk.wrapper.extract_close_refs`
   directly.
 
-* Both outputs are normalised with ``sorted(set(...))`` because bash
-  ends in ``sort -un`` while the Python function preserves first-encounter
-  order (the PRD-specified ordering for the Python side). The parity
-  property under test is *set equality*, not list ordering.
+* Both outputs are normalised with ``sorted(set(...))`` because the
+  pipeline ends in ``sort -un`` while the Python function preserves
+  first-encounter order (the PRD-specified ordering for the Python side).
+  The property under test is *set equality*, not list ordering.
 
 Out-of-scope (documented divergences):
 
 * Cross-line matching — Python's ``\\s+`` would otherwise span ``\\n``;
-  the function processes line-by-line precisely to preserve parity, so
-  this test never feeds cross-line corpus to either side.
+  the function processes line-by-line precisely to preserve this property,
+  so this test never feeds cross-line corpus to either side.
 * Unicode digits — ``grep [0-9]+`` is ASCII; Python ``\\d`` is Unicode.
   Real commit messages never contain Unicode digits in issue references,
   so no corpus case exercises this. A real-world drift would surface
-  before the parity test does.
+  before this test does.
 """
 
 from __future__ import annotations
@@ -50,15 +52,15 @@ import pytest
 
 from ralph_afk.wrapper import extract_close_refs
 
-# The bash regex byte-for-byte from ralph/afk.sh:193.
-_BASH_KEYWORD_RE = (
+# The PRD-specified close-keyword regex, in POSIX-grep ERE form.
+_GREP_KEYWORD_RE = (
     "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+"
 )
 
 
-def _bash_extract_close_refs(corpus: str) -> list[int]:
-    """Invoke the exact ``afk.sh`` pipeline against ``corpus`` and return the
-    sorted-unique list of issue numbers.
+def _grep_extract_close_refs(corpus: str) -> list[int]:
+    """Invoke the canonical ``grep`` pipeline against ``corpus`` and return
+    the sorted-unique list of issue numbers.
 
     Forces ``LC_ALL=C`` on every subprocess to lock down ``[[:space:]]``
     and ``[0-9]`` semantics. Inherits ``PATH`` so grep/tr/sort are
@@ -66,12 +68,12 @@ def _bash_extract_close_refs(corpus: str) -> list[int]:
 
     Asserts subprocess exit codes — ``grep`` may legitimately return 1
     (no matches), but anything else (file errors, regex errors) indicates
-    an environment problem the parity test should surface rather than
+    an environment problem the test should surface rather than
     silently treat as an empty match set.
     """
     env = {"LC_ALL": "C", "PATH": os.environ.get("PATH", "")}
     p1 = subprocess.run(
-        ["grep", "-iEo", _BASH_KEYWORD_RE],
+        ["grep", "-iEo", _GREP_KEYWORD_RE],
         input=corpus,
         capture_output=True,
         text=True,
@@ -122,16 +124,16 @@ def _bash_extract_close_refs(corpus: str) -> list[int]:
     return [int(line) for line in p4.stdout.splitlines() if line.strip()]
 
 
-def _require_bash_toolchain() -> None:
-    """Skip the parity tests cleanly if any required CLI is missing.
+def _require_grep_toolchain() -> None:
+    """Skip the oracle tests cleanly if any required CLI is missing.
 
-    The parity contract is meaningful only when the bash pipeline can
+    The oracle is meaningful only when the ``grep`` pipeline can
     actually run; absence of ``grep``/``tr``/``sort`` on PATH is an
     environment issue, not a contract regression.
     """
     for cmd in ("grep", "tr", "sort"):
         if shutil.which(cmd) is None:
-            pytest.skip(f"{cmd!r} not on PATH — bash parity test cannot run")
+            pytest.skip(f"{cmd!r} not on PATH — grep oracle test cannot run")
 
 
 # --------------------------------------------------------------------------- #
@@ -140,7 +142,7 @@ def _require_bash_toolchain() -> None:
 #
 # Each entry is (label, corpus). The label appears in pytest output so a
 # failure's offending case is obvious. Every entry must produce identical
-# set-of-numbers from bash and Python.
+# set-of-numbers from the grep oracle and Python.
 
 PARITY_CORPUS: list[tuple[str, str]] = [
     ("empty", ""),
@@ -183,15 +185,15 @@ PARITY_CORPUS: list[tuple[str, str]] = [
     ("negative_keyword_glued_to_hash", "Closes#42"),
     ("negative_keyword_in_compound_word", "Close-related #42"),
     ("negative_hash_without_keyword", "Mentions #42 in passing"),
-    # ----- dedup ----- bash sorts/uniqs, Python first-encounter dedups;
-    # set equality holds either way.
+    # ----- dedup ----- the grep pipeline sorts/uniqs, Python first-encounter
+    # dedups; set equality holds either way.
     ("dedup_same_number_twice", "Closes #42 Closes #42"),
     (
         "dedup_across_commits",
         "Closes #42\n---COMMIT-BOUNDARY---\nFixes #42",
     ),
-    # ----- ordering — bash sorts numerically (-un), Python preserves
-    # first-encounter; both normalise to the same set.
+    # ----- ordering — the grep pipeline sorts numerically (-un), Python
+    # preserves first-encounter; both normalise to the same set.
     ("descending_to_test_sort_normalisation", "Closes #9 fixes #1"),
 ]
 
@@ -201,18 +203,18 @@ PARITY_CORPUS: list[tuple[str, str]] = [
     PARITY_CORPUS,
     ids=[label for label, _ in PARITY_CORPUS],
 )
-def test_python_matches_bash_for_corpus(label: str, corpus: str) -> None:
+def test_python_matches_grep_oracle_for_corpus(label: str, corpus: str) -> None:
     """Set-of-issue-numbers extracted from ``corpus`` is identical between
-    the bash grep pipeline and ``extract_close_refs``.
+    the grep pipeline oracle and ``extract_close_refs``.
     """
-    _require_bash_toolchain()
-    bash_set = set(_bash_extract_close_refs(corpus))
+    _require_grep_toolchain()
+    grep_set = set(_grep_extract_close_refs(corpus))
     py_set = set(extract_close_refs(corpus))
-    assert py_set == bash_set, (
-        f"parity break for {label!r}\n"
+    assert py_set == grep_set, (
+        f"oracle mismatch for {label!r}\n"
         f"  corpus = {corpus!r}\n"
-        f"  bash   = {sorted(bash_set)}\n"
+        f"  grep   = {sorted(grep_set)}\n"
         f"  python = {sorted(py_set)}\n"
-        f"This failure IS the spec — bash or Python has drifted from the "
-        f"cross-runner contract."
+        f"This failure IS the spec — the Python implementation has drifted "
+        f"from the close-keyword contract."
     )

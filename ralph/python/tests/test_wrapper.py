@@ -1,7 +1,7 @@
-"""Unit tests for ``ralph_afk.wrapper`` — the cross-runner contract module.
+"""Unit tests for ``ralph_afk.wrapper``.
 
 These tests cover the deep, pure logic of the wrapper. They do NOT cover
-cross-runner regex parity — that lives in ``test_close_keyword_parity.py``
+the close-keyword regex oracle — that lives in ``test_close_keyword_parity.py``
 so the file name surfaces the load-bearing nature of that test in the suite.
 
 Acceptance criteria reference: issue #3.
@@ -31,9 +31,8 @@ from ralph_afk.wrapper import (
 def test_close_keyword_regex_is_pattern_specified_by_prd() -> None:
     """The compiled regex pattern is byte-for-byte the PRD-mandated string.
 
-    Drift here implies the cross-runner contract has been broken — the bash
-    regex at ``ralph/afk.sh:193`` is the other half of the contract and
-    cannot be reformulated either.
+    Drift here implies the PRD-specified close-keyword convention has been
+    broken; the regex cannot be reformulated.
     """
     assert CLOSE_KEYWORD_RE.pattern == (
         r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)"
@@ -79,8 +78,8 @@ def test_extract_close_refs_is_case_insensitive() -> None:
 def test_extract_close_refs_dedupes_in_first_encounter_order() -> None:
     """Dedup preserves the first-encounter order — the PRD's specified shape.
 
-    The bash pipeline ends in ``sort -un`` which produces sorted output;
-    the Python function preserves order so callers (notably ``loop.py``)
+    The POSIX grep oracle produces sorted output; the Python function
+    preserves order so callers (notably ``loop.py``)
     can apply pool-filtering using the chronological order in which the
     agent's commits referenced each issue.
     """
@@ -122,12 +121,11 @@ def test_extract_close_refs_does_not_match_keyword_inside_compound_word() -> Non
 
 
 def test_extract_close_refs_does_not_match_across_newlines() -> None:
-    """Cross-runner parity property: ``grep`` reads line-by-line, so a
-    keyword on one line and ``#N`` on the next must not match.
+    """``grep`` reads line-by-line, so a keyword on one line and ``#N`` on
+    the next must not match.
 
     Python's ``\\s+`` would otherwise span the newline; ``extract_close_refs``
-    therefore processes input line-by-line to preserve parity with the bash
-    runner's grep pipeline.
+    therefore processes input line-by-line to preserve the POSIX grep oracle.
     """
     assert extract_close_refs("Closes\n#42") == []
 
@@ -215,7 +213,7 @@ def test_strike_machine_starts_running_with_zero_strikes() -> None:
 
 
 def test_strike_machine_default_max_strikes_is_three() -> None:
-    """Mirrors ``MAX_NMT_STRIKES`` default in ``ralph/afk.sh:297``."""
+    """The default ``MAX_NMT_STRIKES`` value is three."""
     sm = NMTStrikeStateMachine()
     assert sm.max_strikes == 3
 
@@ -251,8 +249,7 @@ def test_strike_machine_aborts_at_max_strikes() -> None:
 def test_strike_machine_ignores_nmt_sentinel_when_progress_was_made() -> None:
     """The NMT sentinel is informational only — it never affects outcome.
 
-    Mirrors ``ralph/afk.sh:409-412``: if the iteration produced work, the
-    sentinel is ignored and strikes reset.
+    If the iteration produced work, the sentinel is ignored and strikes reset.
     """
     sm = NMTStrikeStateMachine(max_strikes=3)
     sm.tick(commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=True)
@@ -263,8 +260,8 @@ def test_strike_machine_ignores_nmt_sentinel_when_progress_was_made() -> None:
 
 
 def test_strike_machine_counts_no_progress_iteration_even_without_sentinel() -> None:
-    """Mirrors ``ralph/afk.sh:418-420``: a silent no-progress iteration also
-    counts as a strike — the sentinel is not required.
+    """A silent no-progress iteration also counts as a strike — the sentinel
+    is not required.
     """
     sm = NMTStrikeStateMachine(max_strikes=2)
     sm.tick(commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=False)
@@ -277,7 +274,6 @@ def test_strike_machine_counts_no_progress_iteration_even_without_sentinel() -> 
 def test_strike_machine_is_terminal_after_abort() -> None:
     """Once ``aborted``, the state machine is frozen.
 
-    Mirrors ``ralph/afk.sh:427`` (the loop exits immediately on abort).
     A reused state machine object — e.g. if a future caller leaks one
     across runs — must not silently un-abort itself when given a
     progress tick or keep counting strikes past the abort threshold.
@@ -314,15 +310,15 @@ def test_strike_machine_rejects_non_positive_max_strikes(bad_max: int) -> None:
 
 
 def test_wrapper_module_imports_only_stdlib() -> None:
-    """``wrapper.py`` is the cross-runner contract — it must remain a deep,
-    pure module that imports nothing outside a tight stdlib allowlist.
+    """``wrapper.py`` must remain a deep, pure module that imports nothing
+    outside a tight stdlib allowlist.
 
     Allowlist semantics (not blacklist): any import outside the allowlist
     fails the test. This catches the easy-to-miss regressions: a stray
     ``from ralph_afk import gh``, a relative import like ``from . import
     events``, or a third-party convenience like ``import httpx``. The
-    bash regex contract is unit-testable in isolation precisely because
-    nothing here imports from anywhere else in the package.
+    close-keyword regex convention is unit-testable in isolation precisely
+    because nothing here imports from anywhere else in the package.
     """
     import ast
     from pathlib import Path

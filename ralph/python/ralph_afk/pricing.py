@@ -23,9 +23,9 @@ Public surface:
 
 Design notes:
 
-* **No third-party imports.** The cross-runner spec (PRD #1) keeps this module
-  on stdlib so it can be unit-tested in isolation and so the base install stays
-  light. Enforced by ``tests/test_pricing.py::test_pricing_module_imports_only_stdlib``.
+* **No third-party imports.** The PRD keeps this module on stdlib so it can
+  be unit-tested in isolation and so the base install stays light. Enforced by
+  ``tests/test_pricing.py::test_pricing_module_imports_only_stdlib``.
 * **Decimal not float.** TOML scalars are parsed as Python ``float``/``int`` by
   ``tomllib``; we route every numeric through ``str()`` then :class:`Decimal` so
   the canonical ``0.1 + 0.2`` trap does not leak into per-iteration cost rollups.

@@ -68,8 +68,7 @@ class RunConfig:
             lands in #11 and the loop raises :class:`NotImplementedError`
             for it.
         max_iterations: Cap on iterations. ``0`` (the default) means
-            unlimited — mirrors the bash positional arg semantics at
-            ``ralph/afk.sh:307-310``.
+            unlimited.
         max_nmt_strikes: Consecutive no-progress iterations tolerated
             before the loop aborts non-zero. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.

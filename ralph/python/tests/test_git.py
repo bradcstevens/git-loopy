@@ -3,7 +3,7 @@
 Exercises the typed ``git`` subprocess wrapper against real ``tmp_path``
 git repositories. The PRD calls for this approach explicitly: real-git
 tests for ``git.py`` are cheap and high-signal, and they catch divergences
-between the bash runner's semantics and the Python wrapper that a mock
+between git's real semantics and the Python wrapper that a mock
 would silently miss.
 
 Tests are skipped when ``git`` is not on PATH (environment, not regression).
@@ -199,14 +199,14 @@ def test_is_dirty_true_with_staged_addition(tmp_path: Path) -> None:
     assert is_dirty(start=tmp_path) is True
 
 
-def test_is_dirty_false_on_untracked_file_matches_bash_semantics(
+def test_is_dirty_false_on_untracked_file(
     tmp_path: Path,
 ) -> None:
-    """Bash uses ``diff --quiet`` only — untracked files do NOT make it dirty.
+    """``is_dirty`` uses ``diff --quiet`` only — untracked files do NOT make it dirty.
 
-    This is a deliberate parity choice: ``ralph/afk.sh:315`` uses
-    ``! git diff --quiet || ! git diff --cached --quiet`` which ignores
-    untracked files. Our Python wrapper mirrors that.
+    This is a deliberate choice: ``! git diff --quiet || ! git diff
+    --cached --quiet`` ignores untracked files, so an untracked file alone
+    does not abort the next iteration.
     """
     _init_repo(tmp_path)
     _commit(tmp_path, "init")

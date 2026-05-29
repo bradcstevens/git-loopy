@@ -1,8 +1,7 @@
-"""``ralph_afk.wrapper`` — cross-runner contract logic, deep and pure.
+"""``ralph_afk.wrapper`` — wrapper contract logic, deep and pure.
 
 This module is the single source of truth for the wrapper-level behaviour
-shared between the bash runner (``ralph/afk.sh``) and the Python runner
-(this package). Its load-bearing surface is intentionally small:
+of the AFK runner. Its load-bearing surface is intentionally small:
 
 * :data:`CLOSE_KEYWORD_RE` — the GitHub closing-keyword regex.
 * :func:`extract_close_refs` — pulls deduplicated issue numbers out of a
@@ -17,16 +16,16 @@ shared between the bash runner (``ralph/afk.sh``) and the Python runner
 Design notes:
 
 * **stdlib + ``re`` only.** No third-party imports, no peer modules from
-  this package, no SDK. The cross-runner contract must remain unit-testable
+  this package, no SDK. The contract must remain unit-testable
   in isolation.
-* **Line-by-line matching for parity.** Python's ``\\s+`` would otherwise
-  match across newlines, but the bash runner pipes through ``grep`` which
-  reads line-by-line. :func:`extract_close_refs` splits on ``\\n`` so the
-  matching behaviour matches bash exactly, while the compiled regex stays
-  byte-for-byte the PRD-specified pattern.
-* **Drift is caught by ``tests/test_close_keyword_parity.py``.** That test
-  runs both the bash ``grep`` pipeline and :func:`extract_close_refs` against
-  a shared corpus. If it ever fails, the failure IS the spec.
+* **Line-by-line matching.** Python's ``\\s+`` would otherwise
+  match across newlines, so :func:`extract_close_refs` splits on ``\\n``
+  and matches each line independently — equivalent to the line-oriented
+  ``grep`` semantics the close-keyword convention is specified against,
+  while the compiled regex stays byte-for-byte the PRD-specified pattern.
+* **Behaviour is pinned by ``tests/test_close_keyword_parity.py``.** That
+  test runs a POSIX ``grep`` pipeline and :func:`extract_close_refs`
+  against a shared corpus. If it ever fails, the failure IS the spec.
 """
 
 from __future__ import annotations
@@ -43,9 +42,9 @@ __all__ = [
     "NMTStrikeStateMachine",
 ]
 
-# Byte-for-byte the PRD-specified pattern. Mirrors the BRE used at
-# ``ralph/afk.sh:193`` (``[[:space:]]`` ≈ ``\s``, ``[0-9]`` ≈ ``\d``).
-# Drift here is detected by the parity test.
+# Byte-for-byte the PRD-specified close-keyword pattern. The POSIX BRE
+# oracle uses ``[[:space:]]`` ≈ ``\s`` and ``[0-9]`` ≈ ``\d``. Drift here
+# is detected by the regex test.
 CLOSE_KEYWORD_RE: re.Pattern[str] = re.compile(
     r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)",
     re.IGNORECASE,
@@ -56,12 +55,12 @@ def extract_close_refs(commit_messages: str) -> list[int]:
     """Extract deduplicated issue numbers referenced via GitHub closing
     keywords (``close[sd]?`` / ``fix(es|ed)?`` / ``resolve[sd]?``).
 
-    Returns numbers in first-encounter order — the bash pipeline ends in
-    ``sort -un`` (sorted-unique) but the Python side preserves order so
+    Returns numbers in first-encounter order — the POSIX grep/sort oracle
+    produces sorted-unique output, but the Python side preserves order so
     callers can reason about which commit referenced which issue first.
 
-    Matching is performed line-by-line to preserve cross-runner parity
-    with ``grep`` (see module docstring). Lines are split on ``\\n`` only —
+    Matching is performed line-by-line to preserve POSIX ``grep`` semantics
+    (see module docstring). Lines are split on ``\n`` only —
     not via :py:meth:`str.splitlines`, which would also split on ``\\r``,
     ``\\v``, ``\\f`` and Unicode line separators that ``grep`` treats as
     in-line content.
@@ -110,9 +109,8 @@ def did_iteration_make_progress(
 ) -> bool:
     """Decide whether an iteration counts as work.
 
-    Mirrors the bash truth function at ``ralph/afk.sh:403-406``: an
-    iteration "made progress" if either at least one commit landed OR the
-    wrapper auto-closed at least one issue.
+    An iteration "made progress" if either at least one commit landed OR
+    the wrapper auto-closed at least one issue.
 
     Args:
         commits_in_iter: Number of new commits the iteration produced.
@@ -135,8 +133,7 @@ Outcome = Literal["running", "aborted"]
 class NMTStrikeStateMachine:
     """Tracks consecutive no-progress iterations against a configurable cap.
 
-    The state machine mirrors the bash strikes logic at
-    ``ralph/afk.sh:297-298`` and ``409-429``:
+    The state machine implements the no-progress strikes logic:
 
     * Start in ``running`` with zero strikes.
     * Each call to :meth:`tick` represents one completed iteration.
@@ -183,22 +180,20 @@ class NMTStrikeStateMachine:
                 ``<promise>NO MORE TASKS</promise>`` sentinel this
                 iteration. Informational only — the state machine never
                 consults it. The renderer uses it to pick which warning
-                line to print (matching ``ralph/afk.sh:411-412`` vs
-                ``416-417``). Accepted as a keyword arg so future
+                line to print for progress vs no-progress. Accepted as a
+                keyword arg so future
                 consumers can be wired in via :func:`asdict`-style
                 passing without changing call sites.
 
         Returns:
             The new outcome (``"running"`` or ``"aborted"``).
         """
-        # saw_nmt_sentinel is informational only; bash logic at lines
-        # 411-412 / 416-417 only varies the warning message, not the
-        # state-machine outcome.
+        # saw_nmt_sentinel is informational only; it only varies the
+        # warning message, not the state-machine outcome.
         _ = saw_nmt_sentinel
 
-        # Terminal state. The bash runner exits immediately on abort
-        # (``ralph/afk.sh:427``); the Python state machine mirrors that by
-        # freezing — further ticks neither reset strikes nor flip outcome.
+        # Terminal state. On abort the state machine freezes — further
+        # ticks neither reset strikes nor flip the outcome.
         if self.outcome == "aborted":
             return self.outcome
 

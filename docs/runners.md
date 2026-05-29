@@ -1,54 +1,48 @@
-# Runners
+# Runner
 
-> Everything you need to pick a runner, invoke it correctly, and understand what it'll do on each iteration.
+> Everything you need to invoke the AFK runner correctly and understand what it'll do on each iteration.
 
-The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-ralphsh-afksh-or-ralphpython)). Two interchangeable runners ship in this kit; both share the same wrapper contract.
+The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-ralphpython)). The kit ships a single runner — the Python AFK runner at [`ralph/python/`](../ralph/python/), built on the GitHub Copilot Python SDK. [`ralph/afk.sh`](../afk.sh) is an optional one-line convenience launcher that just invokes it with a default model; there is no separate shell runner.
 
-## Pick a Runner: `ralph/sh-afk.sh` vs `ralph/python/`
+## The runner: `ralph/python/`
 
-Both runners implement the **same core wrapper contract** — same `ready-for-agent` filter, same `## Parent` + `## Acceptance criteria` discriminator, same `Closes/Fixes/Resolves #N` auto-close backstop, same env-var surface, same termination model. The Python runner additionally auto-stashes dirty leftovers after an iteration so a partial commit cannot make the next iteration abort or absorb unrelated tracked changes.
+The runner enforces the **wrapper contract** — `ready-for-agent` filter, `## Parent` + `## Acceptance criteria` discriminator, `Closes/Fixes/Resolves #N` auto-close backstop, env-var surface, and termination model. It also auto-stashes dirty leftovers after an iteration so a partial commit cannot make the next iteration abort or absorb unrelated tracked changes.
 
-| Surface                          | [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) (bash)                       | [`ralph/python/`](../ralph/python/) (Python SDK)                                                                                                                  |
-| -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Invocation                       | `bash ralph/sh-afk.sh`                                               | `uv run --project ralph/python ralph-afk`                                                                                                      |
-| Positional arg (iteration cap)   | `bash ralph/sh-afk.sh 50` (0 / omitted = unlimited)                  | `uv run --project ralph/python ralph-afk 50` (0 / omitted = unlimited)                                                                         |
-| `MODEL`                          | env var (default `claude-opus-4.7-xhigh`)                            | env var (same default)                                                                                                                         |
-| `ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                | env var; same                                                                                                                                  |
-| `MAX_NMT_STRIKES`                | env var (default `3`)                                                | env var (same default)                                                                                                                         |
-| Exit `0` — clean                 | empty AFK-ready pool **or** iteration cap reached                    | empty AFK-ready pool **or** iteration cap reached                                                                                              |
-| Exit `1` — aborted               | `MAX_NMT_STRIKES` tripped **or** stale worktree                      | `MAX_NMT_STRIKES` tripped, pre-iteration stale worktree, post-iteration stash failure, **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
-| Observability artefacts          | stdout/stderr only                                                   | `.ralph/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.ralph/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.ralph/logs/<iso>-<run_id>.log` (stderr mirror) |
-| Terminal UX                      | streamed text                                                        | Rich-rendered iteration `Panel`s, per-iteration token + live-catalog estimated-cost signal, run-end summary table                              |
-| OpenTelemetry tracing            | n/a                                                                  | opt-in via `uv sync --project ralph/python --extra otel` + `RALPH_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
-| Extra prerequisites              | `jq`                                                                 | Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                                            |
+| Surface                          | [`ralph/python/`](../ralph/python/) (Python SDK)                                                                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Invocation                       | `uv run --project ralph/python ralph-afk`                                                                                                      |
+| Positional arg (iteration cap)   | `uv run --project ralph/python ralph-afk 50` (0 / omitted = unlimited)                                                                         |
+| `MODEL`                          | env var (default `claude-opus-4.7-xhigh`)                                                                                                      |
+| `ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
+| `MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
+| Exit `0` — clean                 | empty AFK-ready pool **or** iteration cap reached                                                                                              |
+| Exit `1` — aborted               | `MAX_NMT_STRIKES` tripped, pre-iteration stale worktree, post-iteration stash failure, **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
+| Observability artefacts          | `.ralph/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.ralph/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.ralph/logs/<iso>-<run_id>.log` (stderr mirror) |
+| Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + live-catalog estimated-cost signal, run-end summary table                              |
+| OpenTelemetry tracing            | opt-in via `uv sync --project ralph/python --extra otel` + `RALPH_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
+| Prerequisites                    | `gh`, `git`, `copilot`, Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                    |
 
-### When to use which
+The runner gives you a richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.ralph/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. Its dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `ralph/python/` — they do not touch your project's runtime.
 
-**Use [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) when** you want the smallest possible dependency footprint — `gh`, `jq`, `git`, `copilot` and nothing else. The bash runner is stack-agnostic (it doesn't care that your project happens to be Python, Node, Rust, or something else) and is the right default for repos that deliberately chose a zero-Python, zero-npm toolchain.
-
-**Use [`ralph/python/`](../ralph/python/) when** you want the richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.ralph/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. The extra dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `ralph/python/` — they do not touch your project's runtime.
-
-The cost figure surfaced by the Python runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`ralph/python/README.md`](../ralph/python/README.md) for the full caveat.
+The cost figure surfaced by the runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`ralph/python/README.md`](../ralph/python/README.md) for the full caveat.
 
 ## Invocation
 
-The examples below use the bash runner; substitute `uv run --project ralph/python ralph-afk` for the Python variant. All env vars and positional args are identical across runners.
-
 ```bash
 # Unlimited iterations, default model (claude-opus-4.7-xhigh).
-bash ralph/sh-afk.sh
+uv run --project ralph/python ralph-afk
 
 # Cap at 50 iterations.
-bash ralph/sh-afk.sh 50
+uv run --project ralph/python ralph-afk 50
 
 # Pick a different model.
-MODEL=gpt-5.4 bash ralph/sh-afk.sh
+MODEL=gpt-5.4 uv run --project ralph/python ralph-afk
 
 # Tolerate more no-progress iterations before aborting (default: 3).
-MAX_NMT_STRIKES=5 bash ralph/sh-afk.sh
+MAX_NMT_STRIKES=5 uv run --project ralph/python ralph-afk
 
 # Use the legacy local-markdown mode (prds/<feature>/NNN-*.md).
-ISSUE_SOURCE=prds bash ralph/sh-afk.sh
+ISSUE_SOURCE=prds uv run --project ralph/python ralph-afk
 ```
 
 ## Per-iteration flow
@@ -66,7 +60,7 @@ ISSUE_SOURCE=prds bash ralph/sh-afk.sh
 | Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                  |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
 | **Aborted — stuck**   | `1`  | `MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
-| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing `ralph/PROMPT.md`, missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, dirty worktree, or (Python runner only) malformed pricing / stash failure. |
+| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing `ralph/PROMPT.md`, missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, dirty worktree, malformed pricing, or stash failure. |
 
 The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
 
@@ -77,7 +71,7 @@ The auto-close backstop relies on commit messages following the GitHub closing-k
 - **Completion commits:** `Closes #N`, `Fixes #N`, or `Resolves #N` (case-insensitive forms — `close[sd]?`, `fix(es|ed)?`, `resolve[sd]?` — followed by whitespace then `#N`).
 - **Partial-progress commits:** use `Refs #N` or `Progress on #N` so the wrapper does **not** auto-close.
 
-[`ralph/PROMPT.md`](../ralph/PROMPT.md) instructs the agent in this contract and also lays out a **FINAL SEQUENCE** for issue closure (re-fetch state → `gh issue close` → verify state is `CLOSED` → retry once → fall through to wrapper backstop). If you customize `PROMPT.md`, keep that contract intact or the backstop will misfire — and update the regex in `extract_close_refs` inside [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) so it still matches.
+[`ralph/PROMPT.md`](../ralph/PROMPT.md) instructs the agent in this contract and also lays out a **FINAL SEQUENCE** for issue closure (re-fetch state → `gh issue close` → verify state is `CLOSED` → retry once → fall through to wrapper backstop). If you customize `PROMPT.md`, keep that contract intact or the backstop will misfire — and update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`ralph/python/ralph_afk/wrapper.py`](../ralph/python/ralph_afk/wrapper.py) so it still matches.
 
 ## Skill routing
 

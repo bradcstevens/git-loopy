@@ -13,9 +13,9 @@ Public surface:
   can scan both subject and body for closure keywords in one pass.
 * :func:`repo_root` — top-level directory via ``git rev-parse --show-toplevel``.
 * :func:`head_sha` — current HEAD SHA via ``git rev-parse HEAD``.
-* :func:`is_dirty` — mirrors the bash stale-worktree guard at
-  ``ralph/afk.sh:315``: returns ``True`` if either ``git diff --quiet`` or
-  ``git diff --cached --quiet`` exits with code 1. Codes ``> 1`` indicate a
+* :func:`is_dirty` — stale-worktree guard: returns ``True`` if either
+  ``git diff --quiet`` or ``git diff --cached --quiet`` exits with code 1.
+  Codes ``> 1`` indicate a
   real git failure (corrupted index, etc.) and raise :exc:`GitError` rather
   than being conflated with "dirty".
 * :func:`commits_between` — list of :class:`Commit` for ``pre..head``.
@@ -205,7 +205,7 @@ def head_sha(start: Path | str | None = None) -> str:
 def is_dirty(start: Path | str | None = None) -> bool:
     """Return ``True`` if the working tree has uncommitted staged or unstaged changes.
 
-    Mirrors the bash stale-worktree guard at ``ralph/afk.sh:315``::
+    The stale-worktree guard::
 
         if ! git diff --quiet || ! git diff --cached --quiet; then
             # dirty
@@ -217,7 +217,7 @@ def is_dirty(start: Path | str | None = None) -> bool:
     failure as "dirty" — the loop's stale-worktree guard wants to surface
     a real problem with a real error message.
 
-    Note: Like the bash variant, ``is_dirty`` does NOT check for untracked
+    Note: ``is_dirty`` does NOT check for untracked
     files; an untracked file alone does not make the tree "dirty".
 
     Args:
@@ -255,7 +255,7 @@ def commits_between(
 ) -> list[Commit]:
     """Return commits in ``pre..head`` (exclusive of ``pre``, inclusive of ``head``).
 
-    Order is git's default for ``log``: newest first. The bash auto-close
+    Order is git's default for ``log``: newest first. The auto-close
     backstop scans these for closure keywords via
     :func:`ralph_afk.wrapper.extract_close_refs` against ``commit.message``.
 

@@ -802,8 +802,7 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
 
     The post-iteration accounting (commits_between, auto-close backstop,
     strike tick, iteration.end emit, counters persist) still runs — the
-    SDK failure is contained to "no progress" semantics matching bash
-    parity at ``ralph/afk.sh:365-367``.
+    SDK failure is contained to "no progress" semantics.
     """
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")

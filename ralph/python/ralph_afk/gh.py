@@ -5,10 +5,7 @@ Every external GitHub call flows through ``subprocess.run(["gh", ...])`` so
 the user's existing ``gh auth login`` (including GitHub Enterprise endpoints,
 SSO tokens, and device-flow refresh) remains the single source of truth.
 
-The cross-runner contract (see ``ralph/afk.sh``):
-
-* The bash runner uses ``gh`` + ``jq`` for issue I/O.
-* The Python variant uses ``gh`` + stdlib :mod:`json` (no ``jq`` dependency).
+Issue I/O uses ``gh`` + the stdlib :mod:`json` (no ``jq`` dependency).
 
 Public surface:
 
@@ -23,7 +20,7 @@ Public surface:
 * :func:`issue_view` — full single-issue view including ``comments``.
 * :func:`issue_close` — close an issue with a wrap-up comment **and verify**
   the close landed (raises :exc:`GhError` if the post-close state is not
-  ``CLOSED``). Mirrors the verify-after-close pattern at ``ralph/afk.sh:255``.
+  ``CLOSED``).
 
 Design notes:
 
@@ -262,8 +259,8 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
 def auth_status() -> bool:
     """Return ``True`` if ``gh`` is signed in, ``False`` otherwise.
 
-    Mirrors the bash preflight at ``ralph/afk.sh:93``. Asymmetric with the
-    rest of the module: a "not signed in" state (``gh auth status`` rc=1)
+    Asymmetric with the rest of the module: a "not signed in" state
+    (``gh auth status`` rc=1)
     is a normal outcome the loop wants to recover from with a user-facing
     message, not an exception. Only a missing ``gh`` binary raises
     :exc:`GhError`.
@@ -319,8 +316,8 @@ def issue_list(label: str, state: str = "open") -> list[Issue]:
     Args:
         label: A single label name (matches ``gh``'s single ``--label`` flag).
         state: ``"open"``, ``"closed"``, or ``"all"`` — passed verbatim to
-            ``gh issue list --state``. Defaults to ``"open"`` to match the
-            bash collector's filter.
+            ``gh issue list --state``. Defaults to ``"open"`` for the
+            AFK-ready issue collector.
 
     Returns:
         A list of :class:`Issue` with ``comments`` always empty. The loop
@@ -379,9 +376,9 @@ def issue_view(number: int) -> Issue:
 def issue_close(number: int, comment: str) -> None:
     """Close an issue with a wrap-up comment, then verify the close landed.
 
-    Mirrors the bash sequence at ``ralph/afk.sh:255-263``: a ``gh issue close``
-    success is not trusted alone — we re-read state via ``gh issue view ...
-    --json state`` and raise :exc:`GhError` if the post-close state is not
+    A ``gh issue close`` success is not trusted alone — we re-read state via
+    ``gh issue view ... --json state`` and raise :exc:`GhError` if the
+    post-close state is not
     ``CLOSED``. Closing an already-closed issue is a no-op (``gh`` is
     idempotent on this; the verify step still requires ``CLOSED``).
 

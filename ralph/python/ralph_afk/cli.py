@@ -62,8 +62,7 @@ from ralph_afk.config import REASONING_EFFORTS, RunConfig
 __all__ = ["main", "build_parser", "resolve_repo_root"]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
-# Mirrors bash ``ralph/afk.sh:65`` so a wrapper script calling either
-# variant with no ``MODEL`` set produces parity behaviour.
+# Default model used when ``MODEL`` is unset.
 _DEFAULT_MODEL = "claude-opus-4.7-xhigh"
 
 
@@ -133,9 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ralph-afk",
         description=(
-            "Autonomous AFK loop on the GitHub Copilot Python SDK. "
-            "Peer variant of ralph/afk.sh — same wrapper contract, "
-            "richer terminal UX."
+            "Autonomous AFK loop on the GitHub Copilot Python SDK."
         ),
         epilog=(
             "Environment variables:\n"

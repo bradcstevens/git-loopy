@@ -16,7 +16,7 @@ This is why the workflow ([`docs/workflow.md`](workflow.md)) breaks a brief down
 
 Every iteration starts from zero (system prompt + `AGENTS.md` + the issue). The agent forgets everything between iterations. This is a feature, not a bug — **optimize for it** rather than fighting it with compaction. A cleared context is always a known, clean state. Compacted sediment is unpredictable.
 
-[`ralph/sh-afk.sh`](../ralph/sh-afk.sh) (and its Python peer at [`ralph/python/`](../ralph/python/)) invokes a fresh `copilot --yolo -p` per iteration on purpose. The two channels through which state survives between iterations are deliberate and narrow:
+The AFK runner ([`ralph/python/`](../ralph/python/)) invokes a fresh `copilot --yolo -p` per iteration on purpose. The two channels through which state survives between iterations are deliberate and narrow:
 
 - **Git commits.** The previous iteration's commits are the durable record of what was done.
 - **Issue tracker state.** Closing an issue (and the wrapper's auto-close backstop) is how "this slice is done" propagates forward.
@@ -29,7 +29,7 @@ A scaffold for a project that uses this shape end-to-end:
 
 - **Per-repo configuration templates** under [`templates/`](../templates/) — `AGENTS.md` (loaded into every Copilot CLI invocation) and `SPEC.md` (the brief that `/to-prd` consumes).
 - **A vendored copy of every Copilot CLI skill the workflow routes to**, under [`.copilot/skills/`](../.copilot/skills) — alignment, planning, implementation, and meta.
-- **Two interchangeable AFK runners** — pure-bash for the minimal-deps audience, Python on the Copilot SDK for the richer observability audience. Both share the same wrapper contract. See [`docs/runners.md`](runners.md).
+- **A Python AFK runner** on the GitHub Copilot Python SDK — frozen iteration `Panel`s, per-iteration token + estimated-cost signal, a JSONL replay log, a run-summary JSON, and opt-in OpenTelemetry tracing. See [`docs/runners.md`](runners.md).
 - **Stack-agnostic.** Customize the **Feedback loops** table in `AGENTS.md` once for your project's lint / type-check / test / build commands; both the human-driven skills and the AFK loop read from it.
 
 ## Inspiration

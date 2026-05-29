@@ -22,7 +22,7 @@ together into a working ``ralph-afk`` invocation. It owns:
 The per-iteration :class:`~ralph_afk.session.IterationSession` is opened
 inside :func:`run` once per iteration.
 
-Per-iteration sequence (parity with ``ralph/afk.sh:305-433``):
+Per-iteration sequence:
 
 1. Cap check on ``max_iterations``.
 2. **Stale-worktree guard** via :func:`ralph_afk.git.is_dirty`.
@@ -68,8 +68,7 @@ Design notes:
   3. Hands it to the renderer for the Rich-driven terminal output and
      RunSummary accumulator updates.
 * **SDK + source failure containment.** ``send_and_wait`` failures are
-  caught and treated as no-progress (matching bash's ``copilot`` exit-rc
-  handling at lines 365-367). Per-issue ``gh.issue_close`` failures are
+  caught and treated as no-progress. Per-issue ``gh.issue_close`` failures are
   logged via the diagnostics logger inside the source impl and the
   loop continues — losing one closure is preferable to skipping the
   rest of the iteration's bookkeeping.
@@ -223,8 +222,8 @@ def _read_prompt(repo_root: Path) -> str:
 def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     """Render the last-5-commits block fed into the prompt prefix.
 
-    Mirrors the bash format at ``ralph/afk.sh:324``: one line per commit
-    (sha, date, then the message body terminated by ``---``).
+    One line per commit: sha, date, then the message body terminated by
+    ``---``.
     """
     parts: list[str] = []
     for c in commits:
@@ -332,7 +331,7 @@ class _Loop:
                 iter_num=iter_num,
             )
 
-            # 1) Stale-worktree guard (bash line 315).
+            # 1) Stale-worktree guard.
             if git_module.is_dirty(self._repo_root):
                 self._emit(
                     events_module.WRAPPER_STALE_WORKTREE_ABORTED,
@@ -418,8 +417,8 @@ class _Loop:
                                 send_timeout,
                             )
                         except Exception as exc:
-                            # Match bash line 365-367 — treat any copilot failure
-                            # as no-progress; bookkeeping below still runs.
+                            # Treat any copilot failure as no-progress;
+                            # bookkeeping below still runs.
                             self._diag.warning(
                                 "SDK send_and_wait raised %s: %s; "
                                 "treating iteration as no-progress",

@@ -404,8 +404,8 @@ def test_issue_view_nonzero_exit_raises_gh_error(monkeypatch) -> None:
 
 
 def test_issue_close_verifies_state_after_close(monkeypatch) -> None:
-    """Bash parity: ``gh issue close`` success is not trusted alone — the
-    wrapper re-reads state via ``gh issue view --json state``."""
+    """``gh issue close`` success is not trusted alone — the wrapper
+    re-reads state via ``gh issue view --json state``."""
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kw):
@@ -430,9 +430,8 @@ def test_issue_close_verifies_state_after_close(monkeypatch) -> None:
 def test_issue_close_raises_when_verify_state_is_not_closed(monkeypatch) -> None:
     """If ``gh issue close`` returns success but state is still OPEN, raise.
 
-    This mirrors the bash check at ``ralph/afk.sh:255-263``: a successful
-    close subprocess that did not actually close the issue must be surfaced
-    so the loop does not miscount closures.
+    A successful close subprocess that did not actually close the issue must
+    be surfaced so the loop does not miscount closures.
     """
 
     def fake_run(cmd, **kw):

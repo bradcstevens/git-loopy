@@ -58,7 +58,7 @@ copilot
 > /to-issues
 ```
 
-The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## Parent` and `## Acceptance criteria`, which are the two sections [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) looks for when filtering AFK-ready work.
+The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## Parent` and `## Acceptance criteria`, which are the two sections the AFK runner ([`ralph/python/`](../ralph/python/)) looks for when filtering AFK-ready work.
 
 ## Phase 5 — Triage (`/triage`)
 
@@ -68,19 +68,19 @@ The skill re-explores the codebase, quizzes you on slice boundaries, and creates
 
 Walks the open issues through the five-label state machine (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `ready-for-agent` issues are picked up by the AFK loop. The canonical label list lives in `docs/agents/triage-labels.md`.
 
-## Phase 6 — AFK Loop (`ralph/sh-afk.sh` or `ralph/python/`)
+## Phase 6 — AFK Loop (`ralph/python/`)
 
-This is the autonomous phase. Pick a runner, kick it off, walk away.
+This is the autonomous phase. Kick off the runner and walk away.
 
 ```bash
 # Unlimited iterations, default model.
-bash ralph/sh-afk.sh
+uv run --project ralph/python ralph-afk
 
 # Cap at 50 iterations.
-bash ralph/sh-afk.sh 50
+uv run --project ralph/python ralph-afk 50
 ```
 
-**For everything else** — runner comparison, env vars, per-iteration flow, exit conditions, the commit-message contract, and how the prompt routes work to `/diagnose` / `/prototype` / `/tdd` / `/improve-codebase-architecture` / `/grill-with-docs` / `/zoom-out` — see [`docs/runners.md`](runners.md).
+**For everything else** — env vars, per-iteration flow, exit conditions, the commit-message contract, and how the prompt routes work to `/diagnose` / `/prototype` / `/tdd` / `/improve-codebase-architecture` / `/grill-with-docs` / `/zoom-out` — see [`docs/runners.md`](runners.md).
 
 ## Phase 7 — QA
 

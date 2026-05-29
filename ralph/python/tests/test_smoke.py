@@ -84,8 +84,7 @@ def test_ralph_afk_rejects_negative_iterations() -> None:
 def test_ralph_afk_rejects_unknown_issue_source(tmp_path, monkeypatch) -> None:
     """An unsupported ``ISSUE_SOURCE`` value is rejected with a clear error.
 
-    Matches the bash runner's behaviour at ``ralph/afk.sh:68-73``. The
-    validation fires inside the CLI before the loop even runs.
+    The validation fires inside the CLI before the loop even runs.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     monkeypatch.setenv("ISSUE_SOURCE", "gitlab")

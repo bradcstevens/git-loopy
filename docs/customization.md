@@ -37,9 +37,9 @@
 │   ├── microsoft-foundry/          # Azure AI Foundry helpers (delete if not on Microsoft tech).
 │   └── caveman/                    # Token-compressed output mode (off by default in the loop).
 └── ralph/
-    ├── sh-afk.sh                   # Autonomous loop (bash). See docs/runners.md.
-    ├── PROMPT.md                   # Shared agent prompt loaded each iteration (both runners).
-    └── python/                     # Python peer variant of the AFK runner on the GitHub Copilot Python SDK. See ralph/python/README.md.
+    ├── afk.sh                      # Optional one-line convenience launcher for the Python runner.
+    ├── PROMPT.md                   # Agent prompt loaded each iteration.
+    └── python/                     # The AFK runner, on the GitHub Copilot Python SDK. See ralph/python/README.md.
 ```
 
 ### What you'll add when adopting
@@ -61,7 +61,7 @@
 ## The two files you almost always edit
 
 - **`AGENTS.md`** (scaffold from [`templates/AGENTS.template.md`](../templates/AGENTS.template.md)) — fill in **Tech stack** and **Feedback loops**. The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
-- **[`ralph/PROMPT.md`](../ralph/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the regex in `extract_close_refs` inside [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) so the auto-close backstop still matches what the agent emits.
+- **[`ralph/PROMPT.md`](../ralph/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`ralph/python/ralph_afk/wrapper.py`](../ralph/python/ralph_afk/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
 The **template files** ([`templates/AGENTS.template.md`](../templates/AGENTS.template.md), [`templates/SPEC.template.md`](../templates/SPEC.template.md), and the [`CONTEXT.md`](../CONTEXT.md) stub at the repo root) each include a `> 📝` placeholder convention and a `> 🗑️ DELETE IF NOT APPLICABLE` convention. Grep for `<[A-Z_]` to find what's left to replace.
 
@@ -101,9 +101,9 @@ The kit ships with a **two-layer auto-bootstrap** so a forgotten `/setup-agent-s
 | Layer | Where | What it does |
 | --- | --- | --- |
 | **Interactive sessions** | Top of `AGENTS.md` (the "First-run bootstrap" directive in [`templates/AGENTS.template.md`](../templates/AGENTS.template.md), loaded into every Copilot CLI invocation) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
-| **AFK loop runners** | Preflight check in [`ralph/sh-afk.sh`](../ralph/sh-afk.sh) and [`ralph/python/`](../ralph/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
+| **AFK loop runner** | Preflight check in [`ralph/python/`](../ralph/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
 
-The two layers compose: a human starts a fresh repo, runs `bash ralph/sh-afk.sh`, gets a clear error, opens `copilot` interactively, sees the AGENTS.md directive auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
+The two layers compose: a human starts a fresh repo, runs `uv run --project ralph/python ralph-afk`, gets a clear error, opens `copilot` interactively, sees the AGENTS.md directive auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
 
 ## Skills reference
 

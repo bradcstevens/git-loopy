@@ -4,26 +4,21 @@ A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on top 
 
 > Inspired by the [AI Engineer Workshop 2026](https://github.com/mattpocock/ai-engineer-workshop-2026-project) workflow, ported to the GitHub Copilot CLI.
 
-**What you get:** two interchangeable AFK runners (pure-bash and Python SDK), per-repo configuration templates under [`templates/`](templates/), and a vendored copy of every Copilot CLI skill the workflow routes to under [`.copilot/skills/`](.copilot/skills). Stack-agnostic — customize one **Feedback loops** table and the rest of the kit follows.
+**What you get:** a Python AFK runner on the GitHub Copilot Python SDK ([`ralph/python/`](ralph/python/)), per-repo configuration templates under [`templates/`](templates/), and a vendored copy of every Copilot CLI skill the workflow routes to under [`.copilot/skills/`](.copilot/skills). Stack-agnostic — customize one **Feedback loops** table and the rest of the kit follows.
 
 This README is the **quickstart**. The deeper docs live under [`docs/`](docs/) — see [Where to go next](#where-to-go-next).
 
-> **Skills setup starts with `/setup-agent-skills`.** Once you've cloned this kit into your new project and installed the skills at the user level, the **first** thing to run in Copilot CLI is the [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) skill. It populates the `## Agent skills` block in your `AGENTS.md` and writes the per-repo `docs/agents/{issue-tracker,triage-labels,domain}.md` files that every downstream skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnose`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads. Skip this step and those skills will guess at your issue tracker, label vocabulary, and context layout. **Safety net:** if you forget, the bootstrap directive at the top of [`AGENTS.md`](templates/AGENTS.template.md) auto-invokes the skill on your next interactive `copilot` session, and both AFK runners ([`ralph/sh-afk.sh`](ralph/sh-afk.sh), [`ralph/python/`](ralph/python/)) refuse to start without it. Full detail in [`docs/customization.md`](docs/customization.md#setup-agent-skills--the-entry-point-skill) and [`docs/customization.md` → Auto-bootstrap behavior](docs/customization.md#auto-bootstrap-behavior).
+> **Skills setup starts with `/setup-agent-skills`.** Once you've cloned this kit into your new project and installed the skills at the user level, the **first** thing to run in Copilot CLI is the [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) skill. It populates the `## Agent skills` block in your `AGENTS.md` and writes the per-repo `docs/agents/{issue-tracker,triage-labels,domain}.md` files that every downstream skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnose`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads. Skip this step and those skills will guess at your issue tracker, label vocabulary, and context layout. **Safety net:** if you forget, the bootstrap directive at the top of [`AGENTS.md`](templates/AGENTS.template.md) auto-invokes the skill on your next interactive `copilot` session, and the AFK runner ([`ralph/python/`](ralph/python/)) refuses to start without it. Full detail in [`docs/customization.md`](docs/customization.md#setup-agent-skills--the-entry-point-skill) and [`docs/customization.md` → Auto-bootstrap behavior](docs/customization.md#auto-bootstrap-behavior).
 
 ---
 
 ## Prerequisites
 
-**Shared by both runners:**
-
 - [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in: `npm install -g @github/copilot` then run `copilot` once to authenticate.
 - [`gh`](https://cli.github.com/) on PATH and signed in (`gh auth login`).
 - `git` on PATH.
 - A GitHub repository for your project (the loop's default issue source).
-
-**Bash runner** ([`ralph/sh-afk.sh`](ralph/sh-afk.sh)) additionally needs [`jq`](https://jqlang.org/) on PATH.
-
-**Python runner** ([`ralph/python/`](ralph/python/)) additionally needs Python **≥ 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip` ≥ 24). See [`docs/runners.md`](docs/runners.md) for the runner comparison and [`ralph/python/README.md`](ralph/python/README.md) for the Python bootstrap.
+- Python **≥ 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip` ≥ 24) for the AFK runner ([`ralph/python/`](ralph/python/)). See [`docs/runners.md`](docs/runners.md) for the runner contract and [`ralph/python/README.md`](ralph/python/README.md) for the Python bootstrap.
 
 ---
 
@@ -99,9 +94,9 @@ The README stops here. Pick whichever doc matches what you need to do:
 | --- | --- |
 | [`docs/concepts.md`](docs/concepts.md) | You want to understand **why** the workflow is shaped the way it is — the Smart Zone / Memento Model mental models the rest of the kit is built around. Read this first if you're unfamiliar with AFK-style AI coding loops. |
 | [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea → Grill → Brief → PRD → Issues → Triage → AFK loop → QA). Includes the [`/grill-me` vs `/grill-with-docs`](docs/workflow.md#grill-me-vs-grill-with-docs--pick-the-right-one) decision tree and the greenfield-project edge case. |
-| [`docs/runners.md`](docs/runners.md) | You're ready to kick off the AFK loop and need the **runner comparison**, invocation cookbook, per-iteration flow, exit conditions, commit-message contract, and skill-routing rules. |
+| [`docs/runners.md`](docs/runners.md) | You're ready to kick off the AFK loop and need the **runner reference** — invocation cookbook, per-iteration flow, exit conditions, commit-message contract, and skill-routing rules. |
 | [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit to your project** — repo structure, what to edit in `AGENTS.md` and `PROMPT.md`, what `/setup-agent-skills` actually writes, re-running it, and the skills reference. |
-| [`ralph/python/README.md`](ralph/python/README.md) | You picked the Python runner and want the **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing** for it. |
+| [`ralph/python/README.md`](ralph/python/README.md) | You want the AFK runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
 
 A recommended reading order for first-time users: [`docs/concepts.md`](docs/concepts.md) → finish the Quick Start above → [`docs/workflow.md`](docs/workflow.md) → [`docs/runners.md`](docs/runners.md) → [`docs/customization.md`](docs/customization.md) on demand.
 

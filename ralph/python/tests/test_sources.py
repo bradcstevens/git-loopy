@@ -571,8 +571,8 @@ class TestPrdsCollectAfkReady:
     def test_orders_within_feature_numerically_by_nnn(
         self, tmp_path: Path
     ) -> None:
-        # Zero-padded NNN sorts lex-equivalent-to-numerical. Mirrors
-        # bash's `find ... | sort`.
+        # Zero-padded NNN sorts lex-equivalent-to-numerical, matching
+        # POSIX `find ... | sort` ordering.
         _write_md(tmp_path / "prds" / "featA" / "003-c.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "002-b.md", _AFK_BODY)
@@ -635,7 +635,7 @@ class TestPrdsCollectAfkReady:
     def test_rendered_block_format_matches_bash_collector(
         self, tmp_path: Path
     ) -> None:
-        # Bash emits "=== <path> ===\n<file contents>" — match it.
+        # The block is "=== <path> ===\n<file contents>".
         body = "## Parent\n#1\n\n## Acceptance criteria\n- ok\n"
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", body)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
@@ -675,7 +675,7 @@ class TestPrdsHandleCompletions:
     def test_returns_empty_even_when_commit_references_file(
         self, tmp_path: Path
     ) -> None:
-        """Bash parity: wrapper does NOT auto-move files.
+        """The wrapper does NOT auto-move files.
 
         Even if a new commit's message literally contains the pool file
         path, ``handle_completions`` returns an empty list. The agent
