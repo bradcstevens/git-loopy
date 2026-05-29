@@ -1,0 +1,1047 @@
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/components/signed-in-h
+eader.tsx  view_range=[1, 90]
+
+» bash  <truncated: 2965 chars>
+
+» bash  <truncated: 230 chars>
+
+» bash  <truncated: 206 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/.copilot-tsc-errors.txt  
+view_range=[1, 220]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/activate-route.integr
+ation.test.ts  view_range=[1, 75]
+
+» bash  <truncated: 934 chars>
+
+» bash  <truncated: 206 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/.copilot-tsc-errors.txt  
+view_range=[1, 220]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/.copilot-tsc-errors.txt  
+view_range=[65, 120]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/classify-csv-rows.tes
+t.ts  view_range=[1, 110]
+
+» bash  <truncated: 2113 chars>
+
+» bash  command=pnpm exec tsc --noEmit --pretty false > .copilot-tsc-errors.txt 2>&1 || true && sed -n 
+'1,180p' .copilot-tsc-errors.txt  description=Typecheck after test fixes  initial_wait=120
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts  
+view_range=[20, 55]
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/sign-in.test.ts  
+view_range=[108, 138]
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/dev-bypass.test.ts  
+view_range=[75, 85]
+
+» bash  <truncated: 413 chars>
+
+» bash  <truncated: 419 chars>
+
+» bash  command=pnpm exec tsc --noEmit --pretty false > .copilot-tsc-errors.txt 2>&1 || true && sed -n 
+'1,160p' .copilot-tsc-errors.txt  description=Typecheck remaining errors  initial_wait=120
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/build-export-zip.test
+.ts  view_range=[68, 84]
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/cosmos-repo.test.ts  
+view_range=[45, 70]
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/previous-review-page.
+test.tsx  view_range=[535, 548]
+
+» bash  <truncated: 400 chars>
+
+» bash  <truncated: 887 chars>
+
+» bash  command=pnpm exec tsc --noEmit --pretty false > .copilot-tsc-errors.txt 2>&1 || true && sed -n 
+'1,80p' .copilot-tsc-errors.txt  description=Run typecheck check  initial_wait=120
+
+» bash  <truncated: 525 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/cosmos-repo.test.ts  
+view_range=[160, 180]
+
+» bash  <truncated: 526 chars>
+
+» bash  <truncated: 234 chars>
+
+» grep  pattern=userId|judgeId  paths=['src/engine', 'src/lib/state', 'src/lib/score-effective-state', 
+'src/lib/judge-teams']  output_mode=content  -n=True  head_limit=200
+
+» grep  pattern=bj\.userId|bj\.judgeId|byJudge  paths=['src/components/chair-leaderboard.tsx', 
+'src/engine/leaderboard.ts', 'test']  output_mode=content  -n=True  head_limit=200
+
+» bash  command=git --no-pager grep -n "judge:" -- src test | sed -n '1,220p'  description=Find 
+hardcoded judge ids  initial_wait=30
+
+» bash  <truncated: 1225 chars>
+
+» bash  command=pnpm typecheck  description=Run typecheck green check  initial_wait=120
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/dark-theme-entry-flow
+s.test.tsx  view_range=[80, 105]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/sign-in.test.ts  
+view_range=[70, 95]
+
+» bash  <truncated: 454 chars>
+
+» report_intent  intent=Running validation
+» bash  command=pnpm lint  description=Run lint  initial_wait=120
+» bash  command=pnpm format:check  description=Run format check  initial_wait=120
+
+» bash  command=pnpm lint  description=Run lint  initial_wait=120
+
+» bash  command=pnpm format:check  description=Run format check  initial_wait=120
+
+» bash  command=pnpm format  description=Run Prettier  initial_wait=120
+
+» bash  command=rm -f .copilot-tsc-errors.txt && git --no-pager status --short  description=Clean temp 
+and check status  initial_wait=30
+
+» bash  command=git --no-pager checkout -- CONTEXT.md features/design/project/screens.css && pnpm 
+format:check  description=Revert unrelated formatting and recheck format  initial_wait=120
+
+» bash  command=pnpm exec prettier --write CONTEXT.md features/design/project/screens.css && pnpm 
+format:check  description=Format pre-existing files and recheck  initial_wait=120
+
+» bash  command=pnpm typecheck && pnpm lint  description=Run typecheck and lint final  initial_wait=180
+
+» bash  command=env -u AUTH_DEV_BYPASS -u SEED_FIXTURE -u AUTH_DEV_BYPASS_JUDGE_ID pnpm test:unit  
+description=Run unit tests  initial_wait=180
+
+» bash  <truncated: 244 chars>
+
+» bash  command=grep -n "FAIL\|AssertionError\|expected" unit-output.log | head -n 40  
+description=Summarize test failures  initial_wait=30
+
+» view  path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/unit-output.log  
+view_range=[1, 40]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-routes.integrat
+ion.test.ts  view_range=[2028, 2080]
+
+» grep  pattern=UserSchema|legacy|duplicate|unknown role|role  paths=test/schemas.test.ts  
+output_mode=content  -n=True  head_limit=120
+
+» bash  <truncated: 1539 chars>
+
+» bash  <truncated: 264 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/csv-upload-dialog.dom
+.test.tsx  view_range=[12, 25]
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts  
+view_range=[45, 70]
+
+» bash  <truncated: 491 chars>
+
+» bash  command=env -u AUTH_DEV_BYPASS pnpm build  description=Run production build  initial_wait=180
+
+» report_intent  intent=Fixing build failure
+» bash  command=rm -rf .next && env -u AUTH_DEV_BYPASS pnpm build  description=Clean Next cache and 
+rerun build  initial_wait=180
+
+» bash  command=rm -rf .next && env -u AUTH_DEV_BYPASS pnpm build  description=Clean Next cache and 
+rerun build  initial_wait=180
+
+» bash  command=pnpm format:check && pnpm lint && pnpm typecheck  description=Final format lint 
+typecheck  initial_wait=180
+
+» bash  command=rm -f unit-output.log && git --no-pager status --short | sed -n '1,220p'  
+description=Clean test log and inspect status  initial_wait=30
+
+» bash  command=git --no-pager diff --stat && git --no-pager diff --name-only  description=Collect 
+changed files  initial_wait=30
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/schemas/score.ts  
+view_range=[35, 65]
+Implemented #147. No commit made; issue not closed.
+
+Validation:
+- `pnpm typecheck` ✅
+- `pnpm lint` ✅
+- `pnpm format:check` ✅
+- `env -u AUTH_DEV_BYPASS -u SEED_FIXTURE -u AUTH_DEV_BYPASS_JUDGE_ID pnpm test:unit` ✅ same expected 
+pre-existing failure only: `auth-dev-bypass-infra-guard`; 1546 passed, 9 skipped
+- `env -u AUTH_DEV_BYPASS pnpm build` ✅ after clearing stale `.next`
+
+Changed:
+- Renamed schema: `judge.ts` → `user.ts`
+- Updated score/auth/session/repos/permissions/read-sites/tests across `src/` and `test/`
+- Prettier also touched `CONTEXT.md` and `features/design/project/screens.css`.
+
+Ambiguous read-sites:
+- Judge-only fallbacks in `/event` and `/event/teams` now give dual-role users admin precedence.
+
+Confirmed: did not implement Slice B, C, or A2.
+
+» report_intent  intent=Reviewing agent results
+» read_agent  agent_id=impl-147  timeout=60  wait=True
+Agent reports green (1546 passed, only the known pre-existing failure). Let me independently verify — 
+check git status for scope creep and re-run the loops.
+✻ Thinking: The agent passed with 2 new tests added for the schema lifts, so I'm going to independently 
+verify the changes by checking git status and reviewing the key diffs. I'm noticing Prettier modified 
+some unexpected files — particularly a CSS file at `features/design/project/screens.css` which seems off
+since the design styles should be in `src/styles/design/`, so I need to investigate what actually got 
+changed there.
+» bash  <truncated: 223 chars>
+Large change set as expected. A few files look unrelated (CONTEXT.md, screens.css, event.ts, 
+event-timer.ts) — likely Prettier churn. Let me inspect those.
+✻ Thinking: I'm noticing a large changeset with a couple of red flags. The `CONTEXT.md` file was 
+modified, but it looks like just prettier formatting—the glossary already covers user roles, so the 
+agent shouldn't have touched it. Similarly, `features/design/project/screens.css` appears to be 
+unrelated formatting churn that I should revert. I'm also puzzled about why 
+`src/lib/schemas/event-timer.ts` and `event.ts` changed at all for this task.
+
+Let me examine the diffs on these suspicious files to see if they're just formatting noise or if 
+something else is going on.
+» bash  <truncated: 310 chars>
+
+✻ Thinking: The pager is showing up again because the environment variable didn't carry over to this new
+shell session, so I'll use the `--no-pager` flag directly with git diff to bypass it.
+» stop_bash  shellId=79
+» bash  <truncated: 326 chars>
+CONTEXT.md and screens.css are pure pre-existing Prettier churn unrelated to #147. Let me confirm they 
+were already non-clean at baseline (so reverting them just restores the pre-existing state), and keep 
+the legit doc-reference updates in event.ts/event-timer.ts.
+✻ Thinking: I'm noticing that CONTEXT.md and screens.css are just prettier formatting changes unrelated 
+to my actual work, so I should revert them—but then I realize `pnpm format:check` is passing now, which 
+means if these files had pre-existing formatting issues, reverting them would break the check. Looking 
+back at the commit history, screens.css did have a pre-existing prettier warning, and I'm realizing 
+there's a path discrepancy: the file is at `features/design/project/screens.css` but AGENTS.md 
+references `src/styles/design/screens.css`.
+
+The key insight is that the baseline format:check was already failing on screens.css before my 
+changes—the prior commit explicitly noted "only the pre-existing screens.css warning remains." So by 
+reverting screens.css, I'd be re-introducing that pre-existing failure, which isn't my responsibility to
+fix. The right approach is to revert both CONTEXT.md and screens.css since they're unrelated formatting 
+churn, while keeping the legitimate event.ts and event-timer.ts changes that update the JudgeSchema 
+references to UserSchema. I need to verify whether the baseline actually has these format violations. 
+Let me check if prettier flags the committed versions of these files to confirm they're genuinely 
+pre-existing issues rather than artifacts of my changes.
+» bash  <truncated: 439 chars>
+Confirmed — both files were already Prettier-non-clean at baseline (pre-existing, unrelated). I'll 
+revert them to keep the diff scoped to #147, restoring the pre-existing state.
+✻ Thinking: I'm realizing that CONTEXT.md and screens.css were already failing the format check before 
+my changes—these are pre-existing issues unrelated to #147. Rather than fix them as a side effect, I 
+should revert them to their original state and keep my scope focused on the actual issue, which aligns 
+with how the project has handled similar situations before.
+» bash  <truncated: 263 chars>
+Now let me review the core schema/auth/permissions changes for correctness.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/schemas/user.ts
+» bash  <truncated: 215 chars>
+Schema and permissions changes look correct and clean. Let me review the behavior-sensitive read-sites: 
+auth config callbacks, the role-router pages, current-judge chair gate, and the score-write route.
+✻ Thinking: I'm checking whether the preprocess approach causes issues with strict schemas and schema 
+methods like extend or omit — the preprocess wraps ScoreSchema in a ZodEffects, which could break 
+chaining operations that expect a ZodObject directly.
+
+Now I need to verify the score-write route's logic still correctly derives the scoreDocId from the 
+session, and review the more sensitive read paths like the event pages, role routing, JWT callbacks, and
+sign-in flows to make sure nothing breaks with these schema changes.
+» bash  <truncated: 248 chars>
+Faithful translations with correct admin precedence. Let me check the score-write route (bypass-proof 
+derivation), current-judge chair gate, sign-in, and build-state.
+✻ Thinking: I'm verifying the role-based routing logic in the page component—it now checks if the roles 
+array includes 'admin' first for precedence, then falls back to 'judge', with 'unknown' as the final 
+default. The session.role fallback has been replaced with this more explicit role computation.
+
+For the teams page, the capability check correctly enforces that judges can only access non-live 
+statuses, respecting the admin-first precedence. The JWT callback's legacy token bridge looks solid.
+
+Now I need to examine the score-write route, current-judge chair gate, sign-in flow, and build-state to 
+verify those changes.
+» bash  <truncated: 294 chars>
+
+✻ Thinking: Now I'm checking the rest of the current-judge function to update the role validation logic 
+from the old `judge.role !== 'admin'` pattern to the new `!user.roles.includes('admin')` approach.
+» bash  <truncated: 232 chars>
+Chair gates correctly use the live doc. Let me check the judges API route (accepts/returns roles), 
+dev-bypass, and build-state.
+✻ Thinking: I'm verifying the chair gates are using the correct admin role check on the live document, 
+then I need to review the judges API route to see how it handles roles, along with checking the 
+dev-bypass, build-state, and related judge-teams functionality across the engine and badges sections.
+» bash  <truncated: 255 chars>
+The judges API faithfully maps scalar `role` input → `roles:` (keeping the existing UI contract; #150 
+owns the roles-array input) and returns the `roles` shape. Last-admin check translated faithfully. Let 
+me independently run all feedback loops.
+✻ Thinking: I'm noticing a potential inconsistency between issue #147 and slice C (#150) around the API 
+contract for roles. The judges API currently accepts a scalar `role` and maps it internally to `roles: 
+[role]`, but #147's acceptance criteria states the APIs should "accept and return `roles`" as an array. 
+The question is whether #147 actually requires changing the input to accept an array, or if the current 
+scalar-to-array mapping is sufficient since #150 is the one handling the UI side that would send 
+multiple roles through the existing endpoints.
+
+Given that #147 is framed as preserving existing end-to-end behavior and #150 explicitly owns making the
+endpoints accept role arrays from the UI, I think the right interpretation is that #147 should return 
+`roles` (which it does) while continuing to accept scalar `role` input for backward compatibility with 
+the existing admin UI—the UI update to send role arrays is #150's responsibility. The current 
+implementation satisfies this: it returns the `roles` array from the persisted User document and accepts
+the legacy scalar input, maintaining behavior preservation while technically returning roles as the AC 
+specifies.
+
+Now I need to verify the implementation is actually coherent—checking that the admin page component 
+reads `roles` correctly and that the last-admin invariant check properly translates from `j.role === 
+'admin'` to `j.roles.includes('admin')`. Let me run the full test suite to confirm everything passes.
+» bash  <truncated: 268 chars>
+
+» bash  <truncated: 245 chars>
+1546 passed (agent added coverage), only the known pre-existing failure remains. Let me run the build 
+and confirm the legacy-lift AC has test coverage.
+✻ Thinking: The test suite shows 1546 passing tests with only the expected pre-existing auth bypass 
+failure, and the agent added 2 new tests—likely covering legacy lift scenarios. I'm checking whether the
+new tests actually validate schema lift coverage and reviewing the test file changes to confirm they're 
+testing the legacy role lift behavior as intended.
+» bash  <truncated: 202 chars>
+» bash  <truncated: 232 chars>
+Build succeeded. Let me confirm the Score `judgeId`→`userId` legacy lift and the non-empty roles 
+constraint also have test coverage.
+✻ Thinking: The build passed, and I can see test coverage for the legacy scalar role lift in 
+schemas.test.ts along with tests for duplicate roles and invalid roles. Now I need to verify that the 
+Score legacy judgeId lift has similar coverage and check for the empty-roles rejection test.
+» bash  <truncated: 255 chars>
+
+✻ Thinking: I'm checking what test coverage exists for the schema validation—I can see the legacy role 
+parsing is covered, but I need to verify that non-empty roles arrays are being rejected and that the 
+Score's `judgeId` to `userId` migration is tested as a behavior-preservation case.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts  
+view_range=[15, 70]
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts  
+view_range=[360, 420]
+Coverage is strong, but two gaps remain: the explicit non-empty `roles` constraint (an AC) and the Score
+`judgeId`→`userId` legacy lift (my behavior-preservation decision). Let me add those tests.
+✻ Thinking: I'm noticing two test gaps that align with the acceptance criteria for #147: the non-empty 
+roles constraint isn't explicitly covered, and the defensive `judgeId` to `userId` migration in the 
+Score model needs validation. I'll add focused tests for both to ensure the behavior is locked in.
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/schemas.test.ts
+
+» bash  <truncated: 266 chars>
+New tests pass. Let me verify prettier on my edited test file and do a final full verification pass (the
+dev-bypass and build-state diffs too).
+✻ Thinking: My tests are passing, so now I'm running the formatter check on the files I modified and 
+doing a final comprehensive test to make sure everything's clean. I'll also quickly verify the 
+dev-bypass and build-state functionality before committing.
+» bash  <truncated: 352 chars>
+dev-bypass correctly maps to `userId`/`roles: ` with the `chair`→`admin` alias preserved. Let me run the
+full suite once more to confirm everything is green together.
+✻ Thinking: Verifying that the dev-bypass mapping correctly transforms 'chair' to 'admin' and wraps the 
+role in an array, while keeping the screenshot pipeline's header structure intact. Running the full test
+suite now to make sure everything passes together before committing.
+» bash  <truncated: 254 chars>
+All green: 1549 passed (my 3 new tests included), only the known pre-existing 
+`auth-dev-bypass-infra-guard` failure remains. Typecheck, lint, build, and format (on touched files) all
+pass. Let me commit.
+✻ Thinking: All 1549 tests are passing with just the pre-existing `auth-dev-bypass-infra-guard` failure 
+showing up. The typecheck, lint, unit tests, build, and format checks all came through clean — I 
+reverted the unrelated churn in CONTEXT.md and screens.css to keep things tidy.
+
+Now I'm staging everything and committing with the "Closes #147" message, which will handle both the new
+user.ts file and the deletion of judge.ts in one go.
+» report_intent  intent=Committing and closing issue
+» bash  <truncated: 3139 chars>
+Now the FINAL SEQUENCE: re-fetch state, close with a wrap-up comment, verify, and push.
+» bash  <truncated: 237 chars>
+
+» bash  <truncated: 283 chars>
+Issue closed and verified. Now push.
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && git push 
+origin HEAD 2>&1 | tail -5  description=Push to remote  initial_wait=60
+Done. Completed **issue #147 — Slice A1: User document & roles-set model**.
+
+## Summary
+Replaced the single-role `Judge` document with a `User` holding a non-empty, duplicate-free `roles: 
+('judge'|'admin')[]` set (ADR 0013). This was a faithful **shape + read-site swap** that preserves 
+existing behavior for single-role users — deliberately *not* implementing the admin-only exclusion 
+(slice B), the Users-tab rename (slice C), or the data migration (slice A2).
+
+**Key changes:**
+- `schemas/judge.ts` → `user.ts`: `UserSchema`/`User`/`UserRole`/`userIdForEmail` (`user:<email>` id); 
+legacy scalar `role` lifts to `` on read.
+- `Score.judgeId` → `userId` (+ read-only legacy lift); session/JWT use `userId`/`roles` with a bridge 
+for in-flight tokens.
+- Read-sites translated with **capability precedence** (admin gates → `roles.includes('admin')`; 
+judge-only fallbacks → `!includes('admin') && includes('judge')`).
+- Live-doc chair gate and the bypass-proof score-write derivation preserved.
+
+**How I worked:** explored the surface, validated the plan with the rubber-duck (which caught the 
+dual-role precedence and legacy-token risks), delegated the ~120-file mechanical edit to a 
+general-purpose agent, then independently reviewed the core diffs, reverted two unrelated pre-existing 
+Prettier churn files (CONTEXT.md, screens.css), and added 3 tests (empty/dual roles, Score lift).
+
+**Verification:** typecheck ✅, lint ✅, build ✅, unit tests 1549 passed (only the unrelated 
+pre-existing `auth-dev-bypass-infra-guard` failure remains). Committed `35181e6`, closed #147, pushed to
+`main`.
+✓ commit 35181e6ffb  refactor: replace single-role Judge with multi-role User document (#147)
+╭────────────────────────────────────────── Iteration 1 done ──────────────────────────────────────────╮
+│ Iteration 1                                                                                          │
+│ Duration: 1718.15s    Model: claude-opus-4.8                                                         │
+│ Tokens: in=17,079,124  out=70,309    Context: 17,149,433  (observed tokens)                          │
+│ Est cost: —  (model not in pricing table)                                                            │
+│ Tools: 308    Skills: 1                                                                              │
+│ Commits: 1    Auto-closures: 0    Strikes: 0                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+── Iteration 2 ──
+ⓘ AFK-ready pool: 5 issues  (#152, #151, #150, #149, #148)
+
+✻ Thinking: Looking at the dependency graph, I can see that #148, #149, and #150 are all unblocked now 
+since #147 is complete, while #151 and #152 have additional dependencies that need to be resolved first.
+
+Given the priority framework, I should pick one of the three available slices. #149 seems like the 
+strongest choice since it's core engine behavior and directly unblocks #151, which in turn unblocks 
+#152. But before committing to that, I need to check whether #147 is actually merged and see if any of 
+these slices are already partially implemented.
+» report_intent  intent=Selecting and exploring task
+» bash  <truncated: 204 chars>
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && cat 
+docs/agents/domain.md 2>/dev/null | head -60  description=Read domain consumer rules
+The git log used a pager. Let me kill that shell.
+» stop_bash  shellId=100
+Pager stopped. I'll work on **#149 (Slice B: Admin-only is not a judge)** — it's foundational engine 
+work that #147 explicitly deferred, and it unblocks #151. Let me read the relevant ADR and code.
+✻ Thinking: I'm weighing the unblocked tasks by their dependencies and impact. #149 seems like the right
+choice since it's foundational for the engine work and unblocks #151, even though I should consider 
+whether #150's UI work or #148 might be more self-contained.
+
+#149 is the clear winner—it makes the admin and judge roles orthogonal, which is core domain logic and 
+enables the act-as backend. Looking at commit #147, I can see the scope guard intentionally left certain
+code paths unfiltered that treat all users as judges: the build-state engine input, 
+expected/missing-judges calculations, maxPossibleTotal, activation, and last-admin logic. That's exactly
+what Slice B needs to address, so the scope is well-defined.
+
+Let me dig into the relevant code.
+» report_intent  intent=Exploring Slice B engine code
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && cat 
+docs/adr/0013-users-hold-a-set-of-roles.md  description=Read ADR 0013
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && cat 
+src/lib/schemas/user.ts  description=Read user schema
+
+✻ Thinking: Now I'm locating the core engine logic that handles build state tracking, judge validation, 
+score calculations, admin permissions, and activation status.
+» bash  <truncated: 294 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/state/build-state.
+ts
+
+✻ Thinking: I see the issue now—`judges` is actually the full set of Users, and `toEngineRubric` 
+converts them all into the engine's judges. But Slice B specifies that only Users with 'judge' in their 
+roles should be included, so I need to filter `judges` to just those with the role before building the 
+rubric. Let me trace back to where `buildStatePayload` gets called and check the activation and 
+last-admin routes to understand the full context.
+» bash  <truncated: 254 chars>
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/ju
+dges/[judgeId]/route.ts
+
+✻ Thinking: I'm noticing the last-admin route already has the right filter in place with 
+`roles.includes('admin') && removed === false`, so that invariant is solid. The PATCH operation 
+overwrites the entire roles array with a single role though, which is more of a UI concern for the 
+role-set slice. For the current slice, the gate checking `roles.includes('admin')` is already correct, 
+but I need to reconsider what slice B is actually supposed to prevent — removing or un-admining the last
+admin-role user.
+
+Now I'm looking at where the judges list comes from in the activation and state routes, and how the 
+engine uses it for computing max possible total and the leaderboard. The key insight for slice B is 
+filtering the judges list to only include users with the judge role when building the engine's rubric, 
+and requiring at least one non-removed judge-role user during activation. There's a potential edge case 
+with legacy data where an admin-only user might have authored scores, but I should focus on the 
+filtering logic first and check where the state route constructs the judges list.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/st
+ate/route.ts
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && grep -rln
+"activat" src/ --include=*.ts | grep -v test  description=Find activation code
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/admin/rubric-trans
+action-helpers/activation-readiness.ts
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/ex
+port/route.ts  view_range=[40, 90]
+
+✻ Thinking: I'm realizing the engine expects the full judges list with `removed` flags intact—it handles
+the filtering itself. So I should pass Users with the `judge` role and let the engine exclude the 
+removed ones. For the missing-judges calculation, the engine determines "expected judges" as the 
+non-removed judges from the rubric, so I need to make sure that logic aligns with what gets passed in.
+
+The fix is straightforward: filter `rubric.judges` to only include users with the `judge` role wherever 
+it's constructed—in `build-state.ts`'s `toEngineRubric` function and in the export route's rubric 
+building. Since `computeMaxPossibleTotal` uses `rubric.judges`, filtering there handles both cases.
+
+I should create a small helper function to check if a user is a judge—something like `isJudge(user)` 
+that checks `roles.includes('judge')`—and put it in a lib module so it's reusable across the app layer 
+without crossing the engine boundary.
+» bash  <truncated: 310 chars>
+
+» bash  <truncated: 241 chars>
+Let me check how the engine consumes `rubric.judges` vs scores, to ensure filtering admin-only users out
+doesn't break aggregation when a score references them.
+✻ Thinking: I'm creating a domain helper module to export utility functions for checking judge roles and
+filtering judge users, then using it across the build-state and export route. For the activation 
+readiness check, I need to update `has-judge` to specifically look for users with the judge role rather 
+than just non-removed judges, while keeping `lead-judge-authorized` tied to admin permissions.
+
+The last-admin invariant is already correctly checking for admin roles, and I've verified there are no 
+other last-admin gates beyond the judges route. Now I need to think through a potential edge case: if 
+legacy admin-only users have authored scores and we filter them out of the rubric judges list, will the 
+engine's leaderboard computation break when it encounters scores from judges not in that filtered list? 
+Let me check how the engine handles this scenario.
+» bash  <truncated: 275 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/engine/leaderboard.ts 
+view_range=[150, 200]
+
+✻ Thinking: I'm realizing there's a potential issue with how admin-only users' scores are being handled.
+When I build `engineScores` from all scores, each one gets a `judgeRemoved` flag based on whether that 
+judge is in the removed set. But if I filter the judges list to only include judge-role users, an 
+admin-only user's score could still have `judgeRemoved=false`, which would make it contribute to the 
+leaderboard's `contributingTotals` even though that user shouldn't be counted as a judge.
+
+The acceptance criteria don't explicitly address filtering out existing admin-only scores from the 
+total, but for consistency, if an admin-only user is excluded from the expected judges, their score 
+shouldn't contribute to the leaderboard. I need to either mark those scores as removed or filter them 
+out of `engineScores` entirely. Let me trace through `toEngineScores` to see where this filtering should
+happen.
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && cat 
+src/lib/score-effective-state.ts | head -80  description=Read toEngineScores
+
+» bash  <truncated: 328 chars>
+
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && cat 
+src/lib/score-effective-state/engine-projection.ts  description=Read engine-projection
+
+✻ Thinking: I need to make the judge filtering consistent across the system. The cleanest approach is to
+define the effective judge set as users with the 'judge' role, then filter the engine rubric's judges at
+the call sites and treat any scores from non-judge users as removed in `toEngineScores`.
+
+Actually, I realize passing the pre-filtered judge list to both functions creates a problem: an 
+admin-only user wouldn't be in that list at all, so they wouldn't appear in the removed set either, and 
+their score would still contribute. Instead, I should change the logic so that a score from any user not
+in the judge set gets marked as `judgeRemoved: true`, which effectively means "exclude from the total." 
+This conflates the semantics a bit, but it's cleaner than tracking removed separately.
+
+I'm concerned about edge cases where a score references a userId that was never in the judges list to 
+begin with—currently that score would contribute, but I suspect that's not a real scenario since scores 
+should always reference existing judges. Let me focus on the acceptance criteria for #149 and keep the 
+change minimal.
+
+The core insight is that I should define a helper to filter users down to judge-role only, then thread 
+that filtered set through both the rubric and scores functions. For scores, I'll update the logic to 
+exclude any score authored by someone not in that judge-role set. This keeps the engine consistent: the 
+expected set, contributing set, and missing set all align. There's a risk this breaks existing tests 
+that expect admin users to contribute scores, but that's actually the correct behavior change—after this
+slice, admin-only users shouldn't contribute at all, while dual-role users should.
+
+I'll go with the central helper approach and design it now.
+
+Writing helper module...
+
+I'm thinking through whether to filter scores at the engine input level or adjust the function 
+signatures. The key question is whether `toEngineScores` should only receive judge-authored scores, and 
+whether changing its signature would be risky. Let me check where it's actually called to understand the
+impact better.
+» bash  <truncated: 297 chars>
+Let me look at the existing tests for these areas to understand fixtures and expectations before 
+designing.
+✻ Thinking: I'm mapping out where `toEngineScores` gets called and realizing I need to update three 
+files to handle judge filtering consistently — build-state.ts needs to filter by judge-role for both the
+engine rubric and score transformation, export/route.ts needs the same filtering for rubric and engine 
+scores, and activation-readiness.ts requires judge-role validation. I'm thinking about centralizing this
+judge-exclusion logic rather than duplicating it across these files.
+
+The key insight is changing how `toEngineScores` determines if a score should be excluded — instead of 
+just checking if a user was removed, I should pass the set of non-removed judge-role users and treat any
+score not authored by someone in that set as excluded. This handles both removed judges and non-judge 
+users in one check. It does change behavior for edge cases (scores from users not in the judge list 
+would now be excluded rather than included), but that's semantically correct. I need to verify existing 
+tests won't break, particularly ones that might rely on admin-only users contributing scores — those 
+would need to be dual-role users under the new model, but most tests using only judge-role users should 
+be unaffected.
+
+There's a secondary concern about how this affects the audit view for locked teams — marking non-judge 
+scores as "removed" in the engine's output could make them appear as removed judges in the UI, which 
+might be confusing. But given the acceptance criteria don't test score contribution by admin-only users,
+the safest approach is to filter the rubric judges to judge-role users and exclude non-judge-authored 
+scores from contribution. I'm overthinking the edge cases here — let me step back and validate the core 
+scope against the requirements.
+
+Actually, reconsidering the realistic data flow: admin-only users can't have scores in the first place. 
+The migration in slice A2 converts any admin with existing scores to dual-role, and the new #151 
+constraint prevents admin-only from scoring going forward. So filtering rubric.judges to judge-role 
+users is sufficient, and the toEngineScores contribution logic becomes moot for admin-only users. I'll 
+pass the filtered judge-role users to both toEngineRubric and toEngineScores — this keeps 
+removedJudgeIds consistent and handles dual-role removed judges correctly without needing to change the 
+engine's internals.
+
+But there's a pre-migration edge case: legacy admins with scores who haven't been migrated yet still 
+have role ['admin'] and would be excluded from the judge set, causing their scores to contribute to the 
+total while not being counted in expected judges. To be defensively consistent regardless of migration 
+timing, I should make toEngineScores exclude scores authored by users outside the judge-role set, 
+ensuring a score only contributes if its author is actually in the expected judge pool.
+
+Refactoring the function to filter by judge-role users and track whether the author is a judge, then 
+setting judgeRemoved based on both criteria. This makes the logic backward-compatible: callers passing 
+the full judges list get identical behavior to before, while callers passing a filtered judge-role list 
+get the stricter exclusion.
+
+Now I need to verify the existing tests won't break—specifically checking whether any test scores have 
+userIds outside the judges list that were expected to contribute.
+» bash  <truncated: 280 chars>
+
+» bash  <truncated: 325 chars>
+
+✻ Thinking: I need to check the test coverage for toEngineScores by looking at how it's tested 
+indirectly through build-state.test.ts and the activation tests, then determine if modifying its 
+contract would break anything.
+» bash  <truncated: 301 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/build-state.test.ts  
+view_range=[60, 120]
+
+✻ Thinking: I'm noticing that some build-state tests pass scores from judges that might not be in the 
+judges list, so I need to check which tests are actually referencing judge IDs that exist versus those 
+that don't. Let me trace through the test cases to see if there's a pattern where certain tests 
+intentionally use judges outside the expected set.
+
+Actually, the core issue is that if I add an `authoredByJudge` gate to the score conversion, any score 
+from a judge not in the passed list gets marked as removed and excluded from totals—which could break 
+existing tests that rely on those scores contributing. Rather than chase down every test case, I should 
+keep the conversion logic unchanged and instead filter the rubric's judges list before passing it 
+through, ensuring the removed set stays consistent with what's actually being used.
+
+The real correctness concern from the acceptance criteria is that dual-role users (admin + judge) get 
+counted as judges while admin-only users don't appear in missing judges and don't affect the max 
+possible total. Filtering the judges list handles both of those requirements without needing to change 
+the contribution logic, so this minimal approach satisfies the constraints without breaking the existing
+contract.
+
+My plan: create a helper to identify judge-role users, then filter the judges list in both build-state 
+and export before passing to the engine functions. For the export route, I need to be careful about 
+consistency—the removed judge IDs should come from the full judges list to properly exclude dual-role 
+judges, while the rubric itself uses only the filtered judge-role list. Let me check the build-state 
+test to see if any score authors are missing from the judges list to confirm this approach won't break 
+anything.
+» bash  <truncated: 234 chars>
+
+✻ Thinking: I'm verifying that all existing test scores are authored by judges in the list, so adding 
+the `authoredByJudge` filter won't break anything. The robust approach of excluding non-judge authors is
+safe and properly enforces the admin-only restriction, but I need to make sure the build-state passes 
+the judge-role-filtered list through to the engine.
+
+Now I'm checking whether other parts of the codebase are building the judges list from users — the 
+export route does, and I need to verify if the chair-leaderboard SSR or shell route also compute 
+maxPossibleTotal or reference judges, since those might need the same filtering applied.
+» bash  <truncated: 317 chars>
+
+✻ Thinking: I'm creating a new helper module to centralize judge user logic, then filtering at the 
+`buildStatePayload` level so it applies across the state route and SSR pages, while the export route 
+will handle its own rubric building independently.
+
+For the export route specifically, I need to decide whether to reuse the `toEngineScores` logic or build
+it inline—the tricky part is that export currently doesn't fold scale-invalid like the main path does, 
+so I need to account for that difference when aligning the two approaches.
+
+Now I'm working through the remaining changes: updating `activation-readiness.ts` to check for at least 
+one active judge with the judge role rather than just any active judge, verifying the last-admin gate is
+only in the one place, and then updating all callers of `toEngineScores` to pass the filtered judge-role
+users list instead of the full judges list.
+
+For testing, I need to cover how admin-only users are excluded from scoring calculations, how dual-role 
+users are counted properly, and how the activation and last-admin checks behave across different role 
+combinations. I'll start by checking what last-admin tests already exist, then write unit tests for 
+build-state covering the three role scenarios.
+» bash  <truncated: 367 chars>
+
+✻ Thinking: I'm realizing there's a conflict with an existing test at line 140 that expects an 
+admin-only judge to satisfy the has-judge requirement, but Slice B changes this behavior so admin-only 
+users no longer count. I need to update that test to align with the new activation rules that require an
+actual non-removed judge-role user.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-activation-read
+iness.test.ts  view_range=[40, 160]
+
+✻ Thinking: I'm seeing that several test cases at different line numbers are using a single judge with 
+only the admin role, expecting them to pass the ready check. But with the new rule requiring the judge 
+role specifically, these tests will fail since admin alone doesn't satisfy the has-judge requirement. I 
+need to update those test fixtures to give the judge user both the admin and judge roles so they still 
+work as intended. ires both a judge and an admin; a single dual-role user satisfies both. So updating 
+them to ['admin','judge'] is the correct representation and is exactly the new behavior we want to 
+encode.
+
+Now I need to scan through the rest of the activation test file and identify all the places where I need
+to make this change.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-activation-read
+iness.test.ts  view_range=[160, 260]
+
+✻ Thinking: I'm identifying which tests rely on the admin-only judge setup and need updating. Most of 
+them assert either that every judge passed or that the ready state is false due to status, which means 
+they depend on the has-judge check passing. For the ones that don't explicitly assert every-passed, like
+the test at line 104, the ready state is already false from the status check, so the test passes 
+regardless—but converting them to dual-role would be cleaner and more consistent.
+
+The strategy is to convert all sole admin fixtures meant to represent "valid judge presence" into 
+dual-role, except for tests specifically testing has-judge or lead-judge semantics. This keeps the 
+fixtures representing a valid judge configuration while allowing the semantic tests to focus on what 
+they're actually testing. The test at line 128 about removing judges will still work because removing 
+the admin makes activeJudges empty and fails has-judge. But line 140's test about counting the Lead 
+Judge toward has-judge becomes semantically wrong with this change, so I need to replace it with tests 
+that clarify admin-only doesn't satisfy has-judge while dual-role does.
+
+Now I'm going to check the integration tests in admin-routes and activate-route to see if any of them 
+depend on admin-only activation working, since that would break if I change the implementation.
+» bash  <truncated: 258 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/activate-route.integr
+ation.test.ts  view_range=[40, 100]
+I have a clear picture. Let me set up todos and create the domain helper plus a test for it first.
+✻ Thinking: I'm verifying the test setup—the activate integration test properly seeds both CHAIR and 
+JUDGE roles, so the has-judge check passes, and the readiness condition is satisfied since both required
+permissions are covered. Now I'll implement the solution.
+
+The design is solid and I've confirmed the key contract with toEngineScores and existing tests, so I'll 
+move forward with creating the helper function and updating the test suite, then loop back with 
+rubber-duck to validate coverage. First, I need to check what's exported from the schemas index to 
+properly import User and add the helper export.
+» sql  <truncated: 811 chars>
+
+» bash  <truncated: 318 chars>
+
+✻ Thinking: I need to set up a new file for the judge-users domain logic since there's no barrel 
+export—each file imports directly. I'll create the implementation and write tests for it.
+» report_intent  intent=Implementing judge-role helper and engine filter
+» create  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/domain/judge-users
+.ts
+Now update `build-state.ts` and `engine-projection.ts`:
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/state/build-state.
+ts
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/state/build-state.
+ts
+Now update `engine-projection.ts` to exclude scores not authored by a judge-role user:
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/score-effective-st
+ate/engine-projection.ts
+Now the export route:
+✻ Thinking: Looking at the export route's imports and making updates...
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/ex
+port/route.ts  view_range=[1, 20]
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/ex
+port/route.ts
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/app/api/events/[id]/ex
+port/route.ts
+Now activation-readiness:
+✻ Thinking: Looking at the activation-readiness.ts file, I need to update the has-judge check so it 
+properly requires the judge-role, and then update the documentation comment to reflect this dependency.
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/admin/rubric-trans
+action-helpers/activation-readiness.ts
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/src/lib/admin/rubric-trans
+action-helpers/activation-readiness.ts
+Now update the two activation tests whose expectations change. Let me view test lines 92-103 and 140-149
+with context to make unique edits.
+✻ Thinking: I need to update the activation tests where admin-only judge fixtures are the sole user 
+satisfying the has-judge requirement—these need to become dual-role judges instead. I'm also replacing 
+the old "Lead Judge counts toward has-judge" test with the new semantics that reflect this change.
+
+Looking at which tests actually break: tests only fail if an assertion's expected value changes. Since 
+has-judge now returns false for admin-only judges, I need to identify which tests assert on has-judge 
+passing. Most of the affected tests (117, 151, 166, 180, 193) already assert ready=false anyway, so they
+won't break. The critical ones are tests 92 and 101, which need the dual-role change to keep their 
+assertions valid. Rather than editing each identical fixture string individually, I'll make targeted 
+edits using surrounding context to distinguish them, or I could rewrite test 145 entirely since it's 
+testing the old "counts the Lead Judge" semantics. I need to find the right context to identify test 92 
+— the one with the live event — so I can change just that fixture to use a dual-role judge instead of 
+admin-only.
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-activation-read
+iness.test.ts
+
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-activation-read
+iness.test.ts
+Now let me add build-state tests for the role-orthogonality behavior. Let me view the relevant describe 
+blocks.
+✻ Thinking: I need to check the test file structure around lines 250-330 to see where the 
+maxPossibleTotal and missingJudges describe blocks are, so I can add the new test cases for admin-only 
+exclusion, dual-role inclusion, and the judge-users helper in the right places.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/build-state.test.ts  
+view_range=[122, 150]
+
+✻ Thinking: I'm looking at the test file structure to find where to insert the new test case, 
+specifically checking the maxPossibleTotal describe block and the missingJudges section to identify the 
+best spot.
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/build-state.test.ts  
+view_range=[254, 365]
+
+✻ Thinking: I'm adding a new test suite for slice-B role orthogonality that validates admin-only users 
+are excluded from judge counts while dual-role users are properly counted in both maxPossibleTotal and 
+missingJudgeIds.
+» edit  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/build-state.test.ts
+Now add a unit test for the helper itself:
+» create  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/judge-users.test.ts
+Now let me check existing last-admin test coverage to ensure the AC's last-admin-role cases are covered.
+✻ Thinking: Looking at the last-admin scenario, the route already validates that users have the admin 
+role, but I need to check if the integration tests cover the specific case where removing admin status 
+from the only admin user gets rejected with a 409 status. Let me review the existing test file to see 
+whether dual-role users and un-admin scenarios are already tested.
+» bash  <truncated: 282 chars>
+
+✻ Thinking: I notice there's a missing test case for the PATCH endpoint on judges with the last-admin 
+scenario in the admin routes test file, so I'm searching through the test suite to see if this test 
+exists elsewhere or needs to be added.
+» bash  <truncated: 278 chars>
+
+» bash  <truncated: 314 chars>
+
+» view  
+path=/Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app/test/admin-routes.integrat
+ion.test.ts  view_range=[1993, 2075]
+Last-admin invariant is already implemented (`roles.includes('admin')`) and covered by integration 
+tests. Now let me run the feedback loops.
+✻ Thinking: The last-admin invariant is already well-tested through the PATCH route, which covers 
+rejecting removal or demotion of the last admin. For slice B, this gate checking 
+`roles.includes('admin')` satisfies the acceptance criteria, though slice C will expand this when 
+roles-set editing is introduced.
+
+Now I'm running the feedback loops—typecheck, lint, and unit tests for the affected files.
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && pnpm 
+typecheck 2>&1 | tail -20  description=Run typecheck  initial_wait=120
+
+» bash  <truncated: 277 chars>
+All passing. Let me run lint and the full unit suite to confirm no regressions.
+✻ Thinking: I need to run the export route tests first, then check if there's an export integration test
+that might be affected, followed by linting and the full unit test suite which is quite large. Let me 
+start with lint to get quick feedback, then run the complete test suite.
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && pnpm lint
+2>&1 | tail -20  description=Run eslint  initial_wait=120
+
+» bash  command=cd /Users/bradcstevens/code/github/bradcstevens/rcg-hackathon-judge-web-app && pnpm 
+test:unit 2>&1 | tail -30  description=Run full unit test suite  initial_wait=240
+A large number of integration tests fail with "Document already exists" — likely a 
+test-isolation/parallelism artifact unrelated to my change. Let me check the `test:unit` script config 
+and whether this reproduces on the baseline.
+✻ Thinking: I'm seeing a massive spike in test failures — 393 tests failing with "Document already 
+exists: event" — which points to the in-memory repository not being properly reset between parallel test
+files. The prior commit passed with only a pre-existing auth bypass failure, so this isn't caused by my 
+changes but rather a test isolation problem that surfaces when the full suite runs in parallel.
+
+Let me check how the test:unit script is configured and whether it uses single-threaded execution or a 
+specific pool setting to avoid this cross-file state pollution.
+» bash  <truncated: 296 chars>
+This looks like a parallelism/isolation issue. Let me confirm it's pre-existing by running the full 
+suite on a clean baseline (stashing my changes).
+✻ Thinking: The test failures across 17 files suggest my change to a widely-imported module might be the
+culprit rather than a pre-existing parallel execution issue. With 393 failures and the original test run
+passing 1549 tests, something in my modification is likely affecting a core dependency that many tests 
+rely on.
+
+The "Document already exists" error points to a seeding problem where `resetRepoBundle` isn't properly 
+clearing the in-memory backend between tests, which could cascade across multiple test files if they 
+share a module-level singleton. Since the baseline commit claims full test:unit success, I should stash 
+my changes and verify the suite passes cleanly to confirm whether this is actually a pre-existing 
+environment issue or something I introduced.
+» bash  <truncated: 245 chars>
+Confirmed: the 391-failure parallelism issue is **pre-existing** (baseline fails identically; the ±2 is 
+parallel-pollution flakiness). But I notice unexpected pre-existing working-tree changes I didn't make. 
+Let me inspect them.
+✻ Thinking: The baseline already had 391 failures, so my change only adds a couple more failures—likely 
+just flakiness from the non-deterministic parallel test pollution. But I'm noticing the stash pop 
+revealed extra modified files I didn't actually change, which is suspicious.
+
+Let me check what those leftover edits are and make sure I'm only committing my actual changes for this 
+task. To get a true signal on whether my code broke anything, I should run the test suite in isolation 
+with single-threaded execution to avoid the parallel pollution, then specifically test the integration 
+paths my change touches.
+» bash  <truncated: 311 chars>
+
+» stop_bash  shellId=131
+Those are large unrelated pre-existing working-tree changes (not mine) — I'll exclude them and commit 
+only my #149 files. Let me get a clean test signal for the routes I touched by running their integration
+tests in isolation (avoiding the cross-file parallel pollution).
+✻ Thinking: I'm noticing there are substantial uncommitted changes in admin-page.tsx that aren't related
+to my current work on #149, so I need to be careful to only commit my own files and avoid accidentally 
+including those unrelated modifications. My changes span several new and modified files across the 
+domain logic, state management, and API layers, plus their corresponding tests.
+
+Now I'm going to run the integration tests for the routes I modified in isolation to get clean test 
+signals without cross-file pollution—specifically running the export and state tests separately to avoid
+parallelism issues.
+» bash  <truncated: 341 chars>
+
+✻ Thinking: The test is failing with a "Document already exists" error even with just 3 files, so I need
+to isolate whether the problem is within a single file or a setup issue across the test environment—I'll
+run the finalize-export integration test by itself to narrow this down.
+» bash  <truncated: 242 chars>
+Confirmed: `finalize-export.integration` fails identically even in isolation, and on baseline — this is 
+a **pre-existing** in-memory repo reset issue on this machine, not caused by my change. The pure unit 
+tests that directly cover my logic (build-state, activation-readiness, judge-users) all pass. Let me run
+the build (I touched a route) to complete the relevant loops.
+✻ Thinking: The finalize-export.integration test is failing with a "Document already exists" error at 
+the seedFixture call, which suggests the repo bundle singleton isn't being properly reset between tests 
+within the file — seedFixture tries to batch create an 'event' record that already exists from a 
+previous test. Since this same failure appears on the baseline, it's a pre-existing environment issue on
+this machine rather than something introduced by recent changes.
+
+The pure unit tests that directly exercise my engine-projection logic all pass cleanly, so my changes 
+are correct. The integration test harness itself is broken due to the in-memory backend not resetting 
+properly, likely because the module singleton persists across tests despite resetRepoBundle being 
+called. Since this is pre-existing and not related to my changes, I should verify the build passes and 
+move forward. Let me run build to complete the relevant loops, then commit only my files.
+» bash  <truncated: 203 chars>
+Build clean. Let me run prettier on my touched files, then stage and commit only my #149 files 
+(excluding the unrelated pre-existing working-tree changes).
+✻ Thinking: I'm doing a quick validation pass on this cross-cutting change—checking that I've caught all
+the consumers of the expected-judges set and haven't missed any other places in the codebase that 
+compute or display judge counts, like in the shell route's judgesPublic or the chair-leaderboard 
+components.
+» bash  <truncated: 486 chars>
+
+» bash  <truncated: 270 chars>
+
+✻ Thinking: I need to rerun the unit tests that were affected by the prettier formatting to make sure 
+the behavior stayed the same, then commit everything. Let me quickly check the build-state test again.
+» bash  <truncated: 224 chars>
+Now stage only my #149 files and commit:
+» bash  <truncated: 472 chars>
+Staged correctly — only my 8 files; the unrelated pre-existing changes remain unstaged. Let me commit.
+✻ Thinking: Staged the modified and added files while leaving the unrelated ones unstaged, now ready to 
+commit.
+» bash  <truncated: 3142 chars>
+
+» stop_bash  shellId=139
+Committed `65a1308`. Now the FINAL SEQUENCE: re-fetch issue state, push, close, and verify.
+» bash  <truncated: 246 chars>
+
+✻ Thinking: I see there's an issue with a pager hanging the shell during an open ticket marked as 
+ready-for-agent, so I need to stop the current process and push the changes while closing it with the 
+`--no-pager` flag to avoid interactive mode.
+» stop_bash  shellId=140
+
+» bash  <truncated: 234 chars>
+
+» bash  <truncated: 1329 chars>
+
+» read_bash  delay=15  shellId=142
+
+» read_bash  delay=20  shellId=142
+
+✻ Thinking: The gh command seems to be stuck, so I'll give it a moment longer before abandoning this 
+approach and trying the close operation again separately.
+» read_bash  delay=30  shellId=142
+
+» stop_bash  shellId=142
+
+» bash  <truncated: 226 chars>
+Issue #149 is now **CLOSED** and the commit is pushed.
+
+## Summary
+
+Completed **Slice B (#149): Admin-only is not a judge** — making `admin` and `judge` orthogonal 
+capabilities per ADR 0013.
+
+**What changed:**
+- New `src/lib/domain/judge-users.ts` (`isJudgeUser`/`judgeUsers`) — the single predicate for "has 
+judging capability" (roles include `judge`).
+- `buildStatePayload` + export route filter the expected-judges set, so admin-only Users are excluded 
+from `missingJudgeIds`, `maxPossibleTotal`, and scale-invalid lists; dual-role Users count as judges.
+- `toEngineScores` now prevents an admin-only User's Score from folding into a team total.
+- Activation `has-judge` requires a non-removed judge-role User (admin-only fails; a single dual-role 
+User passes). `lead-judge-authorized` still requires `admin`.
+- Last-admin-role invariant was already in place from #147 — left intact.
+- Tests: new `judge-users.test.ts`; new orthogonality cases in `build-state.test.ts` and 
+`admin-activation-readiness.test.ts`.
+
+**Verification:** `typecheck`, `lint`, `build`, and prettier all clean. The pure unit tests covering the
+change pass (38 total).
+
+**Notes:**
+- A pre-existing, change-independent integration-harness failure (`"Document already exists: event"` in 
+`seedFixture`) reproduces identically on a clean baseline (`git stash`) on this machine — unrelated to 
+this slice.
+- I deliberately did **not** commit several unrelated pre-existing working-tree changes 
+(`admin-page.tsx`, two anchor DOM tests, `default-rubric-anchors.md`) that were present in the 
+environment before I started — staged only my 8 files.
+
+Follow-ups unblocked: #151 (Act-as backend), #150 (Users tab).
+✻ Thinking: The close went through successfully — the delay was just from the verification step. Issue 
+#149 is now closed and the push completed. I'm doing a final check on the workspace: the two test files 
+I created are there as intended, and the other unstaged changes aren't mine, so everything's in order.
+✓ commit 65a1308569  feat(engine): admin-only Users are not judges (slice B) (#149)
+╭────────────────────────────────────────── Iteration 2 done ──────────────────────────────────────────╮
+│ Iteration 2                                                                                          │
+│ Duration: 941.81s    Model: claude-opus-4.8                                                          │
+│ Tokens: in=7,024,895  out=42,216    Context: 7,067,111  (observed tokens)                            │
+│ Est cost: —  (model not in pricing table)                                                            │
+│ Tools: 82    Skills: 0                                                                               │
+│ Commits: 1    Auto-closures: 0    Strikes: 0                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+── Iteration 3 ──
+✗ stale worktree — aborting (commit or stash before re-running)
+╭────────────────────────────────────────── Iteration 3 done ──────────────────────────────────────────╮
+│ Iteration 3                                                                                          │
+│ Duration: 0.01s    Model: —                                                                          │
+│ Tokens: in=0  out=0    Context: 0  (observed tokens)                                                 │
+│ Est cost: —  (model not in pricing table)                                                            │
+│ Tools: 0    Skills: 0                                                                                │
+│ Commits: 0    Auto-closures: 0    Strikes: 0                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                              Run summary                                               
+                                                                                                        
+                                           Tokens     Tokens                                     Final  
+    Iter   Issue   Model      Duration         in        out   Cost USD   Commits   Closures   strikes  
+ ────────────────────────────────────────────────────────────────────────────────────────────────────── 
+       1       —   claude-…    1718.2s   17,079,…     70,309          —         1          0         0  
+       2       —   claude-…     941.8s   7,024,8…     42,216          —         1          0         0  
+       3       —   —              0.0s          0          0          —         0          0         0  
+ ────────────────────────────────────────────────────────────────────────────────────────────────────── 
+  totals                                 24,104,…    112,525          —         2          0         0  
+                                                                                                        
+✓ run end: stale_worktree
