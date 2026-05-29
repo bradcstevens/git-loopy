@@ -119,3 +119,10 @@ For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch us
 ### 5. Done
 
 Tell the user the setup is complete and which engineering skills will now read from these files. Mention they can edit `docs/agents/*.md` directly later — re-running this skill is only necessary if they want to switch issue trackers or restart from scratch.
+
+Then point them at the **first content step** of the workflow. The capture and alignment skills don't depend on anything this skill writes, so the user can start immediately:
+
+- **`/intake`** (Phase 0) — if they're arriving with raw, half-formed, or multiple change requests (or supporting material like terminal output or screenshots), run `/intake` first to capture them into a grill-ready `docs/feature-requests/<timestamp>/FEATURE-REQUESTS.md`. No setup required; it creates its output folders lazily.
+- **`/grill-me`** then **`/grill-with-docs`** (Phase 1) — to align on the design, optionally pointed at the `FEATURE-REQUESTS.md` that `/intake` produced.
+
+A user who already knows exactly what they want can skip `/intake` and grill directly.

@@ -65,7 +65,11 @@ $EDITOR ralph/PROMPT.md  # loop-specific routing rules (usually leave defaults)
 
 # 6. Walk through the human-in-the-loop workflow.
 copilot
+> /intake              # optional Phase 0: capture raw/messy/multiple change
+#                        requests (plus terminal output or screenshots) into a
+#                        grill-ready docs/feature-requests/<timestamp>/FEATURE-REQUESTS.md
 > /grill-me            # greenfield: start here, until 3–4 terms keep recurring
+#                        (optionally point it at the FEATURE-REQUESTS.md /intake produced)
 # Once vocabulary stabilises, switch to /grill-with-docs to compile it into
 # CONTEXT.md + docs/adr/. See docs/workflow.md for the deciding axis.
 # ...then /to-prd, /to-issues, /triage, then kick off the AFK loop.
@@ -79,7 +83,7 @@ These two steps are easy to conflate; they're not the same thing.
 
 | Step | Command | What it changes |
 | --- | --- | --- |
-| **Install skills at user level** | `cp -R .copilot/skills/* ~/.copilot/skills/` | Makes `/grill-me`, `/to-prd`, `/to-issues`, `/triage`, `/diagnose`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`, `/find-skills`, `/setup-agent-skills`, etc. discoverable in **any** Copilot CLI session on your machine. Run once per machine (or per kit upgrade). |
+| **Install skills at user level** | `cp -R .copilot/skills/* ~/.copilot/skills/` | Makes `/intake`, `/grill-me`, `/to-prd`, `/to-issues`, `/triage`, `/diagnose`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`, `/find-skills`, `/setup-agent-skills`, etc. discoverable in **any** Copilot CLI session on your machine. Run once per machine (or per kit upgrade). |
 | **Configure skills for this repo** | `/setup-agent-skills` (inside `copilot`) | Edits **this repo's** `AGENTS.md` `## Agent skills` block and writes **this repo's** `docs/agents/*.md`. Tells the other skills which issue tracker (GitHub / GitLab / local markdown / other), which label vocabulary, and which context layout (single vs multi-context) this project uses. Run once per repo. |
 
 The first is a one-time machine-level install. The second is a one-time per-project configuration that **must** run before any of the other planning/implementation skills.
@@ -93,7 +97,7 @@ The README stops here. Pick whichever doc matches what you need to do:
 | Doc | Read when… |
 | --- | --- |
 | [`docs/concepts.md`](docs/concepts.md) | You want to understand **why** the workflow is shaped the way it is — the Smart Zone / Memento Model mental models the rest of the kit is built around. Read this first if you're unfamiliar with AFK-style AI coding loops. |
-| [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea → Grill → Brief → PRD → Issues → Triage → AFK loop → QA). Includes the [`/grill-me` vs `/grill-with-docs`](docs/workflow.md#grill-me-vs-grill-with-docs--pick-the-right-one) decision tree and the greenfield-project edge case. |
+| [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea → Intake → Grill → Brief → PRD → Issues → Triage → AFK loop → QA). Includes the optional [`/intake`](.copilot/skills/intake/SKILL.md) capture step, and the [`/grill-me` vs `/grill-with-docs`](docs/workflow.md#grill-me-vs-grill-with-docs--pick-the-right-one) decision tree and the greenfield-project edge case. |
 | [`docs/runners.md`](docs/runners.md) | You're ready to kick off the AFK loop and need the **runner reference** — invocation cookbook, per-iteration flow, exit conditions, commit-message contract, and skill-routing rules. |
 | [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit to your project** — repo structure, what to edit in `AGENTS.md` and `PROMPT.md`, what `/setup-agent-skills` actually writes, re-running it, and the skills reference. |
 | [`ralph/python/README.md`](ralph/python/README.md) | You want the AFK runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |

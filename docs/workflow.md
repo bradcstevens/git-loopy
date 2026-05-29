@@ -3,14 +3,34 @@
 > The end-to-end loop this kit is designed for. Seven phases, six of them human-driven. The autonomous AFK loop is **one** phase, not the whole story.
 
 ```
-Idea → Grill → Brief → PRD → Issues → Triage → [AFK loop] → QA → Repeat
- ^                                                                  |
- └────────────────────── new issues ───────────────────────────────┘
+Idea → Intake → Grill → Brief → PRD → Issues → Triage → [AFK loop] → QA → Repeat
+ ^                                                                         |
+ └────────────────────────── new issues ──────────────────────────────────┘
 ```
 
 Every step up to "AFK loop" is **human-in-the-loop**. Once you kick off the loop, you go AFK. QA is yours again — it's where you impose taste.
 
 You don't need to use every phase. The skills are independent — pick what helps. The phases are ordered for new projects; experienced users skip phases that don't apply (e.g., a tiny one-off change might go straight from a `gh issue create` to `/triage`).
+
+## Phase 0 — Intake (`/intake`)
+
+**Goal:** Capture raw change requests into a grill-ready brief before any design work begins.
+
+Optional but handy when you're arriving with a pile of half-formed asks — several feature ideas,
+messy wording, a screenshot, or terminal output you want considered. `/intake` interviews you one
+request at a time, automatically splits bundled asks into independent requests and tightens the
+wording (preserving your original phrasing for the grill skills to interrogate), then asks for any
+supporting context to attach.
+
+```bash
+copilot
+> /intake
+```
+
+It writes `docs/feature-requests/<timestamp>/FEATURE-REQUESTS.md` (with a `context/` folder for any
+attachments) and hands you the path to feed into the next phase. It is **capture-only** — it does
+not walk the design tree or touch `CONTEXT.md`/ADRs; that's the grill phase's job. Skip it if you
+already know exactly what you want and prefer to start grilling directly.
 
 ## Phase 1 — Alignment (`/grill-me`, then `/grill-with-docs`)
 
