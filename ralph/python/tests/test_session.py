@@ -12,8 +12,8 @@ Covers the per-iteration SDK Session orchestrator:
 * :class:`IterationSession` lifecycle — creation, ``on_event``
   subscription (not post-create ``session.on(...)``), disconnect on
   exit including on exception.
-* SDK event fan-out — mapped events flow to writer + renderer; deltas
-  drop; ``USER_INPUT_REQUESTED`` is translated to
+* SDK event fan-out — mapped events flow to the writer + sink fan-out;
+  deltas drop from JSONL; ``USER_INPUT_REQUESTED`` is translated to
   ``wrapper.ask_user.attempted``.
 * Module shape — no ``CopilotClient`` instantiation; AST import guard;
   ``__all__`` surface.
@@ -71,6 +71,7 @@ from ralph_afk.session import (
     SessionConfig,
     build_permission_handler,
 )
+from ralph_afk.sinks import SinkFanout
 from ralph_afk.ui import IterationSnapshot, Renderer, RunSummary  # noqa: F401
 
 _FIXED_RUN_ID = "01ABCDEFGHJKMNPQRSTVWXYZ12"
@@ -522,7 +523,7 @@ async def test_iteration_session_creates_sdk_session_on_aenter(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -541,7 +542,7 @@ async def test_iteration_session_passes_model_through(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
             model="gpt-5.4",
@@ -570,7 +571,7 @@ async def test_iteration_session_passes_reasoning_effort_through(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
             model="claude-opus-4.7-xhigh",
@@ -598,7 +599,7 @@ async def test_iteration_session_omits_reasoning_effort_by_default(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ):
@@ -620,7 +621,7 @@ async def test_iteration_session_does_not_register_user_input_handler(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ):
@@ -642,7 +643,7 @@ async def test_iteration_session_subscribes_via_on_event_not_post_create(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ):
@@ -663,7 +664,7 @@ async def test_iteration_session_disconnects_on_aexit(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ):
@@ -683,7 +684,7 @@ async def test_iteration_session_disconnects_when_body_raises(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ):
@@ -704,7 +705,7 @@ async def test_iteration_session_swallows_disconnect_failure(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -723,7 +724,7 @@ async def test_iteration_session_routes_mapped_sdk_event_to_writer(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=2,
         ) as sdk_session:
@@ -752,7 +753,7 @@ async def test_iteration_session_routes_mapped_sdk_event_to_renderer(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -777,7 +778,7 @@ async def test_iteration_session_drops_streaming_delta_events(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -811,7 +812,7 @@ async def test_iteration_session_streams_deltas_to_renderer_not_jsonl(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -858,7 +859,7 @@ async def test_iteration_session_translates_user_input_requested_to_wrapper_even
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=4,
         ) as sdk_session:
@@ -897,7 +898,7 @@ async def test_iteration_session_writer_failure_does_not_break_renderer_fanout(
         fake_client,
         config=_StubConfig(),
         event_log=_BrokenWriter(),  # type: ignore[arg-type]
-        renderer=renderer,
+        sinks=SinkFanout([renderer]),
         run_id=_FIXED_RUN_ID,
         iter_num=1,
     ) as sdk_session:
@@ -920,7 +921,7 @@ async def test_iteration_session_sdk_session_property_raises_outside_context(
         fake_client,
         config=_StubConfig(),
         event_log=event_log,
-        renderer=renderer,
+        sinks=SinkFanout([renderer]),
         run_id=_FIXED_RUN_ID,
         iter_num=1,
     )
@@ -945,7 +946,7 @@ async def test_integration_approve_path_writes_permission_event(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
         ) as sdk_session:
@@ -973,7 +974,7 @@ async def test_integration_deny_tool_path_writes_denied_event(
             fake_client,
             config=_StubConfig(deny_tools=frozenset({"bash"})),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=2,
         ) as sdk_session:
@@ -1001,7 +1002,7 @@ async def test_integration_deny_skill_path_writes_denied_event(
             fake_client,
             config=_StubConfig(deny_skills=frozenset({"caveman"})),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=3,
         ) as sdk_session:
@@ -1031,7 +1032,7 @@ async def test_integration_ask_user_path_writes_wrapper_event(
             fake_client,
             config=_StubConfig(),
             event_log=event_log,
-            renderer=renderer,
+            sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=4,
         ) as sdk_session:
@@ -1080,8 +1081,8 @@ def test_session_module_does_not_construct_copilot_client() -> None:
 
 
 def test_session_module_imports_are_constrained() -> None:
-    """``session.py`` may import only stdlib + ``copilot.*`` + the two
-    deep peer modules it integrates with (``events``, ``persist``, ``ui.renderer``).
+    """``session.py`` may import only stdlib + ``copilot.*`` + the deep peer
+    modules it integrates with (``events``, ``persist``, ``sinks``).
 
     Catches accidental coupling to ``gh`` / ``git`` / ``loop`` / ``cli`` /
     ``config`` / ``wrapper`` / ``pricing`` — every one of those would
@@ -1104,7 +1105,7 @@ def test_session_module_imports_are_constrained() -> None:
         "ralph_afk",
         "ralph_afk.events",
         "ralph_afk.persist",
-        "ralph_afk.ui.renderer",
+        "ralph_afk.sinks",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):

@@ -9,8 +9,12 @@ which passes it down to :class:`IterationSession`.
 A fresh ``CopilotSession`` is created per iteration so the Memento Model
 is preserved at the model-context level — each iteration starts with a
 clean conversation buffer. The session is bound to its
-:class:`EventLogWriter` and :class:`Renderer` for the duration of the
-iteration; both are owned by the caller (loop).
+:class:`EventLogWriter` and the caller's
+:class:`~ralph_afk.sinks.SinkFanout` for the duration of the iteration;
+both are owned by the caller (loop). Mapped SDK events and streaming
+reasoning/message deltas are dispatched through the fan-out (issue #22),
+never to a renderer directly — JSONL writing stays always-on and
+independent of which sinks are registered.
 
 Public surface
 --------------
@@ -74,7 +78,8 @@ Design notes
 
 * **No coupling to peer modules.** The session module knows about the
   SDK, the events module, the persist module (for the writer **type**),
-  and the renderer (for fan-out). It explicitly does **not** import
+  and the sinks module (for the :class:`~ralph_afk.sinks.SinkFanout`
+  fan-out target). It explicitly does **not** import
   ``ralph_afk.gh`` / ``ralph_afk.git`` / ``ralph_afk.loop`` / ``ralph_afk.cli``
   / ``ralph_afk.config`` / ``ralph_afk.wrapper`` / ``ralph_afk.pricing``.
   Enforced by ``tests/test_session.py::test_session_module_imports_are_constrained``.
@@ -83,9 +88,9 @@ Design notes
   Enforced by an AST scan in
   ``tests/test_session.py::test_session_module_does_not_construct_copilot_client``.
 * **``_record`` scrubs once.** Both the JSONL writer's internal scrub
-  AND the renderer's downstream consumers would otherwise see un-scrubbed
-  envelopes. The single :func:`ralph_afk.events.scrub` call at the
-  fan-out point makes the renderer safe and trips the writer's
+  AND the sink fan-out's downstream consumers would otherwise see
+  un-scrubbed envelopes. The single :func:`ralph_afk.events.scrub` call
+  at the fan-out point makes the sinks safe and trips the writer's
   redundant-but-idempotent scrub.
 * **Recording failures cannot alter permission decisions.** Inside the
   permission handler we route every ``record_event`` call through
@@ -120,7 +125,7 @@ from copilot.session import PermissionRequestResult
 
 from ralph_afk import events
 from ralph_afk.persist import EventLogWriter
-from ralph_afk.ui.renderer import Renderer
+from ralph_afk.sinks import SinkFanout
 
 __all__ = [
     "IterationSession",
@@ -305,7 +310,7 @@ def build_permission_handler(
     decision.
 
     The fan-out target is supplied by the caller (``IterationSession``
-    wires it to a writer + renderer pair), so this factory remains
+    wires it to a writer + sink fan-out), so this factory remains
     decoupled from concrete I/O.
 
     Args:
@@ -414,7 +419,7 @@ class IterationSession:
             client,
             config=run_config,
             event_log=writer,
-            renderer=renderer,
+            sinks=sink_fanout,
             run_id=run_id,
             iter_num=3,
             model="claude-opus-4.8",
@@ -438,7 +443,10 @@ class IterationSession:
         config: A :class:`SessionConfig`-conforming object (typically
             ``ralph_afk.config.RunConfig``).
         event_log: The :class:`EventLogWriter` for replay-grade JSONL.
-        renderer: The :class:`Renderer` for live terminal output.
+        sinks: The caller's :class:`~ralph_afk.sinks.SinkFanout`. Mapped SDK
+            events and streaming reasoning/message deltas are dispatched
+            through it; for the non-interactive path the sole registered
+            sink is the line-printer :class:`Renderer`.
         run_id: 26-char ULID for the run.
         iter_num: 1-based iteration index.
         model: Optional model override; forwarded to the SDK. A bare base
@@ -460,7 +468,7 @@ class IterationSession:
         *,
         config: SessionConfig,
         event_log: EventLogWriter,
-        renderer: Renderer,
+        sinks: SinkFanout,
         run_id: str,
         iter_num: int,
         model: str | None = None,
@@ -469,7 +477,7 @@ class IterationSession:
         self._client = client
         self._config = config
         self._event_log = event_log
-        self._renderer = renderer
+        self._sinks = sinks
         self._run_id = run_id
         self._iter_num = iter_num
         self._model = model
@@ -547,11 +555,13 @@ class IterationSession:
     # -- event fan-out -----------------------------------------------------
 
     def _record(self, envelope: dict[str, Any]) -> None:
-        """Scrub once, then fan out to JSONL writer + renderer.
+        """Scrub once, then fan out to JSONL writer + sink fan-out.
 
-        Both downstream calls are guarded so a writer or renderer
-        failure cannot crash the SDK callback dispatch (or, when called
-        from the permission handler, alter the permission decision).
+        JSONL writing is always-on and independent of the sink list: the
+        scrubbed envelope is written *before* the fan-out hand-off. Both
+        downstream calls are guarded so a writer or sink failure cannot
+        crash the SDK callback dispatch (or, when called from the
+        permission handler, alter the permission decision).
         """
         scrubbed = events.scrub(envelope)
         try:
@@ -559,7 +569,7 @@ class IterationSession:
         except Exception:
             pass
         try:
-            self._renderer.render(scrubbed)
+            self._sinks.render(scrubbed)
         except Exception:
             pass
 
@@ -580,26 +590,27 @@ class IterationSession:
 
         Text streaming deltas (``assistant.reasoning_delta`` /
         ``assistant.message_delta``) are intercepted *before*
-        :func:`events.map_sdk_event` and forwarded straight to the renderer
-        for live terminal output. They are deliberately NOT routed through
+        :func:`events.map_sdk_event` and forwarded through the sink
+        fan-out's streaming hooks for live output (issue #22) — not to a
+        renderer directly. They are deliberately NOT routed through
         :meth:`_record`, so they never reach the JSONL writer — the
         replay-grade log carries only the final, scrubbed
         :data:`ASSISTANT_REASONING` / :data:`ASSISTANT_MESSAGE` events.
         (``assistant.streaming_delta`` carries only a byte count, no text, so
-        it falls through to the drop path.) Renderer failures are swallowed:
-        a broken renderer must not crash SDK event dispatch.
+        it falls through to the drop path.) Sink failures are swallowed:
+        a broken sink must not crash SDK event dispatch.
         """
         if sdk_event.type is SessionEventType.ASSISTANT_REASONING_DELTA:
             try:
                 delta: Any = getattr(sdk_event.data, "delta_content", "") or ""
-                self._renderer.stream_reasoning(delta)
+                self._sinks.stream_reasoning(delta)
             except Exception:
                 pass
             return
         if sdk_event.type is SessionEventType.ASSISTANT_MESSAGE_DELTA:
             try:
                 delta = getattr(sdk_event.data, "delta_content", "") or ""
-                self._renderer.stream_message(delta)
+                self._sinks.stream_message(delta)
             except Exception:
                 pass
             return

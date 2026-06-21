@@ -60,13 +60,19 @@ Design notes:
   GitHub backend. Adding a new backend (e.g. a remote API) means
   adding one ``IssueSource`` impl and one factory branch — the
   iteration body never changes.
-* **Inter-module fan-out via the renderer.** Every wrapper-level event
+* **Inter-module fan-out via the sink list.** Every wrapper-level event
   (``wrapper.run.start``, ``wrapper.iteration.start``, etc.) goes through
-  :meth:`_emit_wrapper_event` which:
+  :meth:`_emit` which:
   1. Constructs an envelope via :func:`ralph_afk.events.make_event`.
-  2. Writes the JSONL line via the event log writer (scrubber pipeline).
-  3. Hands it to the renderer for the Rich-driven terminal output and
-     RunSummary accumulator updates.
+  2. Writes the JSONL line via the event log writer (scrubber pipeline) —
+     always-on and independent of which sinks are registered.
+  3. Hands it to the :class:`~ralph_afk.sinks.SinkFanout`, which dispatches
+     to every registered sink (issue #22). For the non-interactive path the
+     sole sink is the line-printer :class:`~ralph_afk.ui.renderer.Renderer`,
+     which drives the Rich terminal output and RunSummary accumulator
+     updates; the same fan-out is handed to each
+     :class:`~ralph_afk.session.IterationSession` so SDK events and streaming
+     deltas flow through the identical seam.
 * **SDK + source failure containment.** ``send_and_wait`` failures are
   caught and treated as no-progress. Per-issue ``gh.issue_close`` failures are
   logged via the diagnostics logger inside the source impl and the
@@ -101,6 +107,7 @@ from ralph_afk.persist import (
 )
 from ralph_afk.pricing import Pricing, PricingError, load_pricing
 from ralph_afk.session import IterationSession
+from ralph_afk.sinks import SinkFanout
 from ralph_afk.sources import (
     AfkReadyItem,
     GitHubIssueSource,
@@ -283,8 +290,8 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
 class _Loop:
     """Stateful orchestrator for one ``ralph-afk`` invocation.
 
-    Bundles the long-lived per-run state — writers, summary, renderer,
-    SDK client, source, strike state machine — so the public
+    Bundles the long-lived per-run state — writers, summary, sink
+    fan-out, SDK client, source, strike state machine — so the public
     :func:`run` function stays small and the per-iteration helper
     methods can read self instead of threading every value through
     their signatures.
@@ -298,7 +305,7 @@ class _Loop:
         prompt_text: str,
         pricing: Pricing,
         writers: WritersBundle,
-        renderer: Renderer,
+        sinks: SinkFanout,
         summary: RunSummary,
         client: CopilotClient,
         source: IssueSource,
@@ -310,7 +317,7 @@ class _Loop:
         self._prompt_text = prompt_text
         self._pricing = pricing
         self._writers = writers
-        self._renderer = renderer
+        self._sinks = sinks
         self._summary = summary
         self._client = client
         self._source = source
@@ -333,7 +340,12 @@ class _Loop:
         iter_num: int | None,
         **payload: Any,
     ) -> dict[str, Any]:
-        """Compose, persist, and render one wrapper-level event."""
+        """Compose, persist, then fan out one wrapper-level event.
+
+        JSONL writing is always-on and independent of the sink list: the
+        envelope is written to the event log *before* the
+        :class:`~ralph_afk.sinks.SinkFanout` hand-off.
+        """
         envelope = events_module.make_event(
             type=event_type,
             run_id=self._writers.run_id,
@@ -345,9 +357,9 @@ class _Loop:
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning("event log write failed: %s", exc)
         try:
-            self._renderer.render(envelope)
+            self._sinks.render(envelope)
         except Exception as exc:  # pragma: no cover - defensive
-            self._diag.warning("renderer failed on %s: %s", event_type, exc)
+            self._diag.warning("sink fan-out failed on %s: %s", event_type, exc)
         return envelope
 
     # -- iteration body ----------------------------------------------------
@@ -487,7 +499,7 @@ class _Loop:
                         self._client,
                         config=self._config,
                         event_log=self._writers.event_log,
-                        renderer=self._renderer,
+                        sinks=self._sinks,
                         run_id=self._writers.run_id,
                         iter_num=iter_num,
                         model=self._config.model,
@@ -792,7 +804,7 @@ async def run(config: RunConfig) -> int:
         print(f"ralph-afk: pricing load failed: {exc}", file=sys.stderr)
         return 1
 
-    # 3) Writers + diagnostics logger + renderer.
+    # 3) Writers + diagnostics logger + renderer + sink fan-out.
     try:
         writers = create_writers(repo_root)
     except Exception as exc:
@@ -810,6 +822,12 @@ async def run(config: RunConfig) -> int:
         verbosity=config.verbosity,
         render_reasoning=config.render_reasoning,
     )
+    # The line-printer Renderer is the sole sink on the non-interactive
+    # path (issue #22); JSONL logging is written separately and stays
+    # always-on regardless of which sinks are registered. The interactive
+    # slices (issue #23+) register additional sinks on this same fan-out,
+    # and Detach (#28) swaps the list back to the Renderer via set_sinks.
+    sinks = SinkFanout([renderer])
     diag = writers.diagnostics
 
     # 4) IssueSource (factory dispatches on config.issue_source). A
@@ -861,7 +879,7 @@ async def run(config: RunConfig) -> int:
         prompt_text=prompt_text,
         pricing=pricing,
         writers=writers,
-        renderer=renderer,
+        sinks=sinks,
         summary=summary,
         client=client,
         source=source,
