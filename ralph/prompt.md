@@ -28,6 +28,14 @@ Pick exactly one task. Prioritise in this order — and at each priority, use th
 
 If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against the domain docs (`docs/agents/domain.md`, `CONTEXT.md`, and any ADRs under `docs/adr/`) before you start — does it fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
 
+# DECLARE YOUR ACTIVE ISSUE (working marker)
+
+Once you've picked your single task — and **before** you start exploring — declare it up front by emitting a **working marker** on its own line, exactly: `<working issue=N>`, where `N` is the number of the issue you selected (for `prds` mode, the number from its filename).
+
+This is an **additive** live-attribution signal: on the interactive path the runner taps it to light up the **active issue** and start its live timer the moment you declare it, and the per-run **queue** uses it to attribute this iteration's work to that issue. It is silently ignored on the non-interactive path.
+
+The marker changes nothing else: you still **pick exactly one task** by the priority order above, and you still close the issue with a `Closes #N` close-keyword exactly as described under **COMMIT** / **THE ISSUE** below. If you omit the marker, the runner infers the active issue from your commit-time `Closes #N` backstop. Emit it once per iteration, for the single issue you chose.
+
 # SKILLS NOT TO INVOKE
 
 These skills exist but are **out of scope for this autonomous loop** — they're either upstream/setup or session-management tools meant for a human-driven session:

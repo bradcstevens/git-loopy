@@ -231,6 +231,16 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._RUN_END == events_module.WRAPPER_RUN_END
     assert state_module._ITERATION_START == events_module.WRAPPER_ITERATION_START
     assert state_module._STRIKE == events_module.WRAPPER_STRIKE
+    # Ledger-driving literals (issue #25).
+    assert (
+        state_module._AFK_READY_COLLECTED
+        == events_module.WRAPPER_AFK_READY_COLLECTED
+    )
+    assert state_module._COMMIT_RECORDED == events_module.WRAPPER_COMMIT_RECORDED
+    assert state_module._AUTO_CLOSE == events_module.WRAPPER_AUTO_CLOSE
+    assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
+    assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
+    assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
 
 
 def test_state_module_imports_are_constrained() -> None:
@@ -242,7 +252,7 @@ def test_state_module_imports_are_constrained() -> None:
     """
     source = Path(state_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    allow = {"__future__", "time", "datetime", "typing"}
+    allow = {"__future__", "re", "time", "dataclasses", "datetime", "typing"}
     seen: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
