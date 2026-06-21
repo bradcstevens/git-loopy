@@ -241,6 +241,9 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
     assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
+    # Transcript-driving literals (issue #27).
+    assert state_module._ASSISTANT_REASONING == events_module.ASSISTANT_REASONING
+    assert state_module._TOOL_CALL == events_module.TOOL_CALL
 
 
 def test_state_module_imports_are_constrained() -> None:
@@ -252,7 +255,7 @@ def test_state_module_imports_are_constrained() -> None:
     """
     source = Path(state_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    allow = {"__future__", "re", "time", "dataclasses", "datetime", "typing"}
+    allow = {"__future__", "collections", "re", "time", "dataclasses", "datetime", "typing"}
     seen: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

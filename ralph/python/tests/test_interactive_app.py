@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+from rich.text import Text  # noqa: E402
 from textual.widgets import ContentSwitcher, DataTable, Static  # noqa: E402
 
 from ralph_afk import events as events_module  # noqa: E402
@@ -176,3 +177,91 @@ async def test_esc_returns_focus_to_tab_bar_from_queue() -> None:
         assert isinstance(app.focused, DataTable)
         await pilot.press("escape")
         assert isinstance(app.focused, TabBar)
+
+
+# ---------------------------------------------------------------------------
+# Queue drill-in + live streaming detail (issue #27)
+# ---------------------------------------------------------------------------
+
+
+def _state_with_active_transcript() -> LiveRunState:
+    """The #26-active run plus a little reasoning / message / tool transcript."""
+    state = _state_with_queue()  # ends with an open "<working issue=26>" message
+    state.stream_reasoning("weighing the options\n")
+    state.stream_message("Here is my plan\n")
+    state.render(
+        {
+            "type": events_module.TOOL_CALL,
+            "tool_name": "bash",
+            "arguments": {"command": "pytest -q"},
+        }
+    )
+    return state
+
+
+def _dimmed_text(text: Text) -> str:
+    """The substring(s) carrying the ``dim`` style — i.e. the reasoning lines."""
+    return "".join(
+        text.plain[span.start : span.end]
+        for span in text.spans
+        if span.style == "dim"
+    )
+
+
+async def test_drill_in_active_issue_shows_live_transcript_and_esc_returns() -> None:
+    app = RalphApp(_state_with_active_transcript(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # Dashboard tab -> focus the queue
+        assert isinstance(app.focused, DataTable)
+        await pilot.press("enter")  # Enter on the active row (#26) -> drill in
+        await pilot.pause()
+
+        # The detail view replaces the queue in the same region (no new tab).
+        queue = app.query_one("#queue", DataTable)
+        detail = app.query_one("#detail")
+        assert detail.display is True
+        assert queue.display is False
+        assert app.query_one(ContentSwitcher).current == "dashboard-pane"
+
+        header = str(app.query_one("#detail-header", Static).renderable)
+        assert "#26" in header
+        assert "status active" in header
+
+        body = app.query_one("#detail-body", Static).renderable
+        assert isinstance(body, Text)
+        # Interleaved transcript: reasoning + message + the tool-call event.
+        assert "weighing the options" in body.plain
+        assert "Here is my plan" in body.plain
+        assert "» bash  command=pytest -q" in body.plain
+        # Reasoning is dimmed; the assistant message is plain.
+        dimmed = _dimmed_text(body)
+        assert "weighing the options" in dimmed
+        assert "Here is my plan" not in dimmed
+
+        # Esc returns to the queue; the tab bar stayed on the Dashboard.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert detail.display is False
+        assert queue.display is True
+        assert isinstance(app.focused, DataTable)
+        assert app.query_one(ContentSwitcher).current == "dashboard-pane"
+
+
+async def test_drill_in_non_active_issue_shows_details_only() -> None:
+    app = RalphApp(_state_with_active_transcript(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # focus the queue
+        await pilot.press("down")  # move to the queued row (#27)
+        await pilot.press("enter")  # drill into the non-active issue
+        await pilot.pause()
+
+        header = str(app.query_one("#detail-header", Static).renderable)
+        assert "#27" in header
+        assert "status queued" in header
+
+        body = app.query_one("#detail-body", Static).renderable
+        assert isinstance(body, Text)
+        # Details only: no live transcript leaks into a non-active issue's view.
+        assert "weighing the options" not in body.plain
+        assert "» bash" not in body.plain
+        assert "details only" in body.plain

@@ -31,7 +31,12 @@ after :func:`ralph_afk.interactive.detect.resolve_interactive` has confirmed the
 optional ``[tui]`` extra is importable. The pure model lives in
 :mod:`ralph_afk.interactive.state`; everything here is presentation.
 
-The per-issue drill-in / live transcript lands in #27.
+The per-issue **drill-in** (issue #27): ``enter`` on a queue row opens a
+full-region detail view inside the Dashboard tab (``escape`` returns to the
+queue; the tab bar stays stable). For the *active* issue it shows the live,
+interleaved transcript (reasoning dimmed + assistant message + key structured
+events) tailing a bounded ring buffer in the state; for a *non-active* issue,
+details only.
 """
 
 from __future__ import annotations
@@ -49,8 +54,10 @@ from textual.widgets import ContentSwitcher, DataTable, Footer, Static
 
 from ralph_afk.interactive.state import (
     LiveRunState,
+    format_detail_header,
     format_duration,
     format_header,
+    issue_detail,
     queue_rows,
 )
 
@@ -135,6 +142,7 @@ class _DashboardPane(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(id="header")
         yield DataTable(id="queue", cursor_type="row", zebra_stripes=True)
+        yield _DetailView(id="detail")
 
     def on_mount(self) -> None:
         table = self.query_one("#queue", DataTable)
@@ -142,6 +150,23 @@ class _DashboardPane(Vertical):
         table.add_column("Status", key="status")
         table.add_column("Active", key="active")
         table.add_column("Waiting", key="waiting")
+
+
+class _DetailView(VerticalScroll):
+    """The full-region per-issue **drill-in** inside the Dashboard tab (#27).
+
+    Opened by ``enter`` on a queue row and closed by ``escape``. It shares the
+    Dashboard tab's region with the queue (their ``display`` is toggled) so the
+    tab bar stays stable — the drill-in is contextual, not a new tab. For the
+    *active* issue the body is the live, interleaved transcript (reasoning
+    dimmed + assistant message + key structured events) tailing the state's
+    bounded ring buffer; for a *non-active* issue, details only (no live
+    stream — the full record stays in the Log tab and the JSONL replay log).
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="detail-header")
+        yield Static(id="detail-body")
 
 
 class _LogPane(VerticalScroll):
@@ -193,6 +218,20 @@ class RalphApp(App[None]):
         width: 1fr;
         padding: 0 1;
     }
+    #detail {
+        height: 1fr;
+        display: none;
+    }
+    #detail-header {
+        height: 1;
+        padding: 0 1;
+        background: $boost;
+        color: $text;
+    }
+    #detail-body {
+        width: 1fr;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -229,6 +268,10 @@ class RalphApp(App[None]):
         #: only ticks timer cells (preserving the cursor) and rebuilds the table
         #: solely when the set/order of issues changes.
         self._displayed_refs: list[str] = []
+        #: The issue ref currently drilled into (``None`` while the queue is
+        #: showing). Esc is context-aware on this: in a drill-in it returns to
+        #: the queue; otherwise it returns focus to the tab bar.
+        self._drilled_ref: str | None = None
 
     def compose(self) -> ComposeResult:
         yield TabBar(_TAB_LABELS)
@@ -249,6 +292,10 @@ class RalphApp(App[None]):
 
     @on(TabBar.Activated)
     def _switch_tab(self, message: TabBar.Activated) -> None:
+        # Switching tabs while drilled in returns to the queue first, so the
+        # Dashboard tab re-opens on its queue (not a stale detail view).
+        if self._drilled_ref is not None:
+            self._close_detail()
         pane_id = _PANE_IDS[message.index]
         self.query_one(ContentSwitcher).current = pane_id
         self._refresh()
@@ -262,7 +309,10 @@ class RalphApp(App[None]):
             self.query_one(f"#{pane_id}", VerticalScroll).focus()
 
     def action_focus_tabs(self) -> None:
-        """Esc: return focus to the tab bar from any pane."""
+        """Esc: close an open drill-in, else return focus to the tab bar."""
+        if self._drilled_ref is not None:
+            self._close_detail()
+            return
         self.query_one(TabBar).focus()
 
     def action_stop(self) -> None:
@@ -282,11 +332,45 @@ class RalphApp(App[None]):
         self.detach_requested = True
         self.exit()
 
+    # -- drill-in ----------------------------------------------------------
+
+    @on(DataTable.RowSelected)
+    def _drill_in(self, event: DataTable.RowSelected) -> None:
+        """``enter`` on a queue row opens that issue's full-region detail view.
+
+        Only the Dashboard's queue triggers a drill-in; the row key is the
+        issue ref (a string) :func:`issue_detail` normalises back to the ledger.
+        """
+        if event.data_table.id != "queue":
+            return
+        key = event.row_key.value
+        if key is None:
+            return
+        self._open_detail(str(key))
+
+    def _open_detail(self, ref: str) -> None:
+        """Show the detail view for ``ref`` in place of the queue."""
+        self._drilled_ref = ref
+        detail = self.query_one("#detail", _DetailView)
+        detail.display = True
+        self._sync_detail()
+        detail.focus()
+        self.query_one("#queue", DataTable).display = False
+
+    def _close_detail(self) -> None:
+        """Return from the detail view to the queue (Esc / tab switch)."""
+        self._drilled_ref = None
+        queue = self.query_one("#queue", DataTable)
+        queue.display = True
+        queue.focus()
+        self.query_one("#detail", _DetailView).display = False
+
     # -- repaint -----------------------------------------------------------
 
     def _refresh(self) -> None:
         self.query_one("#header", Static).update(format_header(self._state))
         self._sync_queue()
+        self._sync_detail()
         if self._log_source is not None:
             # Wrap in Text (no markup parsing) — captured output may contain
             # square brackets that would otherwise be read as Rich markup.
@@ -322,6 +406,33 @@ class RalphApp(App[None]):
                 table.update_cell(
                     key, "waiting", format_duration(row.waiting_seconds)
                 )
+
+    def _sync_detail(self) -> None:
+        """Repaint the open drill-in (a no-op while the queue is showing).
+
+        For the active issue the body tails the state's bounded transcript ring
+        buffer — reasoning lines dimmed, message + event lines plain — so it
+        updates live as the model works. For a non-active issue it is details
+        only; the full record stays in the Log tab and the JSONL replay log.
+        """
+        if self._drilled_ref is None:
+            return
+        detail = issue_detail(self._state, self._drilled_ref)
+        self.query_one("#detail-header", Static).update(format_detail_header(detail))
+        body = Text()
+        if detail.is_active:
+            for line in self._state.transcript():
+                body.append(line.text, style="dim" if line.dim else "")
+                body.append("\n")
+            if not body.plain:
+                body.append("(waiting for the model's output…)", style="dim")
+        else:
+            body.append(
+                f"{detail.status} — details only (no live stream). "
+                "The full transcript is in the Log tab and the JSONL replay log.",
+                style="dim",
+            )
+        self.query_one("#detail-body", Static).update(body)
 
     @staticmethod
     def _cursor_ref(table: DataTable) -> str | None:

@@ -26,14 +26,21 @@ ledger**: a record keyed by issue ref of every issue seen in any pool this run,
 with its status (queued / active / closed / advanced / no-progress / gone) and
 its waiting + active timing. The active issue is attributed from the agent's
 **working marker** (``<working issue=N>``, tapped off the message stream) with a
-commit-time ``Closes #N`` backstop. The message-delta **transcript** pane itself
-is still parked until #27.
+commit-time ``Closes #N`` backstop.
+
+From issue #27 the model also carries the **live transcript**: a bounded
+ring-buffer tail of what the model is doing right now — interleaved reasoning
+(dimmed), assistant message text, and key structured events (tool calls,
+commits, closures) in time order. The drill-in shows this tail for the active
+issue; the *full* record stays in JSONL on disk and in the Log tab, so the tail
+can stay bounded over a long (up to ~2-hour) iteration.
 """
 
 from __future__ import annotations
 
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping
@@ -42,15 +49,22 @@ __all__ = [
     "LiveRunState",
     "IssueLedgerEntry",
     "QueueRow",
+    "TranscriptLine",
+    "IssueDetail",
     "format_header",
     "format_duration",
+    "format_detail_header",
     "queue_rows",
+    "issue_detail",
     "STATUS_QUEUED",
     "STATUS_ACTIVE",
     "STATUS_CLOSED",
     "STATUS_ADVANCED",
     "STATUS_NO_PROGRESS",
     "STATUS_GONE",
+    "TRANSCRIPT_REASONING",
+    "TRANSCRIPT_MESSAGE",
+    "TRANSCRIPT_EVENT",
 ]
 
 # Event-type string literals this model reacts to. Re-declared locally (rather
@@ -71,6 +85,12 @@ _ITERATION_END = "wrapper.iteration.end"
 # The agent's final assistant message — a fallback marker source for when
 # streaming deltas are unavailable (the live path taps ``stream_message``).
 _ASSISTANT_MESSAGE = "assistant.message"
+# Transcript-driving event literals (issue #27): the agent's reasoning blocks
+# and tool calls join the streamed deltas + commit/closure events in the live
+# per-issue transcript tail. Re-declared locally (importing ``ralph_afk.events``
+# would pull the SDK) and kept in lockstep by the parity test.
+_ASSISTANT_REASONING = "assistant.reasoning"
+_TOOL_CALL = "tool.call"
 
 #: Status shown before the first ``wrapper.run.start`` is observed.
 _STATUS_STARTING = "starting"
@@ -101,6 +121,20 @@ _WORKING_MARKER_RE = re.compile(
 #: Rolling message-buffer cap for marker detection — large enough to span a
 #: marker split across streaming deltas, small enough to stay O(1) per delta.
 _MARKER_BUFFER_CHARS = 256
+
+# ---------------------------------------------------------------------------
+# Live transcript tail (issue #27)
+# ---------------------------------------------------------------------------
+#: Public transcript-line kinds. The drill-in dims **reasoning**; **event**
+#: lines carry a leading glyph so the key structured events (tool calls,
+#: commits, closures) stand out without colour; **message** is plain.
+TRANSCRIPT_REASONING = "reasoning"
+TRANSCRIPT_MESSAGE = "message"
+TRANSCRIPT_EVENT = "event"
+#: Bounded ring-buffer cap (lines): the drill-in shows only this tail, so the
+#: pane can't grow without limit over a long iteration. The *full* transcript
+#: stays in JSONL on disk and in the Log tab (issue #27 acceptance criterion).
+_TRANSCRIPT_TAIL_LINES = 200
 
 
 @dataclass
@@ -138,6 +172,28 @@ class IssueLedgerEntry:
         if self.active_since is not None:
             total += max(0.0, now - self.active_since)
         return total
+
+
+@dataclass(frozen=True)
+class TranscriptLine:
+    """One line of the live per-issue transcript tail (issue #27).
+
+    A pure, Textual-free snapshot (mirrors :class:`QueueRow`) so the transcript
+    *content* is unit-testable without a TTY. ``kind`` is one of
+    :data:`TRANSCRIPT_REASONING` / :data:`TRANSCRIPT_MESSAGE` /
+    :data:`TRANSCRIPT_EVENT`; the drill-in renders each line and dims the
+    reasoning ones (see :attr:`dim`). ``text`` is the faithful display text —
+    for ``event`` lines it already carries the leading glyph the line printer
+    uses (``✓`` / ``»`` / ``◇`` / ``↑``).
+    """
+
+    kind: str
+    text: str
+
+    @property
+    def dim(self) -> bool:
+        """Whether the drill-in should render this line dimmed (reasoning)."""
+        return self.kind == TRANSCRIPT_REASONING
 
 
 def _default_wall_clock() -> datetime:
@@ -197,6 +253,24 @@ class LiveRunState:
         self._iter_strike = False
         self._msg_buffer = ""
 
+        # -- live transcript tail (issue #27) -------------------------------
+        #: Bounded ring buffer of completed transcript lines for the current
+        #: iteration's active work. Reset at each ``iteration.start`` so the
+        #: tail is always attributed to the active issue being worked now.
+        self._transcript: deque[TranscriptLine] = deque(
+            maxlen=_TRANSCRIPT_TAIL_LINES
+        )
+        #: The in-progress (newline-less) streamed line and which stream it
+        #: belongs to, surfaced as a provisional trailing line by
+        #: :meth:`transcript` so output appears live (not only on newline).
+        self._partial_kind: str | None = None
+        self._partial_text = ""
+        #: Whether the *current* reasoning / message block arrived as streamed
+        #: deltas, so the matching final event finalises instead of re-adding
+        #: the whole block (mirrors the line printer's de-dup).
+        self._streamed_reasoning = False
+        self._streamed_message = False
+
     # -- EventSink protocol -------------------------------------------------
 
     def render(self, event: Mapping[str, Any]) -> None:
@@ -207,10 +281,12 @@ class LiveRunState:
         * the **header band** (#23) tracks run-scope milestones — run start,
           iteration, strike, run end;
         * the **per-run ledger** (#25) folds the pool, commits, closures, and
-          iteration boundaries into per-issue attribution and timing.
+          iteration boundaries into per-issue attribution and timing;
+        * the **live transcript** (#27) folds tool calls, commits, and closures
+          into the per-issue tail here, joining the streamed reasoning/message
+          deltas taken in :meth:`stream_reasoning` / :meth:`stream_message`.
 
-        Unknown event types only contribute their ``run_id`` (learned once);
-        the transcript pane (#27) hangs off later, richer reactions.
+        Unknown event types only contribute their ``run_id`` (learned once).
         """
         run_id = event.get("run_id")
         if run_id and not self.run_id:
@@ -231,12 +307,17 @@ class LiveRunState:
             self._begin_iteration(now)
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
+        elif etype == _TOOL_CALL:
+            self._record_event_line(_transcript_tool_text(event))
         elif etype == _COMMIT_RECORDED:
             self._iter_commits += 1
+            self._record_event_line(_transcript_commit_text(event))
         elif etype == _AUTO_CLOSE:
             self._record_closure(event.get("issue"), now, status=STATUS_CLOSED)
+            self._record_event_line(_transcript_auto_close_text(event))
         elif etype == _PR_ADVANCED:
             self._record_closure(event.get("pr"), now, status=STATUS_ADVANCED)
+            self._record_event_line(_transcript_pr_advanced_text(event))
         elif etype == _STRIKE:
             self.strikes = _coerce_int(event.get("strikes"), self.strikes)
             self.max_strikes = _coerce_int(
@@ -245,7 +326,10 @@ class LiveRunState:
             self._iter_strike = True
         elif etype == _ITERATION_END:
             self._finalize_iteration(now)
+        elif etype == _ASSISTANT_REASONING:
+            self._finalize_reasoning(event.get("content"))
         elif etype == _ASSISTANT_MESSAGE:
+            self._finalize_message(event.get("content"))
             self._scan_for_marker(event.get("content"))
         elif etype == _RUN_END:
             outcome = event.get("outcome")
@@ -253,15 +337,30 @@ class LiveRunState:
             self._mark_ended()
 
     def stream_reasoning(self, delta: str) -> None:
-        """Accept a reasoning delta. Parked until the #27 transcript pane."""
+        """Fold a reasoning delta into the live transcript tail (issue #27).
+
+        Streamed deltas build the dimmed reasoning lines of the per-issue
+        transcript; the open (newline-less) line is surfaced live by
+        :meth:`transcript` so output appears as the model thinks. The matching
+        final ``assistant.reasoning`` event then finalises the block without
+        re-adding it (see :meth:`_finalize_reasoning`).
+        """
+        if not delta:
+            return
+        self._streamed_reasoning = True
+        self._stream_into(TRANSCRIPT_REASONING, delta)
 
     def stream_message(self, delta: str) -> None:
-        """Tap the agent message stream for the working marker (issue #25).
+        """Fold a message delta into the transcript and tap the working marker.
 
-        Streaming deltas can split ``<working issue=N>`` across chunks, so the
-        scan runs over a small rolling buffer. Detection lights up the active
-        issue live in the ledger; the transcript pane itself lands in #27.
+        Two jobs (issue #25 + #27): the delta builds the assistant-message
+        lines of the live transcript, and — because streaming can split
+        ``<working issue=N>`` across chunks — the same text is scanned over a
+        small rolling buffer to light up the active issue in the ledger.
         """
+        if delta:
+            self._streamed_message = True
+            self._stream_into(TRANSCRIPT_MESSAGE, delta)
         self._scan_for_marker(delta)
 
     # -- driver-facing controls --------------------------------------------
@@ -311,6 +410,79 @@ class LiveRunState:
         base = now if now is not None else self._monotonic()
         return entry.active_seconds(base)
 
+    # -- live transcript (issue #27) ---------------------------------------
+
+    def transcript(self) -> tuple[TranscriptLine, ...]:
+        """The current bounded transcript tail, newest activity last.
+
+        Returns the committed lines plus the in-progress streamed line (if any)
+        as a provisional trailing entry, so the drill-in shows output as the
+        model produces it — not only once a line is terminated by a newline.
+        """
+        lines = list(self._transcript)
+        if self._partial_kind is not None and self._partial_text:
+            lines.append(
+                TranscriptLine(kind=self._partial_kind, text=self._partial_text)
+            )
+        return tuple(lines)
+
+    def _stream_into(self, kind: str, delta: str) -> None:
+        """Append a streamed delta, committing each completed (``\\n``) line.
+
+        A switch of stream kind (reasoning <-> message) flushes the open
+        partial first, so the two streams never glue onto one line.
+        """
+        if self._partial_kind is not None and self._partial_kind != kind:
+            self._flush_partial()
+        self._partial_kind = kind
+        self._partial_text += str(delta)
+        while "\n" in self._partial_text:
+            line, self._partial_text = self._partial_text.split("\n", 1)
+            self._transcript.append(TranscriptLine(kind=kind, text=line))
+
+    def _flush_partial(self) -> None:
+        """Commit the open (newline-less) streamed line, if any, and reset it."""
+        if self._partial_kind is None:
+            return
+        if self._partial_text != "":
+            self._transcript.append(
+                TranscriptLine(kind=self._partial_kind, text=self._partial_text)
+            )
+        self._partial_kind = None
+        self._partial_text = ""
+
+    def _append_block(self, kind: str, content: Any) -> None:
+        """Append a whole (non-streamed) reasoning/message block as lines."""
+        if not isinstance(content, str) or content == "":
+            return
+        for line in content.split("\n"):
+            self._transcript.append(TranscriptLine(kind=kind, text=line))
+
+    def _record_event_line(self, text: str) -> None:
+        """Append a key structured-event line (flushing any open stream line)."""
+        if not text:
+            return
+        self._flush_partial()
+        self._transcript.append(
+            TranscriptLine(kind=TRANSCRIPT_EVENT, text=text)
+        )
+
+    def _finalize_reasoning(self, content: Any) -> None:
+        """Finalise a reasoning block: close the streamed line, else append it."""
+        self._flush_partial()
+        if self._streamed_reasoning:
+            self._streamed_reasoning = False
+            return
+        self._append_block(TRANSCRIPT_REASONING, content)
+
+    def _finalize_message(self, content: Any) -> None:
+        """Finalise a message block: close the streamed line, else append it."""
+        self._flush_partial()
+        if self._streamed_message:
+            self._streamed_message = False
+            return
+        self._append_block(TRANSCRIPT_MESSAGE, content)
+
     # -- internals ----------------------------------------------------------
 
     def _mark_started(self) -> None:
@@ -351,6 +523,14 @@ class LiveRunState:
         self._iter_commits = 0
         self._iter_strike = False
         self._msg_buffer = ""
+        # The live transcript is per-iteration: clear the tail so the drill-in
+        # always shows the active issue being worked *now* (the full record is
+        # in JSONL + the Log tab).
+        self._transcript.clear()
+        self._partial_kind = None
+        self._partial_text = ""
+        self._streamed_reasoning = False
+        self._streamed_message = False
 
     def _record_pool(self, issues: Any, now: float) -> None:
         """Fold one ``afk_ready.collected`` pool into the ledger.
@@ -520,6 +700,85 @@ def _coerce_int(value: Any, fallback: int) -> int:
         return fallback
 
 
+# ---------------------------------------------------------------------------
+# Transcript line formatting (issue #27) — faithful to the line printer's text
+# ---------------------------------------------------------------------------
+#: Cap on a single rendered argument/value so a tool line stays one tidy row.
+_COMPACT_VALUE_CHARS = 60
+
+
+def _compact_value(value: Any) -> str:
+    """One-line, length-capped rendering of a tool-argument value."""
+    text = str(value).replace("\n", " ")
+    if len(text) > _COMPACT_VALUE_CHARS:
+        return text[: _COMPACT_VALUE_CHARS - 3] + "..."
+    return text
+
+
+def _compact_args(arguments: Any) -> str:
+    """Render tool-call arguments compactly (``k=v k=v`` for a dict)."""
+    if isinstance(arguments, dict):
+        return " ".join(f"{k}={_compact_value(v)}" for k, v in arguments.items())
+    if arguments is None:
+        return ""
+    return _compact_value(arguments)
+
+
+def _short_sha(event: Mapping[str, Any]) -> str:
+    """The 10-char short SHA from a commit/closure event (``""`` if absent)."""
+    sha = event.get("sha", "")
+    return sha[:10] if isinstance(sha, str) else ""
+
+
+def _transcript_tool_text(event: Mapping[str, Any]) -> str:
+    """A tool call as a transcript ``event`` line (mirrors the line printer)."""
+    tool_name = event.get("tool_name", "")
+    arguments = event.get("arguments")
+    if tool_name == "skill":
+        skill = ""
+        if isinstance(arguments, dict):
+            raw = arguments.get("skill")
+            if isinstance(raw, str):
+                skill = raw
+        return f"◇ skill {skill or '(unknown)'}"
+    args = _compact_args(arguments)
+    return f"» {tool_name}  {args}" if args else f"» {tool_name}"
+
+
+def _transcript_commit_text(event: Mapping[str, Any]) -> str:
+    """A recorded commit as a transcript ``event`` line."""
+    text = f"✓ commit {_short_sha(event)}"
+    subject = event.get("subject", "")
+    if subject:
+        lines = str(subject).splitlines()
+        text += f"  {lines[0] if lines else str(subject)}"
+    return text
+
+
+def _transcript_auto_close_text(event: Mapping[str, Any]) -> str:
+    """An auto-closed issue as a transcript ``event`` line."""
+    issue = event.get("issue")
+    short = _short_sha(event)
+    text = "✓ auto-closed"
+    if issue is not None:
+        text += f" #{issue}"
+    if short:
+        text += f"  ({short})"
+    return text
+
+
+def _transcript_pr_advanced_text(event: Mapping[str, Any]) -> str:
+    """An advanced PR as a transcript ``event`` line."""
+    pr = event.get("pr")
+    short = _short_sha(event)
+    text = "↑ advanced PR"
+    if pr is not None:
+        text += f" #{pr}"
+    if short:
+        text += f"  ({short})"
+    return text
+
+
 def _format_elapsed(seconds: float) -> str:
     """Render elapsed seconds as ``H:MM:SS`` (hours never zero-padded)."""
     total = int(seconds)
@@ -645,3 +904,86 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Per-issue drill-in projection (issue #27)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class IssueDetail:
+    """One issue's drill-in detail: identity, status, timers, light history.
+
+    A pure, Textual-free snapshot (mirrors :class:`QueueRow`) so the drill-in
+    *content* is unit-testable without a TTY. ``is_active`` decides whether the
+    detail view shows the live transcript (:meth:`LiveRunState.transcript`) or
+    details only; the timers are raw seconds (the widget formats them via
+    :func:`format_duration`) and tick against the caller's ``now``.
+    """
+
+    ref: int | str
+    status: str
+    is_active: bool
+    active_seconds: float
+    waiting_seconds: float
+    first_seen_iter: int
+
+    @property
+    def label(self) -> str:
+        """The issue identity as shown in the detail header (``#26``)."""
+        return f"#{self.ref}"
+
+
+def issue_detail(
+    state: LiveRunState, ref: int | str, *, now: float | None = None
+) -> IssueDetail:
+    """Project one ledger entry into its drill-in :class:`IssueDetail`.
+
+    ``ref`` may arrive as the widget's string row-key; it is normalised to the
+    ledger's key (tolerating int/str skew) the same way pool refs and markers
+    are. An unknown ref (never in any pool) degrades to a ``gone`` detail rather
+    than raising, so a stale drill-in target never crashes the app.
+
+    ``is_active`` is true only when this is the issue being worked *now* (its
+    status is ``active`` and it is the run's ``active_ref``) — the signal the
+    drill-in uses to show the live transcript versus details only.
+    """
+    key = state._normalize_ref(ref)
+    entry = state.ledger.get(key)
+    base = now if now is not None else state._monotonic()
+    if entry is None:
+        return IssueDetail(
+            ref=ref,
+            status=STATUS_GONE,
+            is_active=False,
+            active_seconds=0.0,
+            waiting_seconds=0.0,
+            first_seen_iter=0,
+        )
+    if entry.waiting_duration is not None:
+        waiting = entry.waiting_duration
+    else:
+        waiting = max(0.0, base - entry.first_seen_at)
+    return IssueDetail(
+        ref=key,
+        status=entry.status,
+        is_active=entry.status == STATUS_ACTIVE and key == state.active_ref,
+        active_seconds=entry.active_seconds(base),
+        waiting_seconds=waiting,
+        first_seen_iter=entry.first_seen_iter,
+    )
+
+
+def format_detail_header(detail: IssueDetail) -> str:
+    """Compose the single-line drill-in header from an :class:`IssueDetail`.
+
+    Pure and Textual-free (mirrors :func:`format_header`) so the detail header's
+    *content* is unit-testable without a TTY: identity, status, the active and
+    waiting timers, and the iteration the issue was first seen in.
+    """
+    return (
+        f"{detail.label}"
+        f"  •  status {detail.status}"
+        f"  •  active {format_duration(detail.active_seconds)}"
+        f"  •  waiting {format_duration(detail.waiting_seconds)}"
+        f"  •  first seen iter {detail.first_seen_iter}"
+    )
