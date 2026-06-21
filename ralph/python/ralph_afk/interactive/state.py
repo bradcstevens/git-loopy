@@ -41,7 +41,10 @@ from typing import Any, Callable, Mapping
 __all__ = [
     "LiveRunState",
     "IssueLedgerEntry",
+    "QueueRow",
     "format_header",
+    "format_duration",
+    "queue_rows",
     "STATUS_QUEUED",
     "STATUS_ACTIVE",
     "STATUS_CLOSED",
@@ -525,6 +528,16 @@ def _format_elapsed(seconds: float) -> str:
     return f"{hours:d}:{minutes:02d}:{secs:02d}"
 
 
+def format_duration(seconds: float) -> str:
+    """Public ``H:MM:SS`` duration formatter (issue #26 live Queue timers).
+
+    The same renderer the header's elapsed/active segments use, exposed so the
+    Dashboard tab formats the per-issue queue timers identically (one place to
+    change the clock format).
+    """
+    return _format_elapsed(seconds)
+
+
 def format_header(state: LiveRunState, *, now: float | None = None) -> str:
     """Compose the single-line header band from a :class:`LiveRunState`.
 
@@ -559,3 +572,76 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         f"  •  {state.status}"
         f"  •  strikes {state.strikes}/{state.max_strikes}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Queue projection (issue #26)
+# ---------------------------------------------------------------------------
+#: Display-group rank for queue ordering: the active issue first, then
+#: still-queued issues, then everything terminal (closed / advanced /
+#: no-progress / gone) as trailing history. Within a group the ledger's
+#: first-seen insertion order is preserved by the stable sort below.
+_QUEUE_GROUP_RANK: dict[str, int] = {STATUS_ACTIVE: 0, STATUS_QUEUED: 1}
+_QUEUE_GROUP_HISTORY = 2
+
+
+@dataclass(frozen=True)
+class QueueRow:
+    """One projected Queue row: a ledger entry ready for the Dashboard list.
+
+    A pure, Textual-free snapshot (mirrors :func:`format_header`) so the live
+    Queue's *content + ordering* is unit-testable without a TTY. Timers are raw
+    seconds — the widget formats them via :func:`format_duration` — with the
+    active issue's ``active_seconds`` and a still-queued issue's
+    ``waiting_seconds`` ticking against the caller's ``now`` (see
+    :func:`queue_rows`).
+    """
+
+    ref: int | str
+    status: str
+    active_seconds: float
+    waiting_seconds: float
+    is_active: bool
+
+    @property
+    def label(self) -> str:
+        """The issue identity as shown in the Queue (``#26`` / a PRD path)."""
+        return f"#{self.ref}"
+
+
+def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRow]:
+    """Project the per-run ledger into ordered, live-timing Queue rows.
+
+    Ordering (decision D5/CONTEXT.md): the **active** issue first, then
+    **queued** issues, then the completed history (closed / advanced /
+    no-progress / gone). Within each group the ledger's first-seen order is
+    preserved (the sort is stable over ``ledger`` insertion order).
+
+    Timers tick against ``now`` (defaulting to the injected monotonic clock,
+    the same basis as the header):
+
+    * the **active** issue's ``active_seconds`` advances while it is being
+      worked and freezes once it ends / the run stops (via
+      :meth:`IssueLedgerEntry.active_seconds`);
+    * a still-**queued** issue's ``waiting_seconds`` advances from first-seen
+      until it is first worked, after which its ``waiting_duration`` is frozen.
+    """
+    base = now if now is not None else state._monotonic()
+    rows: list[QueueRow] = []
+    for ref, entry in state.ledger.items():
+        is_active = entry.status == STATUS_ACTIVE and ref == state.active_ref
+        if entry.waiting_duration is not None:
+            waiting = entry.waiting_duration
+        else:
+            waiting = max(0.0, base - entry.first_seen_at)
+        rows.append(
+            QueueRow(
+                ref=ref,
+                status=entry.status,
+                active_seconds=entry.active_seconds(base),
+                waiting_seconds=waiting,
+                is_active=is_active,
+            )
+        )
+    rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))
+    return rows

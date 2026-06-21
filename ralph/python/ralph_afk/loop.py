@@ -88,6 +88,7 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import re
@@ -96,6 +97,7 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Iterable, Protocol
 
 from copilot import CopilotClient
+from rich.console import Console
 
 from ralph_afk import events as events_module
 from ralph_afk import git as git_module
@@ -774,7 +776,9 @@ class InteractiveDriver(Protocol):
 
     * :attr:`state` is the Textual-agnostic
       :class:`~ralph_afk.interactive.state.LiveRunState`, registered by
-      :func:`run` as the sole sink on the interactive path.
+      :func:`run` as the primary sink on the interactive path.
+    * :meth:`attach_panes` receives the loop-owned Summary/Log pane sources
+      (issue #26) before :meth:`run` builds the app.
     * :meth:`run` is handed the loop's ``drive`` coroutine-function and is
       responsible for launching it and the Textual app as **peer asyncio
       tasks** (not parent/child), returning the loop's process exit code. A
@@ -782,6 +786,13 @@ class InteractiveDriver(Protocol):
     """
 
     state: EventSink
+
+    def attach_panes(
+        self,
+        *,
+        summary: RunSummary | None,
+        log_source: Callable[[], str] | None,
+    ) -> None: ...
 
     async def run(self, drive: Callable[[], Coroutine[object, object, int]]) -> int: ...
 
@@ -862,12 +873,24 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     # path (issue #22); JSONL logging is written separately and stays
     # always-on regardless of which sinks are registered. On the interactive
     # path (issue #23, ADR-0001) the driver's Textual-agnostic LiveRunState
-    # is the sole sink instead, and the Renderer is parked so Detach (#28) can
-    # swap it back in via set_sinks.
+    # is the primary sink. For #26's Log + Summary tabs a SECOND sink is
+    # registered: a Renderer writing the same line-printer output to an
+    # in-memory buffer (safe while Textual owns the real terminal). It drives
+    # the shared RunSummary (Summary tab) and its buffer feeds the Log tab.
+    # The stdout Renderer above stays parked (not in the sink list) so #28's
+    # Detach can swap it back in via set_sinks once the TUI tears down.
     if driver is None:
         sinks = SinkFanout([renderer])
     else:
-        sinks = SinkFanout([driver.state])
+        log_buffer = io.StringIO()
+        log_renderer = Renderer(
+            console=Console(file=log_buffer, force_terminal=False),
+            summary=summary,
+            verbosity=config.verbosity,
+            render_reasoning=config.render_reasoning,
+        )
+        sinks = SinkFanout([driver.state, log_renderer])
+        driver.attach_panes(summary=summary, log_source=log_buffer.getvalue)
     diag = writers.diagnostics
 
     # 4) IssueSource (factory dispatches on config.issue_source). A

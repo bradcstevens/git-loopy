@@ -11,25 +11,30 @@ waits for whichever finishes first.
 
 :func:`ralph_afk.loop.run` holds this object structurally (its ``InteractiveDriver``
 Protocol) and calls :meth:`InteractiveDriver.run` with the loop's ``drive``
-coroutine-function; it also registers :attr:`InteractiveDriver.state` as the sole
-sink. Keeping the orchestration here means :mod:`ralph_afk.loop` never imports
-Textual.
+coroutine-function; it also registers :attr:`InteractiveDriver.state` as the
+primary sink and, for #26, attaches the loop-owned Summary/Log pane sources via
+:meth:`InteractiveDriver.attach_panes`. Keeping the orchestration here means
+:mod:`ralph_afk.loop` never imports Textual.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Coroutine
+from typing import TYPE_CHECKING, Callable, Coroutine
 
 from ralph_afk.config import RunConfig
 from ralph_afk.interactive.app import RalphApp
 from ralph_afk.interactive.state import LiveRunState
 
+if TYPE_CHECKING:
+    from ralph_afk.ui.summary import RunSummary
+
 __all__ = ["InteractiveDriver", "build_interactive_driver"]
 
 #: Factory for the observing app, injected so tests can swap in a fake app and
-#: exercise the peering/Stop logic without a TTY.
-AppFactory = Callable[[LiveRunState], "RalphApp"]
+#: exercise the peering/Stop logic without a TTY. Accepts the state plus the
+#: optional loop-owned panes (``summary`` / ``log_source``) attached for #26.
+AppFactory = Callable[..., "RalphApp"]
 
 
 class InteractiveDriver:
@@ -43,6 +48,28 @@ class InteractiveDriver:
     ) -> None:
         self.state = state
         self._app_factory = app_factory
+        #: Loop-owned panes attached by :func:`ralph_afk.loop.run` (issue #26)
+        #: before :meth:`run`: the live run-summary table source and the
+        #: captured line-printer log text source. ``None`` until attached.
+        self.summary: "RunSummary | None" = None
+        self.log_source: Callable[[], str] | None = None
+
+    def attach_panes(
+        self,
+        *,
+        summary: "RunSummary | None",
+        log_source: Callable[[], str] | None,
+    ) -> None:
+        """Receive the loop-owned Summary/Log pane sources (issue #26).
+
+        Called by :func:`ralph_afk.loop.run` after it constructs the shared
+        :class:`~ralph_afk.ui.summary.RunSummary` and the buffer-backed capture
+        renderer, so the app's Summary and Log tabs render the same data the
+        line printer would. The loop owns these objects (it also reads
+        ``summary`` for persistence); the driver only forwards them to the app.
+        """
+        self.summary = summary
+        self.log_source = log_source
 
     async def run(self, drive: Callable[[], Coroutine[object, object, int]]) -> int:
         """Launch the app + the loop's ``drive`` as peers; return the exit code.
@@ -52,7 +79,9 @@ class InteractiveDriver:
         the app is closed. A crash inside the loop is re-raised so the caller
         (:func:`ralph_afk.loop.run`) records it as a non-zero outcome.
         """
-        app = self._app_factory(self.state)
+        app = self._app_factory(
+            self.state, summary=self.summary, log_source=self.log_source
+        )
 
         loop_task: asyncio.Task[int] = asyncio.create_task(
             drive(), name="ralph-afk-loop"

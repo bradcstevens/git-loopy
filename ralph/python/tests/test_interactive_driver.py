@@ -23,8 +23,16 @@ from ralph_afk.interactive.state import LiveRunState
 class _FakeApp:
     """Stand-in for ``RalphApp``: ``run_async`` blocks until ``exit``."""
 
-    def __init__(self, state: LiveRunState) -> None:
+    def __init__(
+        self,
+        state: LiveRunState,
+        *,
+        summary: object = None,
+        log_source: object = None,
+    ) -> None:
         self.state = state
+        self.summary = summary
+        self.log_source = log_source
         self.exited = False
         self._exit_event = asyncio.Event()
 
@@ -78,8 +86,8 @@ def test_stop_cancels_loop_and_returns_zero() -> None:
     tracker = {"cancelled": False}
     captured: list[_SelfStoppingApp] = []
 
-    def factory(s: LiveRunState) -> _SelfStoppingApp:
-        app = _SelfStoppingApp(s)
+    def factory(s: LiveRunState, **kwargs: object) -> _SelfStoppingApp:
+        app = _SelfStoppingApp(s, **kwargs)
         captured.append(app)
         return app
 
@@ -96,8 +104,8 @@ def test_natural_completion_closes_app_and_returns_loop_code() -> None:
     state = LiveRunState()
     captured: list[_FakeApp] = []
 
-    def factory(s: LiveRunState) -> _FakeApp:
-        app = _FakeApp(s)
+    def factory(s: LiveRunState, **kwargs: object) -> _FakeApp:
+        app = _FakeApp(s, **kwargs)
         captured.append(app)
         return app
 
@@ -114,8 +122,8 @@ def test_loop_crash_propagates_and_closes_app() -> None:
     state = LiveRunState()
     captured: list[_FakeApp] = []
 
-    def factory(s: LiveRunState) -> _FakeApp:
-        app = _FakeApp(s)
+    def factory(s: LiveRunState, **kwargs: object) -> _FakeApp:
+        app = _FakeApp(s, **kwargs)
         captured.append(app)
         return app
 
@@ -126,6 +134,30 @@ def test_loop_crash_propagates_and_closes_app() -> None:
         asyncio.run(driver.run(_drive_raising(boom)))
 
     assert captured and captured[0].exited is True
+
+
+def test_attach_panes_are_forwarded_to_the_app_factory() -> None:
+    """The loop-owned Summary/Log sources reach the app (issue #26)."""
+    state = LiveRunState()
+    captured: list[_FakeApp] = []
+
+    def factory(s: LiveRunState, **kwargs: object) -> _FakeApp:
+        app = _FakeApp(s, **kwargs)
+        captured.append(app)
+        return app
+
+    driver = InteractiveDriver(state, app_factory=factory)  # type: ignore[arg-type]
+    sentinel_summary = object()
+
+    def sentinel_log() -> str:
+        return "captured-log"
+
+    driver.attach_panes(summary=sentinel_summary, log_source=sentinel_log)  # type: ignore[arg-type]
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert captured
+    assert captured[0].summary is sentinel_summary
+    assert captured[0].log_source is sentinel_log
 
 
 def test_build_interactive_driver_seeds_state_from_config() -> None:

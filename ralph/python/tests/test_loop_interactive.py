@@ -2,9 +2,11 @@
 
 Issue #23 / ADR-0001: when a driver is supplied, ``run`` registers the driver's
 Textual-agnostic ``state`` (a :class:`~ralph_afk.interactive.state.LiveRunState`)
-as the **sole** sink and hands the loop's ``drive`` coroutine to
-:meth:`InteractiveDriver.run`, returning its result. With ``driver=None`` the
-path is byte-for-byte today's behavior (covered by the rest of the loop suite).
+as the **primary** sink and hands the loop's ``drive`` coroutine to
+:meth:`InteractiveDriver.run`, returning its result. For #26 it also registers a
+buffer-backed capture Renderer as a second sink and attaches the shared Summary
+plus that buffer to the driver's panes. With ``driver=None`` the path is
+byte-for-byte today's behavior (covered by the rest of the loop suite).
 
 The harness drives the cheap **empty-pool** path (exit 0) so no SDK session or
 prompt building is needed — enough to prove the wiring: events fan out to the
@@ -40,6 +42,17 @@ class _DelegatingDriver:
         self.state = state
         self.run_called = False
         self.received_drive: Callable[[], Awaitable[int]] | None = None
+        self.attached_summary: Any = None
+        self.attached_log_source: Callable[[], str] | None = None
+
+    def attach_panes(
+        self,
+        *,
+        summary: Any,
+        log_source: Callable[[], str] | None,
+    ) -> None:
+        self.attached_summary = summary
+        self.attached_log_source = log_source
 
     async def run(self, drive: Callable[[], Awaitable[int]]) -> int:
         self.run_called = True
@@ -58,6 +71,17 @@ class _SkippingDriver:
         self.state = state
         self._result = result
         self.run_called = False
+        self.attached_summary: Any = None
+        self.attached_log_source: Callable[[], str] | None = None
+
+    def attach_panes(
+        self,
+        *,
+        summary: Any,
+        log_source: Callable[[], str] | None,
+    ) -> None:
+        self.attached_summary = summary
+        self.attached_log_source = log_source
 
     async def run(self, drive: Callable[[], Awaitable[int]]) -> int:
         self.run_called = True
@@ -102,7 +126,7 @@ def test_driver_state_is_the_sink_and_observes_run(tmp_path, monkeypatch) -> Non
     # task; the delegating driver awaited it, so the run actually executed.
     assert driver.received_drive is not None
     assert asyncio.iscoroutinefunction(driver.received_drive)
-    # The LiveRunState was the sole sink, so it observed the run's milestones.
+    # The LiveRunState was the primary sink, so it observed the run's milestones.
     assert state.run_id != ""
     assert state.iteration == 1
     assert state.max_strikes == 3
@@ -110,6 +134,35 @@ def test_driver_state_is_the_sink_and_observes_run(tmp_path, monkeypatch) -> Non
     assert state.ended is True
     # SDK client still torn down exactly once.
     assert fake_client.stop_call_count == 1
+
+
+def test_interactive_path_attaches_summary_and_captured_log(
+    tmp_path, monkeypatch
+) -> None:
+    """#26: the loop threads a shared Summary and a captured-log source to the
+    driver's panes, and a second capture sink records the line-printer output."""
+    _wire_empty_pool_repo(tmp_path, monkeypatch)
+    state = LiveRunState(model="claude-opus-4.8", reasoning_effort="max")
+    driver = _DelegatingDriver(state)
+
+    cfg = RunConfig(
+        issue_source="github", max_iterations=1, max_nmt_strikes=3, verbosity=0
+    )
+    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
+
+    assert exit_code == 0
+    # The Summary tab source is a real RunSummary the loop also owns.
+    assert driver.attached_summary is not None
+    # The Log tab source is a callable returning the captured line-printer text;
+    # the empty-pool run still prints a banner, so the capture is non-empty.
+    assert callable(driver.attached_log_source)
+    captured = driver.attached_log_source()
+    assert isinstance(captured, str)
+    assert captured.strip() != ""
+    # The primary LiveRunState sink still observed the run (no events stolen by
+    # the second capture sink).
+    assert state.status == "empty_pool"
+    assert state.ended is True
 
 
 def test_driver_owns_driving_and_run_returns_its_result(tmp_path, monkeypatch) -> None:
