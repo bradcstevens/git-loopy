@@ -78,7 +78,7 @@ copilot
 > /to-issues
 ```
 
-The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## Parent` and `## Acceptance criteria`, which are the two sections the AFK runner ([`ralph/python/`](../ralph/python/)) looks for when filtering AFK-ready work.
+The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## What to build` and `## Acceptance criteria`, which are the two sections the AFK runner ([`ralph/python/`](../ralph/python/)) looks for when filtering AFK-ready work (plus an optional `## Parent` link back to the PRD).
 
 ## Phase 5 — Triage (`/triage`)
 

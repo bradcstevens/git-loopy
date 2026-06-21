@@ -6,7 +6,7 @@ ways the runner discovers AFK-ready work:
 * :class:`GitHubIssueSource` — the default backend used when
   ``ISSUE_SOURCE=github`` (or unset). Discovers issues via ``gh issue
   list --label ready-for-agent``, applies the AFK-ready body
-  discriminator (``^## Parent`` AND ``^## Acceptance criteria``), and
+  discriminator (``^## What to build`` AND ``^## Acceptance criteria``), and
   backstops the agent's ``gh issue close`` step via
   :func:`ralph_afk.wrapper.extract_close_refs` + :func:`gh.issue_close`.
 * :class:`PrdsIssueSource` — the legacy local-markdown backend used
@@ -62,9 +62,12 @@ __all__ = [
 ]
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
-# Body must contain BOTH ``^## Parent`` and ``^## Acceptance criteria``
-# to be considered AFK-ready.
-_RE_PARENT: re.Pattern[str] = re.compile(r"^## Parent", re.MULTILINE)
+# Body must contain BOTH ``^## What to build`` and ``^## Acceptance
+# criteria`` to be considered AFK-ready. ``## Parent`` is OPTIONAL per the
+# to-issues issue template (a slice with no parent issue omits the section),
+# so it is deliberately NOT part of the discriminator — requiring it would
+# silently drop validly-authored parent-less slices.
+_RE_WHAT_TO_BUILD: re.Pattern[str] = re.compile(r"^## What to build", re.MULTILINE)
 _RE_AC: re.Pattern[str] = re.compile(r"^## Acceptance criteria", re.MULTILINE)
 
 # PR AFK-ready discriminator. Unlike issues (whose AFK shape lives in the
@@ -87,12 +90,15 @@ def is_afk_ready(body: str) -> bool:
         body: Raw markdown body of an issue or local-markdown file.
 
     Returns:
-        ``True`` if BOTH ``^## Parent`` and ``^## Acceptance criteria``
-        appear as line-anchored section headers in the body. Both
+        ``True`` if BOTH ``^## What to build`` and ``^## Acceptance
+        criteria`` appear as line-anchored section headers in the body.
+        ``## Parent`` is optional (a slice without a parent issue omits it
+        per the to-issues template) and is intentionally not required, so
+        validly-authored parent-less slices are still picked up. Both
         backends apply this identical check so a body that wouldn't be
         picked up via GitHub also won't be picked up via PRDs.
     """
-    return bool(_RE_PARENT.search(body)) and bool(_RE_AC.search(body))
+    return bool(_RE_WHAT_TO_BUILD.search(body)) and bool(_RE_AC.search(body))
 
 
 def is_pr_afk_ready(pr: gh_module.PullRequest) -> bool:
@@ -605,7 +611,7 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
 class PrdsIssueSource:
     """AFK-ready items backed by local-markdown ``prds/<feature>/<NNN>-*.md`` files.
 
-    The AFK-ready body discriminator (``^## Parent`` AND
+    The AFK-ready body discriminator (``^## What to build`` AND
     ``^## Acceptance criteria``) is applied identically to the GitHub
     backend, per issue #11 acceptance criteria, so a stray non-AFK file
     under ``prds/<feature>/`` is silently skipped rather than fed to the

@@ -168,7 +168,7 @@ class _FakeCommit:
 def _make_issue(
     number: int,
     *,
-    body: str = "## Parent\nfoo\n\n## Acceptance criteria\nbar",
+    body: str = "## Parent\nfoo\n\n## What to build\nthing\n\n## Acceptance criteria\nbar",
     state: str = "OPEN",
 ) -> gh_module.Issue:
     return gh_module.Issue(
@@ -510,7 +510,8 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
 
     afk_body = (
-        "# 001 — Ready\n\n## Parent\nfeatA\n\n## Acceptance criteria\n- impl\n"
+        "# 001 — Ready\n\n## Parent\nfeatA\n\n## What to build\nthing\n\n"
+        "## Acceptance criteria\n- impl\n"
     )
     ready_md.write_text(afk_body, encoding="utf-8")
     not_ready_md.write_text("Just words, no sections.\n", encoding="utf-8")

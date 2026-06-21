@@ -6,7 +6,7 @@ Issues for this iteration are provided at the start of context. They come from o
 - **GitHub pull requests** (only when `docs/agents/issue-tracker.md` sets `PRs as a request surface: yes`): each block is headed `=== PR #N: <title> [labels: ...] (branch: <head-branch>) ===`. These are existing PRs that a human (or `/triage`) marked `ready-for-agent` for you to push forward — see **Pull-request mode** below. Same `gh` contract; never merge or close them.
 - **Local markdown** (legacy `ISSUE_SOURCE=prds`): each block is headed `=== <path> ===` where the path is `prds/<feature>/NNN-*.md`, sibling to a `prd.md`. Archived issues live in `prds/<feature>/done/`.
 
-Every issue you receive is **AFK-ready** — the wrapper script has already filtered to issues that carry the `ready-for-agent` label and have a `## Parent` plus `## Acceptance criteria` section. Do not pick up anything else. Do not work on the parent PRD itself. PR blocks are AFK-ready by a different test — they carry an `## Agent Brief` (in the PR body or a comment); follow that brief.
+Every issue you receive is **AFK-ready** — the wrapper script has already filtered to issues that carry the `ready-for-agent` label and have a `## What to build` plus `## Acceptance criteria` section (a `## Parent` section is optional). Do not pick up anything else. Do not work on the parent PRD itself. PR blocks are AFK-ready by a different test — they carry an `## Agent Brief` (in the PR body or a comment); follow that brief.
 
 You've also been passed the last few commits. Read them to understand what work has been done in prior iterations and avoid redoing it.
 
@@ -92,7 +92,7 @@ When the task is **not** complete and you want to record substantive progress (a
 - Prefer rolling all wrap-up content into the eventual close comment over leaving a trail of progress chatter.
 - Do **not** write `Closes #N` in any partial-progress commit message — the wrapper will auto-close. Use `Refs #N` or `Progress on #N` instead.
 
-Never modify the parent PRD issue (typically `#1`, but always identifiable from each slice's `## Parent` section). Never relabel any issue.
+Never modify the parent PRD issue (typically `#1`, identifiable from each slice's `## Parent` section when present). Never relabel any issue.
 
 ## Pull-request mode
 

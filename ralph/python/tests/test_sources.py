@@ -54,7 +54,7 @@ class _FakeCommit:
 def _make_issue(
     number: int,
     *,
-    body: str = "## Parent\n#1\n\n## Acceptance criteria\n- done",
+    body: str = "## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- done",
     state: str = "OPEN",
     labels: list[str] | None = None,
     title: str | None = None,
@@ -78,33 +78,45 @@ def _make_issue(
 
 class TestIsAfkReady:
     def test_returns_true_for_body_with_both_sections(self) -> None:
-        body = "Intro\n\n## Parent\n#1\n\n## Acceptance criteria\n- foo"
+        body = "Intro\n\n## What to build\nthing\n\n## Acceptance criteria\n- foo"
         assert is_afk_ready(body) is True
 
-    def test_returns_false_when_missing_parent(self) -> None:
-        body = "## Acceptance criteria\n- foo"
+    def test_returns_true_when_parent_omitted(self) -> None:
+        # ``## Parent`` is OPTIONAL per the to-issues template; a slice that
+        # omits it is still AFK-ready as long as it carries the two required
+        # sections. Regression guard for parent-less slices being dropped.
+        body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
+        assert is_afk_ready(body) is True
+
+    def test_returns_true_when_parent_present(self) -> None:
+        # ``## Parent`` is allowed (and usual) — it just isn't required.
+        body = "## Parent\n#1\n\n## What to build\nx\n\n## Acceptance criteria\n- foo"
+        assert is_afk_ready(body) is True
+
+    def test_returns_false_when_missing_what_to_build(self) -> None:
+        body = "## Parent\n#1\n\n## Acceptance criteria\n- foo"
         assert is_afk_ready(body) is False
 
     def test_returns_false_when_missing_acceptance_criteria(self) -> None:
-        body = "## Parent\n#1"
+        body = "## What to build\nthing"
         assert is_afk_ready(body) is False
 
     def test_returns_false_for_empty_body(self) -> None:
         assert is_afk_ready("") is False
 
     def test_returns_false_when_sections_are_not_line_anchored(self) -> None:
-        body = "blah ## Parent #1 ## Acceptance criteria done"
+        body = "blah ## What to build x ## Acceptance criteria done"
         assert is_afk_ready(body) is False
 
     def test_returns_true_when_sections_anchored_at_start_of_string(self) -> None:
-        body = "## Parent\n#1\n## Acceptance criteria\n- bar"
+        body = "## What to build\nthing\n## Acceptance criteria\n- bar"
         assert is_afk_ready(body) is True
 
     def test_returns_true_when_extra_text_follows_section_heading(self) -> None:
-        # "## Parent" must be at the start of a line; extra text on the
-        # same line after the heading is allowed because the regex isn't
+        # "## What to build" must be at the start of a line; extra text on
+        # the same line after the heading is allowed because the regex isn't
         # end-anchored.
-        body = "## Parent  (#1 PRD)\n\n## Acceptance criteria\n- bar"
+        body = "## What to build  (slice)\n\n## Acceptance criteria\n- bar"
         assert is_afk_ready(body) is True
 
 
@@ -257,7 +269,7 @@ class TestGitHubCollectAfkReady:
             42,
             title="Do the thing",
             labels=["ready-for-agent", "bug"],
-            body="## Parent\n#1\n\n## Acceptance criteria\n- ok",
+            body="## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- ok",
         )
         monkeypatch.setattr(
             gh_module, "issue_list", lambda label, state="open": [issue]
@@ -271,7 +283,7 @@ class TestGitHubCollectAfkReady:
         assert block.startswith(
             "=== Issue #42: Do the thing [labels: ready-for-agent, bug] ==="
         )
-        assert "## Parent" in block
+        assert "## What to build" in block
         assert "## Acceptance criteria" in block
 
     def test_renders_block_with_recent_comments_newest_first(
@@ -512,7 +524,7 @@ class TestPrdsPreflight:
 # --------------------------------------------------------------------------- #
 
 
-_AFK_BODY = "## Parent\n#1\n\n## Acceptance criteria\n- a"
+_AFK_BODY = "## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- a"
 _NON_AFK_BODY = "Just a regular body without sections."
 
 
@@ -637,7 +649,7 @@ class TestPrdsCollectAfkReady:
         self, tmp_path: Path
     ) -> None:
         # The block is "=== <path> ===\n<file contents>".
-        body = "## Parent\n#1\n\n## Acceptance criteria\n- ok\n"
+        body = "## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- ok\n"
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", body)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
         items = impl.collect_afk_ready()

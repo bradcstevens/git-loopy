@@ -3,7 +3,7 @@
 `ralph/python/` is the AFK loop runner for this kit, built on the
 [GitHub Copilot Python SDK](https://github.com/github/copilot-sdk/tree/main/python).
 It loads [`ralph/PROMPT.md`](../PROMPT.md) each iteration and enforces the
-**wrapper contract** — a `ready-for-agent` filter, a `## Parent` +
+**wrapper contract** — a `ready-for-agent` filter, a `## What to build` +
 `## Acceptance criteria` discriminator, a `Closes/Fixes/Resolves #N`
 auto-close backstop, the `MODEL` / `ISSUE_SOURCE` / `MAX_NMT_STRIKES`
 env-var surface, and a clean-exit-on-empty / abort-on-stuck termination
