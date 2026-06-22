@@ -1,8 +1,8 @@
 """Unit tests for ``ralph_afk.wrapper``.
 
-These tests cover the deep, pure logic of the wrapper. They do NOT cover
-the close-keyword regex oracle — that lives in ``test_close_keyword_parity.py``
-so the file name surfaces the load-bearing nature of that test in the suite.
+These tests cover the deep, pure logic of the wrapper, including the
+close-keyword regex (:func:`extract_close_refs`) against the full
+keyword / case / separator / dedup / negative corpus.
 
 Acceptance criteria reference: issue #3.
 """

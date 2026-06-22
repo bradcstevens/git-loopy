@@ -23,9 +23,10 @@ Design notes:
   and matches each line independently — equivalent to the line-oriented
   ``grep`` semantics the close-keyword convention is specified against,
   while the compiled regex stays byte-for-byte the PRD-specified pattern.
-* **Behaviour is pinned by ``tests/test_close_keyword_parity.py``.** That
-  test runs a POSIX ``grep`` pipeline and :func:`extract_close_refs`
-  against a shared corpus. If it ever fails, the failure IS the spec.
+* **Behaviour is pinned by ``tests/test_wrapper.py``**, which exercises
+  :func:`extract_close_refs` against the close-keyword corpus — every
+  keyword form, case-insensitivity, the tab / multi-space separators,
+  first-encounter dedup, and the negatives the convention must reject.
 """
 
 from __future__ import annotations
@@ -42,9 +43,9 @@ __all__ = [
     "NMTStrikeStateMachine",
 ]
 
-# Byte-for-byte the PRD-specified close-keyword pattern. The POSIX BRE
-# oracle uses ``[[:space:]]`` ≈ ``\s`` and ``[0-9]`` ≈ ``\d``. Drift here
-# is detected by the regex test.
+# Byte-for-byte the PRD-specified close-keyword pattern. The convention is
+# specified against POSIX ``grep`` semantics (``[[:space:]]`` ≈ ``\s``,
+# ``[0-9]`` ≈ ``\d``); drift is detected by ``tests/test_wrapper.py``.
 CLOSE_KEYWORD_RE: re.Pattern[str] = re.compile(
     r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)",
     re.IGNORECASE,
