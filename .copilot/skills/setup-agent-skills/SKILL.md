@@ -1,6 +1,6 @@
 ---
 name: setup-agent-skills
-description: Configure this repo for the engineering skills — set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.
+description: Configure this repo for the engineering skills — fetch the ralph AFK tooling, then set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.
 disable-model-invocation: true
 ---
 
@@ -8,11 +8,34 @@ disable-model-invocation: true
 
 Scaffold the per-repo configuration that the engineering skills assume:
 
+- **Ralph AFK tooling** — the `ralph/` loop runner, cloned into the repo from the starter kit
 - **Issue tracker** — where issues live (GitHub by default; local markdown is also supported out of the box)
 - **Triage labels** — the strings used for the five canonical triage roles
 - **Domain docs** — where `CONTEXT.md` and ADRs live, and the consumer rules for reading them
 
-This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write.
+Apart from the deterministic fetch step below, this is a prompt-driven skill. Fetch the tooling first, then explore, present what you found, confirm with the user, and write.
+
+## Fetch the ralph tooling
+
+Do this **first**, before the interactive process below. Clone **only** the [`ralph/`](https://github.com/bradcstevens/github-copilot-ralph-starter-kit/tree/main/ralph) directory from the starter kit into the directory the skill was invoked in (the current working directory). This is the one deterministic step in this skill — run it as-is.
+
+It uses a shallow, blobless, sparse clone into a temp dir, then moves just `ralph/` into place, so the invocation directory ends up with a clean `ralph/` (no `.git`, no other starter-kit files):
+
+```bash
+if [ -e ./ralph ]; then
+  echo "ralph/ already exists here — skipping (remove it first to re-fetch)."
+else
+  TMP="$(mktemp -d)" && \
+  git clone --depth 1 --filter=blob:none --sparse \
+    https://github.com/bradcstevens/github-copilot-ralph-starter-kit.git "$TMP/repo" && \
+  git -C "$TMP/repo" sparse-checkout set ralph && \
+  mv "$TMP/repo/ralph" ./ralph && \
+  rm -rf "$TMP" && \
+  echo "Cloned ralph/ into $(pwd)/ralph"
+fi
+```
+
+If `ralph/` already exists in the invocation directory, leave it untouched and tell the user (this is expected when the skill is run inside the starter kit itself). Then continue with the process below.
 
 ## Process
 
@@ -124,4 +147,4 @@ For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch us
 
 ### 5. Done
 
-Tell the user the setup is complete and which engineering skills will now read from these files. Mention they can edit `docs/agents/*.md` directly later — re-running this skill is only necessary if they want to switch issue trackers or restart from scratch.
+Tell the user the setup is complete: the `ralph/` AFK tooling was cloned into the repo (or already present), and which engineering skills will now read from the `docs/agents/*.md` files. Mention they can edit `docs/agents/*.md` directly later — re-running this skill is only necessary if they want to switch issue trackers, re-fetch the `ralph/` tooling (remove `ralph/` first), or restart from scratch.
