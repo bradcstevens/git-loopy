@@ -10,7 +10,7 @@ the Pilot test in ``test_interactive_app.py`` covers the widget rendering.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ralph_afk import events as events_module
 from ralph_afk.interactive.state import (
@@ -22,6 +22,7 @@ from ralph_afk.interactive.state import (
     STATUS_QUEUED,
     LiveRunState,
     format_duration,
+    format_wall_clock,
     queue_rows,
 )
 
@@ -67,6 +68,29 @@ def test_format_duration_renders_h_mm_ss() -> None:
     assert format_duration(0) == "0:00:00"
     assert format_duration(65) == "0:01:05"
     assert format_duration(3661) == "1:01:01"
+
+
+# ---------------------------------------------------------------------------
+# format_wall_clock — 12-hour AM/PM local stamp (issue #33; reused by #37)
+# ---------------------------------------------------------------------------
+
+
+def test_format_wall_clock_renders_12_hour_am_pm() -> None:
+    # Afternoon: 13:42:07 -> 1:42:07 PM (hour leading zero stripped).
+    assert format_wall_clock(datetime(2026, 6, 21, 13, 42, 7)) == "1:42:07 PM"
+    # Morning single-digit hour: only the HOUR loses its leading zero; the
+    # minute/second zero-padding is preserved.
+    assert format_wall_clock(datetime(2026, 6, 21, 9, 8, 5)) == "9:08:05 AM"
+
+
+def test_format_wall_clock_handles_noon_and_midnight() -> None:
+    assert format_wall_clock(datetime(2026, 6, 21, 12, 0, 0)) == "12:00:00 PM"
+    assert format_wall_clock(datetime(2026, 6, 21, 0, 5, 3)) == "12:05:03 AM"
+
+
+def test_format_wall_clock_none_renders_placeholder() -> None:
+    # An issue not yet active (no Started time) renders the em-dash placeholder.
+    assert format_wall_clock(None) == "—"
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +181,11 @@ def test_completed_group_includes_advanced_no_progress_and_gone() -> None:
 
 
 # ---------------------------------------------------------------------------
-# queue_rows — live-ticking timers
+# queue_rows — live-ticking Active timer + per-issue Started wall clock
 # ---------------------------------------------------------------------------
 
 
-def test_active_row_active_timer_ticks_and_waiting_freezes() -> None:
+def test_active_row_active_timer_ticks_and_started_wall_is_set() -> None:
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
@@ -172,14 +196,16 @@ def test_active_row_active_timer_ticks_and_waiting_freezes() -> None:
 
     row = queue_rows(state)[0]
     assert row.is_active is True
-    assert row.waiting_seconds == 7.0  # frozen at activation
+    # Started is the wall clock of when the issue first became active (the
+    # marker fired at monotonic 7, i.e. 7s after the run-start reference).
+    assert row.started_wall == _FIXED_WALL + timedelta(seconds=7)
     assert row.active_seconds == 20.0  # ticks against the clock
 
     clock.advance(5)
     assert queue_rows(state)[0].active_seconds == 25.0
 
 
-def test_queued_row_waiting_timer_ticks() -> None:
+def test_queued_row_has_no_started_wall() -> None:
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
@@ -188,18 +214,65 @@ def test_queued_row_waiting_timer_ticks() -> None:
 
     row = queue_rows(state)[0]
     assert row.status == STATUS_QUEUED
-    assert row.waiting_seconds == 12.0  # still waiting -> ticks
+    # A still-queued issue has never been active -> no Started time yet.
+    assert row.started_wall is None
     assert row.active_seconds == 0.0
 
 
-def test_now_override_is_used_for_timers() -> None:
+def test_started_wall_is_set_once_across_revisits() -> None:
+    """Started is the FIRST activation's wall clock; a later revisit never moves
+    it, even though the issue's Active time keeps summing (issue #33 / CONTEXT)."""
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
     _collect(state, 70)
-    # now-override drives the waiting timer regardless of the clock value.
+    clock.advance(5)
+    state.stream_message("<working issue=70>")  # first active at monotonic 5
+    clock.advance(10)
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    # A later iteration works #70 again, much later on the wall clock.
+    clock.advance(900)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    _collect(state, 70)
+    state.stream_message("<working issue=70>")
+
+    row = queue_rows(state)[0]
+    assert row.is_active is True
+    assert row.started_wall == _FIXED_WALL + timedelta(seconds=5)  # frozen
+
+
+def test_active_seconds_sums_across_iterations() -> None:
+    """The Active duration carries across iterations and keeps ticking on the
+    revisit — the queue keeps one entry per issue (issue #33 / CONTEXT.md)."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    # iter 1: #90 is active for 10s, then the iteration ends (folding 10s in).
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 90)
+    state.stream_message("<working issue=90>")
+    clock.advance(10)
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    # iter 2: #90 is worked again; its Active resumes from the carried 10s.
+    clock.advance(100)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    _collect(state, 90)
+    state.stream_message("<working issue=90>")
+    assert queue_rows(state)[0].active_seconds == 10.0  # iter-1 time carried
+    clock.advance(6)
+    assert queue_rows(state)[0].active_seconds == 16.0  # ticks on, summed
+
+
+def test_now_override_is_used_for_the_active_timer() -> None:
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 80)
+    state.stream_message("<working issue=80>")  # active at monotonic 0
+    # now-override drives the active timer regardless of the clock value.
     row = queue_rows(state, now=9.0)[0]
-    assert row.waiting_seconds == 9.0
+    assert row.active_seconds == 9.0
 
 
 def test_completed_row_timers_are_frozen() -> None:

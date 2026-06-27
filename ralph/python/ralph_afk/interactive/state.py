@@ -48,7 +48,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
 __all__ = [
@@ -59,6 +59,7 @@ __all__ = [
     "IssueDetail",
     "format_header",
     "format_duration",
+    "format_wall_clock",
     "format_detail_header",
     "queue_rows",
     "issue_detail",
@@ -160,6 +161,9 @@ class IssueLedgerEntry:
     * ``first_seen_at`` — first appearance in any pool this run.
     * ``started_at`` — first time it became the active issue (first working
       marker, or the iteration-start fallback when inferred).
+    * ``started_wall`` — the **local wall-clock** time of ``started_at``, derived
+      from the run-start reference (issue #33): the Queue's **Started** column.
+      ``None`` until the issue first becomes active.
     * ``waiting_duration`` — ``first_seen`` to first active.
     * ``active_duration`` — time spent active; **sums across iterations** if the
       issue is revisited (live-ticking via :meth:`active_seconds`).
@@ -173,6 +177,7 @@ class IssueLedgerEntry:
     first_seen_iter: int
     status: str = STATUS_QUEUED
     started_at: float | None = None
+    started_wall: datetime | None = None
     waiting_duration: float | None = None
     active_duration: float = 0.0
     ended_at: float | None = None
@@ -433,6 +438,23 @@ class LiveRunState:
         base = now if now is not None else self._monotonic()
         return entry.active_seconds(base)
 
+    def _wall_at(self, instant: float) -> datetime | None:
+        """The local wall-clock time for a monotonic ``instant``.
+
+        The run samples the wall clock **once** (at run start, alongside the
+        monotonic baseline); every per-issue **Started** stamp (issue #33) is then
+        *derived* from its monotonic activation instant — ``started_wall +
+        (instant - started_monotonic)`` — exactly as :meth:`elapsed_seconds`
+        derives elapsed. This keeps Started consistent with the elapsed timer
+        (one clock basis), is accurate for the iteration-end inference path (whose
+        ``instant`` is the iteration start, not the moment the fallback runs), and
+        is immune to a mid-run wall-clock adjustment. Returns ``None`` before the
+        run-start reference is captured (no activation can precede it in practice).
+        """
+        if self.started_wall is None or self._started_monotonic is None:
+            return None
+        return self.started_wall + timedelta(seconds=instant - self._started_monotonic)
+
     # -- per-issue Log (issue #34, ADR-0003) -------------------------------
 
     def log(self, ref: int | str | None = None) -> tuple[LogLine, ...]:
@@ -652,6 +674,7 @@ class LiveRunState:
             self._deactivate(self.active_ref, at=since, status=STATUS_QUEUED)
         if entry.started_at is None:
             entry.started_at = since
+            entry.started_wall = self._wall_at(since)
             entry.waiting_duration = max(0.0, since - entry.first_seen_at)
         if entry.active_since is None:
             entry.active_since = since
@@ -883,6 +906,22 @@ def format_duration(seconds: float) -> str:
     return _format_elapsed(seconds)
 
 
+def format_wall_clock(when: datetime | None) -> str:
+    """Public 12-hour AM/PM **wall-clock** stamp, e.g. ``1:42:07 PM`` (issue #33).
+
+    The single renderer for every wall-clock surface — the Queue's per-issue
+    **Started** column here, and (issue #37) the header run-start and the Log
+    line stamps — so the AM/PM format lives in one place, the way
+    :func:`format_duration` centralises *durations*. Wall-clock times use 12-hour
+    AM/PM; durations stay ``H:MM:SS``. The hour drops its leading zero (``1:`` not
+    ``01:``) while the minute/second padding is kept. ``None`` (an issue not yet
+    active, or no run-start yet) renders as the em-dash placeholder.
+    """
+    if when is None:
+        return "—"
+    return when.strftime("%I:%M:%S %p").lstrip("0")
+
+
 def format_header(state: LiveRunState, *, now: float | None = None) -> str:
     """Compose the single-line header band from a :class:`LiveRunState`.
 
@@ -935,17 +974,20 @@ class QueueRow:
     """One projected Queue row: a ledger entry ready for the Dashboard list.
 
     A pure, Textual-free snapshot (mirrors :func:`format_header`) so the live
-    Queue's *content + ordering* is unit-testable without a TTY. Timers are raw
-    seconds — the widget formats them via :func:`format_duration` — with the
-    active issue's ``active_seconds`` and a still-queued issue's
-    ``waiting_seconds`` ticking against the caller's ``now`` (see
-    :func:`queue_rows`).
+    Queue's *content + ordering* is unit-testable without a TTY. The columns are
+    **Issue | Status | Started | Active** (issue #33, ADR-0003): ``started_wall``
+    is the **wall-clock** time the issue first became active (the widget formats
+    it via :func:`format_wall_clock`; ``None`` until it has been active), and
+    ``active_seconds`` is the live ``H:MM:SS`` duration that sums across every
+    iteration that worked the issue (the widget formats it via
+    :func:`format_duration`, ticking against the caller's ``now`` — see
+    :func:`queue_rows`). There is no Waiting column.
     """
 
     ref: int | str
     status: str
+    started_wall: datetime | None
     active_seconds: float
-    waiting_seconds: float
     is_active: bool
 
     @property
@@ -955,36 +997,30 @@ class QueueRow:
 
 
 def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRow]:
-    """Project the per-run ledger into ordered, live-timing Queue rows.
+    """Project the per-run ledger into ordered Queue rows (issue #33 columns).
 
     Ordering (decision D5/CONTEXT.md): the **active** issue first, then
     **queued** issues, then the completed history (closed / advanced /
     no-progress / gone). Within each group the ledger's first-seen order is
     preserved (the sort is stable over ``ledger`` insertion order).
 
-    Timers tick against ``now`` (defaulting to the injected monotonic clock,
-    the same basis as the header):
-
-    * the **active** issue's ``active_seconds`` advances while it is being
-      worked and freezes once it ends / the run stops (via
-      :meth:`IssueLedgerEntry.active_seconds`);
-    * a still-**queued** issue's ``waiting_seconds`` advances from first-seen
-      until it is first worked, after which its ``waiting_duration`` is frozen.
+    Each row carries the issue's **Started** wall clock (``started_wall`` — the
+    time it first became active, ``None`` while still only queued) and its
+    **Active** duration (``active_seconds``), which ticks against ``now``
+    (defaulting to the injected monotonic clock, the same basis as the header)
+    while the issue is being worked and freezes once it ends / the run stops,
+    summing across every iteration that worked it.
     """
     base = now if now is not None else state._monotonic()
     rows: list[QueueRow] = []
     for ref, entry in state.ledger.items():
         is_active = entry.status == STATUS_ACTIVE and ref == state.active_ref
-        if entry.waiting_duration is not None:
-            waiting = entry.waiting_duration
-        else:
-            waiting = max(0.0, base - entry.first_seen_at)
         rows.append(
             QueueRow(
                 ref=ref,
                 status=entry.status,
+                started_wall=entry.started_wall,
                 active_seconds=entry.active_seconds(base),
-                waiting_seconds=waiting,
                 is_active=is_active,
             )
         )

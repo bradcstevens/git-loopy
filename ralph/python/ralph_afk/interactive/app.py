@@ -50,6 +50,7 @@ from ralph_afk.interactive.state import (
     format_detail_header,
     format_duration,
     format_header,
+    format_wall_clock,
     issue_detail,
     queue_rows,
 )
@@ -75,8 +76,8 @@ class _Dashboard(Vertical):
         table = self.query_one("#queue", DataTable)
         table.add_column("Issue", key="issue")
         table.add_column("Status", key="status")
+        table.add_column("Started", key="started")
         table.add_column("Active", key="active")
-        table.add_column("Waiting", key="waiting")
 
 
 class _LogView(VerticalScroll):
@@ -283,8 +284,8 @@ class RalphApp(App[None]):
                 table.add_row(
                     row.label,
                     row.status,
+                    format_wall_clock(row.started_wall),
                     format_duration(row.active_seconds),
-                    format_duration(row.waiting_seconds),
                     key=str(row.ref),
                 )
             self._displayed_refs = new_refs
@@ -294,10 +295,10 @@ class RalphApp(App[None]):
             for row in rows:
                 key = str(row.ref)
                 table.update_cell(key, "status", row.status)
-                table.update_cell(key, "active", format_duration(row.active_seconds))
                 table.update_cell(
-                    key, "waiting", format_duration(row.waiting_seconds)
+                    key, "started", format_wall_clock(row.started_wall)
                 )
+                table.update_cell(key, "active", format_duration(row.active_seconds))
 
     def _sync_log(self) -> None:
         """Repaint the open Log (a no-op while the Dashboard is showing).

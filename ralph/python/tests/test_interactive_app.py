@@ -17,6 +17,8 @@ plus the unchanged exit model — **Stop** (``q`` / ``Ctrl+C``) and **Detach**
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 pytest.importorskip("textual")
@@ -150,6 +152,47 @@ async def test_dashboard_queue_lists_issues_active_first_and_cursor_moves() -> N
         assert table.cursor_row == 0
         await pilot.press("down")
         assert table.cursor_row == 1
+
+
+async def test_dashboard_queue_columns_drop_waiting_add_started() -> None:
+    """The Queue is Issue | Status | Started | Active — no Waiting (issue #33).
+
+    Started is the 12-hour AM/PM wall clock of when the issue first became
+    active; a still-queued issue shows the em-dash placeholder until it has been
+    active. Clocks are injected so the rendered stamp is deterministic.
+    """
+    fixed = datetime(2026, 6, 21, 13, 42, 7)
+    state = LiveRunState(
+        run_id="01Q",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 0.0,
+        wall_clock=lambda: fixed,
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.WRAPPER_AFK_READY_COLLECTED,
+            "issues": [26, 27, 28],
+        }
+    )
+    state.stream_message("<working issue=26>")
+
+    app = RalphApp(state, refresh_interval=3600)
+    async with app.run_test():
+        table = app.query_one("#queue", DataTable)
+        labels = [str(col.label) for col in table.columns.values()]
+        assert labels == ["Issue", "Status", "Started", "Active"]
+        assert "Waiting" not in labels
+        # The active row (#26) shows its Started wall clock in 12h AM/PM.
+        active_row = table.get_row_at(0)
+        assert active_row[1] == "active"
+        assert active_row[2] == "1:42:07 PM"
+        # Still-queued rows (#27, #28) show the placeholder until first active.
+        assert table.get_row_at(1)[1] == "queued"
+        assert table.get_row_at(1)[2] == "—"
+        assert table.get_row_at(2)[2] == "—"
 
 
 async def test_summary_band_renders_rollup() -> None:
