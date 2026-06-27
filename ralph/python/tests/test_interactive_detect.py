@@ -10,7 +10,11 @@ import ast
 from pathlib import Path
 
 from ralph_afk.interactive import detect as detect_module
-from ralph_afk.interactive.detect import resolve_interactive, textual_available
+from ralph_afk.interactive.detect import (
+    resolve_interactive,
+    resolve_model_selection,
+    textual_available,
+)
 
 
 def _resolve(
@@ -113,6 +117,43 @@ def test_non_interactive_intent_does_not_probe_or_warn_about_textual() -> None:
         _resolve(flag=False, textual_importable=False, warnings=warnings) is False
     )
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_model_selection — ModelSelectionMode (opt-in startup picker)
+# ---------------------------------------------------------------------------
+
+
+def test_model_selection_off_by_default() -> None:
+    # No flag, no env: the picker is opt-in, so default is off.
+    assert resolve_model_selection(flag=None, env_value=None) is False
+
+
+def test_select_model_flag_enters_mode() -> None:
+    assert resolve_model_selection(flag=True, env_value=None) is True
+
+
+def test_env_one_enters_mode() -> None:
+    assert resolve_model_selection(flag=None, env_value="1") is True
+
+
+def test_env_zero_stays_off() -> None:
+    assert resolve_model_selection(flag=None, env_value="0") is False
+
+
+def test_select_model_flag_wins_over_env_zero() -> None:
+    # Flag says yes, env says no → flag wins.
+    assert resolve_model_selection(flag=True, env_value="0") is True
+
+
+def test_no_select_model_flag_wins_over_env_one() -> None:
+    # Flag says no, env says yes → flag wins.
+    assert resolve_model_selection(flag=False, env_value="1") is False
+
+
+def test_blank_env_is_ignored_and_stays_off() -> None:
+    assert resolve_model_selection(flag=None, env_value="   ") is False
+    assert resolve_model_selection(flag=None, env_value="") is False
 
 
 # ---------------------------------------------------------------------------

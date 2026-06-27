@@ -4,9 +4,11 @@
 # model. See ralph/python/README.md and docs/runners.md for the full surface.
 #
 # On an interactive run (a TTY with the `[tui]` extra, or RALPH_INTERACTIVE=1)
-# a one-time startup picker now lets you choose the model + reasoning effort
-# live from `list_models()` before the loop starts. The MODEL / REASONING_EFFORT
-# below are the **pre-selected default** (the picker's cursor lands on them);
-# `--no-interactive` and non-TTY runs use them directly without the picker.
+# the startup model + reasoning-effort picker (ModelSelectionMode) is opt-in:
+# pass `--select-model` (e.g. `./afk.sh --select-model`) or set
+# RALPH_MODEL_SELECT=1 to choose live from `list_models()` before the loop
+# starts; the flag wins over the env var. By default the run goes straight to
+# the loop on the MODEL / REASONING_EFFORT below with no prompt. Arguments are
+# forwarded ("$@"), so the flag and a positional iteration cap reach the CLI.
 #
-MODEL=claude-opus-4.8 REASONING_EFFORT=max uv run --project ralph/python ralph-afk
+MODEL=claude-opus-4.8 REASONING_EFFORT=max uv run --project ralph/python ralph-afk "$@"

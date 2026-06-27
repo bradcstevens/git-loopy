@@ -174,6 +174,10 @@ def build_parser() -> argparse.ArgumentParser:
             "the line printer\n"
             "                              (default: auto-detect from TTY; "
             "needs the [tui] extra).\n"
+            "  RALPH_MODEL_SELECT          '1' opts into the startup model "
+            "picker (ModelSelectionMode);\n"
+            "                              off by default. --select-model wins "
+            "over this.\n"
             "  RALPH_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
             "(default: 7200).\n"
         ),
@@ -251,6 +255,27 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Force today's line-printer output even on a TTY. Overrides "
             "RALPH_INTERACTIVE."
+        ),
+    )
+    parser.add_argument(
+        "--select-model",
+        dest="select_model",
+        action="store_true",
+        default=None,
+        help=(
+            "Open the one-time startup model + reasoning-effort picker "
+            "(ModelSelectionMode) before the run. Opt-in — off by default. "
+            "Wins over RALPH_MODEL_SELECT. Requires the interactive TUI; on a "
+            "non-interactive run it warns and uses the configured model."
+        ),
+    )
+    parser.add_argument(
+        "--no-select-model",
+        dest="select_model",
+        action="store_false",
+        help=(
+            "Skip the startup model picker and use the configured model / "
+            "effort directly. Wins over RALPH_MODEL_SELECT."
         ),
     )
     return parser
@@ -527,6 +552,41 @@ def _should_run_interactive(args: argparse.Namespace) -> bool:
     )
 
 
+def _should_select_model(args: argparse.Namespace) -> bool:
+    """Resolve whether this invocation opens the startup model picker.
+
+    The picker is **opt-in** (CONTEXT: ModelSelectionMode) — off unless
+    explicitly requested. Delegates the flag-over-env precedence
+    (``--select-model`` / ``--no-select-model`` vs ``RALPH_MODEL_SELECT``) to
+    :func:`ralph_afk.interactive.detect.resolve_model_selection`. Imported lazily
+    so a default invocation never pays the import.
+    """
+    from ralph_afk.interactive.detect import resolve_model_selection
+
+    return resolve_model_selection(
+        flag=args.select_model,
+        env_value=os.environ.get("RALPH_MODEL_SELECT"),
+    )
+
+
+def _model_select_unavailable_message(config: RunConfig) -> str:
+    """Phrase the 'ModelSelectionMode requested but no TUI' fallback warning.
+
+    The startup picker is a TUI action; when it is requested on a run that takes
+    no interactive path (non-TTY, ``--no-interactive``, ``RALPH_INTERACTIVE=0``,
+    or the ``[tui]`` extra absent) there is nowhere to draw it, so the run keeps
+    the configured model rather than prompting.
+    """
+    target = config.model or "the configured model"
+    if config.reasoning_effort:
+        target = f"{target} ({config.reasoning_effort})"
+    return (
+        "ModelSelectionMode was requested (--select-model / RALPH_MODEL_SELECT) "
+        "but no interactive TUI is available to show the picker (it needs a TTY "
+        f"and the [tui] extra); using {target}."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point registered as the ``ralph-afk`` console script.
 
@@ -561,34 +621,50 @@ def main(argv: list[str] | None = None) -> int:
     # so it is reached only once `_should_run_interactive` has confirmed the
     # [tui] extra is importable. Every non-interactive condition keeps today's
     # exact line-printer behavior (driver left as None).
+    select_model = _should_select_model(args)
     if _should_run_interactive(args):
-        return asyncio.run(_drive_interactive(config))
+        return asyncio.run(
+            _drive_interactive(config, select_model=select_model)
+        )
 
+    # The startup picker (ModelSelectionMode) is a TUI action; on the
+    # non-interactive path it cannot run. If it was explicitly requested, warn
+    # and fall back to the configured model (issue #31).
+    if select_model:
+        _warn(_model_select_unavailable_message(config))
     return asyncio.run(_loop.run(config))
 
 
-async def _drive_interactive(config: RunConfig) -> int:
-    """Run the one-time startup picker, then drive the observed loop (#23/#24).
+async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
+    """Optionally run the startup picker, then drive the observed loop (#23/#24/#31).
 
     The interactive entrypoint runs inside one :func:`asyncio.run` so the
     picker's **throwaway** ``list_models()`` client (an async SDK call) and the
     peer-task loop share a single event loop:
 
-    1. :func:`ralph_afk.interactive.picker.resolve_run_model` resolves the run's
+    1. When **ModelSelectionMode** is requested (``select_model`` — the opt-in
+       ``--select-model`` flag or ``RALPH_MODEL_SELECT=1``),
+       :func:`ralph_afk.interactive.picker.resolve_run_model` resolves the run's
        model + reasoning effort via the live two-stage picker (issue #24),
-       falling back to the env/default already in ``config`` on any failure.
-    2. The choice is baked into a fresh frozen :class:`RunConfig` (the loop still
-       creates and owns its *own* run client).
+       falling back to the env/default already in ``config`` on any failure. By
+       default the picker is **skipped** and the configured model/effort are used
+       directly (issue #31).
+    2. The (possibly picked) choice is baked into a fresh frozen
+       :class:`RunConfig` (the loop still creates and owns its *own* run client).
     3. The interactive driver launches the loop as a peer of the observing app
        (ADR-0001).
     """
     from ralph_afk import loop as _loop
-    from ralph_afk.interactive import picker
 
-    model, reasoning_effort = await picker.resolve_run_model(config, warn=_warn)
-    config = dataclasses.replace(
-        config, model=model, reasoning_effort=reasoning_effort
-    )
+    if select_model:
+        from ralph_afk.interactive import picker
+
+        model, reasoning_effort = await picker.resolve_run_model(
+            config, warn=_warn
+        )
+        config = dataclasses.replace(
+            config, model=model, reasoning_effort=reasoning_effort
+        )
 
     from ralph_afk.interactive.driver import build_interactive_driver
 
