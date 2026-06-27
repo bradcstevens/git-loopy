@@ -12,7 +12,7 @@ install skips it. These cover the structural backbone:
 
 plus the unchanged exit model — **Stop** (``q`` / ``Ctrl+C``) and **Detach**
 (``d``). The pure Queue / Log projections are unit-tested without a TTY in
-``test_interactive_queue.py`` / ``test_interactive_transcript.py``.
+``test_interactive_queue.py`` / ``test_interactive_log.py``.
 """
 
 from __future__ import annotations
@@ -168,8 +168,8 @@ async def test_summary_band_renders_rollup() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _state_with_active_transcript() -> LiveRunState:
-    """The #26-active run plus a little reasoning / message / tool transcript."""
+def _state_with_active_log() -> LiveRunState:
+    """The #26-active run plus a little reasoning / message / tool Log."""
     state = _state_with_queue()  # ends with an open "<working issue=26>" message
     state.stream_reasoning("weighing the options\n")
     state.stream_message("Here is my plan\n")
@@ -183,6 +183,31 @@ def _state_with_active_transcript() -> LiveRunState:
     return state
 
 
+def _state_with_history() -> LiveRunState:
+    """A run where #26 was worked in iter 1 (now historical) and #27 is active.
+
+    #26 streams a line then the iteration ends (it goes ``no-progress``, keeping
+    its retained Log); iteration 2 lights up #27 and streams its own line. Used
+    to assert per-issue isolation and the historical-vs-live split (issue #34).
+    """
+    state = LiveRunState(run_id="01H", model="m", reasoning_effort="x")
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26, 27]}
+    )
+    state.stream_message("<working issue=26>\n")
+    state.stream_message("twenty-six history\n")
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26, 27]}
+    )
+    state.stream_message("<working issue=27>\n")
+    state.stream_message("twenty-seven live\n")
+    return state
+
+
 def _dimmed_text(text: Text) -> str:
     """The substring(s) carrying the ``dim`` style — i.e. the reasoning lines."""
     return "".join(
@@ -193,7 +218,7 @@ def _dimmed_text(text: Text) -> str:
 
 
 async def test_enter_opens_active_issue_log_and_esc_returns() -> None:
-    app = RalphApp(_state_with_active_transcript(), refresh_interval=3600)
+    app = RalphApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test() as pilot:
         # The Queue holds focus; Enter on the active row (#26) opens its Log.
         assert isinstance(app.focused, DataTable)
@@ -212,7 +237,7 @@ async def test_enter_opens_active_issue_log_and_esc_returns() -> None:
 
         body = app.query_one("#log-body", Static).renderable
         assert isinstance(body, Text)
-        # Interleaved transcript: reasoning + message + the tool-call event.
+        # Interleaved Log: reasoning + message + the tool-call event.
         assert "weighing the options" in body.plain
         assert "Here is my plan" in body.plain
         assert "» bash  command=pytest -q" in body.plain
@@ -229,8 +254,13 @@ async def test_enter_opens_active_issue_log_and_esc_returns() -> None:
         assert isinstance(app.focused, DataTable)
 
 
-async def test_enter_opens_non_active_issue_log_shows_details_only() -> None:
-    app = RalphApp(_state_with_active_transcript(), refresh_interval=3600)
+async def test_enter_opens_queued_issue_log_shows_no_lines_and_footer() -> None:
+    """A queued-but-never-worked issue's Log: no lines + the JSONL-replay footer.
+
+    Crucially, the active issue's live Log never leaks into it (per-issue
+    isolation, issue #34).
+    """
+    app = RalphApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test() as pilot:
         table = app.query_one("#queue", DataTable)
         await pilot.press("down")  # move to the queued row (#27)
@@ -244,10 +274,12 @@ async def test_enter_opens_non_active_issue_log_shows_details_only() -> None:
 
         body = app.query_one("#log-body", Static).renderable
         assert isinstance(body, Text)
-        # Details only: no live transcript leaks into a non-active issue's Log.
+        # Isolation: the active issue's live Log does not leak into #27's.
         assert "weighing the options" not in body.plain
         assert "» bash" not in body.plain
-        assert "details only" in body.plain
+        # No retained lines yet, and the JSONL-replay footer is shown.
+        assert "no Log lines for this issue" in body.plain
+        assert "JSONL replay log" in body.plain
 
         # Esc returns to the Dashboard with the Queue cursor preserved on #27.
         await pilot.press("escape")
@@ -255,6 +287,46 @@ async def test_enter_opens_non_active_issue_log_shows_details_only() -> None:
         assert app.query_one("#log", _LogView).display is False
         assert isinstance(app.focused, DataTable)
         assert table.cursor_row == 1
+
+
+async def test_enter_opens_historical_issue_log_shows_its_retained_tail() -> None:
+    """A historical issue shows ITS OWN retained Log tail + the JSONL footer.
+
+    The active issue (#27) streams live; opening the historical issue (#26)
+    shows #26's own retained lines, never #27's (per-issue isolation, #34).
+    """
+    app = RalphApp(_state_with_history(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        table = app.query_one("#queue", DataTable)
+        # Active-first ordering: #27 (active) leads, then historical #26.
+        assert [table.get_row_at(i)[0] for i in range(2)] == ["#27", "#26"]
+        await pilot.press("down")  # move to the historical row (#26)
+        assert table.cursor_row == 1
+        await pilot.press("enter")
+        await pilot.pause()
+
+        header = str(app.query_one("#log-header", Static).renderable)
+        assert "#26" in header
+
+        body = app.query_one("#log-body", Static).renderable
+        assert isinstance(body, Text)
+        # #26's OWN retained tail is shown, with the JSONL-replay footer.
+        assert "twenty-six history" in body.plain
+        assert "JSONL replay log" in body.plain
+        # Isolation: the live active issue's (#27) output never leaks in.
+        assert "twenty-seven live" not in body.plain
+
+        # Opening the active issue (#27) instead streams its live line.
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("up")
+        assert table.cursor_row == 0
+        await pilot.press("enter")
+        await pilot.pause()
+        active_body = app.query_one("#log-body", Static).renderable
+        assert isinstance(active_body, Text)
+        assert "twenty-seven live" in active_body.plain
+        assert "twenty-six history" not in active_body.plain
 
 
 async def test_esc_on_dashboard_is_a_noop() -> None:

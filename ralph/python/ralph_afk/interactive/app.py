@@ -15,17 +15,17 @@ Two levels, no tab bar:
   Queue holds focus; ``up`` / ``down`` move its cursor.
 * **Level 2 — the per-issue Log**: ``enter`` on a Queue row opens that issue's
   **Log** (a full-region view that replaces the Dashboard); ``escape`` returns
-  to the Dashboard with the Queue cursor preserved. For the *active* issue the
-  Log shows the live, interleaved transcript (reasoning dimmed + assistant
-  message + key structured events) tailing the state's bounded ring buffer; for
-  a *non-active* issue it shows details only (the full record stays in the JSONL
-  replay log).
+  to the Dashboard with the Queue cursor preserved. The Log shows the **opened
+  issue's own** accumulating, bounded tail (reasoning dimmed + assistant message
+  + key structured events), isolated from the other issues (issue #34): the
+  *active* issue streams live, a *historical* issue shows its retained tail plus
+  a footer noting the full record stays in the JSONL replay log.
 
 This supersedes the #26 tabbed dashboard (a focusable tab bar over a
 ``ContentSwitcher`` with a Dashboard / Log / Summary split): the whole-run Log
 tab and the Summary-as-a-separate-screen are retired. The full per-iteration
 Summary table stays the run-end scrollback artefact (printed by the driver), not
-an in-app screen. Per-issue Log accumulation (#34), timestamps (#37), and
+an in-app screen. Per-issue Log buffers land here (#34); timestamps (#37) and
 sticky-with-release autoscroll (#38) arrive in later slices.
 
 This module imports Textual, so it is imported **only on the interactive path**,
@@ -83,11 +83,11 @@ class _LogView(VerticalScroll):
     """Level 2: one issue's full-region **Log** (the per-issue drill-down).
 
     Opened by ``enter`` on a Queue row and closed by ``escape``; it replaces the
-    Dashboard while showing (their ``display`` is toggled). For the *active*
-    issue the body is the live, interleaved transcript (reasoning dimmed +
-    assistant message + key structured events) tailing the state's bounded ring
-    buffer; for a *non-active* issue it is details only (the full record stays in
-    the JSONL replay log).
+    Dashboard while showing (their ``display`` is toggled). The body is the
+    opened issue's **own** accumulating, bounded Log tail (reasoning dimmed +
+    assistant message + key structured events), isolated per issue (issue #34):
+    the *active* issue streams live, a *historical* issue shows its retained tail
+    plus a footer noting the full record stays in the JSONL replay log.
     """
 
     def compose(self) -> ComposeResult:
@@ -164,7 +164,8 @@ class RalphApp(App[None]):
         self._summary = summary
         #: Retained for the driver's app-factory contract (issue #26). The
         #: whole-run Log tab it fed is retired (ADR-0003), so it is no longer
-        #: rendered; the per-issue Log reads the state's transcript instead.
+        #: rendered; the per-issue Log reads the state's per-issue ``log(ref)``
+        #: buffers instead.
         self._log_source = log_source
         self._refresh_interval = refresh_interval
         #: Set when the user requests a Stop (``q`` / ``Ctrl+C``). Lets a Pilot
@@ -301,27 +302,30 @@ class RalphApp(App[None]):
     def _sync_log(self) -> None:
         """Repaint the open Log (a no-op while the Dashboard is showing).
 
-        For the active issue the body tails the state's bounded transcript ring
-        buffer — reasoning lines dimmed, message + event lines plain — so it
-        updates live as the model works. For a non-active issue it is details
-        only; the full record stays in the JSONL replay log.
+        The body shows the **opened issue's own** Log — its accumulated, bounded
+        tail (reasoning dimmed, message + event lines plain), isolated from the
+        other issues (issue #34). The *active* issue streams live (its open
+        partial line included) so it updates as the model works; a *historical*
+        issue shows its retained tail followed by a footer noting the full record
+        is in the JSONL replay log.
         """
         if self._open_ref is None:
             return
         detail = issue_detail(self._state, self._open_ref)
         self.query_one("#log-header", Static).update(format_detail_header(detail))
         body = Text()
+        lines = self._state.log(self._open_ref)
+        for line in lines:
+            body.append(line.text, style="dim" if line.dim else "")
+            body.append("\n")
         if detail.is_active:
-            for line in self._state.transcript():
-                body.append(line.text, style="dim" if line.dim else "")
-                body.append("\n")
-            if not body.plain:
+            if not lines:
                 body.append("(waiting for the model's output…)", style="dim")
         else:
+            if not lines:
+                body.append("(no Log lines for this issue yet.)\n", style="dim")
             body.append(
-                f"{detail.status} — details only (no live stream). "
-                "The full record is in the JSONL replay log.",
-                style="dim",
+                "— the full record is in the JSONL replay log.", style="dim"
             )
         self.query_one("#log-body", Static).update(body)
 

@@ -81,9 +81,9 @@ class InteractiveDriver:
         renderer. ``summary`` feeds the Dashboard's compact **Summary** rollup
         band (ADR-0003); ``log_source`` is forwarded for the app-factory contract
         but no longer rendered — the whole-run Log tab is retired and the
-        per-issue **Log** reads the state's transcript instead. The loop owns
-        these objects (it also reads ``summary`` for persistence); the driver
-        only forwards them to the app.
+        per-issue **Log** reads the state's per-issue Log buffers instead. The
+        loop owns these objects (it also reads ``summary`` for persistence); the
+        driver only forwards them to the app.
         """
         self.summary = summary
         self.log_source = log_source

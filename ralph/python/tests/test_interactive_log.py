@@ -1,15 +1,16 @@
-"""Tests for the pure **live transcript** + **drill-in detail** projections in
-``ralph_afk.interactive.state`` (issue #27).
+"""Tests for the pure **per-issue Log** + **drill-in detail** projections in
+``ralph_afk.interactive.state`` (issue #34, ADR-0003).
 
-The drill-in shows, for the *active* issue, an interleaved tail of what the
-model is doing — dimmed reasoning, assistant message text, and key structured
-events (tool calls, commits, closures) in time order — kept in a bounded
-ring-buffer so memory can't grow over a long iteration. For a *non-active*
-issue it shows details only.
+Each issue keeps **its own** Log buffer that **accumulates across every
+iteration** that worked it and is **bounded per issue** (a generous ring-buffer
+tail), replacing the single iteration-scoped, active-only transcript of issue
+#27. Output produced before the iteration's working marker is attributed to the
+active issue once it is known, and per-issue buffers stay isolated; the full
+record stays in the always-on JSONL replay log on disk.
 
 These tests pin that *content* without a TTY (mirroring the ``queue_rows`` /
 ``format_header`` seams); the Pilot test in ``test_interactive_app.py`` covers
-the widget rendering and the active-vs-non-active difference on screen.
+the widget rendering and the active-vs-historical difference on screen.
 """
 
 from __future__ import annotations
@@ -19,12 +20,12 @@ from datetime import datetime
 from ralph_afk import events as events_module
 from ralph_afk.interactive import state as state_module
 from ralph_afk.interactive.state import (
+    LOG_EVENT,
+    LOG_MESSAGE,
+    LOG_REASONING,
     STATUS_ACTIVE,
     STATUS_GONE,
     STATUS_QUEUED,
-    TRANSCRIPT_EVENT,
-    TRANSCRIPT_MESSAGE,
-    TRANSCRIPT_REASONING,
     LiveRunState,
     format_detail_header,
     issue_detail,
@@ -49,7 +50,7 @@ _FIXED_WALL = datetime(2026, 6, 21, 12, 0, 0)
 
 def _make_state(clock: _FakeClock | None = None) -> LiveRunState:
     return LiveRunState(
-        run_id="01TRANS",
+        run_id="01LOG",
         model="claude-opus-4.8",
         reasoning_effort="max",
         monotonic=clock if clock is not None else _FakeClock(),
@@ -57,12 +58,30 @@ def _make_state(clock: _FakeClock | None = None) -> LiveRunState:
     )
 
 
-def _texts(state: LiveRunState) -> list[str]:
-    return [line.text for line in state.transcript()]
+def _texts(state: LiveRunState, ref: int | str | None = None) -> list[str]:
+    return [line.text for line in state.log(ref)]
+
+
+def _activate(state: LiveRunState, ref: int, *, iteration: int, pool=None) -> None:
+    """Open an iteration and light up ``ref`` as the active issue via its marker.
+
+    The marker is given its own trailing newline so it commits as a discrete
+    line rather than gluing onto the next message.
+    """
+    state.render(
+        {"type": events_module.WRAPPER_ITERATION_START, "iter": iteration}
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_AFK_READY_COLLECTED,
+            "issues": pool if pool is not None else [ref],
+        }
+    )
+    state.stream_message(f"<working issue={ref}>\n")
 
 
 # ---------------------------------------------------------------------------
-# Streaming deltas -> interleaved lines
+# Streaming deltas -> interleaved lines (the live current tail)
 # ---------------------------------------------------------------------------
 
 
@@ -70,17 +89,17 @@ def test_streamed_reasoning_is_dimmed_and_message_is_plain() -> None:
     state = _make_state()
     state.stream_reasoning("weighing options\n")
     state.stream_message("Hello world\n")
-    rendered = [(line.kind, line.text, line.dim) for line in state.transcript()]
-    assert (TRANSCRIPT_REASONING, "weighing options", True) in rendered
-    assert (TRANSCRIPT_MESSAGE, "Hello world", False) in rendered
+    rendered = [(line.kind, line.text, line.dim) for line in state.log()]
+    assert (LOG_REASONING, "weighing options", True) in rendered
+    assert (LOG_MESSAGE, "Hello world", False) in rendered
 
 
 def test_open_partial_line_is_visible_before_a_newline() -> None:
     """Output appears as the model produces it, not only on a terminating ``\\n``."""
     state = _make_state()
     state.stream_message("partial without newline")
-    last = state.transcript()[-1]
-    assert last.kind == TRANSCRIPT_MESSAGE
+    last = state.log()[-1]
+    assert last.kind == LOG_MESSAGE
     assert last.text == "partial without newline"
     # Continuing the same logical line replaces the provisional partial.
     state.stream_message(" continued\n")
@@ -112,12 +131,12 @@ def test_tool_call_appends_event_line_and_flushes_open_partial() -> None:
             "arguments": {"command": "ls"},
         }
     )
-    lines = state.transcript()
+    lines = state.log()
     texts = [line.text for line in lines]
     assert "about to call a tool" in texts  # partial flushed before the event
     assert "» bash  command=ls" in texts
     event_line = next(line for line in lines if line.text.startswith("» bash"))
-    assert event_line.kind == TRANSCRIPT_EVENT
+    assert event_line.kind == LOG_EVENT
     assert event_line.dim is False
 
 
@@ -156,7 +175,9 @@ def test_commit_auto_close_and_pr_advanced_event_lines() -> None:
             "sha": "9876543210def",
         }
     )
-    texts = _texts(state)
+    # The auto-close attributes the iteration's work to #26 (the Closes #N
+    # backstop), so all three event lines land in #26's own Log.
+    texts = _texts(state, 26)
     assert "✓ commit abcdef1234  Fix the bug" in texts
     assert "✓ auto-closed #26  (1234567890)" in texts
     assert "↑ advanced PR #27  (9876543210)" in texts
@@ -182,9 +203,9 @@ def test_final_message_without_streaming_appends_the_block() -> None:
     state.render(
         {"type": events_module.ASSISTANT_MESSAGE, "content": "line one\nline two"}
     )
-    lines = state.transcript()
+    lines = state.log()
     assert [line.text for line in lines] == ["line one", "line two"]
-    assert all(line.kind == TRANSCRIPT_MESSAGE for line in lines)
+    assert all(line.kind == LOG_MESSAGE for line in lines)
 
 
 def test_final_reasoning_without_streaming_appends_a_dimmed_block() -> None:
@@ -195,39 +216,107 @@ def test_final_reasoning_without_streaming_appends_a_dimmed_block() -> None:
             "content": "considered A\nconsidered B",
         }
     )
-    lines = state.transcript()
+    lines = state.log()
     assert [line.text for line in lines] == ["considered A", "considered B"]
-    assert all(line.kind == TRANSCRIPT_REASONING and line.dim for line in lines)
+    assert all(line.kind == LOG_REASONING and line.dim for line in lines)
 
 
 # ---------------------------------------------------------------------------
-# Bounded tail + per-iteration reset
+# Per-issue buffers: bounded, accumulating, isolated, pre-marker attribution
 # ---------------------------------------------------------------------------
 
 
-def test_transcript_is_a_bounded_tail() -> None:
-    """A long iteration can't grow the pane without limit (acceptance: memory)."""
+def test_log_is_bounded_per_issue() -> None:
+    """A long iteration can't grow one issue's Log without limit (acceptance)."""
     state = _make_state()
-    cap = state_module._TRANSCRIPT_TAIL_LINES
+    _activate(state, 3, iteration=1)
+    cap = state_module._LOG_TAIL_LINES
     total = cap + 50
     for i in range(total):
         state.stream_message(f"line {i}\n")
-    lines = state.transcript()
+    lines = state.log(3)
     assert len(lines) == cap
-    # The newest lines are retained; the oldest are dropped.
+    # The newest lines are retained; the oldest (incl. the marker) are dropped.
     assert lines[-1].text == f"line {total - 1}"
     assert lines[0].text == f"line {total - cap}"
 
 
-def test_transcript_resets_on_iteration_start() -> None:
+def test_log_accumulates_across_iterations() -> None:
+    """The same issue worked twice keeps BOTH iterations' lines (issue #34)."""
+    state = _make_state()
+    _activate(state, 7, iteration=1)
+    state.stream_message("iter one line\n")
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    _activate(state, 7, iteration=2)
+    state.stream_message("iter two line\n")
+
+    texts = _texts(state, 7)
+    assert "iter one line" in texts
+    assert "iter two line" in texts
+    # Accumulated in time order: the first iteration's line precedes the second.
+    assert texts.index("iter one line") < texts.index("iter two line")
+
+
+def test_per_issue_logs_are_isolated() -> None:
+    """Each issue's Log holds only its own lines, never a global stream."""
+    state = _make_state()
+    _activate(state, 7, iteration=1, pool=[7, 8])
+    state.stream_message("seven only\n")
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    _activate(state, 8, iteration=2, pool=[7, 8])
+    state.stream_message("eight only\n")
+
+    seven = _texts(state, 7)
+    eight = _texts(state, 8)
+    assert "seven only" in seven
+    assert "eight only" not in seven
+    assert "eight only" in eight
+    assert "seven only" not in eight
+
+
+def test_pre_marker_output_is_attributed_to_active_issue_once_known() -> None:
+    """Output before the working marker lands in the active issue when known."""
     state = _make_state()
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
-    state.stream_message("iter one output\n")
-    assert "iter one output" in _texts(state)
-    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
-    assert state.transcript() == ()
-    state.stream_message("iter two output\n")
-    assert _texts(state) == ["iter two output"]
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [9]}
+    )
+    # Output produced BEFORE the working marker arrives.
+    state.stream_reasoning("pre-marker thinking\n")
+    state.stream_message("pre-marker message\n")
+    # No issue is active yet, so nothing is attributed to #9.
+    assert state.log(9) == ()
+
+    # The working marker arrives mid-iteration.
+    state.stream_message("<working issue=9>\n")
+
+    # The earlier pre-marker output is now attributed to #9, in time order.
+    texts = _texts(state, 9)
+    assert "pre-marker thinking" in texts
+    assert "pre-marker message" in texts
+    assert texts.index("pre-marker thinking") < texts.index("pre-marker message")
+
+
+def test_historical_issue_log_is_retained_after_deactivation() -> None:
+    """A no-longer-active issue keeps its retained Log tail (issue #34)."""
+    state = _make_state()
+    _activate(state, 5, iteration=1)
+    state.stream_message("historical line\n")
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    # #5 is no longer active, but opening its Log still shows its own lines.
+    assert state.active_ref is None
+    assert "historical line" in _texts(state, 5)
+
+
+def test_log_for_unworked_issue_is_empty() -> None:
+    """A queued-but-never-worked issue has no Log lines (its own, isolated)."""
+    state = _make_state()
+    _activate(state, 1, iteration=1, pool=[1, 2])
+    state.stream_message("one only\n")
+    assert state.log(2) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +346,7 @@ def test_issue_detail_active_issue_is_active_with_ticking_active_time() -> None:
     assert detail.first_seen_iter == 1
 
 
-def test_issue_detail_non_active_issue_shows_details_only() -> None:
+def test_issue_detail_non_active_issue_is_not_active() -> None:
     clock = _FakeClock()
     state = _run_with_active(clock)
     clock.advance(30)

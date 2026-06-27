@@ -416,13 +416,13 @@ def test_checkpoint_does_not_count_as_a_commit_or_advance() -> None:
     assert entry.ended_at is None
 
 
-def test_checkpoint_renders_as_distinct_transcript_line() -> None:
+def test_checkpoint_renders_as_distinct_log_line() -> None:
     state = _make_state()
     _start_iteration(state, iteration=1, issues=[12])
     state.stream_message("<working issue=12>")
     state.render(
         _ev(events_module.WRAPPER_CHECKPOINT_RECORDED, sha="cap1234567890", issue=12)
     )
-    texts = [line.text for line in state.transcript()]
+    texts = [line.text for line in state.log()]
     assert any("checkpoint" in t.lower() for t in texts)
     assert any("cap1234567" in t for t in texts)

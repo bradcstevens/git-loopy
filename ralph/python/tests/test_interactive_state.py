@@ -169,7 +169,7 @@ def test_mark_stopped_sets_status_and_freezes_elapsed() -> None:
 
 def test_streaming_hooks_are_accepted_no_ops() -> None:
     state = _make_state()
-    # Must not raise; #23 parks them, #27 fills the transcript pane.
+    # Must not raise; #23 parks them, #34 fills the per-issue Log.
     state.stream_reasoning("thinking…")
     state.stream_message("hello")
     assert state.iteration == 0
@@ -245,7 +245,7 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
     assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
-    # Transcript-driving literals (issue #27).
+    # Log-driving literals (issue #34).
     assert state_module._ASSISTANT_REASONING == events_module.ASSISTANT_REASONING
     assert state_module._TOOL_CALL == events_module.TOOL_CALL
 
