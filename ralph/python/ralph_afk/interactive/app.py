@@ -18,15 +18,18 @@ Two levels, no tab bar:
   to the Dashboard with the Queue cursor preserved. The Log shows the **opened
   issue's own** accumulating, bounded tail (reasoning dimmed + assistant message
   + key structured events), isolated from the other issues (issue #34): the
-  *active* issue streams live, a *historical* issue shows its retained tail plus
-  a footer noting the full record stays in the JSONL replay log.
+  *active* issue streams live and **sticky-with-release** auto-scrolls to the
+  latest line (issue #38), a *historical* issue shows its retained tail plus a
+  footer noting the full record stays in the JSONL replay log.
 
 This supersedes the #26 tabbed dashboard (a focusable tab bar over a
 ``ContentSwitcher`` with a Dashboard / Log / Summary split): the whole-run Log
 tab and the Summary-as-a-separate-screen are retired. The full per-iteration
 Summary table stays the run-end scrollback artefact (printed by the driver), not
-an in-app screen. Per-issue Log buffers land here (#34); timestamps (#37) and
-sticky-with-release autoscroll (#38) arrive in later slices.
+an in-app screen. Per-issue Log buffers (#34) and timestamps (#37) land in the
+state layer; the Log's sticky-with-release autoscroll (#38) is wired here via
+Textual's :meth:`~textual.widget.Widget.anchor` plus a "new lines below"
+indicator.
 
 This module imports Textual, so it is imported **only on the interactive path**,
 after :func:`ralph_afk.interactive.detect.resolve_interactive` has confirmed the
@@ -43,6 +46,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.message import Message
 from textual.widgets import DataTable, Footer, Static
 
 from ralph_afk.interactive.state import (
@@ -70,6 +74,12 @@ _DEFAULT_REFRESH_INTERVAL = 0.25
 #: stamp.
 _STAMP_WIDTH = 11
 
+#: The hint shown in the Log's ``#log-indicator`` bar while sticky-with-release
+#: autoscroll is *paused* — the operator has scrolled up off the bottom (issue
+#: #38). Cleared the instant auto-bottom re-engages (a return to the bottom or
+#: the ``End`` key).
+_LOG_NEW_LINES_BELOW = "↓ new lines below — End to re-engage auto-scroll"
+
 
 class _Dashboard(Vertical):
     """Level 1: the header band, the live Queue, and the Summary rollup band."""
@@ -87,20 +97,64 @@ class _Dashboard(Vertical):
         table.add_column("Active", key="active")
 
 
-class _LogView(VerticalScroll):
+class _LogScroll(VerticalScroll):
+    """Level 2's scrollable Log body, with **sticky-with-release** autoscroll.
+
+    The region is *anchored* (Textual's
+    :meth:`~textual.widget.Widget.anchor`), which gives the full
+    sticky-with-release behaviour ADR-0003 calls for at zero cost: while at the
+    bottom the compositor keeps it pinned to the latest line as new lines arrive;
+    the moment the operator scrolls up off the bottom Textual *releases* the
+    anchor (autoscroll pauses); and it *re-engages* on a return to the bottom
+    (``_check_anchor`` in ``watch_scroll_y``) or the ``end`` key (``scroll_end``).
+
+    The one thing Textual does not surface is a "new lines below" hint. So this
+    subclass watches its own scroll position and posts :class:`AutoscrollChanged`
+    whenever the pinned/paused state flips, letting the app show or hide the
+    indicator the instant the operator scrolls — not on the next timer repaint.
+    """
+
+    class AutoscrollChanged(Message):
+        """The Log's auto-bottom engaged (``at_bottom``) or paused (not)."""
+
+        def __init__(self, at_bottom: bool) -> None:
+            self.at_bottom = at_bottom
+            super().__init__()
+
+    #: Tracks the last reported "pinned to the bottom?" so a message is only
+    #: posted on an actual flip (not on every intra-scroll delta). Anchoring on
+    #: open starts at the bottom, so the default is ``True``.
+    _at_bottom: bool = True
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        at_bottom = self.is_vertical_scroll_end
+        if at_bottom != self._at_bottom:
+            self._at_bottom = at_bottom
+            self.post_message(self.AutoscrollChanged(at_bottom))
+
+
+class _LogView(Vertical):
     """Level 2: one issue's full-region **Log** (the per-issue drill-down).
 
     Opened by ``enter`` on a Queue row and closed by ``escape``; it replaces the
-    Dashboard while showing (their ``display`` is toggled). The body is the
-    opened issue's **own** accumulating, bounded Log tail (reasoning dimmed +
-    assistant message + key structured events), isolated per issue (issue #34):
-    the *active* issue streams live, a *historical* issue shows its retained tail
-    plus a footer noting the full record stays in the JSONL replay log.
+    Dashboard while showing (their ``display`` is toggled). A fixed
+    ``#log-header`` sits above the scrollable :class:`_LogScroll`
+    (``#log-scroll``), which holds the ``#log-body``; a fixed ``#log-indicator``
+    bar below the scroll surfaces the "new lines below" hint while
+    sticky-with-release autoscroll is paused (issue #38). The body is the opened
+    issue's **own** accumulating, bounded Log tail (reasoning dimmed + assistant
+    message + key structured events), isolated per issue (issue #34): the
+    *active* issue streams live and auto-scrolls to the latest line, a
+    *historical* issue shows its retained tail plus a footer noting the full
+    record stays in the JSONL replay log.
     """
 
     def compose(self) -> ComposeResult:
         yield Static(id="log-header")
-        yield Static(id="log-body")
+        with _LogScroll(id="log-scroll"):
+            yield Static(id="log-body")
+        yield Static(id="log-indicator")
 
 
 class RalphApp(App[None]):
@@ -144,9 +198,20 @@ class RalphApp(App[None]):
         background: $boost;
         color: $text;
     }
+    #log-scroll {
+        height: 1fr;
+    }
     #log-body {
         width: 1fr;
         padding: 0 1;
+    }
+    #log-indicator {
+        height: 1;
+        padding: 0 1;
+        background: $warning;
+        color: $text;
+        text-style: bold;
+        display: none;
     }
     """
 
@@ -247,13 +312,20 @@ class RalphApp(App[None]):
         self._open_log(str(key))
 
     def _open_log(self, ref: str) -> None:
-        """Show ``ref``'s Log in place of the Dashboard."""
+        """Show ``ref``'s Log in place of the Dashboard, anchored to the latest line.
+
+        Auto-bottom is (re-)engaged on every open so the newest line is in view,
+        and focus moves to the scroll region so ``up`` / ``down`` / ``End`` drive
+        the sticky-with-release autoscroll (issue #38).
+        """
         self._open_ref = ref
         log = self.query_one("#log", _LogView)
         self._sync_log()
         self.query_one("#dashboard", _Dashboard).display = False
         log.display = True
-        log.focus()
+        scroll = self.query_one("#log-scroll", _LogScroll)
+        scroll.anchor()
+        scroll.focus()
 
     def _close_log(self) -> None:
         """Return from the Log to the Dashboard (Esc), preserving the cursor."""
@@ -339,6 +411,30 @@ class RalphApp(App[None]):
                 "— the full record is in the JSONL replay log.", style="dim"
             )
         self.query_one("#log-body", Static).update(body)
+        self._update_log_indicator()
+
+    def _update_log_indicator(self) -> None:
+        """Show the "new lines below" hint while autoscroll is paused (issue #38).
+
+        *Paused* means the Log is anchored (auto-bottom is the default) but the
+        operator has scrolled up off the bottom, so fresh lines are accruing out
+        of view; returning to the bottom or pressing ``End`` re-engages and
+        clears it. Driven both by the timer repaint and, for immediacy, by
+        :class:`_LogScroll.AutoscrollChanged` the instant the operator scrolls.
+        """
+        scroll = self.query_one("#log-scroll", _LogScroll)
+        indicator = self.query_one("#log-indicator", Static)
+        paused = scroll.is_anchored and not scroll.is_vertical_scroll_end
+        indicator.display = paused
+        if paused:
+            indicator.update(_LOG_NEW_LINES_BELOW)
+
+    @on(_LogScroll.AutoscrollChanged)
+    def _on_log_autoscroll_changed(
+        self, event: _LogScroll.AutoscrollChanged
+    ) -> None:
+        """Repaint the indicator the instant auto-bottom engages or pauses."""
+        self._update_log_indicator()
 
     @staticmethod
     def _cursor_ref(table: DataTable) -> str | None:

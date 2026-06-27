@@ -27,7 +27,12 @@ from rich.text import Text  # noqa: E402
 from textual.widgets import ContentSwitcher, DataTable, Static  # noqa: E402
 
 from ralph_afk import events as events_module  # noqa: E402
-from ralph_afk.interactive.app import RalphApp, _Dashboard, _LogView  # noqa: E402
+from ralph_afk.interactive.app import (  # noqa: E402
+    RalphApp,
+    _Dashboard,
+    _LogScroll,
+    _LogView,
+)
 from ralph_afk.interactive.state import LiveRunState  # noqa: E402
 
 
@@ -406,6 +411,113 @@ async def test_log_view_stamps_lines_12h_and_opens_reasoning_with_marker() -> No
         assert "1:42:07 PM" in body.plain
         assert body.plain.count("1:42:07 PM") == 1
 
+
+# ---------------------------------------------------------------------------
+# Level 2: sticky-with-release autoscroll in the per-issue Log (issue #38)
+# ---------------------------------------------------------------------------
+
+
+def _state_with_long_log(count: int = 40) -> LiveRunState:
+    """The #26-active run with enough Log lines to overflow the Log viewport."""
+    state = _state_with_queue()  # active issue #26
+    for i in range(count):
+        state.stream_message(f"log line {i:02d}\n")
+    return state
+
+
+async def test_log_sticks_to_latest_line_by_default() -> None:
+    """AC1: while at the bottom, the Log auto-scrolls to the latest line.
+
+    The Log opens anchored (auto-bottom) and stays pinned to the newest line as
+    fresh lines arrive; the new-lines-below indicator stays hidden.
+    """
+    app = RalphApp(_state_with_long_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # open #26's Log
+        await pilot.pause()
+        scroll = app.query_one("#log-scroll", _LogScroll)
+        # Opened anchored and pinned to the latest line (auto-bottom).
+        assert scroll.is_anchored
+        assert scroll.is_vertical_scroll_end
+        assert app.query_one("#log-indicator", Static).display is False
+
+        # New lines arrive: the view sticks to the new bottom.
+        before = scroll.scroll_y
+        for i in range(12):
+            app._state.stream_message(f"streamed {i:02d}\n")
+        app._refresh()
+        await pilot.pause()
+        await pilot.pause()
+        assert scroll.is_vertical_scroll_end
+        assert scroll.scroll_y > before
+        assert app.query_one("#log-indicator", Static).display is False
+
+
+async def test_scrolling_up_pauses_autoscroll_and_shows_indicator() -> None:
+    """AC2: scrolling up releases the stick and reveals the new-lines indicator.
+
+    While paused, fresh lines do NOT yank the view back to the bottom.
+    """
+    app = RalphApp(_state_with_long_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        scroll = app.query_one("#log-scroll", _LogScroll)
+        assert scroll.is_vertical_scroll_end  # starts stuck to the bottom
+
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.pause()
+        # Autoscroll paused: off the bottom, indicator visible.
+        assert not scroll.is_vertical_scroll_end
+        indicator = app.query_one("#log-indicator", Static)
+        assert indicator.display is True
+        assert "new lines below" in str(indicator.renderable).lower()
+
+        # Fresh lines while paused: the view stays put (no jump to bottom).
+        held = scroll.scroll_y
+        for i in range(8):
+            app._state.stream_message(f"while paused {i:02d}\n")
+        app._refresh()
+        await pilot.pause()
+        await pilot.pause()
+        assert scroll.scroll_y == held
+        assert not scroll.is_vertical_scroll_end
+        assert app.query_one("#log-indicator", Static).display is True
+
+
+async def test_end_and_return_to_bottom_reengage_autobottom() -> None:
+    """AC3: End (or scrolling back to the bottom) re-engages and clears it."""
+    app = RalphApp(_state_with_long_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        scroll = app.query_one("#log-scroll", _LogScroll)
+
+        # Release by scrolling up.
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.pause()
+        assert not scroll.is_vertical_scroll_end
+        assert app.query_one("#log-indicator", Static).display is True
+
+        # End re-engages auto-bottom and clears the indicator.
+        await pilot.press("end")
+        await pilot.pause()
+        assert scroll.is_vertical_scroll_end
+        assert app.query_one("#log-indicator", Static).display is False
+
+        # Release again, then scroll back down to the bottom: also re-engages.
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.pause()
+        assert app.query_one("#log-indicator", Static).display is True
+        for _ in range(12):
+            await pilot.press("down")
+        await pilot.pause()
+        assert scroll.is_vertical_scroll_end
+        assert app.query_one("#log-indicator", Static).display is False
 
 
 async def test_esc_on_dashboard_is_a_noop() -> None:
