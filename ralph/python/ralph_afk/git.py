@@ -24,6 +24,10 @@ Public surface:
 * :func:`add_all` / :func:`commit` — the mutating half of the runner
   Checkpoint (``git add -A`` then ``git commit -m``); the user's git config
   stays the single source of truth.
+* :func:`push` — the remote half of the durability net (ADR-0004): a bare
+  ``git push`` of the current branch to its configured upstream. Failures
+  (no upstream, auth, non-fast-forward) raise :exc:`GitError` so the loop can
+  warn without aborting; a local-only repo keeps working.
 * :func:`commits_between` — list of :class:`Commit` for ``pre..head``.
 * :func:`recent_commits` — last ``n`` commits, newest-first.
 * :func:`range_count` — ``git rev-list --count`` for ``pre..head``.
@@ -56,6 +60,7 @@ __all__ = [
     "has_untracked",
     "add_all",
     "commit",
+    "push",
     "current_branch",
     "switch",
     "commits_between",
@@ -332,6 +337,35 @@ def commit(message: str, start: Path | str | None = None) -> str:
     """
     _run(["commit", "-m", message], cwd=start)
     return head_sha(start)
+
+
+def push(start: Path | str | None = None) -> None:
+    """Push the current branch to its configured upstream via ``git push``.
+
+    The remote half of ADR-0004's durability net. After an iteration produces
+    new commits — agent commits and/or a runner :func:`commit` Checkpoint — the
+    loop pushes so the work reaches the remote instead of piling up locally. A
+    bare ``git push`` (no ref arguments, no ``--force``) keeps the user's git
+    config — ``push.default``, the branch's upstream tracking ref, credential
+    helpers — the single source of truth.
+
+    Every failure mode the loop must tolerate *non-fatally* (it warns and
+    carries on, so a local-only repo keeps working) surfaces here as
+    :exc:`GitError`:
+
+    * no upstream configured for the current branch,
+    * no remote, an unreachable remote, or an auth failure,
+    * a non-fast-forward rejection (the remote moved under us).
+
+    Args:
+        start: Directory inside the repo to run from. Defaults to cwd.
+
+    Raises:
+        GitError: If ``git`` is not on PATH or the push is rejected for any of
+            the reasons above. The loop's ``_maybe_push`` catches this and
+            never lets it abort the run.
+    """
+    _run(["push"], cwd=start)
 
 
 def current_branch(start: Path | str | None = None) -> str | None:

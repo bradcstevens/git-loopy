@@ -48,13 +48,20 @@ Per-iteration sequence:
     or untracked worktree is staged and captured in a single
     close-keyword-free ``wrapper.checkpoint.recorded`` commit attributed to
     the Active issue. Deliberately ordered *after* the agent-commit
-    accounting (step 8) and *before* strike accounting (step 11), so the
+    accounting (step 8) and *before* strike accounting (step 12), so the
     Checkpoint is excluded from both the Summary commit tally and the Strike
     machine. Non-fatal: a failure warns and the loop carries on.
-11. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
+11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
+    produced new commits — agent commits (step 8) and/or the Checkpoint from
+    step 10 — the current branch is pushed to its upstream
+    (``wrapper.push.recorded`` on success) so the work reaches the remote.
+    Non-fatal: a missing remote/upstream, an auth failure, or a
+    non-fast-forward warns and the loop carries on, so a local-only repo
+    completes normally.
+12. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
     resets strikes; no-progress increments, possibly tripping the
-    abort threshold. Checkpoints are *not* progress.
-12. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
+    abort threshold. Checkpoints and pushes are *not* progress.
+13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
     persist :class:`~ralph_afk.persist.IterationCounters` from the
     closed snapshot.
 
@@ -595,9 +602,20 @@ class _Loop:
             #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
             #    and it never resets a Strike. Non-fatal — a failure warns and
             #    the loop carries on (a local-only repo still completes).
-            self._maybe_checkpoint(iter_num, pool, completions, new_commits)
+            checkpoint_sha = self._maybe_checkpoint(
+                iter_num, pool, completions, new_commits
+            )
 
-            # 9) Strike state machine + emit appropriate events.
+            # 9) Auto-push (ADR-0004, second half). Whenever this iteration
+            #    produced new commits — agent commits (step 6) and/or the
+            #    Checkpoint just made (step 8) — push the current branch to its
+            #    upstream so the work reaches the remote instead of piling up
+            #    locally. Non-fatal: a missing remote/upstream, an auth failure,
+            #    or a non-fast-forward warns and the loop carries on. Like the
+            #    Checkpoint, a push is NOT Strike progress (it creates no commit).
+            self._maybe_push(iter_num, new_commits, checkpoint_sha)
+
+            # 10) Strike state machine + emit appropriate events.
             outcome = self._strike_machine.tick(
                 commits_in_iter=len(new_commits),
                 auto_closures_in_iter=auto_closures,
@@ -616,7 +634,7 @@ class _Loop:
                     outcome=("abort" if outcome == "aborted" else "warn"),
                 )
 
-            # 10) Close the iteration snapshot, persist counters.
+            # 11) Close the iteration snapshot, persist counters.
             self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
             self._record_counters(iter_num)
 
@@ -717,6 +735,46 @@ class _Loop:
         if len(pool) == 1:
             return pool[0].ref
         return None
+
+    def _maybe_push(
+        self,
+        iter_num: int,
+        new_commits: list[git_module.Commit],
+        checkpoint_sha: str | None,
+    ) -> bool:
+        """Push the current branch to its upstream after an iteration's new commits.
+
+        The remote half of ADR-0004's durability net. Whenever this iteration
+        produced new commits — agent commits (``new_commits``) and/or the runner
+        Checkpoint just authored (``checkpoint_sha``) — :func:`git.push` sends
+        the current branch to its configured upstream so the work reaches the
+        remote instead of accumulating locally. An iteration that produced
+        neither (a clean tree with no agent commit, or a pure PR advance the
+        agent pushed itself) skips the push entirely.
+
+        Non-fatal by construction: a missing upstream, a missing/unreachable
+        remote, an auth failure, or a non-fast-forward rejection raises
+        :exc:`git.GitError`, which is caught and warned — a local-only repo
+        completes normally. A successful push emits ``wrapper.push.recorded``;
+        a failure emits nothing (it only warns), mirroring the failed-Checkpoint
+        path so the JSONL records pushes that actually landed.
+
+        Returns:
+            ``True`` if a push was attempted and succeeded; ``False`` if there
+            was nothing to push or the push failed non-fatally.
+        """
+        if not new_commits and checkpoint_sha is None:
+            return False
+        try:
+            git_module.push(self._repo_root)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "auto-push failed: %s; continuing (work stays local)", exc
+            )
+            return False
+        self._emit(events_module.WRAPPER_PUSH_RECORDED, iter_num=iter_num)
+        self._diag.info("auto-pushed current branch after new commits")
+        return True
 
     def _handle_completions_safely(
         self,

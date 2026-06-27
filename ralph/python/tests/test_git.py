@@ -30,6 +30,7 @@ from ralph_afk.git import (
     has_untracked,
     head_sha,
     is_dirty,
+    push,
     range_count,
     recent_commits,
     repo_root,
@@ -580,3 +581,83 @@ def test_commit_raises_when_nothing_staged(tmp_path: Path) -> None:
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
         commit("nothing to do", start=tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# push  (issue #35 — auto-push durability net)                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _init_bare(path: Path) -> None:
+    """Initialise a bare repo at ``path`` to serve as an upstream remote."""
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "-b", "main", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _wire_upstream(work: Path, remote: Path) -> None:
+    """Add ``remote`` as ``origin`` and seed it as ``main``'s upstream."""
+    subprocess.run(
+        ["git", "-C", str(work), "remote", "add", "origin", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-u", "-q", "origin", "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_push_sends_new_commits_to_upstream(tmp_path: Path) -> None:
+    """A bare ``git push`` advances the configured upstream to local HEAD."""
+    remote = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    work.mkdir()
+    _init_bare(remote)
+    _init_repo(work)
+    _commit(work, "init")
+    _wire_upstream(work, remote)
+    # A brand-new local commit the upstream has not seen yet.
+    local_head = _commit(work, "second")
+
+    push(start=work)
+
+    # Verify via ls-remote (a transport op, like push itself) rather than
+    # bare-repo path discovery, which a host `safe.bareRepository=explicit`
+    # config refuses. This asserts what actually landed ON the remote.
+    ls_remote = subprocess.run(
+        ["git", "-C", str(work), "ls-remote", "origin", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    remote_head = ls_remote.split()[0] if ls_remote else ""
+    assert remote_head == local_head
+
+
+def test_push_is_noop_when_upstream_already_current(tmp_path: Path) -> None:
+    """Pushing with nothing new ('Everything up-to-date') exits 0, not an error."""
+    remote = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    work.mkdir()
+    _init_bare(remote)
+    _init_repo(work)
+    _commit(work, "init")
+    _wire_upstream(work, remote)
+
+    # No new commit: a redundant push is a safe no-op, never a GitError.
+    push(start=work)
+
+
+def test_push_raises_without_upstream(tmp_path: Path) -> None:
+    """No remote / no upstream → ``git push`` fails → GitError (non-fatal upstream)."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init")
+    with pytest.raises(GitError):
+        push(start=tmp_path)

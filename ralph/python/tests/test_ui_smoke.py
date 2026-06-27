@@ -47,6 +47,7 @@ from ralph_afk.events import (
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
     WRAPPER_STRIKE,
@@ -585,6 +586,33 @@ def test_wrapper_checkpoint_recorded_is_not_counted_as_a_commit() -> None:
     snap = summary.current
     assert snap is not None
     # The agent commit counts; the Checkpoint does not.
+    assert snap.commits == 1
+
+
+def test_wrapper_push_recorded_renders_distinctly() -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_PUSH_RECORDED})
+    out = buf.getvalue()
+    assert "push" in out.lower()
+    # One printed line.
+    assert out.count("\n") <= 2
+
+
+def test_wrapper_push_recorded_is_not_counted_as_a_commit() -> None:
+    """An auto-push must NOT increment the Summary's agent-commit tally."""
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(
+        {
+            "type": WRAPPER_COMMIT_RECORDED,
+            "sha": "1111111111111111",
+            "subject": "feat: real agent work",
+        }
+    )
+    renderer.render({"type": WRAPPER_PUSH_RECORDED})
+    snap = summary.current
+    assert snap is not None
+    # The agent commit counts; the push does not.
     assert snap.commits == 1
 
 

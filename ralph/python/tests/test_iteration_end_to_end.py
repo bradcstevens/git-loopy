@@ -183,9 +183,29 @@ def _make_issue(
     )
 
 
+def _logged_types(tmp_path: Path) -> list[str]:
+    """Return the ordered ``type`` of every JSONL event the run logged."""
+    logs_dir = tmp_path / ".ralph" / "logs"
+    lines = next(logs_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+    return [json.loads(raw)["type"] for raw in lines]
+
+
 # ---------------------------------------------------------------------------
 # The end-to-end test
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_real_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Insulate every loop-driving test from a real ``git push`` subprocess.
+
+    The runner auto-pushes (ADR-0004) after any iteration that produced new
+    commits or a Checkpoint. Without this default stub, those tests would shell
+    out to a real ``git push`` from a ``tmp_path`` that is not a repo — a
+    non-fatal :exc:`git.GitError`, but a real subprocess all the same.
+    Push-specific tests override this with their own recorder.
+    """
+    monkeypatch.setattr(git_module, "push", lambda start=None: None)
 
 
 def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
@@ -653,6 +673,123 @@ def test_checkpoint_failure_is_non_fatal(tmp_path, monkeypatch) -> None:
     # No checkpoint event was emitted (the commit failed before emit).
     assert "wrapper.checkpoint.recorded" not in types_seen
     # And crucially the run reached its clean end.
+    assert "wrapper.run.end" in types_seen
+
+
+# ---------------------------------------------------------------------------
+# Auto-push (issue #35 — ADR-0004 durability net, second half)
+# ---------------------------------------------------------------------------
+
+
+def test_loop_pushes_after_agent_commit(tmp_path, monkeypatch) -> None:
+    """A new agent commit triggers the auto-push; ``wrapper.push.recorded`` is logged.
+
+    The clean-tree, one-agent-commit case: no Checkpoint is made, but the
+    iteration still produced a new commit, so the current branch is pushed to
+    its upstream after accounting.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
+    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
+    # One agent commit, no close keyword -> pure progress, no auto-closure.
+    monkeypatch.setattr(
+        git_module,
+        "commits_between",
+        lambda pre, head, start=None: [
+            _FakeCommit(sha="a" * 40, subject="feat: real work", body="Refs #42")
+        ],
+    )
+    push_calls: list[Any] = []
+    monkeypatch.setattr(
+        git_module, "push", lambda start=None: push_calls.append(start)
+    )
+
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert len(push_calls) == 1, "a new agent commit must trigger exactly one push"
+    types_seen = _logged_types(tmp_path)
+    assert "wrapper.commit.recorded" in types_seen
+    assert "wrapper.push.recorded" in types_seen
+
+
+def test_loop_pushes_after_checkpoint(tmp_path, monkeypatch) -> None:
+    """A Checkpoint (no agent commit) still triggers the auto-push.
+
+    The dirty-tree, zero-agent-commit case: the only new commit this iteration
+    is the runner Checkpoint, which is enough to push the branch to the remote.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
+    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
+    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
+    monkeypatch.setattr(
+        git_module, "commit", lambda message, start=None: "cap" + "0" * 37
+    )
+    push_calls: list[Any] = []
+    monkeypatch.setattr(
+        git_module, "push", lambda start=None: push_calls.append(start)
+    )
+
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert len(push_calls) == 1, "the Checkpoint must trigger exactly one push"
+    types_seen = _logged_types(tmp_path)
+    assert "wrapper.checkpoint.recorded" in types_seen
+    assert "wrapper.push.recorded" in types_seen
+
+
+def test_loop_no_push_when_clean_and_no_new_commits(tmp_path, monkeypatch) -> None:
+    """A clean tree with no agent commit and no Checkpoint never pushes."""
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
+    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
+    push_calls: list[Any] = []
+    monkeypatch.setattr(
+        git_module, "push", lambda start=None: push_calls.append(start)
+    )
+
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert push_calls == [], "nothing new to push -> no push attempt"
+    assert "wrapper.push.recorded" not in _logged_types(tmp_path)
+
+
+def test_loop_push_failure_is_non_fatal(tmp_path, monkeypatch) -> None:
+    """A push failure (no remote / auth / non-fast-forward) warns but never aborts.
+
+    A local-only repo (no upstream) must keep working: the push raises
+    :exc:`git.GitError`, the loop swallows it with a warning, the run exits 0,
+    and — mirroring the failed-Checkpoint path — no ``wrapper.push.recorded``
+    event is emitted (the push never landed).
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
+    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
+    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
+    monkeypatch.setattr(
+        git_module, "commit", lambda message, start=None: "cap" + "0" * 37
+    )
+
+    def boom(start: Any = None) -> None:
+        raise git_module.GitError(["git", "push"], 128, "no upstream configured")
+
+    monkeypatch.setattr(git_module, "push", boom)
+
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    # The failed push did not abort the run.
+    assert exit_code == 0
+    types_seen = _logged_types(tmp_path)
+    # The Checkpoint landed, but the push failed -> no push event, clean end.
+    assert "wrapper.checkpoint.recorded" in types_seen
+    assert "wrapper.push.recorded" not in types_seen
     assert "wrapper.run.end" in types_seen
 
 

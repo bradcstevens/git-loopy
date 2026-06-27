@@ -69,6 +69,7 @@ __all__ = [
     "WRAPPER_AFK_READY_COLLECTED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
+    "WRAPPER_PUSH_RECORDED",
     "WRAPPER_AUTO_CLOSE",
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
@@ -106,6 +107,11 @@ WRAPPER_ITERATION_END = "wrapper.iteration.end"
 WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
+# Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in
+# pushing the current branch to its upstream after new commits. A push FAILURE
+# is non-fatal and emits no event (it only warns), mirroring how a failed
+# Checkpoint emits nothing — see ``_Loop._maybe_push``.
+WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"
 WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"

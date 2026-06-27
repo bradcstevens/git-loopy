@@ -74,6 +74,7 @@ from ralph_afk.events import (
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
     WRAPPER_STRIKE,
@@ -97,6 +98,7 @@ def test_wrapper_event_constants_are_literal_strings() -> None:
     assert WRAPPER_AFK_READY_COLLECTED == "wrapper.afk_ready.collected"
     assert WRAPPER_CHECKPOINT_RECORDED == "wrapper.checkpoint.recorded"
     assert WRAPPER_COMMIT_RECORDED == "wrapper.commit.recorded"
+    assert WRAPPER_PUSH_RECORDED == "wrapper.push.recorded"
     assert WRAPPER_AUTO_CLOSE == "wrapper.auto_close"
     assert WRAPPER_STRIKE == "wrapper.strike"
     assert WRAPPER_ASK_USER_ATTEMPTED == "wrapper.ask_user.attempted"

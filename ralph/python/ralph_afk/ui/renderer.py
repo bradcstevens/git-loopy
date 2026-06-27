@@ -60,6 +60,7 @@ from ralph_afk.events import (
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_PR_ADVANCED,
+    WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
     WRAPPER_STRIKE,
@@ -270,6 +271,16 @@ class Renderer:
         if issue is not None:
             label = f"#{issue}" if isinstance(issue, int) else str(issue)
             text.append(f"  ({label})", style=STYLES["meta"])
+        self.console.print(text)
+
+    def _on_push_recorded(self, event: dict[str, Any]) -> None:
+        # The runner auto-push (ADR-0004) landed: the current branch reached its
+        # upstream after this iteration's new commits. Like a Checkpoint, a push
+        # is a runner action — NOT an agent commit — so it is rendered with its
+        # own glyph and never touches the Summary commit tally.
+        text = Text()
+        text.append("⇡ ", style=STYLES["meta"])
+        text.append("pushed to upstream", style=STYLES["meta"])
         self.console.print(text)
 
     def _on_commit_recorded(self, event: dict[str, Any]) -> None:
@@ -536,6 +547,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
+    WRAPPER_PUSH_RECORDED: Renderer._on_push_recorded,
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
     WRAPPER_PR_ADVANCED: Renderer._on_pr_advanced,
     WRAPPER_STRIKE: Renderer._on_strike,
