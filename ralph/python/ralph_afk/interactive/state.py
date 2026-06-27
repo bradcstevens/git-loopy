@@ -28,6 +28,15 @@ its waiting + active timing. The active issue is attributed from the agent's
 **working marker** (``<working issue=N>``, tapped off the message stream) with a
 commit-time ``Closes #N`` backstop.
 
+From issue #36 (ADR-0003) each ledger entry also carries **per-issue
+consumption**: the input/output tokens of every ``usage.tokens`` event observed
+while the issue was active (the model they were billed against too), **summed
+across every iteration** that worked it — attributed to the same Active issue as
+the timing and Log, with the same pending-pre-marker flush. The Queue renders
+these as live tokens-in / tokens-out / estimated-cost columns; summed they
+reconcile with the run-level **Summary** totals (which still account per
+iteration).
+
 From issue #34 (ADR-0003) the model also carries the **per-issue Logs**: one
 bounded ring-buffer tail *per issue*, keyed by ref, of interleaved reasoning
 (dimmed), assistant message text, and key structured events (tool calls,
@@ -105,6 +114,12 @@ _ASSISTANT_MESSAGE = "assistant.message"
 # and kept in lockstep by the parity test.
 _ASSISTANT_REASONING = "assistant.reasoning"
 _TOOL_CALL = "tool.call"
+#: Per-turn token usage (issue #36): the SDK's ``assistant.usage`` mapped to
+#: ``{model, input, output}``. Folded into the **Active issue**'s per-issue
+#: consumption (tokens in/out + cost), summing across every iteration that
+#: worked it. Re-declared locally (importing ``ralph_afk.events`` would pull the
+#: SDK) and kept in lockstep by the parity test.
+_USAGE_TOKENS = "usage.tokens"
 
 #: Status shown before the first ``wrapper.run.start`` is observed.
 _STATUS_STARTING = "starting"
@@ -174,6 +189,14 @@ class IssueLedgerEntry:
     * ``waiting_duration`` — ``first_seen`` to first active.
     * ``active_duration`` — time spent active; **sums across iterations** if the
       issue is revisited (live-ticking via :meth:`active_seconds`).
+    * ``tokens_in`` / ``tokens_out`` — per-issue **consumption** (issue #36): the
+      input/output tokens of every ``usage.tokens`` event attributed to this
+      issue while it was the Active issue, **summed across every iteration** that
+      worked it (the same accumulate-not-reset rule as ``active_duration``). The
+      Queue's per-issue **Cost** is :func:`estimate_cost` over these.
+    * ``model`` — the model the usage was billed against (first non-None wins,
+      mirroring :class:`~ralph_afk.ui.summary.RunSummary`); the basis for the
+      per-issue cost estimate. ``None`` until a usage event names one.
     * ``ended_at`` — when a terminal closure (closed / advanced) was recorded.
     * ``active_since`` — internal: start of the current active stint, or
       ``None`` when not currently active.
@@ -187,6 +210,9 @@ class IssueLedgerEntry:
     started_wall: datetime | None = None
     waiting_duration: float | None = None
     active_duration: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    model: str | None = None
     ended_at: float | None = None
     active_since: float | None = None
 
@@ -292,6 +318,16 @@ class LiveRunState:
         #: active issue's buffer the moment it is activated (the working-marker
         #: attribution). Reset at each ``iteration.start``; bounded like a Log.
         self._pending: deque[LogLine] = deque(maxlen=_LOG_TAIL_LINES)
+        #: Pending pre-marker token usage for the current iteration (issue #36),
+        #: the consumption analogue of ``_pending``: ``usage.tokens`` that arrive
+        #: before the active issue is known accrue here and are flushed onto the
+        #: active issue on activation (including the late ``Closes #N`` /
+        #: single-member-pool backstop). Reset at each ``iteration.start``; an
+        #: iteration that never names an active issue discards them, the same
+        #: orphan treatment as ``_pending``.
+        self._pending_tokens_in = 0
+        self._pending_tokens_out = 0
+        self._pending_model: str | None = None
         #: The in-progress (newline-less) streamed line and which stream it
         #: belongs to, surfaced as a provisional trailing line by :meth:`log`
         #: so output appears live (not only on newline). ``_partial_started`` is
@@ -320,7 +356,10 @@ class LiveRunState:
         * the **per-issue Log** (#34) folds tool calls, commits, and closures
           into the active issue's bounded tail here, joining the streamed
           reasoning/message deltas taken in :meth:`stream_reasoning` /
-          :meth:`stream_message`.
+          :meth:`stream_message`;
+        * the **per-issue consumption** (#36) folds ``usage.tokens`` into the
+          active issue's token tallies (the basis for the Queue's per-issue
+          Cost), summing across every iteration that worked it.
 
         Unknown event types only contribute their ``run_id`` (learned once).
         """
@@ -371,6 +410,12 @@ class LiveRunState:
         elif etype == _ASSISTANT_MESSAGE:
             self._finalize_message(event.get("content"))
             self._scan_for_marker(event.get("content"))
+        elif etype == _USAGE_TOKENS:
+            self._record_usage(
+                event.get("model"),
+                event.get("input"),
+                event.get("output"),
+            )
         elif etype == _RUN_END:
             outcome = event.get("outcome")
             self.status = str(outcome) if outcome is not None else "ended"
@@ -528,6 +573,71 @@ class LiveRunState:
             self.active_ref, deque(maxlen=_LOG_TAIL_LINES)
         )
 
+    # -- per-issue consumption (issue #36) ---------------------------------
+
+    def _record_usage(
+        self, model: Any, tokens_in: Any, tokens_out: Any
+    ) -> None:
+        """Attribute one ``usage.tokens`` event to the Active issue's tally.
+
+        While an issue is active the tokens accrue to its own entry (summing
+        across every iteration that worked it). Before the iteration's working
+        marker is known they accrue to the pending buckets and are flushed onto
+        the active issue on :meth:`_activate` — the consumption analogue of the
+        Log's pending pre-marker buffer, so the late ``Closes #N`` /
+        single-member-pool backstop attributes the whole iteration's usage too.
+        """
+        tin = max(0, _coerce_int(tokens_in, 0))
+        tout = max(0, _coerce_int(tokens_out, 0))
+        name = str(model) if model else None
+        if self.active_ref is not None:
+            entry = self.ledger.get(self.active_ref)
+            if entry is not None:
+                self._accrue_usage(entry, name, tin, tout)
+            return
+        # Pre-marker: hold until the active issue is known (flushed in _activate).
+        if self._pending_model is None and name is not None:
+            self._pending_model = name
+        self._pending_tokens_in += tin
+        self._pending_tokens_out += tout
+
+    @staticmethod
+    def _accrue_usage(
+        entry: IssueLedgerEntry, model: str | None, tokens_in: int, tokens_out: int
+    ) -> None:
+        """Fold a token sample into ``entry``; first non-None model wins.
+
+        The model selection mirrors :meth:`RunSummary.record_usage` so the
+        per-issue cost basis matches the run-level Summary's per-iteration basis,
+        keeping the two reconcilable.
+        """
+        if entry.model is None and model is not None:
+            entry.model = model
+        entry.tokens_in += tokens_in
+        entry.tokens_out += tokens_out
+
+    def _flush_pending_usage(self, entry: IssueLedgerEntry) -> None:
+        """Drain the pending pre-marker token buckets onto ``entry`` and reset.
+
+        Called from :meth:`_activate` once the active issue is known. After the
+        first activation the buckets are empty, so a later same-iteration switch
+        of active issue is a no-op (pre-marker usage belongs to the first one).
+        """
+        if (
+            self._pending_tokens_in
+            or self._pending_tokens_out
+            or self._pending_model is not None
+        ):
+            self._accrue_usage(
+                entry,
+                self._pending_model,
+                self._pending_tokens_in,
+                self._pending_tokens_out,
+            )
+        self._pending_tokens_in = 0
+        self._pending_tokens_out = 0
+        self._pending_model = None
+
     def _stream_into(self, kind: str, delta: str) -> None:
         """Append a streamed delta, committing each completed (``\\n``) line.
 
@@ -673,12 +783,17 @@ class LiveRunState:
         self._iter_commits = 0
         self._iter_strike = False
         self._msg_buffer = ""
-        # Per-issue Logs ACCUMULATE across iterations (issue #34), so they are
-        # never cleared here. Only the per-iteration streaming scratch resets:
-        # the pending pre-marker buffer and the open streamed line. Any orphan
-        # pre-marker output from an iteration that never identified an active
-        # issue is discarded here (it lives on in the JSONL replay log).
+        # Per-issue Logs (and per-issue token tallies) ACCUMULATE across
+        # iterations (issues #34 / #36), so they are never cleared here. Only the
+        # per-iteration streaming scratch resets: the pending pre-marker buffer,
+        # the pending pre-marker token usage, and the open streamed line. Any
+        # orphan pre-marker output / usage from an iteration that never
+        # identified an active issue is discarded here (it lives on in the JSONL
+        # replay log / the run-level Summary).
         self._pending.clear()
+        self._pending_tokens_in = 0
+        self._pending_tokens_out = 0
+        self._pending_model = None
         self._partial_kind = None
         self._partial_text = ""
         self._partial_started = None
@@ -756,6 +871,9 @@ class LiveRunState:
         if self._pending:
             buf.extend(self._pending)
             self._pending.clear()
+        # Likewise attribute this iteration's pre-marker token usage (issue #36)
+        # to the now-active issue, then reset the pending buckets.
+        self._flush_pending_usage(entry)
 
     def _record_closure(self, ref: Any, now: float, *, status: str) -> None:
         """Record an authoritative commit-time outcome (closed / advanced).
@@ -1084,13 +1202,17 @@ class QueueRow:
 
     A pure, Textual-free snapshot (mirrors :func:`format_header`) so the live
     Queue's *content + ordering* is unit-testable without a TTY. The columns are
-    **Issue | Status | Started | Active** (issue #33, ADR-0003): ``started_wall``
-    is the **wall-clock** time the issue first became active (the widget formats
-    it via :func:`format_wall_clock`; ``None`` until it has been active), and
-    ``active_seconds`` is the live ``H:MM:SS`` duration that sums across every
-    iteration that worked the issue (the widget formats it via
-    :func:`format_duration`, ticking against the caller's ``now`` — see
-    :func:`queue_rows`). There is no Waiting column.
+    **Issue | Status | Started | Active | Tokens in | Tokens out | Cost**
+    (issues #33 / #36, ADR-0003): ``started_wall`` is the **wall-clock** time the
+    issue first became active (the widget formats it via :func:`format_wall_clock`;
+    ``None`` until it has been active), ``active_seconds`` is the live ``H:MM:SS``
+    duration that sums across every iteration that worked the issue (the widget
+    formats it via :func:`format_duration`, ticking against the caller's ``now`` —
+    see :func:`queue_rows`), and ``tokens_in`` / ``tokens_out`` / ``model`` are
+    the issue's accumulated **consumption** — the widget renders the token counts
+    and derives the per-issue **Cost** via :func:`~ralph_afk.pricing.estimate_cost`
+    over ``model`` (``None`` model → the unknown-model em dash). There is no
+    Waiting column.
     """
 
     ref: int | str
@@ -1098,6 +1220,9 @@ class QueueRow:
     started_wall: datetime | None
     active_seconds: float
     is_active: bool
+    tokens_in: int
+    tokens_out: int
+    model: str | None
 
     @property
     def label(self) -> str:
@@ -1118,7 +1243,11 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
     **Active** duration (``active_seconds``), which ticks against ``now``
     (defaulting to the injected monotonic clock, the same basis as the header)
     while the issue is being worked and freezes once it ends / the run stops,
-    summing across every iteration that worked it.
+    summing across every iteration that worked it. It also carries the issue's
+    accumulated **consumption** (issue #36): ``tokens_in`` / ``tokens_out`` and
+    the ``model`` they were billed against, likewise summed across every
+    iteration that worked it — the basis for the per-issue Cost the widget
+    derives via :func:`~ralph_afk.pricing.estimate_cost`.
     """
     base = now if now is not None else state._monotonic()
     rows: list[QueueRow] = []
@@ -1131,6 +1260,9 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 started_wall=entry.started_wall,
                 active_seconds=entry.active_seconds(base),
                 is_active=is_active,
+                tokens_in=entry.tokens_in,
+                tokens_out=entry.tokens_out,
+                model=entry.model,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))

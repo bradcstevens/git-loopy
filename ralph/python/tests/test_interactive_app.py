@@ -18,6 +18,7 @@ plus the unchanged exit model — **Stop** (``q`` / ``Ctrl+C``) and **Detach**
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
@@ -34,6 +35,8 @@ from ralph_afk.interactive.app import (  # noqa: E402
     _LogView,
 )
 from ralph_afk.interactive.state import LiveRunState  # noqa: E402
+from ralph_afk.pricing import ModelPricing, Pricing  # noqa: E402
+from ralph_afk.ui.summary import RunSummary  # noqa: E402
 
 
 class _FakeSummary:
@@ -188,7 +191,15 @@ async def test_dashboard_queue_columns_drop_waiting_add_started() -> None:
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
         labels = [str(col.label) for col in table.columns.values()]
-        assert labels == ["Issue", "Status", "Started", "Active"]
+        assert labels == [
+            "Issue",
+            "Status",
+            "Started",
+            "Active",
+            "Tokens in",
+            "Tokens out",
+            "Cost USD",
+        ]
         assert "Waiting" not in labels
         # The active row (#26) shows its Started wall clock in 12h AM/PM.
         active_row = table.get_row_at(0)
@@ -198,6 +209,59 @@ async def test_dashboard_queue_columns_drop_waiting_add_started() -> None:
         assert table.get_row_at(1)[1] == "queued"
         assert table.get_row_at(1)[2] == "—"
         assert table.get_row_at(2)[2] == "—"
+
+
+async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
+    """The Queue carries live per-issue tokens in / out + estimated Cost (#36).
+
+    The active issue (#26) accrues a usage event and shows its tokens plus a
+    cost computed from the **Summary's** pricing table (the same source the
+    rollup band uses, so the two reconcile). A still-queued issue (#27) shows
+    zero tokens and the em-dash cost — no usage, no priced model yet.
+    """
+    pricing = Pricing(
+        models={
+            "claude-opus-4.8": ModelPricing(
+                input_per_mtok=Decimal("15"),
+                output_per_mtok=Decimal("75"),
+                context_window=200_000,
+            )
+        }
+    )
+    state = LiveRunState(run_id="01U", model="claude-opus-4.8", reasoning_effort="x")
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26, 27]}
+    )
+    state.stream_message("<working issue=26>")
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "claude-opus-4.8",
+            "input": 1000,
+            "output": 200,
+        }
+    )
+
+    app = RalphApp(
+        state, summary=RunSummary(pricing=pricing), refresh_interval=3600
+    )
+    async with app.run_test():
+        table = app.query_one("#queue", DataTable)
+        # Columns: Issue | Status | Started | Active | Tokens in | out | Cost.
+        active_row = table.get_row_at(0)
+        assert active_row[0] == "#26"
+        assert active_row[4] == "1,000"
+        assert active_row[5] == "200"
+        # 1000 * 15/1e6 + 200 * 75/1e6 = 0.015 + 0.015 = 0.0300.
+        assert active_row[6] == "$0.0300"
+        # The still-queued #27 has no usage: zero tokens, em-dash cost.
+        queued_row = table.get_row_at(1)
+        assert queued_row[0] == "#27"
+        assert queued_row[4] == "0"
+        assert queued_row[5] == "0"
+        assert queued_row[6] == "—"
 
 
 async def test_summary_band_renders_rollup() -> None:

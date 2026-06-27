@@ -248,6 +248,8 @@ def test_state_event_type_constants_match_events() -> None:
     # Log-driving literals (issue #34).
     assert state_module._ASSISTANT_REASONING == events_module.ASSISTANT_REASONING
     assert state_module._TOOL_CALL == events_module.TOOL_CALL
+    # Per-issue consumption literal (issue #36).
+    assert state_module._USAGE_TOKENS == events_module.USAGE_TOKENS
 
 
 def test_state_module_imports_are_constrained() -> None:

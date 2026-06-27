@@ -11,6 +11,7 @@ the Pilot test in ``test_interactive_app.py`` covers the widget rendering.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from ralph_afk import events as events_module
 from ralph_afk.interactive.state import (
@@ -25,6 +26,8 @@ from ralph_afk.interactive.state import (
     format_wall_clock,
     queue_rows,
 )
+from ralph_afk.pricing import ModelPricing, Pricing, estimate_cost
+from ralph_afk.ui.summary import RunSummary
 
 
 class _FakeClock:
@@ -57,6 +60,32 @@ def _collect(state: LiveRunState, *issues: int) -> None:
     state.render(
         {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": list(issues)}
     )
+
+
+def _usage(state: LiveRunState, *, model: str | None, tin: int, tout: int) -> None:
+    """Drive one ``usage.tokens`` session event into the state sink."""
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": model,
+            "input": tin,
+            "output": tout,
+        }
+    )
+
+
+#: A small, explicit pricing table so per-issue cost is exactly assertable and
+#: independent of the packaged ``pricing.toml`` figures (15 / 75 USD per Mtok —
+#: the ``claude-opus-4.8`` shape).
+_PRICING = Pricing(
+    models={
+        "claude-opus-4.8": ModelPricing(
+            input_per_mtok=Decimal("15"),
+            output_per_mtok=Decimal("75"),
+            context_window=200_000,
+        )
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -292,3 +321,173 @@ def test_completed_row_timers_are_frozen() -> None:
     assert frozen.active_seconds == 10.0
     clock.advance(1000)
     assert queue_rows(state)[0].active_seconds == 10.0  # still frozen
+
+
+# ---------------------------------------------------------------------------
+# queue_rows — per-issue consumption: tokens in / out + model for cost (#36)
+# ---------------------------------------------------------------------------
+
+
+def test_usage_accrues_tokens_and_model_to_the_active_issue() -> None:
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 36, 37)
+    state.stream_message("<working issue=36>")
+    _usage(state, model="claude-opus-4.8", tin=1000, tout=200)
+
+    by_ref = {r.ref: r for r in queue_rows(state)}
+    # The Active issue carries the iteration's tokens + the usage event's model.
+    assert by_ref[36].tokens_in == 1000
+    assert by_ref[36].tokens_out == 200
+    assert by_ref[36].model == "claude-opus-4.8"
+    # A still-queued issue accrues nothing (no usage attributed to it).
+    assert by_ref[37].tokens_in == 0
+    assert by_ref[37].tokens_out == 0
+    assert by_ref[37].model is None
+
+
+def test_usage_sums_across_iterations_for_one_issue() -> None:
+    """Per-issue tokens sum across every iteration that worked the issue — the
+    queue keeps one entry per issue (issue #36 / CONTEXT.md)."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    # iter 1: #90 active, two usage events.
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 90)
+    state.stream_message("<working issue=90>")
+    _usage(state, model="claude-opus-4.8", tin=1000, tout=200)
+    _usage(state, model="claude-opus-4.8", tin=300, tout=50)
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    # iter 2: #90 worked again; its tokens resume from the carried totals.
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    _collect(state, 90)
+    state.stream_message("<working issue=90>")
+    _usage(state, model="claude-opus-4.8", tin=500, tout=100)
+
+    row = queue_rows(state)[0]
+    assert row.tokens_in == 1000 + 300 + 500
+    assert row.tokens_out == 200 + 50 + 100
+
+
+def test_pre_marker_usage_is_attributed_to_the_active_issue() -> None:
+    """Usage produced before the working marker lands is held pending and
+    flushed onto the active issue once it is known (mirrors the Log)."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 50)
+    # Tokens arrive BEFORE the marker (no active issue yet).
+    _usage(state, model="claude-opus-4.8", tin=700, tout=90)
+    state.stream_message("<working issue=50>")
+    # And more after activation.
+    _usage(state, model="claude-opus-4.8", tin=100, tout=10)
+
+    row = queue_rows(state)[0]
+    assert row.ref == 50
+    assert row.tokens_in == 800
+    assert row.tokens_out == 100
+    assert row.model == "claude-opus-4.8"
+
+
+def test_usage_attributed_via_closure_backstop_when_no_marker() -> None:
+    """With no working marker, the ``Closes #N`` backstop activates the issue at
+    closure time; pre-activation usage is still attributed to it (issue #36)."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 61)
+    # All usage arrives before the (late) activation — no marker this iteration.
+    _usage(state, model="claude-opus-4.8", tin=1200, tout=300)
+    state.render({"type": events_module.WRAPPER_COMMIT_RECORDED})
+    state.render({"type": events_module.WRAPPER_AUTO_CLOSE, "issue": 61})
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    row = queue_rows(state)[0]
+    assert row.ref == 61
+    assert row.status == STATUS_CLOSED
+    assert row.tokens_in == 1200
+    assert row.tokens_out == 300
+
+
+def test_orphan_usage_without_an_active_issue_is_not_attributed() -> None:
+    """Usage in an iteration that never produces an active issue (no marker, no
+    closure, multi-issue pool) is discarded at the next iteration boundary — the
+    same orphan treatment as pre-marker Log output."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 71, 72)  # two issues, so no single-member inference
+    _usage(state, model="claude-opus-4.8", tin=999, tout=99)
+    state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+    for row in queue_rows(state):
+        assert row.tokens_in == 0
+        assert row.tokens_out == 0
+        assert row.model is None
+
+
+def test_unknown_model_cost_is_none_not_a_crash() -> None:
+    """An issue worked on a model absent from the pricing table keeps its tokens
+    but yields ``None`` cost — the existing unknown-model treatment (the renderer
+    shows the em dash), never a crash (issue #36 acceptance criterion)."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 80)
+    state.stream_message("<working issue=80>")
+    _usage(state, model="mystery-model", tin=400, tout=60)
+
+    row = queue_rows(state)[0]
+    assert row.model == "mystery-model"
+    assert row.tokens_in == 400
+    # estimate_cost returns None (not zero, not a crash) for the unknown model.
+    assert estimate_cost(row.model, row.tokens_in, row.tokens_out, _PRICING) is None
+
+
+def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
+    """Summing per-issue tokens + cost reconciles with the run-level Summary
+    totals (issue #36 acceptance criterion). The same usage drives both: the
+    per-issue ledger (Active-issue attribution) and a ``RunSummary`` (per
+    iteration), and the totals agree."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    summary = RunSummary(pricing=_PRICING)
+
+    # Three iterations: #100 worked twice, #101 once, each with its own usage.
+    plan = [
+        (1, 100, 1000, 200),
+        (2, 100, 500, 100),
+        (3, 101, 300, 50),
+    ]
+    for iter_num, issue, tin, tout in plan:
+        state.render(
+            {"type": events_module.WRAPPER_ITERATION_START, "iter": iter_num}
+        )
+        _collect(state, issue)
+        state.stream_message(f"<working issue={issue}>")
+        _usage(state, model="claude-opus-4.8", tin=tin, tout=tout)
+        state.render({"type": events_module.WRAPPER_ITERATION_END})
+
+        summary.on_iteration_start(iter_num=iter_num, issue_num=issue)
+        summary.record_usage(model="claude-opus-4.8", tokens_in=tin, tokens_out=tout)
+        summary.on_iteration_end()
+
+    rows = queue_rows(state)
+    totals = summary.totals()
+    # Tokens reconcile exactly.
+    assert sum(r.tokens_in for r in rows) == totals.tokens_in
+    assert sum(r.tokens_out for r in rows) == totals.tokens_out
+    # Per-issue accumulation: #100 summed both of its iterations.
+    by_ref = {r.ref: r for r in rows}
+    assert (by_ref[100].tokens_in, by_ref[100].tokens_out) == (1500, 300)
+    assert (by_ref[101].tokens_in, by_ref[101].tokens_out) == (300, 50)
+    # Cost reconciles too (cost is linear in tokens; one model across the run).
+    per_issue_cost = Decimal(0)
+    for r in rows:
+        assert r.model is not None  # every worked issue recorded its usage model
+        per_issue_cost += (
+            estimate_cost(r.model, r.tokens_in, r.tokens_out, _PRICING) or Decimal(0)
+        )
+    assert per_issue_cost == totals.cost_usd

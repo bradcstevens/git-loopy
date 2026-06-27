@@ -9,8 +9,9 @@ Two levels, no tab bar:
 
 * **Level 1 — the Dashboard** (the only top-level screen): the #23 header band,
   the live **Queue** (the #25 ledger projected by
-  :func:`~ralph_afk.interactive.state.queue_rows`), and a compact **Summary**
-  rollup band (run-level totals from
+  :func:`~ralph_afk.interactive.state.queue_rows`, with the #36 per-issue
+  consumption columns — tokens in / out + estimated Cost), and a compact
+  **Summary** rollup band (run-level totals from
   :meth:`~ralph_afk.ui.summary.RunSummary.build_rollup_band`), stacked. The
   Queue holds focus; ``up`` / ``down`` move its cursor.
 * **Level 2 — the per-issue Log**: ``enter`` on a Queue row opens that issue's
@@ -59,6 +60,7 @@ from ralph_afk.interactive.state import (
     log_line_views,
     queue_rows,
 )
+from ralph_afk.pricing import Pricing, estimate_cost
 
 if TYPE_CHECKING:
     from ralph_afk.ui.summary import RunSummary
@@ -81,6 +83,26 @@ _STAMP_WIDTH = 11
 _LOG_NEW_LINES_BELOW = "↓ new lines below — End to re-engage auto-scroll"
 
 
+def _format_queue_cost(
+    model: str | None,
+    tokens_in: int,
+    tokens_out: int,
+    pricing: Pricing | None,
+) -> str:
+    """Render a Queue row's estimated **Cost** cell (issue #36).
+
+    Reuses the existing pricing path (:func:`~ralph_afk.pricing.estimate_cost`):
+    a model absent from the pricing table — or one no usage event has named yet
+    (``model is None``), or no pricing table at all — yields the em-dash
+    placeholder rather than crashing or silently understating cost. This is the
+    same unknown-model treatment the Summary band / run-end table use.
+    """
+    if pricing is None or model is None:
+        return "—"
+    cost = estimate_cost(model, tokens_in, tokens_out, pricing)
+    return f"${cost:.4f}" if cost is not None else "—"
+
+
 class _Dashboard(Vertical):
     """Level 1: the header band, the live Queue, and the Summary rollup band."""
 
@@ -95,6 +117,9 @@ class _Dashboard(Vertical):
         table.add_column("Status", key="status")
         table.add_column("Started", key="started")
         table.add_column("Active", key="active")
+        table.add_column("Tokens in", key="tokens_in")
+        table.add_column("Tokens out", key="tokens_out")
+        table.add_column("Cost USD", key="cost")
 
 
 class _LogScroll(VerticalScroll):
@@ -355,6 +380,11 @@ class RalphApp(App[None]):
     def _sync_queue(self) -> None:
         table = self.query_one("#queue", DataTable)
         rows = queue_rows(self._state)
+        # The per-issue Cost reuses the Summary's pricing table (issue #36), so
+        # the Queue costs and the Summary band cost share one source — keeping
+        # the two reconcilable. ``None`` (no summary attached) renders the em
+        # dash, the same unknown-model treatment as a missing price.
+        pricing = getattr(self._summary, "pricing", None)
         new_refs = [str(row.ref) for row in rows]
         if new_refs != self._displayed_refs:
             saved = self._cursor_ref(table)
@@ -365,6 +395,11 @@ class RalphApp(App[None]):
                     row.status,
                     format_wall_clock(row.started_wall),
                     format_duration(row.active_seconds),
+                    f"{row.tokens_in:,}",
+                    f"{row.tokens_out:,}",
+                    _format_queue_cost(
+                        row.model, row.tokens_in, row.tokens_out, pricing
+                    ),
                     key=str(row.ref),
                 )
             self._displayed_refs = new_refs
@@ -378,6 +413,15 @@ class RalphApp(App[None]):
                     key, "started", format_wall_clock(row.started_wall)
                 )
                 table.update_cell(key, "active", format_duration(row.active_seconds))
+                table.update_cell(key, "tokens_in", f"{row.tokens_in:,}")
+                table.update_cell(key, "tokens_out", f"{row.tokens_out:,}")
+                table.update_cell(
+                    key,
+                    "cost",
+                    _format_queue_cost(
+                        row.model, row.tokens_in, row.tokens_out, pricing
+                    ),
+                )
 
     def _sync_log(self) -> None:
         """Repaint the open Log (a no-op while the Dashboard is showing).
