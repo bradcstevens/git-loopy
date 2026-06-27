@@ -56,12 +56,14 @@ __all__ = [
     "IssueLedgerEntry",
     "QueueRow",
     "LogLine",
+    "LogLineView",
     "IssueDetail",
     "format_header",
     "format_duration",
     "format_wall_clock",
     "format_detail_header",
     "queue_rows",
+    "log_line_views",
     "issue_detail",
     "STATUS_QUEUED",
     "STATUS_ACTIVE",
@@ -143,6 +145,11 @@ _MARKER_BUFFER_CHARS = 256
 LOG_REASONING = "reasoning"
 LOG_MESSAGE = "message"
 LOG_EVENT = "event"
+#: Opens each reasoning block in the Log (issue #37), mirroring the line
+#: printer's ``✻ Thinking:`` prefix. Re-declared locally (state.py stays
+#: SDK/rich-free, like the event-type literals) and kept in lockstep by a parity
+#: test (``test_thinking_marker_matches_the_line_printer_prefix``).
+_THINKING_MARKER = "✻ Thinking:"
 #: Bounded ring-buffer cap (lines) **per issue**: each issue's Log shows only
 #: this tail, so no single issue's buffer can grow without limit over a long
 #: run. The *full* record stays in the always-on JSONL replay log on disk
@@ -201,11 +208,15 @@ class LogLine:
     view renders each line and dims the reasoning ones (see :attr:`dim`).
     ``text`` is the faithful display text — for ``event`` lines it already
     carries the leading glyph the line printer uses (``✓`` / ``»`` / ``◇`` /
-    ``↑``).
+    ``↑``). ``timestamp`` is the **local wall-clock** time the line was appended
+    (issue #37), rendered as a 12-hour AM/PM stamp by :func:`log_line_views`
+    (which collapses repeats within the same second); ``None`` only if the run's
+    wall clock yields none.
     """
 
     kind: str
     text: str
+    timestamp: datetime | None = None
 
     @property
     def dim(self) -> bool:
@@ -283,9 +294,12 @@ class LiveRunState:
         self._pending: deque[LogLine] = deque(maxlen=_LOG_TAIL_LINES)
         #: The in-progress (newline-less) streamed line and which stream it
         #: belongs to, surfaced as a provisional trailing line by :meth:`log`
-        #: so output appears live (not only on newline).
+        #: so output appears live (not only on newline). ``_partial_started`` is
+        #: the wall clock captured when the open line *began* (issue #37), reused
+        #: when it commits so the live and committed stamps agree.
         self._partial_kind: str | None = None
         self._partial_text = ""
+        self._partial_started: datetime | None = None
         #: Whether the *current* reasoning / message block arrived as streamed
         #: deltas, so the matching final event finalises instead of re-adding
         #: the whole block (mirrors the line printer's de-dup).
@@ -367,14 +381,19 @@ class LiveRunState:
 
         Streamed deltas build the dimmed reasoning lines of the per-issue Log;
         the open (newline-less) line is surfaced live by :meth:`log` so output
-        appears as the model thinks. The matching final ``assistant.reasoning``
-        event then finalises the block without re-adding it (see
-        :meth:`_finalize_reasoning`). Before the working marker is known the
-        delta lands in the pending buffer (attributed on activation).
+        appears as the model thinks. The first delta of a block opens it with a
+        timestamped ``✻ Thinking:`` marker (issue #37), mirroring the line
+        printer's prefix. The matching final ``assistant.reasoning`` event then
+        finalises the block without re-adding it (see :meth:`_finalize_reasoning`).
+        Before the working marker is known the delta lands in the pending buffer
+        (attributed on activation).
         """
         if not delta:
             return
-        self._streamed_reasoning = True
+        if not self._streamed_reasoning:
+            self._flush_partial()
+            self._record_reasoning_marker()
+            self._streamed_reasoning = True
         self._stream_into(LOG_REASONING, delta)
 
     def stream_message(self, delta: str) -> None:
@@ -487,7 +506,11 @@ class LiveRunState:
         lines = list(committed)
         if include_partial and self._partial_kind is not None and self._partial_text:
             lines.append(
-                LogLine(kind=self._partial_kind, text=self._partial_text)
+                LogLine(
+                    kind=self._partial_kind,
+                    text=self._partial_text,
+                    timestamp=self._partial_started,
+                )
             )
         return tuple(lines)
 
@@ -511,17 +534,31 @@ class LiveRunState:
         A switch of stream kind (reasoning <-> message) flushes the open
         partial first, so the two streams never glue onto one line. Completed
         lines land in the active issue's Log (or the pending pre-marker buffer)
-        via :meth:`_commit_buffer`.
+        via :meth:`_commit_buffer`. Each line is stamped (issue #37) with the
+        wall clock from when its *open* line began (``_partial_started``); lines
+        that both begin and end inside this one delta share this delta's sample.
         """
         if self._partial_kind is not None and self._partial_kind != kind:
             self._flush_partial()
+        now = self._wall_clock()
+        if self._partial_text == "":
+            self._partial_started = now
         self._partial_kind = kind
         self._partial_text += str(delta)
         if "\n" in self._partial_text:
             buf = self._commit_buffer()
+            first = True
             while "\n" in self._partial_text:
                 line, self._partial_text = self._partial_text.split("\n", 1)
-                buf.append(LogLine(kind=kind, text=line))
+                buf.append(
+                    LogLine(
+                        kind=kind,
+                        text=line,
+                        timestamp=self._partial_started if first else now,
+                    )
+                )
+                first = False
+            self._partial_started = now if self._partial_text else None
 
     def _flush_partial(self) -> None:
         """Commit the open (newline-less) streamed line, if any, and reset it."""
@@ -529,33 +566,64 @@ class LiveRunState:
             return
         if self._partial_text != "":
             self._commit_buffer().append(
-                LogLine(kind=self._partial_kind, text=self._partial_text)
+                LogLine(
+                    kind=self._partial_kind,
+                    text=self._partial_text,
+                    timestamp=self._partial_started,
+                )
             )
         self._partial_kind = None
         self._partial_text = ""
+        self._partial_started = None
 
     def _append_block(self, kind: str, content: Any) -> None:
         """Append a whole (non-streamed) reasoning/message block as lines."""
         if not isinstance(content, str) or content == "":
             return
+        now = self._wall_clock()
         buf = self._commit_buffer()
         for line in content.split("\n"):
-            buf.append(LogLine(kind=kind, text=line))
+            buf.append(LogLine(kind=kind, text=line, timestamp=now))
 
     def _record_event_line(self, text: str) -> None:
         """Append a key structured-event line (flushing any open stream line)."""
         if not text:
             return
         self._flush_partial()
-        self._commit_buffer().append(LogLine(kind=LOG_EVENT, text=text))
+        self._commit_buffer().append(
+            LogLine(kind=LOG_EVENT, text=text, timestamp=self._wall_clock())
+        )
+
+    def _record_reasoning_marker(self) -> None:
+        """Open a reasoning block with a stamped ``✻ Thinking:`` marker (#37).
+
+        Its own dimmed (reasoning-kind) line, carrying the wall clock of the
+        block's start; the reasoning content streams or appends after it. The
+        single same-second stamp then sits on this marker (see
+        :func:`log_line_views`), so the block reads as one timestamped unit.
+        """
+        self._commit_buffer().append(
+            LogLine(
+                kind=LOG_REASONING,
+                text=_THINKING_MARKER,
+                timestamp=self._wall_clock(),
+            )
+        )
 
     def _finalize_reasoning(self, content: Any) -> None:
-        """Finalise a reasoning block: close the streamed line, else append it."""
+        """Finalise a reasoning block: close the streamed line, else append it.
+
+        A streamed block already opened with its ``✻ Thinking:`` marker on the
+        first delta, so finalising only clears the per-block flag. A non-streamed
+        block (deltas absent) opens its marker here, before the block's lines.
+        """
         self._flush_partial()
         if self._streamed_reasoning:
             self._streamed_reasoning = False
             return
-        self._append_block(LOG_REASONING, content)
+        if isinstance(content, str) and content != "":
+            self._record_reasoning_marker()
+            self._append_block(LOG_REASONING, content)
 
     def _finalize_message(self, content: Any) -> None:
         """Finalise a message block: close the streamed line, else append it."""
@@ -613,6 +681,7 @@ class LiveRunState:
         self._pending.clear()
         self._partial_kind = None
         self._partial_text = ""
+        self._partial_started = None
         self._streamed_reasoning = False
         self._streamed_message = False
 
@@ -922,6 +991,46 @@ def format_wall_clock(when: datetime | None) -> str:
     return when.strftime("%I:%M:%S %p").lstrip("0")
 
 
+@dataclass(frozen=True)
+class LogLineView:
+    """One :class:`LogLine` projected for display (issue #37).
+
+    A pure, Textual-free row the Log view renders directly: ``text`` and ``dim``
+    come straight from the line, and ``stamp`` is its 12-hour AM/PM wall-clock
+    time **only on the first line of each second** — repeats within the same
+    second carry a blank ``stamp`` so the timestamp column stays uncluttered
+    (mirrors how a long burst of output reads). A line with no timestamp renders
+    a blank stamp.
+    """
+
+    stamp: str
+    text: str
+    dim: bool
+
+
+def log_line_views(lines: Iterable[LogLine]) -> list[LogLineView]:
+    """Project Log lines into display rows, collapsing same-second stamps (#37).
+
+    Each line keeps the wall clock captured when it was appended; here that is
+    rendered (:func:`format_wall_clock`, 12-hour AM/PM) for the **first** line of
+    each distinct second only, so a burst of lines sharing a second shows the
+    stamp once. Lines without a timestamp render a blank stamp. The wall-clock
+    rule: stamps are 12-hour AM/PM; *durations* (elsewhere) stay ``H:MM:SS``.
+    """
+    views: list[LogLineView] = []
+    prev_second: datetime | None = None
+    for line in lines:
+        when = line.timestamp
+        if when is None:
+            stamp = ""
+        else:
+            second = when.replace(microsecond=0)
+            stamp = "" if second == prev_second else format_wall_clock(when)
+            prev_second = second
+        views.append(LogLineView(stamp=stamp, text=line.text, dim=line.dim))
+    return views
+
+
 def format_header(state: LiveRunState, *, now: float | None = None) -> str:
     """Compose the single-line header band from a :class:`LiveRunState`.
 
@@ -939,7 +1048,7 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
     else:
         model = "default"
 
-    started = state.started_wall.strftime("%H:%M:%S") if state.started_wall else "—"
+    started = format_wall_clock(state.started_wall)
     elapsed = _format_elapsed(state.elapsed_seconds(now))
 
     if state.active_ref is not None:

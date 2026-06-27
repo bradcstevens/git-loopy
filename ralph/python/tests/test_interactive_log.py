@@ -15,7 +15,7 @@ the widget rendering and the active-vs-historical difference on screen.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ralph_afk import events as events_module
 from ralph_afk.interactive import state as state_module
@@ -27,8 +27,11 @@ from ralph_afk.interactive.state import (
     STATUS_GONE,
     STATUS_QUEUED,
     LiveRunState,
+    LogLine,
+    LogLineView,
     format_detail_header,
     issue_detail,
+    log_line_views,
 )
 
 
@@ -48,13 +51,29 @@ class _FakeClock:
 _FIXED_WALL = datetime(2026, 6, 21, 12, 0, 0)
 
 
-def _make_state(clock: _FakeClock | None = None) -> LiveRunState:
+class _FakeWallClock:
+    """A controllable wall clock: ``advance`` (seconds) then call to read."""
+
+    def __init__(self, start: datetime = _FIXED_WALL) -> None:
+        self.value = start
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += timedelta(seconds=seconds)
+
+
+def _make_state(
+    clock: _FakeClock | None = None,
+    wall: _FakeWallClock | None = None,
+) -> LiveRunState:
     return LiveRunState(
         run_id="01LOG",
         model="claude-opus-4.8",
         reasoning_effort="max",
         monotonic=clock if clock is not None else _FakeClock(),
-        wall_clock=lambda: _FIXED_WALL,
+        wall_clock=wall if wall is not None else (lambda: _FIXED_WALL),
     )
 
 
@@ -217,7 +236,12 @@ def test_final_reasoning_without_streaming_appends_a_dimmed_block() -> None:
         }
     )
     lines = state.log()
-    assert [line.text for line in lines] == ["considered A", "considered B"]
+    # The block opens with the ✻ Thinking: marker (issue #37), then its lines.
+    assert [line.text for line in lines] == [
+        "✻ Thinking:",
+        "considered A",
+        "considered B",
+    ]
     assert all(line.kind == LOG_REASONING and line.dim for line in lines)
 
 
@@ -386,3 +410,140 @@ def test_format_detail_header_contains_all_fields() -> None:
     assert "status active" in header
     assert "active 0:01:05" in header
     assert "first seen iter 2" in header
+
+
+# ---------------------------------------------------------------------------
+# Timestamps (issue #37): each Log line is stamped at append time
+# ---------------------------------------------------------------------------
+
+
+def test_event_line_is_stamped_with_the_wall_clock_at_append() -> None:
+    """A structured-event line carries the wall-clock time it was appended."""
+    wall = _FakeWallClock()
+    state = _make_state(wall=wall)
+    wall.advance(7)  # 12:00:07
+    state.render(
+        {
+            "type": events_module.TOOL_CALL,
+            "tool_name": "bash",
+            "arguments": {"command": "ls"},
+        }
+    )
+    line = state.log()[-1]
+    assert line.text == "» bash  command=ls"
+    assert line.timestamp == _FIXED_WALL + timedelta(seconds=7)
+
+
+def test_streamed_line_is_stamped_when_the_line_begins() -> None:
+    """A streamed line keeps the wall clock from when its first delta arrived."""
+    wall = _FakeWallClock()
+    state = _make_state(wall=wall)
+    state.stream_message("hello ")  # open partial begins at 12:00:00
+    wall.advance(3)  # the terminating delta arrives later, same logical line
+    state.stream_message("world\n")
+    line = state.log()[-1]
+    assert line.text == "hello world"
+    assert line.timestamp == _FIXED_WALL  # stamped at line start, not at commit
+
+
+def test_open_partial_is_stamped_live() -> None:
+    """The provisional (newline-less) partial surfaced by ``log`` is stamped."""
+    wall = _FakeWallClock()
+    state = _make_state(wall=wall)
+    wall.advance(2)
+    state.stream_message("still typing")
+    line = state.log()[-1]
+    assert line.text == "still typing"
+    assert line.timestamp == _FIXED_WALL + timedelta(seconds=2)
+
+
+# ---------------------------------------------------------------------------
+# log_line_views (issue #37): 12h stamp on the first line of each second
+# ---------------------------------------------------------------------------
+
+
+def test_log_line_views_render_12_hour_stamp_and_carry_dim() -> None:
+    """The first line of a second shows a 12h AM/PM stamp; dim follows the kind."""
+    t0 = datetime(2026, 6, 21, 13, 42, 7)
+    views = log_line_views(
+        [
+            LogLine(kind=LOG_REASONING, text="thinking", timestamp=t0),
+            LogLine(kind=LOG_MESSAGE, text="answer", timestamp=t0),
+        ]
+    )
+    assert isinstance(views[0], LogLineView)
+    assert views[0].stamp == "1:42:07 PM"
+    assert (views[0].text, views[0].dim) == ("thinking", True)
+    assert (views[1].text, views[1].dim) == ("answer", False)
+
+
+def test_log_line_views_collapse_repeats_within_the_same_second() -> None:
+    """Only the first line in a given second carries the stamp (issue #37)."""
+    t0 = datetime(2026, 6, 21, 13, 42, 7)
+    views = log_line_views(
+        [
+            LogLine(kind=LOG_MESSAGE, text="a", timestamp=t0),
+            LogLine(kind=LOG_MESSAGE, text="b", timestamp=t0 + timedelta(microseconds=300_000)),
+            LogLine(kind=LOG_MESSAGE, text="c", timestamp=t0 + timedelta(seconds=1)),
+            LogLine(kind=LOG_MESSAGE, text="d", timestamp=t0 + timedelta(seconds=1, microseconds=1)),
+        ]
+    )
+    assert [v.stamp for v in views] == ["1:42:07 PM", "", "1:42:08 PM", ""]
+
+
+def test_log_line_views_blank_stamp_when_timestamp_missing() -> None:
+    """A line with no timestamp renders a blank stamp (defensive)."""
+    views = log_line_views([LogLine(kind=LOG_MESSAGE, text="x", timestamp=None)])
+    assert views[0].stamp == ""
+    assert views[0].text == "x"
+
+
+# ---------------------------------------------------------------------------
+# Thinking marker (issue #37): a reasoning block opens with ✻ Thinking:
+# ---------------------------------------------------------------------------
+
+_THINKING = "✻ Thinking:"
+
+
+def test_streamed_reasoning_block_opens_with_a_stamped_thinking_marker() -> None:
+    wall = _FakeWallClock()
+    state = _make_state(wall=wall)
+    wall.advance(7)  # 12:00:07
+    state.stream_reasoning("weighing options\n")
+    lines = state.log()
+    assert [line.text for line in lines][:2] == [_THINKING, "weighing options"]
+    # The marker is reasoning-styled (dimmed) and stamped at the block open.
+    assert lines[0].kind == LOG_REASONING and lines[0].dim
+    assert lines[0].timestamp == _FIXED_WALL + timedelta(seconds=7)
+
+
+def test_non_streamed_reasoning_block_opens_with_a_thinking_marker() -> None:
+    state = _make_state()
+    state.render(
+        {"type": events_module.ASSISTANT_REASONING, "content": "considered A"}
+    )
+    assert [line.text for line in state.log()] == [_THINKING, "considered A"]
+
+
+def test_each_reasoning_block_gets_its_own_marker() -> None:
+    """A fresh block (after its closing event) re-opens with a new marker."""
+    state = _make_state()
+    state.stream_reasoning("first\n")
+    state.render({"type": events_module.ASSISTANT_REASONING, "content": "first"})
+    state.stream_reasoning("second\n")
+    assert [line.text for line in state.log()].count(_THINKING) == 2
+
+
+def test_empty_non_streamed_reasoning_emits_no_marker() -> None:
+    """A reasoning event with no content does not leave a dangling marker."""
+    state = _make_state()
+    state.render({"type": events_module.ASSISTANT_REASONING, "content": ""})
+    assert state.log() == ()
+
+
+def test_thinking_marker_matches_the_line_printer_prefix() -> None:
+    """The Log's reasoning marker stays in lockstep with the renderer's prefix."""
+    from ralph_afk.ui import renderer as renderer_module
+
+    assert state_module._THINKING_MARKER == renderer_module._THINKING_PREFIX
+    assert state_module._THINKING_MARKER == _THINKING

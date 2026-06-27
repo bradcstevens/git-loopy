@@ -372,6 +372,42 @@ async def test_enter_opens_historical_issue_log_shows_its_retained_tail() -> Non
         assert "twenty-six history" not in active_body.plain
 
 
+async def test_log_view_stamps_lines_12h_and_opens_reasoning_with_marker() -> None:
+    """The Log view renders 12h AM/PM stamps (collapsed per second) + ✻ Thinking:.
+
+    Clocks are injected so the rendered stamp is deterministic (issue #37).
+    """
+    fixed = datetime(2026, 6, 21, 13, 42, 7)
+    state = LiveRunState(
+        run_id="01TS",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 0.0,
+        wall_clock=lambda: fixed,
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26]}
+    )
+    state.stream_message("<working issue=26>\n")
+    state.stream_reasoning("weighing options\n")
+
+    app = RalphApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # open #26's live Log
+        await pilot.pause()
+        body = app.query_one("#log-body", Static).renderable
+        assert isinstance(body, Text)
+        # The reasoning block opens with the ✻ Thinking: marker.
+        assert "✻ Thinking:" in body.plain
+        assert "weighing options" in body.plain
+        # 12-hour AM/PM stamp, shown once: all lines share the injected second.
+        assert "1:42:07 PM" in body.plain
+        assert body.plain.count("1:42:07 PM") == 1
+
+
+
 async def test_esc_on_dashboard_is_a_noop() -> None:
     """With no tab bar, Esc on the Dashboard does nothing (and never crashes)."""
     app = RalphApp(_state_with_queue(), refresh_interval=3600)

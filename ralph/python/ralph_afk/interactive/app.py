@@ -52,6 +52,7 @@ from ralph_afk.interactive.state import (
     format_header,
     format_wall_clock,
     issue_detail,
+    log_line_views,
     queue_rows,
 )
 
@@ -62,6 +63,12 @@ __all__ = ["RalphApp"]
 
 #: How often the panes repaint so the elapsed/queue clocks visibly tick.
 _DEFAULT_REFRESH_INTERVAL = 0.25
+
+#: Fixed width of the Log's wall-clock stamp column (issue #37). The widest
+#: 12-hour stamp is ``12:00:00 PM`` (11 chars); padding every row to it keeps the
+#: text column aligned whether or not a row carries a (same-second-collapsed)
+#: stamp.
+_STAMP_WIDTH = 11
 
 
 class _Dashboard(Vertical):
@@ -305,25 +312,28 @@ class RalphApp(App[None]):
 
         The body shows the **opened issue's own** Log — its accumulated, bounded
         tail (reasoning dimmed, message + event lines plain), isolated from the
-        other issues (issue #34). The *active* issue streams live (its open
-        partial line included) so it updates as the model works; a *historical*
-        issue shows its retained tail followed by a footer noting the full record
-        is in the JSONL replay log.
+        other issues (issue #34). Each line carries a 12-hour AM/PM wall-clock
+        stamp captured when it was appended, collapsed so only the first line of
+        each second shows it (issue #37; :func:`log_line_views`). The *active*
+        issue streams live (its open partial line included) so it updates as the
+        model works; a *historical* issue shows its retained tail followed by a
+        footer noting the full record is in the JSONL replay log.
         """
         if self._open_ref is None:
             return
         detail = issue_detail(self._state, self._open_ref)
         self.query_one("#log-header", Static).update(format_detail_header(detail))
         body = Text()
-        lines = self._state.log(self._open_ref)
-        for line in lines:
-            body.append(line.text, style="dim" if line.dim else "")
+        views = log_line_views(self._state.log(self._open_ref))
+        for view in views:
+            body.append(f"{view.stamp:<{_STAMP_WIDTH}}  ", style="dim")
+            body.append(view.text, style="dim" if view.dim else "")
             body.append("\n")
         if detail.is_active:
-            if not lines:
+            if not views:
                 body.append("(waiting for the model's output…)", style="dim")
         else:
-            if not lines:
+            if not views:
                 body.append("(no Log lines for this issue yet.)\n", style="dim")
             body.append(
                 "— the full record is in the JSONL replay log.", style="dim"

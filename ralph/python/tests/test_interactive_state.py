@@ -194,7 +194,7 @@ def test_format_header_contains_all_fields() -> None:
     header = format_header(state)
     assert "01RUN" in header
     assert "claude-opus-4.8 (max)" in header
-    assert "start 12:00:00" in header
+    assert "start 12:00:00 PM" in header  # 12-hour AM/PM wall clock (issue #37)
     assert "elapsed 1:01:01" in header
     assert "iter 2" in header
     assert "running" in header
