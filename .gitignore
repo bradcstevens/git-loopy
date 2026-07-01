@@ -56,3 +56,6 @@ issues/
 .copilot/session-state/
 .pytest_cache/
 .ruff_cache/
+
+# Intake feature-request briefs (per-run capture from /intake; not tracked)
+docs/feature-requests/
