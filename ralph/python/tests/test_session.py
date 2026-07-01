@@ -53,6 +53,7 @@ from rich.console import Console
 
 from ralph_afk import events as events_module
 from ralph_afk import session as session_module
+from ralph_afk.emit import EventEmitter
 from ralph_afk.events import (
     ASSISTANT_MESSAGE,
     REDACTED_SECRET,
@@ -766,6 +767,64 @@ async def test_iteration_session_routes_mapped_sdk_event_to_renderer(
     assert "visible-to-renderer" in buf.getvalue()
 
 
+def test_iteration_session_fans_scrubbed_envelope_to_sink_via_emitter(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    """``_record`` fans out through the shared EventEmitter, scrubbed once.
+
+    #44 shrinks ``_record`` to ``self._emitter.dispatch(envelope)``. This pins
+    two things: that the session composes its fan-out on an
+    :class:`EventEmitter` (the ``_emitter`` assertion is what fails against the
+    pre-#44 inline ``_record``, which had no emitter), and the sink contract
+    that ``render`` only ever sees an *already-scrubbed* envelope — a secret on
+    the recorded envelope reaches the sink **redacted**, and the JSONL writer
+    and the sink receive the *same* scrubbed bytes.
+    """
+    secret = "ghp_" + "A" * 36
+
+    class _RecordingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+
+        def render(self, event: dict[str, Any]) -> None:
+            self.events.append(event)
+
+        def stream_reasoning(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+        def stream_message(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+    sink = _RecordingSink()
+    iter_session = IterationSession(
+        fake_client,
+        config=_StubConfig(),
+        event_log=event_log,
+        sinks=SinkFanout([sink]),
+        run_id=_FIXED_RUN_ID,
+        iter_num=2,
+    )
+    # The fan-out is composed on the shared EventEmitter (diag=None).
+    assert isinstance(iter_session._emitter, EventEmitter)
+
+    envelope = events_module.make_event(
+        ASSISTANT_MESSAGE, _FIXED_RUN_ID, 2, content=f"leaked {secret}"
+    )
+    with event_log:
+        iter_session._record(envelope)
+
+    assert sink.events, "sink never received the recorded envelope"
+    received = sink.events[0]
+    assert secret not in json.dumps(received)
+    assert REDACTED_SECRET in received["content"]
+    # Writer and sink agree — both got the same scrubbed bytes.
+    log_lines = [
+        json.loads(ln) for ln in event_log.path.read_text().strip().splitlines()
+    ]
+    assert log_lines[-1] == received
+
+
 async def test_iteration_session_drops_streaming_delta_events(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
@@ -1082,12 +1141,13 @@ def test_session_module_does_not_construct_copilot_client() -> None:
 
 def test_session_module_imports_are_constrained() -> None:
     """``session.py`` may import only stdlib + ``copilot.*`` + the deep peer
-    modules it integrates with (``events``, ``persist``, ``sinks``).
+    modules it integrates with (``events``, ``persist``, ``sinks``, ``emit``).
 
     Catches accidental coupling to ``gh`` / ``git`` / ``loop`` / ``cli`` /
     ``config`` / ``wrapper`` / ``pricing`` — every one of those would
     invert the dependency direction and make the session module harder
-    to test in isolation.
+    to test in isolation. ``emit`` (issue #44) is the shared scrub-and-fan-out
+    seam; it is itself a pure leaf (``__future__`` + ``typing`` + ``events``).
     """
     source = Path(session_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -1103,6 +1163,7 @@ def test_session_module_imports_are_constrained() -> None:
         # peer ralph_afk modules — strictly the deep ones we integrate
         # with. NO loop / cli / config / gh / git / wrapper / pricing.
         "ralph_afk",
+        "ralph_afk.emit",
         "ralph_afk.events",
         "ralph_afk.persist",
         "ralph_afk.sinks",

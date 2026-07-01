@@ -78,8 +78,10 @@ Design notes
 
 * **No coupling to peer modules.** The session module knows about the
   SDK, the events module, the persist module (for the writer **type**),
-  and the sinks module (for the :class:`~ralph_afk.sinks.SinkFanout`
-  fan-out target). It explicitly does **not** import
+  the sinks module (for the :class:`~ralph_afk.sinks.SinkFanout`
+  fan-out target), and the emit module (for the shared
+  :class:`~ralph_afk.emit.EventEmitter` fan-out seam). It explicitly does
+  **not** import
   ``ralph_afk.gh`` / ``ralph_afk.git`` / ``ralph_afk.loop`` / ``ralph_afk.cli``
   / ``ralph_afk.config`` / ``ralph_afk.wrapper`` / ``ralph_afk.pricing``.
   Enforced by ``tests/test_session.py::test_session_module_imports_are_constrained``.
@@ -87,11 +89,16 @@ Design notes
   one-per-invocation client; ``IterationSession`` only consumes it.
   Enforced by an AST scan in
   ``tests/test_session.py::test_session_module_does_not_construct_copilot_client``.
-* **``_record`` scrubs once.** Both the JSONL writer's internal scrub
-  AND the sink fan-out's downstream consumers would otherwise see
-  un-scrubbed envelopes. The single :func:`ralph_afk.events.scrub` call
-  at the fan-out point makes the sinks safe and trips the writer's
-  redundant-but-idempotent scrub.
+* **``_record`` scrubs once, via the shared emitter.** :meth:`_record`
+  delegates to
+  :meth:`EventEmitter.dispatch <ralph_afk.emit.EventEmitter.dispatch>`
+  (issue #44), which scrubs the envelope a single time and hands the same
+  scrubbed dict to both the JSONL writer and the sink fan-out — so the
+  sinks are safe (the writer's own internal scrub is then a
+  redundant-but-idempotent no-op). The emitter is constructed with
+  ``diag=None`` so a write/sink failure stays silent in the SDK-callback /
+  permission-handler paths: a recording error must never surface log noise
+  or exceptions here.
 * **Recording failures cannot alter permission decisions.** Inside the
   permission handler we route every ``record_event`` call through
   :func:`_safe_record` which swallows exceptions. The SDK's permission
@@ -124,6 +131,7 @@ from copilot.generated.session_events import (
 from copilot.session import PermissionRequestResult
 
 from ralph_afk import events
+from ralph_afk.emit import EventEmitter
 from ralph_afk.persist import EventLogWriter
 from ralph_afk.sinks import SinkFanout
 
@@ -483,6 +491,16 @@ class IterationSession:
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._sdk_session: CopilotSession | None = None
+        # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
+        # SDK-callback / permission-handler paths silent on a write/sink
+        # failure — the session must never surface log noise or exceptions
+        # from a recording error (see the module design notes).
+        self._emitter = EventEmitter(
+            run_id=self._run_id,
+            event_log=self._event_log,
+            sinks=self._sinks,
+            diag=None,
+        )
 
     @property
     def sdk_session(self) -> CopilotSession:
@@ -557,21 +575,15 @@ class IterationSession:
     def _record(self, envelope: dict[str, Any]) -> None:
         """Scrub once, then fan out to JSONL writer + sink fan-out.
 
-        JSONL writing is always-on and independent of the sink list: the
-        scrubbed envelope is written *before* the fan-out hand-off. Both
-        downstream calls are guarded so a writer or sink failure cannot
-        crash the SDK callback dispatch (or, when called from the
-        permission handler, alter the permission decision).
+        Delegates to the shared :class:`~ralph_afk.emit.EventEmitter`
+        (issue #44): it scrubs the envelope a single time and hands the same
+        scrubbed dict to both ``event_log.write`` and ``sinks.render``, each
+        individually guarded so a writer or sink failure cannot crash the SDK
+        callback dispatch (or, when called from the permission handler, alter
+        the permission decision). ``diag=None`` keeps those failures silent,
+        matching the pre-emitter inline copy.
         """
-        scrubbed = events.scrub(envelope)
-        try:
-            self._event_log.write(scrubbed)
-        except Exception:
-            pass
-        try:
-            self._sinks.render(scrubbed)
-        except Exception:
-            pass
+        self._emitter.dispatch(envelope)
 
     def _on_sdk_event(self, sdk_event: SessionEvent) -> None:
         """Route an SDK event to ``_record``.
