@@ -91,6 +91,15 @@ The per-run, per-iteration accounting band of the **Dashboard** (tokens, cost,
 commits, closures, strikes), updated each iteration and mirrored in the run-end
 table. A band of the **Dashboard**, not a separate screen.
 
+**Consumption**:
+The tokens-in / tokens-out and the model they were billed against, attributed to a
+scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or an
+**Active issue** — summed across every **Iteration** that worked it — the basis for the
+**Queue**'s per-issue Cost. Every Cost figure derives from Consumption by one shared
+rule (first non-None model wins; tokens sum), represented in code by the `UsageTally`
+value object (`ralph_afk.usage`).
+_Avoid_: usage, spend (for the token measure); billing.
+
 **ModelSelectionMode**:
 The opt-in startup state — entered with the `--select-model` flag or
 `RALPH_MODEL_SELECT=1` — that shows the live model + reasoning-effort picker before the
@@ -111,6 +120,9 @@ _Avoid_: picker mode, interactive model prompt.
 - A **Checkpoint** is authored by the runner (not the agent) at an **Iteration**
   boundary and is attributed to the **Active issue**, but never counts as **Strike**
   progress.
+- **Consumption** is attributed to a scope: an **Iteration** (the **Summary**'s Cost)
+  or an **Active issue** (the **Queue**'s per-issue Cost). Both derive Cost from the
+  same `UsageTally` rule, so per-issue and per-iteration figures stay reconcilable.
 
 ## Example dialogue
 
