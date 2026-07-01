@@ -187,6 +187,30 @@ def _make_client() -> CopilotClient:
     return CopilotClient(telemetry=_build_telemetry_config())
 
 
+def _make_git_client() -> git_module.SubprocessGitClient:
+    """Construct the per-invocation root-bound git client.
+
+    Factored to its own module-level function — mirroring :func:`_make_client`
+    — so tests can monkeypatch it
+    (``monkeypatch.setattr("ralph_afk.loop._make_git_client", ...)``) to inject
+    a single fake object (``tests.fakes.FakeGitClient``) instead of
+    monkeypatching a dozen ``git.*`` free functions. Production callers get a
+    :class:`~ralph_afk.git.SubprocessGitClient` discovered from the process cwd:
+    it resolves the repository root once (``git rev-parse --show-toplevel``) and
+    binds every subsequent git call to it.
+
+    Returns the concrete :class:`~ralph_afk.git.SubprocessGitClient` rather than
+    the :class:`~ralph_afk.git.GitClient` protocol so :func:`run` can read
+    ``.root`` (a construction detail, not part of the injected seam) for the
+    writers/prompt/source setup before injecting the client into :class:`_Loop`.
+
+    Raises:
+        git.GitError: If ``git`` is not on PATH or the cwd is not inside a git
+            repository. :func:`run` catches this and exits 1 cleanly.
+    """
+    return git_module.SubprocessGitClient.discover()
+
+
 def _make_issue_source(
     config: RunConfig,
     repo_root: Path,
@@ -325,7 +349,7 @@ class _Loop:
         self,
         *,
         config: RunConfig,
-        repo_root: Path,
+        git: git_module.GitClient,
         prompt_text: str,
         pricing: Pricing,
         writers: WritersBundle,
@@ -337,7 +361,7 @@ class _Loop:
         include_prs: bool = False,
     ) -> None:
         self._config = config
-        self._repo_root = repo_root
+        self._git = git
         self._prompt_text = prompt_text
         self._pricing = pricing
         self._writers = writers
@@ -433,7 +457,7 @@ class _Loop:
             #     path is byte-for-byte unchanged and never touches branches.
             if self._include_prs and self._base_branch is not None:
                 try:
-                    on_branch = git_module.current_branch(self._repo_root)
+                    on_branch = self._git.current_branch()
                 except git_module.GitError as exc:
                     self._diag.warning(
                         "current_branch check failed: %s; skipping base "
@@ -443,7 +467,7 @@ class _Loop:
                     on_branch = None
                 if on_branch is not None and on_branch != self._base_branch:
                     try:
-                        git_module.switch(self._base_branch, self._repo_root)
+                        self._git.switch(self._base_branch)
                         self._diag.info(
                             "restored base branch %s (iteration started on %s)",
                             self._base_branch,
@@ -485,7 +509,7 @@ class _Loop:
 
             # 3) Build prompt (last-5 commits + AFK-ready item blocks + prompt body).
             try:
-                recent = git_module.recent_commits(5, self._repo_root)
+                recent = self._git.recent_commits(5)
             except git_module.GitError as exc:
                 self._diag.warning("recent_commits failed: %s; using empty prefix", exc)
                 recent = []
@@ -500,7 +524,7 @@ class _Loop:
             #    any commit that landed while we were enriching the pool
             #    isn't incorrectly attributed to this iteration.
             try:
-                pre_sha = git_module.head_sha(self._repo_root)
+                pre_sha = self._git.head_sha()
             except git_module.GitError as exc:
                 self._diag.error("git head_sha failed: %s; aborting iteration", exc)
                 self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
@@ -547,7 +571,7 @@ class _Loop:
 
             # 6) Post-iteration accounting.
             try:
-                head = git_module.head_sha(self._repo_root)
+                head = self._git.head_sha()
             except git_module.GitError as exc:
                 self._diag.warning(
                     "post-iteration git head_sha failed: %s; "
@@ -555,9 +579,7 @@ class _Loop:
                 )
                 head = pre_sha
             try:
-                new_commits = git_module.commits_between(
-                    pre_sha, head, self._repo_root
-                )
+                new_commits = self._git.commits_between(pre_sha, head)
             except git_module.GitError as exc:
                 self._diag.warning(
                     "post-iteration commits_between failed: %s; "
@@ -678,8 +700,8 @@ class _Loop:
             captured (clean tree) or the Checkpoint could not be made.
         """
         try:
-            dirty = git_module.is_dirty(self._repo_root)
-            untracked = git_module.has_untracked(self._repo_root)
+            dirty = self._git.is_dirty()
+            untracked = self._git.has_untracked()
         except git_module.GitError as exc:
             self._diag.warning(
                 "checkpoint dirty-check failed: %s; skipping checkpoint", exc
@@ -690,10 +712,8 @@ class _Loop:
 
         active_ref = self._infer_active_ref(pool, completions, new_commits)
         try:
-            git_module.add_all(self._repo_root)
-            sha = git_module.commit(
-                checkpoint_message(active_ref), self._repo_root
-            )
+            self._git.add_all()
+            sha = self._git.commit(checkpoint_message(active_ref))
         except git_module.GitError as exc:
             self._diag.warning(
                 "checkpoint commit failed: %s; continuing without it", exc
@@ -775,7 +795,7 @@ class _Loop:
         if not new_commits and checkpoint_sha is None:
             return False
         try:
-            git_module.push(self._repo_root)
+            self._git.push()
         except git_module.GitError as exc:
             self._diag.warning(
                 "auto-push failed: %s; continuing (work stays local)", exc
@@ -860,7 +880,7 @@ class _Loop:
         # disables the defensive restore.
         if self._include_prs:
             try:
-                self._base_branch = git_module.current_branch(self._repo_root)
+                self._base_branch = self._git.current_branch()
             except git_module.GitError as exc:
                 self._diag.warning(
                     "could not determine base branch for PR restore: %s", exc
@@ -1007,15 +1027,17 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         * ``1`` — abort (NMT strike threshold or
           preflight / setup failure).
     """
-    # 1) Repo root + prompt file.
+    # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
+    #    repository root once; ``.root`` feeds the writers / prompt / source setup.
     try:
-        repo_root = git_module.repo_root()
+        git = _make_git_client()
     except git_module.GitError as exc:
         print(
             f"ralph-afk: failed to resolve git repository root: {exc}",
             file=sys.stderr,
         )
         return 1
+    repo_root = git.root
 
     try:
         prompt_text = _read_prompt(repo_root)
@@ -1122,7 +1144,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
 
     loop = _Loop(
         config=config,
-        repo_root=repo_root,
+        git=git,
         prompt_text=prompt_text,
         pricing=pricing,
         writers=writers,

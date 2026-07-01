@@ -1,41 +1,63 @@
-"""``ralph_afk.git`` — typed subprocess wrapper around the ``git`` CLI.
+"""``ralph_afk.git`` — typed subprocess seam around the ``git`` CLI.
 
 Every external ``git`` call in ``ralph_afk/`` flows through this module so
 the user's existing ``git`` config (credential helpers, ``safe.directory``,
 ``user.email``, signing keys) remains the single source of truth.
 
+Git is a **real seam**: the loop holds a :class:`GitClient` (an injectable
+Protocol) rather than calling module functions, so tests substitute one
+object (``tests.fakes.FakeGitClient``) instead of monkeypatching a dozen
+free functions. The client is **root-bound** — it carries the repository
+root, so every call site drops the "which directory does git run in" detail
+(no ``start=`` argument); it is captured once at construction.
+
 Public surface:
 
-* :exc:`GitError` — typed failure from any public function.
+* :exc:`GitError` — typed failure from any client method.
 * :class:`Commit` — frozen value object carrying ``sha`` / ``subject`` /
   ``body`` / ``date``. The :attr:`Commit.message` property returns the full
   message (``subject + "\\n" + body``) so :func:`ralph_afk.wrapper.extract_close_refs`
   can scan both subject and body for closure keywords in one pass.
-* :func:`repo_root` — top-level directory via ``git rev-parse --show-toplevel``.
-* :func:`head_sha` — current HEAD SHA via ``git rev-parse HEAD``.
-* :func:`is_dirty` — tracked-change probe feeding the runner Checkpoint
-  (ADR-0004): returns ``True`` if either
+* :class:`GitClient` — ``@runtime_checkable`` Protocol naming the git
+  **mechanics** the loop needs (the loop owns the Iteration **policy** that
+  orders them). Root-bound: no ``start=`` parameter.
+* :class:`SubprocessGitClient` — the production adapter. Constructed with a
+  repository root, or discovered from a starting directory via
+  :meth:`SubprocessGitClient.discover`; every method shells out to real
+  ``git`` in that root.
+
+The client's mechanics:
+
+* :meth:`~SubprocessGitClient.head_sha` — current HEAD SHA via
+  ``git rev-parse HEAD``.
+* :meth:`~SubprocessGitClient.is_dirty` — tracked-change probe feeding the
+  runner Checkpoint (ADR-0004): returns ``True`` if either
   ``git diff --quiet`` or ``git diff --cached --quiet`` exits with code 1.
-  Codes ``> 1`` indicate a
-  real git failure (corrupted index, etc.) and raise :exc:`GitError` rather
-  than being conflated with "dirty".
-* :func:`has_untracked` — companion probe: ``True`` if any untracked,
-  non-ignored file exists (``git ls-files --others --exclude-standard``).
-* :func:`add_all` / :func:`commit` — the mutating half of the runner
-  Checkpoint (``git add -A`` then ``git commit -m``); the user's git config
-  stays the single source of truth.
-* :func:`push` — the remote half of the durability net (ADR-0004): a bare
-  ``git push`` of the current branch to its configured upstream. Failures
-  (no upstream, auth, non-fast-forward) raise :exc:`GitError` so the loop can
-  warn without aborting; a local-only repo keeps working.
-* :func:`commits_between` — list of :class:`Commit` for ``pre..head``.
-* :func:`recent_commits` — last ``n`` commits, newest-first.
-* :func:`range_count` — ``git rev-list --count`` for ``pre..head``.
+  Codes ``> 1`` indicate a real git failure (corrupted index, etc.) and
+  raise :exc:`GitError` rather than being conflated with "dirty".
+* :meth:`~SubprocessGitClient.has_untracked` — companion probe: ``True`` if
+  any untracked, non-ignored file exists
+  (``git ls-files --others --exclude-standard``).
+* :meth:`~SubprocessGitClient.add_all` / :meth:`~SubprocessGitClient.commit`
+  — the mutating half of the runner Checkpoint (``git add -A`` then
+  ``git commit -m``); the user's git config stays the single source of truth.
+* :meth:`~SubprocessGitClient.push` — the remote half of the durability net
+  (ADR-0004): a bare ``git push`` of the current branch to its configured
+  upstream. Failures (no upstream, auth, non-fast-forward) raise
+  :exc:`GitError` so the loop can warn without aborting; a local-only repo
+  keeps working.
+* :meth:`~SubprocessGitClient.commits_between` — list of :class:`Commit` for
+  ``pre..head``.
+* :meth:`~SubprocessGitClient.recent_commits` — last ``n`` commits, newest-first.
+* :meth:`~SubprocessGitClient.range_count` — ``git rev-list --count`` for
+  ``pre..head``.
 
 Design notes:
 
 * **No Python-native git libraries.** ``GitPython`` / ``pygit2`` are
   explicitly forbidden — enforced by ``tests/test_no_forbidden_api_libs.py``.
+  The seam keeps that ADR-0004 posture: the adapter still shells out to real
+  ``git`` and the user's git config stays the single source of truth.
 * **NUL-delimited log parsing.** ``git log -z`` separates commits with
   ``\\0`` rather than ``\\n``, which means commit bodies containing
   ``---COMMIT-BOUNDARY---``-style strings cannot fool the parser.
@@ -49,23 +71,13 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Sequence
+from typing import Final, Protocol, Sequence, runtime_checkable
 
 __all__ = [
     "GitError",
     "Commit",
-    "repo_root",
-    "head_sha",
-    "is_dirty",
-    "has_untracked",
-    "add_all",
-    "commit",
-    "push",
-    "current_branch",
-    "switch",
-    "commits_between",
-    "recent_commits",
-    "range_count",
+    "GitClient",
+    "SubprocessGitClient",
 ]
 
 _GIT_BIN: Final[str] = "git"
@@ -185,71 +197,273 @@ def _stderr_tail(stderr: str | None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Public API                                                                  #
+# GitClient seam                                                              #
 # --------------------------------------------------------------------------- #
 
 
-def repo_root(start: Path | str | None = None) -> Path:
-    """Return the top-level directory of the enclosing git repository.
+@runtime_checkable
+class GitClient(Protocol):
+    """The git **mechanics** the loop needs, as an injectable seam.
 
-    Args:
-        start: Directory to resolve from. Defaults to the current cwd.
+    Root-bound: an implementation carries the repository root, so no method
+    takes a ``start=`` directory argument. The loop holds one ``GitClient``
+    and owns the Iteration **policy** that orders these calls (pre/post
+    ``head_sha`` reads, ``commits_between`` before the Checkpoint, ``add_all``
+    then ``commit``, ``push`` after) — the client never sequences them.
 
-    Returns:
-        The repository root as an absolute :class:`Path` (with macOS
-        ``/private/var/...`` symlinks resolved via :meth:`Path.resolve`).
-
-    Raises:
-        GitError: If ``git`` is not on PATH or ``start`` is not inside a
-            git repository.
+    :class:`SubprocessGitClient` is the production adapter;
+    ``tests.fakes.FakeGitClient`` the in-memory test double. Both satisfy this
+    Protocol structurally — no subclassing required, but ``isinstance(impl,
+    GitClient)`` works because the decorator marks it ``@runtime_checkable``.
     """
-    out = _run(["rev-parse", "--show-toplevel"], cwd=start)
-    return Path(out.strip()).resolve()
+
+    def head_sha(self) -> str:
+        """Return the current ``HEAD`` commit SHA (full 40-char form)."""
+        ...
+
+    def is_dirty(self) -> bool:
+        """Return ``True`` if the tree has uncommitted staged/unstaged changes."""
+        ...
+
+    def has_untracked(self) -> bool:
+        """Return ``True`` if the tree has any untracked, non-ignored file."""
+        ...
+
+    def add_all(self) -> None:
+        """Stage every change in the worktree (``git add -A``)."""
+        ...
+
+    def commit(self, message: str) -> str:
+        """Create a commit with ``message`` and return the new ``HEAD`` SHA."""
+        ...
+
+    def push(self) -> None:
+        """Push the current branch to its configured upstream."""
+        ...
+
+    def current_branch(self) -> str | None:
+        """Return the checked-out branch name, or ``None`` on detached HEAD."""
+        ...
+
+    def switch(self, branch: str) -> None:
+        """Check out an existing local branch by name."""
+        ...
+
+    def commits_between(self, pre: str, head: str) -> list[Commit]:
+        """Return commits in ``pre..head`` (exclusive of ``pre``)."""
+        ...
+
+    def recent_commits(self, n: int) -> list[Commit]:
+        """Return the last ``n`` commits, newest first."""
+        ...
+
+    def range_count(self, pre: str, head: str) -> int:
+        """Return the number of commits in ``pre..head``."""
+        ...
 
 
-def head_sha(start: Path | str | None = None) -> str:
-    """Return the current ``HEAD`` commit SHA (full 40-char form).
+class SubprocessGitClient:
+    """Root-bound :class:`GitClient` shelling out to the real ``git`` CLI.
 
-    Raises:
-        GitError: If ``git`` is not on PATH, ``start`` is not inside a git
-            repository, or the repo has no commits yet.
+    Carries the repository root captured once at construction (or discovered
+    via :meth:`discover`); every method runs ``git`` in that root, so callers
+    never restate the directory. Honours ADR-0004: no ``GitPython`` / ``pygit2``
+    — the user's ``git`` config stays the single source of truth.
     """
-    out = _run(["rev-parse", "HEAD"], cwd=start)
-    return out.strip()
 
+    def __init__(self, root: Path) -> None:
+        """Bind the client to ``root`` (the repository top-level directory)."""
+        self._root: Path = Path(root)
 
-def is_dirty(start: Path | str | None = None) -> bool:
-    """Return ``True`` if the working tree has uncommitted staged or unstaged changes.
+    @property
+    def root(self) -> Path:
+        """The repository root every git call runs in."""
+        return self._root
 
-    Feeds the runner Checkpoint (ADR-0004)::
+    @classmethod
+    def discover(cls, start: Path | str | None = None) -> SubprocessGitClient:
+        """Construct a client bound to the repo enclosing ``start``.
 
-        if ! git diff --quiet || ! git diff --cached --quiet; then
-            # dirty -> capture in a Checkpoint commit
-        fi
+        Resolves the top-level directory via ``git rev-parse --show-toplevel``
+        (with macOS ``/private/var/...`` symlinks resolved via
+        :meth:`Path.resolve`). ``repo_root`` **discovery** *produces* the root,
+        so it is a classmethod, not a root-bound instance method.
 
-    ``git diff --quiet`` exits ``0`` on clean and ``1`` on dirty. Codes
-    ``> 1`` indicate a real git failure (corrupted index, missing object,
-    etc.) and we raise :exc:`GitError` rather than silently treating the
-    failure as "dirty" — the loop wants to surface a real problem with a
-    real error message.
+        Args:
+            start: Directory to resolve from. Defaults to the current cwd.
 
-    Note: ``is_dirty`` does NOT check for untracked
-    files (:func:`has_untracked` does); an untracked file alone does not make
-    the tree "dirty". The Checkpoint path ORs the two so it captures both.
+        Returns:
+            A :class:`SubprocessGitClient` bound to the resolved root.
 
-    Args:
-        start: Directory inside the repo to run from. Defaults to cwd.
+        Raises:
+            GitError: If ``git`` is not on PATH or ``start`` is not inside a
+                git repository.
+        """
+        out = _run(["rev-parse", "--show-toplevel"], cwd=start)
+        return cls(Path(out.strip()).resolve())
 
-    Raises:
-        GitError: If ``git`` is not on PATH, or ``diff --quiet`` returns
-            an exit code other than 0 or 1.
-    """
-    for args in (["diff", "--quiet"], ["diff", "--cached", "--quiet"]):
-        cmd = [_GIT_BIN, *args]
+    def head_sha(self) -> str:
+        """Return the current ``HEAD`` commit SHA (full 40-char form).
+
+        Raises:
+            GitError: If ``git`` is not on PATH, the root is not inside a git
+                repository, or the repo has no commits yet.
+        """
+        out = _run(["rev-parse", "HEAD"], cwd=self._root)
+        return out.strip()
+
+    def is_dirty(self) -> bool:
+        """Return ``True`` if the working tree has uncommitted changes.
+
+        Feeds the runner Checkpoint (ADR-0004)::
+
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+                # dirty -> capture in a Checkpoint commit
+            fi
+
+        ``git diff --quiet`` exits ``0`` on clean and ``1`` on dirty. Codes
+        ``> 1`` indicate a real git failure (corrupted index, missing object,
+        etc.) and we raise :exc:`GitError` rather than silently treating the
+        failure as "dirty" — the loop wants to surface a real problem with a
+        real error message.
+
+        Note: ``is_dirty`` does NOT check for untracked files
+        (:meth:`has_untracked` does); an untracked file alone does not make
+        the tree "dirty". The Checkpoint path ORs the two so it captures both.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, or ``diff --quiet`` returns
+                an exit code other than 0 or 1.
+        """
+        for args in (["diff", "--quiet"], ["diff", "--cached", "--quiet"]):
+            cmd = [_GIT_BIN, *args]
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    cwd=str(self._root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise GitError(cmd, 127, "git not found on PATH") from exc
+            if completed.returncode == 1:
+                return True
+            if completed.returncode != 0:
+                raise GitError(
+                    cmd, completed.returncode, _stderr_tail(completed.stderr)
+                )
+        return False
+
+    def has_untracked(self) -> bool:
+        """Return ``True`` if the working tree has any untracked, non-ignored file.
+
+        Complements :meth:`is_dirty` (which sees only tracked-file changes): the
+        runner Checkpoint (ADR-0004) captures *both* dirty tracked files and brand
+        new untracked files the agent forgot to ``git add``. Uses::
+
+            git ls-files --others --exclude-standard
+
+        ``--others`` lists files git is not tracking; ``--exclude-standard`` honours
+        ``.gitignore`` / ``.git/info/exclude`` / the global excludes file, so an
+        ignored build artefact never trips a Checkpoint. Non-empty output means at
+        least one untracked, non-ignored path exists.
+
+        Raises:
+            GitError: If ``git`` is not on PATH or ``ls-files`` fails (e.g. the
+                root is not inside a git repository).
+        """
+        out = _run(["ls-files", "--others", "--exclude-standard"], cwd=self._root)
+        return bool(out.strip())
+
+    def add_all(self) -> None:
+        """Stage every change in the worktree via ``git add -A``.
+
+        Stages modifications, deletions, and new (non-ignored) files in one pass,
+        honouring ``.gitignore`` exactly as the user's git config dictates. This is
+        the staging half of the runner Checkpoint (ADR-0004); the user's git config
+        stays the single source of truth (no ``--force``, no excludes override).
+
+        Raises:
+            GitError: If ``git`` is not on PATH or the ``add`` fails.
+        """
+        _run(["add", "-A"], cwd=self._root)
+
+    def commit(self, message: str) -> str:
+        """Create a commit with ``message`` and return the new ``HEAD`` SHA.
+
+        The commit half of the runner Checkpoint (ADR-0004). A plain
+        ``git commit -m <message>`` so the user's git config — identity, signing
+        key, hooks — stays the single source of truth; the runner never bypasses
+        ``--no-verify`` or overrides the author. ``message`` may carry multiple
+        paragraphs (subject, body, trailer) separated by blank lines; they survive
+        git's default ``-m`` cleanup.
+
+        The caller is expected to have staged something first (e.g. via
+        :meth:`add_all`): ``git commit`` with an empty index exits non-zero and
+        raises :exc:`GitError`, which the loop treats as a non-fatal skipped
+        Checkpoint rather than an abort.
+
+        Args:
+            message: The full commit message (subject + optional body/trailer).
+
+        Returns:
+            The full 40-character SHA of the newly created commit.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, nothing is staged, or the commit
+                otherwise fails (e.g. a pre-commit hook rejected it).
+        """
+        _run(["commit", "-m", message], cwd=self._root)
+        return self.head_sha()
+
+    def push(self) -> None:
+        """Push the current branch to its configured upstream via ``git push``.
+
+        The remote half of ADR-0004's durability net. After an iteration produces
+        new commits — agent commits and/or a runner :meth:`commit` Checkpoint — the
+        loop pushes so the work reaches the remote instead of piling up locally. A
+        bare ``git push`` (no ref arguments, no ``--force``) keeps the user's git
+        config — ``push.default``, the branch's upstream tracking ref, credential
+        helpers — the single source of truth.
+
+        Every failure mode the loop must tolerate *non-fatally* (it warns and
+        carries on, so a local-only repo keeps working) surfaces here as
+        :exc:`GitError`:
+
+        * no upstream configured for the current branch,
+        * no remote, an unreachable remote, or an auth failure,
+        * a non-fast-forward rejection (the remote moved under us).
+
+        Raises:
+            GitError: If ``git`` is not on PATH or the push is rejected for any of
+                the reasons above. The loop's ``_maybe_push`` catches this and
+                never lets it abort the run.
+        """
+        _run(["push"], cwd=self._root)
+
+    def current_branch(self) -> str | None:
+        """Return the name of the currently checked-out branch, or ``None``.
+
+        Uses ``git symbolic-ref --quiet --short HEAD``. Returns ``None`` when
+        HEAD is detached (no symbolic ref). ``gh pr checkout`` normally leaves
+        a named branch, but a detached HEAD is a valid state the caller must
+        handle (e.g. skip the base-branch restore rather than guess a name).
+
+        Returns:
+            The short branch name (e.g. ``"main"``), or ``None`` on detached HEAD.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, or ``symbolic-ref`` fails for
+                a reason other than detached HEAD (exit code > 1).
+        """
+        cmd = [_GIT_BIN, "symbolic-ref", "--quiet", "--short", "HEAD"]
         try:
             completed = subprocess.run(
                 cmd,
-                cwd=str(start) if start is not None else None,
+                cwd=str(self._root),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -258,238 +472,91 @@ def is_dirty(start: Path | str | None = None) -> bool:
             )
         except FileNotFoundError as exc:
             raise GitError(cmd, 127, "git not found on PATH") from exc
+        if completed.returncode == 0:
+            name = completed.stdout.strip()
+            return name or None
         if completed.returncode == 1:
-            return True
-        if completed.returncode != 0:
-            raise GitError(
-                cmd, completed.returncode, _stderr_tail(completed.stderr)
-            )
-    return False
+            # `symbolic-ref --quiet` exits 1 with no output on a detached HEAD.
+            return None
+        raise GitError(cmd, completed.returncode, _stderr_tail(completed.stderr))
 
+    def switch(self, branch: str) -> None:
+        """Check out an existing local branch by name.
 
-def has_untracked(start: Path | str | None = None) -> bool:
-    """Return ``True`` if the working tree has any untracked, non-ignored file.
+        Thin wrapper over ``git checkout <branch>`` (``checkout`` rather than the
+        newer ``git switch`` for maximum compatibility with the git versions the
+        kit targets). The loop uses this to restore the base branch after an
+        iteration that ran ``gh pr checkout`` left ``HEAD`` on a PR branch.
 
-    Complements :func:`is_dirty` (which sees only tracked-file changes): the
-    runner Checkpoint (ADR-0004) captures *both* dirty tracked files and brand
-    new untracked files the agent forgot to ``git add``. Uses::
+        Args:
+            branch: Name of an existing local branch to check out.
 
-        git ls-files --others --exclude-standard
+        Raises:
+            GitError: If ``git`` is not on PATH or the checkout fails (e.g. the
+                branch doesn't exist, or the checkout would clobber local changes).
+        """
+        _run(["checkout", branch], cwd=self._root)
 
-    ``--others`` lists files git is not tracking; ``--exclude-standard`` honours
-    ``.gitignore`` / ``.git/info/exclude`` / the global excludes file, so an
-    ignored build artefact never trips a Checkpoint. Non-empty output means at
-    least one untracked, non-ignored path exists.
+    def commits_between(self, pre: str, head: str) -> list[Commit]:
+        """Return commits in ``pre..head`` (exclusive of ``pre``, inclusive of ``head``).
 
-    Args:
-        start: Directory inside the repo to run from. Defaults to cwd.
+        Order is git's default for ``log``: newest first. The auto-close
+        backstop scans these for closure keywords via
+        :func:`ralph_afk.wrapper.extract_close_refs` against ``commit.message``.
 
-    Raises:
-        GitError: If ``git`` is not on PATH or ``ls-files`` fails (e.g. ``start``
-            is not inside a git repository).
-    """
-    out = _run(["ls-files", "--others", "--exclude-standard"], cwd=start)
-    return bool(out.strip())
+        This range **excludes any runner Checkpoint by construction**: the loop
+        reads ``head`` *before* authoring the Checkpoint, so a Checkpoint commit
+        (authored after ``head``) falls outside ``pre..head``. That protects the
+        Strike rule — a Checkpoint is not progress; an agent commit is.
 
+        Args:
+            pre: Exclusive start SHA.
+            head: Inclusive end SHA (typically ``HEAD``).
 
-def add_all(start: Path | str | None = None) -> None:
-    """Stage every change in the worktree via ``git add -A``.
+        Returns:
+            A list of :class:`Commit`. Empty if ``pre == head``.
 
-    Stages modifications, deletions, and new (non-ignored) files in one pass,
-    honouring ``.gitignore`` exactly as the user's git config dictates. This is
-    the staging half of the runner Checkpoint (ADR-0004); the user's git config
-    stays the single source of truth (no ``--force``, no excludes override).
-
-    Args:
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Raises:
-        GitError: If ``git`` is not on PATH or the ``add`` fails.
-    """
-    _run(["add", "-A"], cwd=start)
-
-
-def commit(message: str, start: Path | str | None = None) -> str:
-    """Create a commit with ``message`` and return the new ``HEAD`` SHA.
-
-    The commit half of the runner Checkpoint (ADR-0004). A plain
-    ``git commit -m <message>`` so the user's git config — identity, signing
-    key, hooks — stays the single source of truth; the runner never bypasses
-    ``--no-verify`` or overrides the author. ``message`` may carry multiple
-    paragraphs (subject, body, trailer) separated by blank lines; they survive
-    git's default ``-m`` cleanup.
-
-    The caller is expected to have staged something first (e.g. via
-    :func:`add_all`): ``git commit`` with an empty index exits non-zero and
-    raises :exc:`GitError`, which the loop treats as a non-fatal skipped
-    Checkpoint rather than an abort.
-
-    Args:
-        message: The full commit message (subject + optional body/trailer).
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Returns:
-        The full 40-character SHA of the newly created commit.
-
-    Raises:
-        GitError: If ``git`` is not on PATH, nothing is staged, or the commit
-            otherwise fails (e.g. a pre-commit hook rejected it).
-    """
-    _run(["commit", "-m", message], cwd=start)
-    return head_sha(start)
-
-
-def push(start: Path | str | None = None) -> None:
-    """Push the current branch to its configured upstream via ``git push``.
-
-    The remote half of ADR-0004's durability net. After an iteration produces
-    new commits — agent commits and/or a runner :func:`commit` Checkpoint — the
-    loop pushes so the work reaches the remote instead of piling up locally. A
-    bare ``git push`` (no ref arguments, no ``--force``) keeps the user's git
-    config — ``push.default``, the branch's upstream tracking ref, credential
-    helpers — the single source of truth.
-
-    Every failure mode the loop must tolerate *non-fatally* (it warns and
-    carries on, so a local-only repo keeps working) surfaces here as
-    :exc:`GitError`:
-
-    * no upstream configured for the current branch,
-    * no remote, an unreachable remote, or an auth failure,
-    * a non-fast-forward rejection (the remote moved under us).
-
-    Args:
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Raises:
-        GitError: If ``git`` is not on PATH or the push is rejected for any of
-            the reasons above. The loop's ``_maybe_push`` catches this and
-            never lets it abort the run.
-    """
-    _run(["push"], cwd=start)
-
-
-def current_branch(start: Path | str | None = None) -> str | None:
-    """Return the name of the currently checked-out branch, or ``None``.
-
-    Uses ``git symbolic-ref --quiet --short HEAD``. Returns ``None`` when
-    HEAD is detached (no symbolic ref). ``gh pr checkout`` normally leaves
-    a named branch, but a detached HEAD is a valid state the caller must
-    handle (e.g. skip the base-branch restore rather than guess a name).
-
-    Args:
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Returns:
-        The short branch name (e.g. ``"main"``), or ``None`` on detached HEAD.
-
-    Raises:
-        GitError: If ``git`` is not on PATH, or ``symbolic-ref`` fails for
-            a reason other than detached HEAD (exit code > 1).
-    """
-    cmd = [_GIT_BIN, "symbolic-ref", "--quiet", "--short", "HEAD"]
-    try:
-        completed = subprocess.run(
-            cmd,
-            cwd=str(start) if start is not None else None,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+        Raises:
+            GitError: On any subprocess failure (invalid SHA, etc.).
+        """
+        if pre == head:
+            return []
+        return _parse_log_z(
+            ["log", _LOG_FORMAT, "--date=short", "-z", f"{pre}..{head}"],
+            cwd=self._root,
         )
-    except FileNotFoundError as exc:
-        raise GitError(cmd, 127, "git not found on PATH") from exc
-    if completed.returncode == 0:
-        name = completed.stdout.strip()
-        return name or None
-    if completed.returncode == 1:
-        # `symbolic-ref --quiet` exits 1 with no output on a detached HEAD.
-        return None
-    raise GitError(cmd, completed.returncode, _stderr_tail(completed.stderr))
 
+    def recent_commits(self, n: int) -> list[Commit]:
+        """Return the last ``n`` commits on the current branch, newest first.
 
-def switch(branch: str, start: Path | str | None = None) -> None:
-    """Check out an existing local branch by name.
+        Args:
+            n: Maximum number of commits to return. ``n <= 0`` returns ``[]``.
 
-    Thin wrapper over ``git checkout <branch>`` (``checkout`` rather than the
-    newer ``git switch`` for maximum compatibility with the git versions the
-    kit targets). The loop uses this to restore the base branch after an
-    iteration that ran ``gh pr checkout`` left ``HEAD`` on a PR branch.
+        Returns:
+            A list of :class:`Commit`, length ``min(n, total_commits)``.
 
-    Args:
-        branch: Name of an existing local branch to check out.
-        start: Directory inside the repo to run from. Defaults to cwd.
+        Raises:
+            GitError: On any subprocess failure.
+        """
+        if n <= 0:
+            return []
+        return _parse_log_z(
+            ["log", f"-n{n}", _LOG_FORMAT, "--date=short", "-z"],
+            cwd=self._root,
+        )
 
-    Raises:
-        GitError: If ``git`` is not on PATH or the checkout fails (e.g. the
-            branch doesn't exist, or the checkout would clobber local changes).
-    """
-    _run(["checkout", branch], cwd=start)
+    def range_count(self, pre: str, head: str) -> int:
+        """Return the number of commits in ``pre..head``.
 
+        Mirrors ``git rev-list --count $pre..$head``. Returns 0 if ``pre == head``.
 
-def commits_between(
-    pre: str, head: str, start: Path | str | None = None
-) -> list[Commit]:
-    """Return commits in ``pre..head`` (exclusive of ``pre``, inclusive of ``head``).
-
-    Order is git's default for ``log``: newest first. The auto-close
-    backstop scans these for closure keywords via
-    :func:`ralph_afk.wrapper.extract_close_refs` against ``commit.message``.
-
-    Args:
-        pre: Exclusive start SHA.
-        head: Inclusive end SHA (typically ``HEAD``).
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Returns:
-        A list of :class:`Commit`. Empty if ``pre == head``.
-
-    Raises:
-        GitError: On any subprocess failure (invalid SHA, etc.).
-    """
-    if pre == head:
-        return []
-    return _parse_log_z(
-        ["log", _LOG_FORMAT, "--date=short", "-z", f"{pre}..{head}"],
-        cwd=start,
-    )
-
-
-def recent_commits(n: int, start: Path | str | None = None) -> list[Commit]:
-    """Return the last ``n`` commits on the current branch, newest first.
-
-    Args:
-        n: Maximum number of commits to return. ``n <= 0`` returns ``[]``.
-        start: Directory inside the repo to run from. Defaults to cwd.
-
-    Returns:
-        A list of :class:`Commit`, length ``min(n, total_commits)``.
-
-    Raises:
-        GitError: On any subprocess failure.
-    """
-    if n <= 0:
-        return []
-    return _parse_log_z(
-        ["log", f"-n{n}", _LOG_FORMAT, "--date=short", "-z"],
-        cwd=start,
-    )
-
-
-def range_count(
-    pre: str, head: str, start: Path | str | None = None
-) -> int:
-    """Return the number of commits in ``pre..head``.
-
-    Mirrors ``git rev-list --count $pre..$head``. Returns 0 if ``pre == head``.
-
-    Raises:
-        GitError: On any subprocess failure (invalid SHA, etc.).
-    """
-    if pre == head:
-        return 0
-    out = _run(["rev-list", "--count", f"{pre}..{head}"], cwd=start)
-    return int(out.strip())
+        Raises:
+            GitError: On any subprocess failure (invalid SHA, etc.).
+        """
+        if pre == head:
+            return 0
+        out = _run(["rev-list", "--count", f"{pre}..{head}"], cwd=self._root)
+        return int(out.strip())
 
 
 # --------------------------------------------------------------------------- #

@@ -13,8 +13,13 @@ API; it monkeypatches:
   iteration's SDK event flow.
 * ``ralph_afk.gh.auth_status`` / ``repo_view`` / ``issue_list`` /
   ``issue_view`` / ``issue_close`` → stubs.
-* ``ralph_afk.git.repo_root`` / ``head_sha`` / ``is_dirty`` /
-  ``commits_between`` / ``recent_commits`` → stubs.
+* ``ralph_afk.loop._make_git_client`` → a single
+  :class:`~tests.fakes.FakeGitClient` (issue #46) injected through the loop's
+  git seam, replacing the old per-function ``ralph_afk.git.*`` monkeypatches.
+  Its stateful linear commit log keeps ``head_sha`` / ``commits_between`` /
+  ``recent_commits`` consistent, and :meth:`FakeGitClient.simulate_agent_commit`
+  (driven from the SDK stub's ``on_send`` hook) models the agent's commit
+  landing between the pre- and post-iteration head reads.
 
 After ``loop.run`` returns, the test asserts:
 
@@ -32,7 +37,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -59,6 +63,7 @@ from ralph_afk.pricing import Pricing
 from ralph_afk.sinks import SinkFanout
 from ralph_afk.ui import RunSummary
 from ralph_afk.wrapper import is_checkpoint_message
+from tests.fakes import FakeGitClient
 
 
 # ---------------------------------------------------------------------------
@@ -78,9 +83,11 @@ class FakeCopilotSession:
         *,
         on_event: Callable[[SessionEvent], None] | None,
         scripted_events: list[SessionEvent],
+        on_send: Callable[[], None] | None = None,
     ) -> None:
         self._on_event = on_event
         self._scripted_events = scripted_events
+        self._on_send = on_send
         self.session_id = "fake-session-id"
         self.send_and_wait_calls: list[tuple[str, float]] = []
 
@@ -92,6 +99,11 @@ class FakeCopilotSession:
         **_extra: Any,
     ) -> SessionEvent | None:
         self.send_and_wait_calls.append((prompt, timeout))
+        # Model the agent doing its work *during* the session — between the
+        # loop's pre- and post-iteration ``head_sha`` reads — so an injected
+        # commit advances the fake git log while the SDK "runs".
+        if self._on_send is not None:
+            self._on_send()
         last: SessionEvent | None = None
         for evt in self._scripted_events:
             if self._on_event is not None:
@@ -111,8 +123,14 @@ class FakeCopilotClient:
     pre-loaded with the test's scripted events.
     """
 
-    def __init__(self, scripted_events: list[SessionEvent]) -> None:
+    def __init__(
+        self,
+        scripted_events: list[SessionEvent],
+        *,
+        on_send: Callable[[], None] | None = None,
+    ) -> None:
         self._scripted_events = scripted_events
+        self.on_send = on_send
         self.created: list[FakeCopilotSession] = []
         self.stop_call_count = 0
 
@@ -128,6 +146,7 @@ class FakeCopilotClient:
         session = FakeCopilotSession(
             on_event=on_event,
             scripted_events=self._scripted_events,
+            on_send=self.on_send,
         )
         self.created.append(session)
         return session
@@ -153,24 +172,6 @@ def _sdk_event(
         timestamp=ts if ts is not None else datetime(2026, 5, 16, 0, 0, 0, tzinfo=timezone.utc),
         type=et,
     )
-
-
-@dataclass(frozen=True)
-class _FakeCommit:
-    """Lightweight stand-in for :class:`git.Commit` returned by the stubs.
-
-    Carries the same attributes the loop reads — ``sha``, ``subject``,
-    ``body``, ``date``, and the computed ``message`` property.
-    """
-
-    sha: str
-    subject: str
-    body: str = ""
-    date: str = "2026-05-16"
-
-    @property
-    def message(self) -> str:
-        return f"{self.subject}\n{self.body}" if self.body else self.subject
 
 
 def _make_issue(
@@ -202,19 +203,6 @@ def _logged_types(tmp_path: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _no_real_push(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Insulate every loop-driving test from a real ``git push`` subprocess.
-
-    The runner auto-pushes (ADR-0004) after any iteration that produced new
-    commits or a Checkpoint. Without this default stub, those tests would shell
-    out to a real ``git push`` from a ``tmp_path`` that is not a repo — a
-    non-fatal :exc:`git.GitError`, but a real subprocess all the same.
-    Push-specific tests override this with their own recorder.
-    """
-    monkeypatch.setattr(git_module, "push", lambda start=None: None)
-
-
 def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     """One iteration: SDK fires events; loop persists JSONL + run summary; auto-close fires.
 
@@ -241,34 +229,25 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
     # -- 2) git stubs ------------------------------------------------------
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-
-    head_sequence = iter(["pre-sha-abc", "post-sha-xyz"])
-
-    def fake_head_sha(start: Any = None) -> str:
-        return next(head_sequence)
-
-    monkeypatch.setattr(git_module, "head_sha", fake_head_sha)
-    monkeypatch.setattr(
-        git_module,
-        "recent_commits",
-        lambda n, start=None: [
-            _FakeCommit(sha="0000000000000000000000000000000000000001", subject="prior commit")
+    # -- 2) git seam: FakeGitClient seeded with the prior commit ----------
+    # The agent's commit (with ``Closes #42``) is appended *during* the SDK
+    # session via the client's ``on_send`` hook (wired below), so the
+    # post-iteration head advances past the pre-iteration head and
+    # ``commits_between`` yields exactly that agent commit.
+    fake_git = FakeGitClient(
+        tmp_path,
+        commits=[
+            git_module.Commit(
+                sha="0000000000000000000000000000000000000001",
+                subject="prior commit",
+                body="",
+                date="2026-05-16",
+            )
         ],
+        dirty=False,
+        untracked=False,
     )
-
-    new_commit = _FakeCommit(
-        sha="abcdef1234567890abcdef1234567890abcdef12",
-        subject="feat(thing): implement",
-        body="Closes #42",
-    )
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [new_commit],
-    )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     # -- 3) gh stubs -------------------------------------------------------
     issue_42 = _make_issue(42)
@@ -348,6 +327,12 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     ]
 
     fake_client = FakeCopilotClient(scripted_events=scripted)
+    # The agent authors its commit (referencing ``Closes #42``) mid-session.
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        sha="abcdef1234567890abcdef1234567890abcdef12",
+        subject="feat(thing): implement",
+        body="Closes #42",
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     # -- 5) Run loop with max_iterations=1 -------------------------------
@@ -450,11 +435,8 @@ def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "deadbeef")
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -484,24 +466,35 @@ def _wire_single_issue_github(
     monkeypatch: pytest.MonkeyPatch,
     *,
     issue_number: int = 42,
-) -> FakeCopilotClient:
+    dirty: bool = False,
+    untracked: bool = False,
+    commit_error: git_module.GitError | None = None,
+    push_error: git_module.GitError | None = None,
+) -> tuple[FakeCopilotClient, FakeGitClient]:
     """Minimal github wiring for a one-issue run with no agent commits.
 
-    Sets up the repo on disk, the gh stubs (one AFK-ready issue that is
-    never closed), and a clean head/commit accounting (the agent makes no
-    commit). The caller owns the dirty/untracked + checkpoint stubs so each
-    test can script the Checkpoint path it wants.
+    Sets up the repo on disk, the gh stubs (one AFK-ready issue that is never
+    closed), and injects a single :class:`~tests.fakes.FakeGitClient` through the
+    loop's git seam. By default the worktree is clean and the agent makes no
+    commit, so ``head_sha`` is constant across the iteration
+    (``commits_between`` is empty); pass ``dirty=True`` / ``untracked=True`` /
+    ``commit_error`` / ``push_error`` to script the Checkpoint / push path a test
+    wants. Returns ``(fake_client, fake_git)`` so the caller can drive the
+    SDK ``on_send`` hook and inspect the ``add_all`` / ``commit`` / ``push``
+    spies.
     """
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
     issue = _make_issue(issue_number)
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "samesha")
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    monkeypatch.setattr(
-        git_module, "commits_between", lambda pre, head, start=None: []
+    fake_git = FakeGitClient(
+        tmp_path,
+        dirty=dirty,
+        untracked=untracked,
+        commit_error=commit_error,
+        push_error=push_error,
     )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -517,7 +510,7 @@ def _wire_single_issue_github(
 
     fake_client = FakeCopilotClient(scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    return fake_client
+    return fake_client, fake_git
 
 
 def test_loop_dirty_worktree_checkpoints_and_continues(
@@ -532,24 +525,9 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
     ``wrapper.checkpoint.recorded`` — NOT ``wrapper.commit.recorded`` — so it is
     not counted as agent progress.
     """
-    fake_client = _wire_single_issue_github(tmp_path, monkeypatch)
-
-    # Dirty tracked files at the iteration boundary; no untracked files.
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-
-    add_all_calls: list[Any] = []
-    commit_messages: list[str] = []
-
-    def fake_add_all(start: Any = None) -> None:
-        add_all_calls.append(start)
-
-    def fake_commit(message: str, start: Any = None) -> str:
-        commit_messages.append(message)
-        return "cap0000000000000000000000000000000000000"
-
-    monkeypatch.setattr(git_module, "add_all", fake_add_all)
-    monkeypatch.setattr(git_module, "commit", fake_commit)
+    fake_client, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=True, untracked=False
+    )
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
@@ -559,11 +537,13 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
     assert len(fake_client.created) == 1, "the SDK session still ran"
 
     # Exactly one Checkpoint: stage everything, then one commit.
-    assert add_all_calls, "the worktree must be staged before the Checkpoint"
-    assert len(commit_messages) == 1, (
-        f"expected exactly one Checkpoint commit; got {commit_messages}"
+    assert fake_git.add_all_calls, (
+        "the worktree must be staged before the Checkpoint"
     )
-    msg = commit_messages[0]
+    assert len(fake_git.commit_messages) == 1, (
+        f"expected exactly one Checkpoint commit; got {fake_git.commit_messages}"
+    )
+    msg = fake_git.commit_messages[0]
     assert is_checkpoint_message(msg), "Checkpoint must carry the trailer"
     assert "42" in msg, "Checkpoint is attributed to the Active issue #42"
 
@@ -585,25 +565,17 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
 
 def test_loop_clean_worktree_makes_no_checkpoint(tmp_path, monkeypatch) -> None:
     """A clean (neither dirty nor untracked) worktree never authors a Checkpoint."""
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-
-    commit_calls: list[str] = []
-    monkeypatch.setattr(
-        git_module, "add_all", lambda start=None: None
-    )
-    monkeypatch.setattr(
-        git_module,
-        "commit",
-        lambda message, start=None: commit_calls.append(message) or "x",
+    _, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=False, untracked=False
     )
 
     cfg = RunConfig(issue_source="github", max_iterations=1)
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
-    assert commit_calls == [], "a clean worktree must not be checkpointed"
+    assert fake_git.commit_messages == [], (
+        "a clean worktree must not be checkpointed"
+    )
     logs_dir = tmp_path / ".ralph" / "logs"
     log_lines = next(logs_dir.glob("*.jsonl")).read_text(
         encoding="utf-8"
@@ -623,18 +595,9 @@ def test_checkpoint_is_excluded_from_strikes_abort_after_n_still_fires(
     abort-after-N protection fires (exit 1) — the durability net did not mask a
     genuinely stuck agent.
     """
-    fake_client = _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-
-    commit_count = {"n": 0}
-
-    def fake_commit(message: str, start: Any = None) -> str:
-        commit_count["n"] += 1
-        return f"cap{commit_count['n']:040d}"
-
-    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
-    monkeypatch.setattr(git_module, "commit", fake_commit)
+    fake_client, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=True, untracked=False
+    )
 
     cfg = RunConfig(
         issue_source="github", max_iterations=10, max_nmt_strikes=2
@@ -644,8 +607,9 @@ def test_checkpoint_is_excluded_from_strikes_abort_after_n_still_fires(
     # Abort-after-N still fires despite every iteration being Checkpointed.
     assert exit_code == 1
     # Two iterations to reach the 2-strike threshold, one Checkpoint each.
-    assert commit_count["n"] == 2, (
-        f"expected one Checkpoint per stuck iteration; got {commit_count['n']}"
+    assert len(fake_git.commit_messages) == 2, (
+        f"expected one Checkpoint per stuck iteration; "
+        f"got {fake_git.commit_messages}"
     )
     assert len(fake_client.created) == 2
 
@@ -657,15 +621,15 @@ def test_checkpoint_failure_is_non_fatal(tmp_path, monkeypatch) -> None:
     Checkpoint must not take down the loop — the iteration completes and the
     run exits normally.
     """
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
-
-    def boom(message: str, start: Any = None) -> str:
-        raise git_module.GitError(["git", "commit"], 1, "nothing to commit")
-
-    monkeypatch.setattr(git_module, "commit", boom)
+    _wire_single_issue_github(
+        tmp_path,
+        monkeypatch,
+        dirty=True,
+        untracked=False,
+        commit_error=git_module.GitError(
+            ["git", "commit"], 1, "nothing to commit"
+        ),
+    )
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
@@ -695,27 +659,21 @@ def test_loop_pushes_after_agent_commit(tmp_path, monkeypatch) -> None:
     iteration still produced a new commit, so the current branch is pushed to
     its upstream after accounting.
     """
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    # One agent commit, no close keyword -> pure progress, no auto-closure.
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [
-            _FakeCommit(sha="a" * 40, subject="feat: real work", body="Refs #42")
-        ],
+    fake_client, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=False, untracked=False
     )
-    push_calls: list[Any] = []
-    monkeypatch.setattr(
-        git_module, "push", lambda start=None: push_calls.append(start)
+    # One agent commit, no close keyword -> pure progress, no auto-closure.
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        sha="a" * 40, subject="feat: real work", body="Refs #42"
     )
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
-    assert len(push_calls) == 1, "a new agent commit must trigger exactly one push"
+    assert fake_git.push_calls == 1, (
+        "a new agent commit must trigger exactly one push"
+    )
     types_seen = _logged_types(tmp_path)
     assert "wrapper.commit.recorded" in types_seen
     assert "wrapper.push.recorded" in types_seen
@@ -727,23 +685,15 @@ def test_loop_pushes_after_checkpoint(tmp_path, monkeypatch) -> None:
     The dirty-tree, zero-agent-commit case: the only new commit this iteration
     is the runner Checkpoint, which is enough to push the branch to the remote.
     """
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
-    monkeypatch.setattr(
-        git_module, "commit", lambda message, start=None: "cap" + "0" * 37
-    )
-    push_calls: list[Any] = []
-    monkeypatch.setattr(
-        git_module, "push", lambda start=None: push_calls.append(start)
+    _, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=True, untracked=False
     )
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
-    assert len(push_calls) == 1, "the Checkpoint must trigger exactly one push"
+    assert fake_git.push_calls == 1, "the Checkpoint must trigger exactly one push"
     types_seen = _logged_types(tmp_path)
     assert "wrapper.checkpoint.recorded" in types_seen
     assert "wrapper.push.recorded" in types_seen
@@ -751,19 +701,15 @@ def test_loop_pushes_after_checkpoint(tmp_path, monkeypatch) -> None:
 
 def test_loop_no_push_when_clean_and_no_new_commits(tmp_path, monkeypatch) -> None:
     """A clean tree with no agent commit and no Checkpoint never pushes."""
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    push_calls: list[Any] = []
-    monkeypatch.setattr(
-        git_module, "push", lambda start=None: push_calls.append(start)
+    _, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, dirty=False, untracked=False
     )
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
-    assert push_calls == [], "nothing new to push -> no push attempt"
+    assert fake_git.push_calls == 0, "nothing new to push -> no push attempt"
     assert "wrapper.push.recorded" not in _logged_types(tmp_path)
 
 
@@ -775,18 +721,15 @@ def test_loop_push_failure_is_non_fatal(tmp_path, monkeypatch) -> None:
     and — mirroring the failed-Checkpoint path — no ``wrapper.push.recorded``
     event is emitted (the push never landed).
     """
-    _wire_single_issue_github(tmp_path, monkeypatch)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: True)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "add_all", lambda start=None: None)
-    monkeypatch.setattr(
-        git_module, "commit", lambda message, start=None: "cap" + "0" * 37
+    _wire_single_issue_github(
+        tmp_path,
+        monkeypatch,
+        dirty=True,
+        untracked=False,
+        push_error=git_module.GitError(
+            ["git", "push"], 128, "no upstream configured"
+        ),
     )
-
-    def boom(start: Any = None) -> None:
-        raise git_module.GitError(["git", "push"], 128, "no upstream configured")
-
-    monkeypatch.setattr(git_module, "push", boom)
 
     cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
     exit_code = asyncio.run(loop_module.run(cfg))
@@ -850,38 +793,18 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
         if p.is_file()
     }
 
-    # -- 2) git stubs ------------------------------------------------------
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    head_sequence = iter(["pre-sha-prds", "post-sha-prds"])
-    monkeypatch.setattr(
-        git_module, "head_sha", lambda start=None: next(head_sequence)
-    )
-    monkeypatch.setattr(
-        git_module,
-        "recent_commits",
-        lambda n, start=None: [
-            _FakeCommit(
-                sha="0" * 40, subject="prior", body=""
+    # -- 2) git seam: FakeGitClient (agent commit appended mid-session) ---
+    fake_git = FakeGitClient(
+        tmp_path,
+        commits=[
+            git_module.Commit(
+                sha="0" * 40, subject="prior", body="", date="2026-05-16"
             )
         ],
+        dirty=False,
+        untracked=False,
     )
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [
-            _FakeCommit(
-                sha="a" * 40,
-                subject="feat(featA/001): implement",
-                # NOTE: even if the commit message contained the path
-                # literally, PrdsIssueSource.handle_completions returns
-                # [] — the agent owns the `git mv`. Test that no
-                # auto_close fires.
-                body=f"Refs prds/featA/001-ready.md",
-            )
-        ],
-    )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     # -- 3) gh MUST NOT be called in PRDs mode ----------------------------
     # If anything in the loop reaches for gh.* in PRDs mode, the test
@@ -931,6 +854,13 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
         ),
     ]
     fake_client = FakeCopilotClient(scripted_events=scripted)
+    # The agent authors one commit mid-session (PRDs mode never auto-closes:
+    # PrdsIssueSource.handle_completions returns [] — the agent owns the git mv).
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        sha="a" * 40,
+        subject="feat(featA/001): implement",
+        body="Refs prds/featA/001-ready.md",
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     # -- 5) Run loop with issue_source=prds --------------------------------
@@ -1025,11 +955,8 @@ def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
     # NB: no `prds/` directory created.
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "deadbeef")
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     # PRDs mode must not touch gh.
     def boom(*_a: Any, **_kw: Any) -> Any:
@@ -1056,7 +983,8 @@ def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> Non
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     monkeypatch.setattr(gh_module, "auth_status", lambda: False)
 
     fake_client = FakeCopilotClient(scripted_events=[])
@@ -1079,14 +1007,8 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "deadbeef")
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    monkeypatch.setattr(
-        git_module, "commits_between", lambda pre, head, start=None: []
-    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -1135,14 +1057,8 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "deadbeef")
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    monkeypatch.setattr(
-        git_module, "commits_between", lambda pre, head, start=None: []
-    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -1197,19 +1113,8 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    head_sequence = iter(["pre", "post"])
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: next(head_sequence))
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [
-            _FakeCommit(sha="deadbeef", subject="x", body="Closes #42"),
-        ],
-    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -1230,6 +1135,11 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     monkeypatch.setattr(gh_module, "issue_close", raising_close)
 
     fake_client = FakeCopilotClient(scripted_events=[])
+    # The agent authors a commit referencing ``Closes #42`` mid-session; the
+    # subsequent auto-close attempt fails (raising_close) but must not abort.
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        sha="deadbeef", subject="x", body="Closes #42"
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     cfg = RunConfig(issue_source="github", max_iterations=1)
@@ -1252,7 +1162,9 @@ def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> Non
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    monkeypatch.setattr(
+        loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
+    )
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
         gh_module,
@@ -1284,7 +1196,9 @@ def test_loop_bad_pricing_file_returns_exit_one(tmp_path, monkeypatch) -> None:
     bad_pricing = tmp_path / "bad-pricing.toml"
     bad_pricing.write_text("this is not = valid [toml", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
+    monkeypatch.setattr(
+        loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
+    )
 
     fake_client = FakeCopilotClient(scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
@@ -1308,27 +1222,8 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     (tmp_path / "ralph").mkdir()
     (tmp_path / "ralph" / "prompt.md").write_text("be ralph", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    head_counter = {"i": 0}
-
-    def fake_head_sha(start: Any = None) -> str:
-        head_counter["i"] += 1
-        return f"sha-{head_counter['i']}"
-
-    monkeypatch.setattr(git_module, "head_sha", fake_head_sha)
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [
-            _FakeCommit(
-                sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                subject="progress",
-            )
-        ],
-    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
@@ -1342,6 +1237,11 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(gh_module, "issue_view", lambda n: _make_issue(n))
 
     fake_client = FakeCopilotClient(scripted_events=[])
+    # Each iteration the agent lands one fresh commit (progress -> no strikes),
+    # so head advances every session and the only stop condition is the cap.
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        subject="progress"
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
@@ -1418,34 +1318,18 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
     # -- 2) git stubs ------------------------------------------------------
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-
-    head_sequence = iter(["pre-sha-abc", "post-sha-xyz"])
-
-    def fake_head_sha(start: Any = None) -> str:
-        return next(head_sequence)
-
-    monkeypatch.setattr(git_module, "head_sha", fake_head_sha)
-    monkeypatch.setattr(
-        git_module,
-        "recent_commits",
-        lambda n, start=None: [
-            _FakeCommit(sha="0" * 40, subject="prior commit")
-        ],
-    )
-    monkeypatch.setattr(
-        git_module,
-        "commits_between",
-        lambda pre, head, start=None: [
-            _FakeCommit(
-                sha="abcdef1234567890abcdef1234567890abcdef12",
-                subject="feat: stuff",
-                body="Closes #42",
+    # -- 2) git seam: FakeGitClient (agent commit appended mid-session) ---
+    fake_git = FakeGitClient(
+        tmp_path,
+        commits=[
+            git_module.Commit(
+                sha="0" * 40, subject="prior commit", body="", date="2026-05-16"
             )
         ],
+        dirty=False,
+        untracked=False,
     )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     # -- 3) gh stubs -------------------------------------------------------
     issue_42 = _make_issue(42)
@@ -1483,6 +1367,13 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
 
     # -- 4) SDK stub (minimal: empty event flow) ---------------------------
     fake_client = FakeCopilotClient(scripted_events=[])
+    # The agent authors its ``Closes #42`` commit mid-session so the closure
+    # (and its ralph_afk.enforce_closures span) fires as before.
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        sha="abcdef1234567890abcdef1234567890abcdef12",
+        subject="feat: stuff",
+        body="Closes #42",
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     # -- 5) Run loop with max_iterations=1 ---------------------------------
@@ -1600,22 +1491,11 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
-    # -- git stubs --------------------------------------------------------
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
-    monkeypatch.setattr(git_module, "has_untracked", lambda start=None: False)
-    # Head SHA constant: no base-branch commit this iteration.
-    monkeypatch.setattr(git_module, "head_sha", lambda start=None: "base-sha")
-    monkeypatch.setattr(
-        git_module, "commits_between", lambda pre, head, start=None: []
-    )
-    monkeypatch.setattr(git_module, "recent_commits", lambda n, start=None: [])
-    # HEAD is on the base branch the whole time → no restore needed.
-    monkeypatch.setattr(git_module, "current_branch", lambda start=None: "main")
-    switch_calls: list[str] = []
-    monkeypatch.setattr(
-        git_module, "switch", lambda branch, start=None: switch_calls.append(branch)
-    )
+    # -- git seam: clean tree on the base branch, no base-branch commit ---
+    # (PR work happens on the PR branch; the only progress signal is the PR
+    # head-SHA advance.) HEAD stays on the base branch, so no switch/restore.
+    fake_git = FakeGitClient(tmp_path, dirty=False, untracked=False, branch="main")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     # -- gh stubs ---------------------------------------------------------
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
@@ -1687,7 +1567,9 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
 
     # -- assertions -------------------------------------------------------
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
-    assert switch_calls == [], "base branch must not be switched when HEAD is on base"
+    assert fake_git.switch_calls == [], (
+        "base branch must not be switched when HEAD is on base"
+    )
 
     # PR block reached the prompt.
     sdk_session = fake_client.created[0]
@@ -1775,7 +1657,7 @@ def _make_loop(
     pricing = Pricing(models={})
     loop = loop_module._Loop(
         config=RunConfig(),
-        repo_root=repo_root,
+        git=FakeGitClient(repo_root),
         prompt_text="",
         pricing=pricing,
         writers=writers,

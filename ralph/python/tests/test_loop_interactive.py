@@ -19,11 +19,11 @@ import asyncio
 from typing import Any, Awaitable, Callable
 
 from ralph_afk import gh as gh_module
-from ralph_afk import git as git_module
 from ralph_afk import loop as loop_module
 from ralph_afk.config import RunConfig
 from ralph_afk.interactive.state import LiveRunState
 from ralph_afk.sinks import SinkFanout
+from tests.fakes import FakeGitClient
 
 
 class _FakeClient:
@@ -118,8 +118,8 @@ def _wire_empty_pool_repo(tmp_path: Any, monkeypatch: Any) -> _FakeClient:
     (tmp_path / "ralph" / "prompt.md").write_text("ralph prompt\n", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
-    monkeypatch.setattr(git_module, "repo_root", lambda start=None: tmp_path)
-    monkeypatch.setattr(git_module, "is_dirty", lambda start=None: False)
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(

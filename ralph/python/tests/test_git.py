@@ -19,22 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from ralph_afk import git
 from ralph_afk.git import (
     Commit,
+    GitClient,
     GitError,
-    add_all,
-    commit,
-    commits_between,
-    current_branch,
-    has_untracked,
-    head_sha,
-    is_dirty,
-    push,
-    range_count,
-    recent_commits,
-    repo_root,
-    switch,
+    SubprocessGitClient,
 )
 
 # --------------------------------------------------------------------------- #
@@ -137,20 +126,20 @@ def test_commit_default_date_is_empty_string() -> None:
 def test_repo_root_resolves_to_top_level(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     expected = tmp_path.resolve()
-    assert repo_root(start=tmp_path) == expected
+    assert SubprocessGitClient.discover(start=tmp_path).root == expected
 
 
 def test_repo_root_works_from_nested_subdirectory(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sub = tmp_path / "a" / "b" / "c"
     sub.mkdir(parents=True)
-    assert repo_root(start=sub) == tmp_path.resolve()
+    assert SubprocessGitClient.discover(start=sub).root == tmp_path.resolve()
 
 
 def test_repo_root_raises_outside_repo(tmp_path: Path) -> None:
     """Non-repo directory → GitError, not a generic CalledProcessError."""
     with pytest.raises(GitError) as exc_info:
-        repo_root(start=tmp_path)
+        SubprocessGitClient.discover(start=tmp_path).root
     assert exc_info.value.returncode != 0
 
 
@@ -162,7 +151,7 @@ def test_repo_root_raises_outside_repo(tmp_path: Path) -> None:
 def test_head_sha_returns_full_40_hex(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "init")
-    assert head_sha(start=tmp_path) == sha
+    assert SubprocessGitClient(tmp_path).head_sha() == sha
     assert len(sha) == 40
     assert all(ch in "0123456789abcdef" for ch in sha)
 
@@ -171,7 +160,7 @@ def test_head_sha_raises_in_empty_repo(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     # No commits yet → `git rev-parse HEAD` returns non-zero.
     with pytest.raises(GitError):
-        head_sha(start=tmp_path)
+        SubprocessGitClient(tmp_path).head_sha()
 
 
 # --------------------------------------------------------------------------- #
@@ -182,14 +171,14 @@ def test_head_sha_raises_in_empty_repo(tmp_path: Path) -> None:
 def test_is_dirty_false_on_clean_tree(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    assert is_dirty(start=tmp_path) is False
+    assert SubprocessGitClient(tmp_path).is_dirty() is False
 
 
 def test_is_dirty_true_with_unstaged_modification(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init", file_name="a.txt", content="v1")
     (tmp_path / "a.txt").write_text("v2")
-    assert is_dirty(start=tmp_path) is True
+    assert SubprocessGitClient(tmp_path).is_dirty() is True
 
 
 def test_is_dirty_true_with_staged_addition(tmp_path: Path) -> None:
@@ -202,7 +191,7 @@ def test_is_dirty_true_with_staged_addition(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert is_dirty(start=tmp_path) is True
+    assert SubprocessGitClient(tmp_path).is_dirty() is True
 
 
 def test_is_dirty_false_on_untracked_file(
@@ -217,7 +206,7 @@ def test_is_dirty_false_on_untracked_file(
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     (tmp_path / "untracked.txt").write_text("nobody added me")
-    assert is_dirty(start=tmp_path) is False
+    assert SubprocessGitClient(tmp_path).is_dirty() is False
 
 
 def test_is_dirty_raises_when_git_returns_error_exit_code(
@@ -225,7 +214,7 @@ def test_is_dirty_raises_when_git_returns_error_exit_code(
 ) -> None:
     """``git diff`` outside a repo returns rc > 1 — we raise GitError."""
     with pytest.raises(GitError):
-        is_dirty(start=tmp_path)
+        SubprocessGitClient(tmp_path).is_dirty()
 
 
 # --------------------------------------------------------------------------- #
@@ -238,7 +227,7 @@ def test_commits_between_returns_only_new_commits(tmp_path: Path) -> None:
     sha1 = _commit(tmp_path, "first")
     sha2 = _commit(tmp_path, "second")
     sha3 = _commit(tmp_path, "third")
-    commits = commits_between(sha1, sha3, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).commits_between(sha1, sha3)
     assert len(commits) == 2
     # Newest first, mirroring `git log` default.
     assert commits[0].sha == sha3
@@ -249,7 +238,7 @@ def test_commits_between_returns_only_new_commits(tmp_path: Path) -> None:
 def test_commits_between_returns_empty_when_pre_equals_head(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "init")
-    assert commits_between(sha, sha, start=tmp_path) == []
+    assert SubprocessGitClient(tmp_path).commits_between(sha, sha) == []
 
 
 def test_commits_between_preserves_subject_and_body_separately(tmp_path: Path) -> None:
@@ -261,7 +250,7 @@ def test_commits_between_preserves_subject_and_body_separately(tmp_path: Path) -
         "Closes #42\n\nLine 1 of body.\nLine 2 of body.",
         file_name="b.txt",
     )
-    commits = commits_between(sha1, sha2, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).commits_between(sha1, sha2)
     assert len(commits) == 1
     c = commits[0]
     assert c.subject == "Closes #42"
@@ -283,7 +272,7 @@ def test_commits_between_message_property_carries_closure_keyword_from_subject(
     _init_repo(tmp_path)
     sha1 = _commit(tmp_path, "first")
     sha2 = _commit(tmp_path, "Fixes #6", file_name="b.txt")
-    commits = commits_between(sha1, sha2, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).commits_between(sha1, sha2)
     assert "Fixes #6" in commits[0].message
 
 
@@ -297,7 +286,7 @@ def test_commits_between_message_property_carries_closure_keyword_from_body(
         "feat(something): land slice\n\nResolves #6.",
         file_name="b.txt",
     )
-    commits = commits_between(sha1, sha2, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).commits_between(sha1, sha2)
     assert "Resolves #6" in commits[0].message
 
 
@@ -305,7 +294,7 @@ def test_commits_between_raises_on_invalid_sha(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
-        commits_between("deadbeef" * 5, "HEAD", start=tmp_path)
+        SubprocessGitClient(tmp_path).commits_between("deadbeef" * 5, "HEAD")
 
 
 # --------------------------------------------------------------------------- #
@@ -315,31 +304,31 @@ def test_commits_between_raises_on_invalid_sha(tmp_path: Path) -> None:
 
 def test_recent_commits_returns_newest_first(tmp_path: Path) -> None:
     _init_repo(tmp_path)
-    sha1 = _commit(tmp_path, "first")
+    _commit(tmp_path, "first")
     sha2 = _commit(tmp_path, "second")
     sha3 = _commit(tmp_path, "third")
-    commits = recent_commits(2, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).recent_commits(2)
     assert [c.sha for c in commits] == [sha3, sha2]
 
 
 def test_recent_commits_clamps_to_repo_size(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "only")
-    commits = recent_commits(10, start=tmp_path)
+    commits = SubprocessGitClient(tmp_path).recent_commits(10)
     assert len(commits) == 1
 
 
 def test_recent_commits_zero_or_negative_n_returns_empty(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    assert recent_commits(0, start=tmp_path) == []
-    assert recent_commits(-1, start=tmp_path) == []
+    assert SubprocessGitClient(tmp_path).recent_commits(0) == []
+    assert SubprocessGitClient(tmp_path).recent_commits(-1) == []
 
 
 def test_recent_commits_populates_date_field(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    [c] = recent_commits(1, start=tmp_path)
+    [c] = SubprocessGitClient(tmp_path).recent_commits(1)
     # YYYY-MM-DD via --date=short
     assert len(c.date) == 10
     assert c.date.count("-") == 2
@@ -355,21 +344,21 @@ def test_range_count_matches_actual_commit_count(tmp_path: Path) -> None:
     sha1 = _commit(tmp_path, "first")
     _commit(tmp_path, "second")
     _commit(tmp_path, "third")
-    head = head_sha(start=tmp_path)
-    assert range_count(sha1, head, start=tmp_path) == 2
+    head = SubprocessGitClient(tmp_path).head_sha()
+    assert SubprocessGitClient(tmp_path).range_count(sha1, head) == 2
 
 
 def test_range_count_returns_zero_when_pre_equals_head(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "init")
-    assert range_count(sha, sha, start=tmp_path) == 0
+    assert SubprocessGitClient(tmp_path).range_count(sha, sha) == 0
 
 
 def test_range_count_raises_on_invalid_sha(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
-        range_count("deadbeef" * 5, "HEAD", start=tmp_path)
+        SubprocessGitClient(tmp_path).range_count("deadbeef" * 5, "HEAD")
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +370,7 @@ def test_parser_handles_commit_with_empty_body(tmp_path: Path) -> None:
     """Subject-only commit (no blank-line body) round-trips cleanly."""
     _init_repo(tmp_path)
     sha1 = _commit(tmp_path, "subject-only")
-    [c] = recent_commits(1, start=tmp_path)
+    [c] = SubprocessGitClient(tmp_path).recent_commits(1)
     assert c.sha == sha1
     assert c.subject == "subject-only"
     assert c.body == ""
@@ -399,7 +388,7 @@ def test_parser_handles_commit_with_multiline_body(tmp_path: Path) -> None:
         "Closes #42."
     )
     sha = _commit(tmp_path, multi_line, file_name="x.txt")
-    [c] = recent_commits(1, start=tmp_path)
+    [c] = SubprocessGitClient(tmp_path).recent_commits(1)
     assert c.sha == sha
     assert c.subject == "feat(foo): land slice"
     assert "Decision: A vs B." in c.body
@@ -427,7 +416,7 @@ def test_git_error_carries_command_returncode_stderr_tail() -> None:
 def test_current_branch_returns_named_branch(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    assert current_branch(tmp_path) == "main"
+    assert SubprocessGitClient(tmp_path).current_branch() == "main"
 
 
 def test_current_branch_returns_none_on_detached_head(tmp_path: Path) -> None:
@@ -439,7 +428,7 @@ def test_current_branch_returns_none_on_detached_head(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert current_branch(tmp_path) is None
+    assert SubprocessGitClient(tmp_path).current_branch() is None
 
 
 def test_switch_checks_out_existing_branch(tmp_path: Path) -> None:
@@ -451,18 +440,18 @@ def test_switch_checks_out_existing_branch(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    switch("feature/x", tmp_path)
-    assert current_branch(tmp_path) == "feature/x"
+    SubprocessGitClient(tmp_path).switch("feature/x")
+    assert SubprocessGitClient(tmp_path).current_branch() == "feature/x"
     # Round-trip back to base.
-    switch("main", tmp_path)
-    assert current_branch(tmp_path) == "main"
+    SubprocessGitClient(tmp_path).switch("main")
+    assert SubprocessGitClient(tmp_path).current_branch() == "main"
 
 
 def test_switch_raises_for_missing_branch(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
-        switch("does-not-exist", tmp_path)
+        SubprocessGitClient(tmp_path).switch("does-not-exist")
 
 
 # --------------------------------------------------------------------------- #
@@ -473,14 +462,14 @@ def test_switch_raises_for_missing_branch(tmp_path: Path) -> None:
 def test_has_untracked_false_on_clean_tree(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    assert has_untracked(start=tmp_path) is False
+    assert SubprocessGitClient(tmp_path).has_untracked() is False
 
 
 def test_has_untracked_true_with_untracked_file(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     (tmp_path / "new.txt").write_text("nobody added me")
-    assert has_untracked(start=tmp_path) is True
+    assert SubprocessGitClient(tmp_path).has_untracked() is True
 
 
 def test_has_untracked_false_for_modification_only(tmp_path: Path) -> None:
@@ -488,8 +477,8 @@ def test_has_untracked_false_for_modification_only(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init", file_name="a.txt", content="v1")
     (tmp_path / "a.txt").write_text("v2")
-    assert has_untracked(start=tmp_path) is False
-    assert is_dirty(start=tmp_path) is True
+    assert SubprocessGitClient(tmp_path).has_untracked() is False
+    assert SubprocessGitClient(tmp_path).is_dirty() is True
 
 
 def test_has_untracked_honours_gitignore(tmp_path: Path) -> None:
@@ -500,12 +489,12 @@ def test_has_untracked_honours_gitignore(tmp_path: Path) -> None:
     (tmp_path / "ignored").mkdir()
     (tmp_path / "ignored" / "x.txt").write_text("hidden")
     (tmp_path / "debug.log").write_text("noise")
-    assert has_untracked(start=tmp_path) is False
+    assert SubprocessGitClient(tmp_path).has_untracked() is False
 
 
 def test_has_untracked_raises_outside_repo(tmp_path: Path) -> None:
     with pytest.raises(GitError):
-        has_untracked(start=tmp_path)
+        SubprocessGitClient(tmp_path).has_untracked()
 
 
 def test_add_all_stages_modification_and_untracked(tmp_path: Path) -> None:
@@ -514,10 +503,10 @@ def test_add_all_stages_modification_and_untracked(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("v2")
     (tmp_path / "b.txt").write_text("brand new")
 
-    add_all(start=tmp_path)
+    SubprocessGitClient(tmp_path).add_all()
 
     # Everything is now staged: nothing untracked, and a staged diff exists.
-    assert has_untracked(start=tmp_path) is False
+    assert SubprocessGitClient(tmp_path).has_untracked() is False
     staged = subprocess.run(
         ["git", "-C", str(tmp_path), "diff", "--cached", "--name-only"],
         check=True,
@@ -534,7 +523,7 @@ def test_add_all_honours_gitignore(tmp_path: Path) -> None:
     (tmp_path / "keep.txt").write_text("tracked")
     (tmp_path / "debug.log").write_text("ignored")
 
-    add_all(start=tmp_path)
+    SubprocessGitClient(tmp_path).add_all()
 
     staged = subprocess.run(
         ["git", "-C", str(tmp_path), "diff", "--cached", "--name-only"],
@@ -549,13 +538,13 @@ def test_commit_creates_commit_and_returns_head_sha(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     (tmp_path / "c.txt").write_text("payload")
-    add_all(start=tmp_path)
+    SubprocessGitClient(tmp_path).add_all()
 
-    sha = commit("a runner checkpoint", start=tmp_path)
+    sha = SubprocessGitClient(tmp_path).commit("a runner checkpoint")
 
-    assert sha == head_sha(start=tmp_path)
+    assert sha == SubprocessGitClient(tmp_path).head_sha()
     assert len(sha) == 40 and all(ch in "0123456789abcdef" for ch in sha)
-    recorded = recent_commits(1, start=tmp_path)[0]
+    recorded = SubprocessGitClient(tmp_path).recent_commits(1)[0]
     assert recorded.subject == "a runner checkpoint"
 
 
@@ -564,12 +553,12 @@ def test_commit_preserves_multi_paragraph_message(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     (tmp_path / "d.txt").write_text("payload")
-    add_all(start=tmp_path)
+    SubprocessGitClient(tmp_path).add_all()
 
     message = "Checkpoint subject\n\nA body paragraph.\n\nRalph-Checkpoint: 32"
-    commit(message, start=tmp_path)
+    SubprocessGitClient(tmp_path).commit(message)
 
-    recorded = recent_commits(1, start=tmp_path)[0]
+    recorded = SubprocessGitClient(tmp_path).recent_commits(1)[0]
     assert recorded.subject == "Checkpoint subject"
     assert "A body paragraph." in recorded.body
     assert "Ralph-Checkpoint: 32" in recorded.body
@@ -580,7 +569,7 @@ def test_commit_raises_when_nothing_staged(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
-        commit("nothing to do", start=tmp_path)
+        SubprocessGitClient(tmp_path).commit("nothing to do")
 
 
 # --------------------------------------------------------------------------- #
@@ -626,7 +615,7 @@ def test_push_sends_new_commits_to_upstream(tmp_path: Path) -> None:
     # A brand-new local commit the upstream has not seen yet.
     local_head = _commit(work, "second")
 
-    push(start=work)
+    SubprocessGitClient(work).push()
 
     # Verify via ls-remote (a transport op, like push itself) rather than
     # bare-repo path discovery, which a host `safe.bareRepository=explicit`
@@ -652,7 +641,7 @@ def test_push_is_noop_when_upstream_already_current(tmp_path: Path) -> None:
     _wire_upstream(work, remote)
 
     # No new commit: a redundant push is a safe no-op, never a GitError.
-    push(start=work)
+    SubprocessGitClient(work).push()
 
 
 def test_push_raises_without_upstream(tmp_path: Path) -> None:
@@ -660,4 +649,47 @@ def test_push_raises_without_upstream(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
     with pytest.raises(GitError):
-        push(start=tmp_path)
+        SubprocessGitClient(tmp_path).push()
+
+
+# --------------------------------------------------------------------------- #
+# GitClient conformance + Checkpoint-exclusion (the seam contract)             #
+# --------------------------------------------------------------------------- #
+
+
+def test_subprocess_git_client_satisfies_gitclient_protocol(tmp_path: Path) -> None:
+    """The adapter satisfies the ``@runtime_checkable`` ``GitClient`` structurally."""
+    assert isinstance(SubprocessGitClient(tmp_path), GitClient)
+    # A bare object missing the mechanics is rejected — the check has teeth.
+    assert not isinstance(object(), GitClient)
+
+
+def test_commits_between_excludes_a_runner_checkpoint(tmp_path: Path) -> None:
+    """A Checkpoint authored *after* the post-iteration head read is excluded.
+
+    Mirrors the loop's ordering: read the ``pre`` head, the agent commits, read
+    the post-iteration ``head``, *then* the runner authors its Checkpoint.
+    Because the Checkpoint lands after ``head`` was captured,
+    ``commits_between(pre, head)`` returns only the agent's commit — the
+    load-bearing Strike invariant (a Checkpoint is not progress).
+    """
+    _init_repo(tmp_path)
+    pre = _commit(tmp_path, "base")
+    git = SubprocessGitClient(tmp_path)
+
+    # The agent authors real work; the loop reads the post-iteration head.
+    agent_sha = _commit(
+        tmp_path, "feat: agent work\n\nCloses #42", file_name="a.txt"
+    )
+    head = git.head_sha()
+    assert head == agent_sha
+
+    # The runner Checkpoints *after* ``head`` is read.
+    (tmp_path / "leftover.txt").write_text("uncommitted scratch")
+    git.add_all()
+    checkpoint_sha = git.commit("chore(ralph): checkpoint")
+    assert checkpoint_sha != head
+
+    between = git.commits_between(pre, head)
+    assert [c.sha for c in between] == [agent_sha]
+    assert all(c.sha != checkpoint_sha for c in between)
