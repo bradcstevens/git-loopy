@@ -1085,11 +1085,8 @@ def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(
         loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
     )
-    monkeypatch.setattr(gh_module, "auth_status", lambda: True)
     monkeypatch.setattr(
-        gh_module,
-        "repo_view",
-        lambda: gh_module.Repo(owner="x", name="y", default_branch="main"),
+        loop_module, "_make_github_client", lambda: FakeGitHubClient()
     )
 
     def _exploding_factory() -> Any:
@@ -1145,16 +1142,11 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
-    monkeypatch.setattr(gh_module, "auth_status", lambda: True)
-    monkeypatch.setattr(
-        gh_module,
-        "repo_view",
-        lambda: gh_module.Repo(owner="x", name="y", default_branch="main"),
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(99)],
     )
-    monkeypatch.setattr(
-        gh_module, "issue_list", lambda label, state="open": [_make_issue(99)]
-    )
-    monkeypatch.setattr(gh_module, "issue_view", lambda n: _make_issue(n))
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     fake_client = FakeCopilotClient(scripted_events=[])
     # Each iteration the agent lands one fresh commit (progress -> no strikes),
@@ -1251,39 +1243,12 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
-    # -- 3) gh stubs -------------------------------------------------------
-    issue_42 = _make_issue(42)
-
-    monkeypatch.setattr(gh_module, "auth_status", lambda: True)
-    monkeypatch.setattr(
-        gh_module,
-        "repo_view",
-        lambda: gh_module.Repo(owner="x", name="y", default_branch="main"),
+    # -- 3) gh seam: FakeGitHubClient (issue_close flips #42 to CLOSED) ----
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42)],
     )
-    monkeypatch.setattr(
-        gh_module,
-        "issue_list",
-        lambda label, state="open": [issue_42],
-    )
-
-    issue_42_state = {"value": "OPEN"}
-
-    def fake_issue_view(number: int) -> gh_module.Issue:
-        return gh_module.Issue(
-            number=number,
-            title=issue_42.title,
-            body=issue_42.body,
-            labels=issue_42.labels,
-            state=issue_42_state["value"],
-            url=issue_42.url,
-            comments=(),
-        )
-
-    def fake_issue_close(number: int, comment: str) -> None:
-        issue_42_state["value"] = "CLOSED"
-
-    monkeypatch.setattr(gh_module, "issue_view", fake_issue_view)
-    monkeypatch.setattr(gh_module, "issue_close", fake_issue_close)
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     # -- 4) SDK stub (minimal: empty event flow) ---------------------------
     fake_client = FakeCopilotClient(scripted_events=[])
@@ -1417,37 +1382,18 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     fake_git = FakeGitClient(tmp_path, dirty=False, untracked=False, branch="main")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
-    # -- gh stubs ---------------------------------------------------------
-    monkeypatch.setattr(gh_module, "auth_status", lambda: True)
-    monkeypatch.setattr(
-        gh_module,
-        "repo_view",
-        lambda: gh_module.Repo(owner="x", name="y", default_branch="main"),
-    )
-    monkeypatch.setattr(gh_module, "issue_list", lambda label, state="open": [])
-    monkeypatch.setattr(
-        gh_module,
-        "pr_list",
-        lambda label, state="open": [
-            _make_pr_view(7, head_sha="prsha-old")
-        ],
-    )
-
+    # -- gh seam: FakeGitHubClient (PR head advances mid-session) ---------
     brief = gh_module.Comment(
         author="triage-bot",
         body="## Agent Brief\nFinish the caching change.",
         created_at="2026-05-16T00:00:00Z",
     )
-    pr_view_calls = {"n": 0}
-
-    def fake_pr_view(number: int) -> gh_module.PullRequest:
-        pr_view_calls["n"] += 1
-        # 1st call = collection (old head + brief); 2nd = advance check (new head).
-        if pr_view_calls["n"] == 1:
-            return _make_pr_view(number, head_sha="prsha-old", comments=(brief,))
-        return _make_pr_view(number, head_sha="prsha-new", comments=(brief,))
-
-    monkeypatch.setattr(gh_module, "pr_view", fake_pr_view)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[],
+        prs=[_make_pr_view(7, head_sha="prsha-old", comments=(brief,))],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     # -- SDK stub ---------------------------------------------------------
     scripted = [
@@ -1471,6 +1417,10 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
         ),
     ]
     fake_client = FakeCopilotClient(scripted_events=scripted)
+    # The agent pushes to the PR branch mid-session: the head advances between
+    # the collection-time pr_view (baseline "prsha-old") and the post-iteration
+    # advance-check pr_view, so _detect_pr_advances records the advance.
+    fake_client.on_send = lambda: fake_gh.set_pr_head(7, "prsha-new")
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     # -- run --------------------------------------------------------------

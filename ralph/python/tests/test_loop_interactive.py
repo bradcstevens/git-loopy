@@ -23,7 +23,7 @@ from ralph_afk import loop as loop_module
 from ralph_afk.config import RunConfig
 from ralph_afk.interactive.state import LiveRunState
 from ralph_afk.sinks import SinkFanout
-from tests.fakes import FakeGitClient
+from tests.fakes import FakeGitClient, FakeGitHubClient
 
 
 class _FakeClient:
@@ -121,13 +121,11 @@ def _wire_empty_pool_repo(tmp_path: Any, monkeypatch: Any) -> _FakeClient:
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
-    monkeypatch.setattr(gh_module, "auth_status", lambda: True)
-    monkeypatch.setattr(
-        gh_module,
-        "repo_view",
-        lambda: gh_module.Repo(owner="x", name="y", default_branch="main"),
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[],
     )
-    monkeypatch.setattr(gh_module, "issue_list", lambda label, state="open": [])
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     fake_client = _FakeClient()
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
