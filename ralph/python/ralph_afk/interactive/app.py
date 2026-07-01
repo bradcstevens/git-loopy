@@ -60,10 +60,11 @@ from ralph_afk.interactive.state import (
     log_line_views,
     queue_rows,
 )
-from ralph_afk.pricing import Pricing, estimate_cost
+from ralph_afk.pricing import Pricing
 
 if TYPE_CHECKING:
     from ralph_afk.ui.summary import RunSummary
+    from ralph_afk.usage import UsageTally
 
 __all__ = ["RalphApp"]
 
@@ -83,23 +84,22 @@ _STAMP_WIDTH = 11
 _LOG_NEW_LINES_BELOW = "↓ new lines below — End to re-engage auto-scroll"
 
 
-def _format_queue_cost(
-    model: str | None,
-    tokens_in: int,
-    tokens_out: int,
-    pricing: Pricing | None,
-) -> str:
-    """Render a Queue row's estimated **Cost** cell (issue #36).
+def _format_queue_cost(usage: UsageTally, pricing: Pricing | None) -> str:
+    """Render a Queue row's estimated **Cost** cell (issues #36/#42).
 
-    Reuses the existing pricing path (:func:`~ralph_afk.pricing.estimate_cost`):
-    a model absent from the pricing table — or one no usage event has named yet
-    (``model is None``), or no pricing table at all — yields the em-dash
-    placeholder rather than crashing or silently understating cost. This is the
-    same unknown-model treatment the Summary band / run-end table use.
+    Derives the figure from the row's shared
+    :class:`~ralph_afk.usage.UsageTally` via :meth:`UsageTally.cost`, which owns
+    the one unknown-model guard every Cost figure shares: a model absent from
+    the pricing table — or one no usage event has named yet (``model is None``)
+    — yields ``None`` → the em-dash placeholder rather than crashing or silently
+    understating cost. Only the *no pricing table at all* case (``pricing is
+    None``, e.g. no Summary attached) is still guarded here, since
+    :meth:`UsageTally.cost` requires a concrete pricing table. This is the same
+    unknown-model treatment the Summary band / run-end table use.
     """
-    if pricing is None or model is None:
+    if pricing is None:
         return "—"
-    cost = estimate_cost(model, tokens_in, tokens_out, pricing)
+    cost = usage.cost(pricing)
     return f"${cost:.4f}" if cost is not None else "—"
 
 
@@ -395,11 +395,9 @@ class RalphApp(App[None]):
                     row.status,
                     format_wall_clock(row.started_wall),
                     format_duration(row.active_seconds),
-                    f"{row.tokens_in:,}",
-                    f"{row.tokens_out:,}",
-                    _format_queue_cost(
-                        row.model, row.tokens_in, row.tokens_out, pricing
-                    ),
+                    f"{row.usage.tokens_in:,}",
+                    f"{row.usage.tokens_out:,}",
+                    _format_queue_cost(row.usage, pricing),
                     key=str(row.ref),
                 )
             self._displayed_refs = new_refs
@@ -413,14 +411,12 @@ class RalphApp(App[None]):
                     key, "started", format_wall_clock(row.started_wall)
                 )
                 table.update_cell(key, "active", format_duration(row.active_seconds))
-                table.update_cell(key, "tokens_in", f"{row.tokens_in:,}")
-                table.update_cell(key, "tokens_out", f"{row.tokens_out:,}")
+                table.update_cell(key, "tokens_in", f"{row.usage.tokens_in:,}")
+                table.update_cell(key, "tokens_out", f"{row.usage.tokens_out:,}")
                 table.update_cell(
                     key,
                     "cost",
-                    _format_queue_cost(
-                        row.model, row.tokens_in, row.tokens_out, pricing
-                    ),
+                    _format_queue_cost(row.usage, pricing),
                 )
 
     def _sync_log(self) -> None:

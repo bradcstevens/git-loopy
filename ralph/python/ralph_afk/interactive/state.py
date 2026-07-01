@@ -1190,11 +1190,12 @@ class QueueRow:
     ``None`` until it has been active), ``active_seconds`` is the live ``H:MM:SS``
     duration that sums across every iteration that worked the issue (the widget
     formats it via :func:`format_duration`, ticking against the caller's ``now`` —
-    see :func:`queue_rows`), and ``tokens_in`` / ``tokens_out`` / ``model`` are
-    the issue's accumulated **consumption** — the widget renders the token counts
-    and derives the per-issue **Cost** via :func:`~ralph_afk.pricing.estimate_cost`
-    over ``model`` (``None`` model → the unknown-model em dash). There is no
-    Waiting column.
+    see :func:`queue_rows`), and ``usage`` is the issue's accumulated
+    **Consumption** as the shared :class:`~ralph_afk.usage.UsageTally` (issue
+    #42) carried straight through from the ledger entry — the widget renders
+    ``usage.tokens_in`` / ``usage.tokens_out`` and derives the per-issue **Cost**
+    via :meth:`UsageTally.cost`, which owns the unknown-model em-dash guard
+    (a ``None`` / unpriced model → the em dash). There is no Waiting column.
     """
 
     ref: int | str
@@ -1202,9 +1203,7 @@ class QueueRow:
     started_wall: datetime | None
     active_seconds: float
     is_active: bool
-    tokens_in: int
-    tokens_out: int
-    model: str | None
+    usage: UsageTally
 
     @property
     def label(self) -> str:
@@ -1226,10 +1225,11 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
     (defaulting to the injected monotonic clock, the same basis as the header)
     while the issue is being worked and freezes once it ends / the run stops,
     summing across every iteration that worked it. It also carries the issue's
-    accumulated **consumption** (issue #36): ``tokens_in`` / ``tokens_out`` and
-    the ``model`` they were billed against, likewise summed across every
-    iteration that worked it — the basis for the per-issue Cost the widget
-    derives via :func:`~ralph_afk.pricing.estimate_cost`.
+    accumulated **Consumption** (issues #36/#42) as the ledger entry's shared
+    :class:`~ralph_afk.usage.UsageTally` passed straight through (``usage``) —
+    tokens + the model they were billed against, summed across every iteration
+    that worked it — the basis for the per-issue Cost the widget derives via
+    :meth:`UsageTally.cost`.
     """
     base = now if now is not None else state._monotonic()
     rows: list[QueueRow] = []
@@ -1242,9 +1242,7 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 started_wall=entry.started_wall,
                 active_seconds=entry.active_seconds(base),
                 is_active=is_active,
-                tokens_in=entry.usage.tokens_in,
-                tokens_out=entry.usage.tokens_out,
-                model=entry.usage.model,
+                usage=entry.usage,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))

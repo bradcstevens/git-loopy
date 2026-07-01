@@ -340,13 +340,13 @@ def test_usage_accrues_tokens_and_model_to_the_active_issue() -> None:
 
     by_ref = {r.ref: r for r in queue_rows(state)}
     # The Active issue carries the iteration's tokens + the usage event's model.
-    assert by_ref[36].tokens_in == 1000
-    assert by_ref[36].tokens_out == 200
-    assert by_ref[36].model == "claude-opus-4.8"
+    assert by_ref[36].usage.tokens_in == 1000
+    assert by_ref[36].usage.tokens_out == 200
+    assert by_ref[36].usage.model == "claude-opus-4.8"
     # A still-queued issue accrues nothing (no usage attributed to it).
-    assert by_ref[37].tokens_in == 0
-    assert by_ref[37].tokens_out == 0
-    assert by_ref[37].model is None
+    assert by_ref[37].usage.tokens_in == 0
+    assert by_ref[37].usage.tokens_out == 0
+    assert by_ref[37].usage.model is None
 
 
 def test_issue_ledger_entry_embeds_usage_tally_and_delegates() -> None:
@@ -356,7 +356,7 @@ def test_issue_ledger_entry_embeds_usage_tally_and_delegates() -> None:
     ``UsageTally``'s — not a second copy in ``state.py``. ``_record_usage`` /
     ``_accrue_usage`` / the pending pre-marker buffer / ``_flush_pending_usage``
     all fold through :meth:`UsageTally.add` / :meth:`~UsageTally.merge`, and the
-    Queue row (flat this slice) reads straight off the tally.
+    Queue row carries that same tally whole (issue #42).
     """
     # A fresh ledger entry default-constructs a real UsageTally.
     entry = IssueLedgerEntry(ref=1, first_seen_at=0.0, first_seen_iter=1)
@@ -379,9 +379,47 @@ def test_issue_ledger_entry_embeds_usage_tally_and_delegates() -> None:
     assert tally.model == "claude-opus-4.8"
     assert tally.tokens_in == 31
     assert tally.tokens_out == 11
-    # The Queue projection reads the flat cells straight off the tally.
+    # The Queue projection carries the whole tally (issue #42).
     row = queue_rows(state)[0]
-    assert (row.tokens_in, row.tokens_out, row.model) == (31, 11, "claude-opus-4.8")
+    assert (row.usage.tokens_in, row.usage.tokens_out, row.usage.model) == (
+        31,
+        11,
+        "claude-opus-4.8",
+    )
+
+
+def test_queue_row_carries_usage_tally_and_derives_cost() -> None:
+    """#42: a Queue row carries the ledger entry's shared ``UsageTally`` whole.
+
+    ``queue_rows`` passes ``entry.usage`` straight through (no flattened
+    token / model copy on the row), so the per-issue **Cost** derives from
+    :meth:`UsageTally.cost` — the one unknown-model em-dash guard every Cost
+    figure shares — over the *same* object the ledger accrues into.
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 55, 56)  # #55 is worked; #56 stays queued (no usage)
+    state.stream_message("<working issue=55>")
+    _usage(state, model="claude-opus-4.8", tin=1000, tout=200)
+
+    by_ref = {r.ref: r for r in queue_rows(state)}
+    worked = by_ref[55]
+    # The row carries the whole tally — the *same* object the ledger entry
+    # accrues into (passed straight through, not a flattened copy).
+    assert isinstance(worked.usage, UsageTally)
+    assert worked.usage is state.ledger[55].usage
+    assert (worked.usage.tokens_in, worked.usage.tokens_out, worked.usage.model) == (
+        1000,
+        200,
+        "claude-opus-4.8",
+    )
+    # The per-issue Cost derives from the tally's own guard: 1000 * 15/1e6 +
+    # 200 * 75/1e6 = 0.0300 for the priced model (the widget renders "$0.0300").
+    assert worked.usage.cost(_PRICING) == Decimal("0.0300")
+    # A still-queued issue carries a default tally (None model) whose cost is
+    # None — the em-dash source the widget renders, never zero.
+    assert by_ref[56].usage.cost(_PRICING) is None
 
 
 def test_usage_sums_across_iterations_for_one_issue() -> None:
@@ -404,8 +442,8 @@ def test_usage_sums_across_iterations_for_one_issue() -> None:
     _usage(state, model="claude-opus-4.8", tin=500, tout=100)
 
     row = queue_rows(state)[0]
-    assert row.tokens_in == 1000 + 300 + 500
-    assert row.tokens_out == 200 + 50 + 100
+    assert row.usage.tokens_in == 1000 + 300 + 500
+    assert row.usage.tokens_out == 200 + 50 + 100
 
 
 def test_pre_marker_usage_is_attributed_to_the_active_issue() -> None:
@@ -423,9 +461,9 @@ def test_pre_marker_usage_is_attributed_to_the_active_issue() -> None:
 
     row = queue_rows(state)[0]
     assert row.ref == 50
-    assert row.tokens_in == 800
-    assert row.tokens_out == 100
-    assert row.model == "claude-opus-4.8"
+    assert row.usage.tokens_in == 800
+    assert row.usage.tokens_out == 100
+    assert row.usage.model == "claude-opus-4.8"
 
 
 def test_usage_attributed_via_closure_backstop_when_no_marker() -> None:
@@ -444,8 +482,8 @@ def test_usage_attributed_via_closure_backstop_when_no_marker() -> None:
     row = queue_rows(state)[0]
     assert row.ref == 61
     assert row.status == STATUS_CLOSED
-    assert row.tokens_in == 1200
-    assert row.tokens_out == 300
+    assert row.usage.tokens_in == 1200
+    assert row.usage.tokens_out == 300
 
 
 def test_orphan_usage_without_an_active_issue_is_not_attributed() -> None:
@@ -460,9 +498,9 @@ def test_orphan_usage_without_an_active_issue_is_not_attributed() -> None:
     state.render({"type": events_module.WRAPPER_ITERATION_END})
 
     for row in queue_rows(state):
-        assert row.tokens_in == 0
-        assert row.tokens_out == 0
-        assert row.model is None
+        assert row.usage.tokens_in == 0
+        assert row.usage.tokens_out == 0
+        assert row.usage.model is None
 
 
 def test_unknown_model_cost_is_none_not_a_crash() -> None:
@@ -477,10 +515,18 @@ def test_unknown_model_cost_is_none_not_a_crash() -> None:
     _usage(state, model="mystery-model", tin=400, tout=60)
 
     row = queue_rows(state)[0]
-    assert row.model == "mystery-model"
-    assert row.tokens_in == 400
-    # estimate_cost returns None (not zero, not a crash) for the unknown model.
-    assert estimate_cost(row.model, row.tokens_in, row.tokens_out, _PRICING) is None
+    assert row.usage.model == "mystery-model"
+    assert row.usage.tokens_in == 400
+    # The unknown model yields None cost (not zero, not a crash) — the em-dash
+    # source. UsageTally.cost now owns the guard (issue #42), and it agrees with
+    # the underlying estimate_cost oracle.
+    assert row.usage.cost(_PRICING) is None
+    assert (
+        estimate_cost(
+            row.usage.model, row.usage.tokens_in, row.usage.tokens_out, _PRICING
+        )
+        is None
+    )
 
 
 def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
@@ -514,17 +560,15 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
     rows = queue_rows(state)
     totals = summary.totals()
     # Tokens reconcile exactly.
-    assert sum(r.tokens_in for r in rows) == totals.tokens_in
-    assert sum(r.tokens_out for r in rows) == totals.tokens_out
+    assert sum(r.usage.tokens_in for r in rows) == totals.tokens_in
+    assert sum(r.usage.tokens_out for r in rows) == totals.tokens_out
     # Per-issue accumulation: #100 summed both of its iterations.
     by_ref = {r.ref: r for r in rows}
-    assert (by_ref[100].tokens_in, by_ref[100].tokens_out) == (1500, 300)
-    assert (by_ref[101].tokens_in, by_ref[101].tokens_out) == (300, 50)
+    assert (by_ref[100].usage.tokens_in, by_ref[100].usage.tokens_out) == (1500, 300)
+    assert (by_ref[101].usage.tokens_in, by_ref[101].usage.tokens_out) == (300, 50)
     # Cost reconciles too (cost is linear in tokens; one model across the run).
     per_issue_cost = Decimal(0)
     for r in rows:
-        assert r.model is not None  # every worked issue recorded its usage model
-        per_issue_cost += (
-            estimate_cost(r.model, r.tokens_in, r.tokens_out, _PRICING) or Decimal(0)
-        )
+        assert r.usage.model is not None  # every worked issue recorded its model
+        per_issue_cost += r.usage.cost(_PRICING) or Decimal(0)
     assert per_issue_cost == totals.cost_usd
