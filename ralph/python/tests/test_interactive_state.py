@@ -253,15 +253,34 @@ def test_state_event_type_constants_match_events() -> None:
 
 
 def test_state_module_imports_are_constrained() -> None:
-    """``state.py`` is deep + pure: stdlib + ``typing`` only — no Textual/SDK.
+    """``state.py`` is deep + pure: stdlib + ``typing`` + one deep value object.
 
     The interactive sink must stay unit-testable without a TTY and must never
-    import Textual (issue #23 acceptance criterion; ADR-0001 import-guard
-    convention, mirroring ``ralph_afk.sinks``).
+    import Textual or the SDK (issue #23 acceptance criterion; ADR-0001
+    import-guard convention, mirroring ``ralph_afk.sinks``). The **only**
+    first-party import allowed is :mod:`ralph_afk.usage` (issue #41) — the shared
+    ``UsageTally`` **Consumption** value object the per-Active-issue accrual folds
+    onto. It is itself deep and pure (stdlib + :mod:`ralph_afk.pricing`), so
+    ``state.py`` imports ``usage``, **not** ``pricing`` / Textual / the SDK
+    directly. Any other first-party import (or Textual / the SDK) still fails.
     """
     source = Path(state_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    allow = {"__future__", "collections", "re", "time", "dataclasses", "datetime", "typing"}
+    allow = {
+        # Stdlib + typing — the deep-and-pure baseline.
+        "__future__",
+        "collections",
+        "re",
+        "time",
+        "dataclasses",
+        "datetime",
+        "typing",
+        # The one first-party allowance (issue #41): the shared UsageTally
+        # Consumption value object. Deep and pure (stdlib + ralph_afk.pricing);
+        # state.py folds its per-Active-issue Consumption onto it. NOT a Textual /
+        # SDK / pricing coupling — state.py imports usage, not pricing directly.
+        "ralph_afk.usage",
+    }
     seen: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -274,3 +293,7 @@ def test_state_module_imports_are_constrained() -> None:
     leaked = seen - allow
     assert not leaked, f"state.py imports non-allowlisted modules: {leaked}"
     assert "textual" not in seen, "LiveRunState must not import Textual"
+    # The allowance is exercised (state folds Consumption through UsageTally) and
+    # is exactly one hop deep: state.py imports usage, not pricing directly.
+    assert "ralph_afk.usage" in seen, "state.py folds Consumption through UsageTally"
+    assert "ralph_afk.pricing" not in seen, "state.py imports usage, not pricing"

@@ -21,6 +21,7 @@ from ralph_afk.interactive.state import (
     STATUS_GONE,
     STATUS_NO_PROGRESS,
     STATUS_QUEUED,
+    IssueLedgerEntry,
     LiveRunState,
     format_duration,
     format_wall_clock,
@@ -28,6 +29,7 @@ from ralph_afk.interactive.state import (
 )
 from ralph_afk.pricing import ModelPricing, Pricing, estimate_cost
 from ralph_afk.ui.summary import RunSummary
+from ralph_afk.usage import UsageTally
 
 
 class _FakeClock:
@@ -345,6 +347,41 @@ def test_usage_accrues_tokens_and_model_to_the_active_issue() -> None:
     assert by_ref[37].tokens_in == 0
     assert by_ref[37].tokens_out == 0
     assert by_ref[37].model is None
+
+
+def test_issue_ledger_entry_embeds_usage_tally_and_delegates() -> None:
+    """#41: a ledger entry's Consumption lives in a shared ``UsageTally``.
+
+    The per-issue accrual rule (*first non-None model wins; tokens sum*) is the
+    ``UsageTally``'s — not a second copy in ``state.py``. ``_record_usage`` /
+    ``_accrue_usage`` / the pending pre-marker buffer / ``_flush_pending_usage``
+    all fold through :meth:`UsageTally.add` / :meth:`~UsageTally.merge`, and the
+    Queue row (flat this slice) reads straight off the tally.
+    """
+    # A fresh ledger entry default-constructs a real UsageTally.
+    entry = IssueLedgerEntry(ref=1, first_seen_at=0.0, first_seen_iter=1)
+    assert isinstance(entry.usage, UsageTally)
+
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 42)
+    state.stream_message("<working issue=42>")
+    # A leading None model, then the authoritative model, then a *different*
+    # non-None model that must NOT overwrite it (first non-None wins absolutely).
+    _usage(state, model=None, tin=10, tout=5)
+    _usage(state, model="claude-opus-4.8", tin=20, tout=5)
+    _usage(state, model="gpt-5.4", tin=1, tout=1)
+
+    # The rule now lives solely in the tally on the entry.
+    tally = state.ledger[42].usage
+    assert isinstance(tally, UsageTally)
+    assert tally.model == "claude-opus-4.8"
+    assert tally.tokens_in == 31
+    assert tally.tokens_out == 11
+    # The Queue projection reads the flat cells straight off the tally.
+    row = queue_rows(state)[0]
+    assert (row.tokens_in, row.tokens_out, row.model) == (31, 11, "claude-opus-4.8")
 
 
 def test_usage_sums_across_iterations_for_one_issue() -> None:

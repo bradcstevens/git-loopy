@@ -56,9 +56,11 @@ from __future__ import annotations
 import re
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
+
+from ralph_afk.usage import UsageTally
 
 __all__ = [
     "LiveRunState",
@@ -189,14 +191,14 @@ class IssueLedgerEntry:
     * ``waiting_duration`` — ``first_seen`` to first active.
     * ``active_duration`` — time spent active; **sums across iterations** if the
       issue is revisited (live-ticking via :meth:`active_seconds`).
-    * ``tokens_in`` / ``tokens_out`` — per-issue **consumption** (issue #36): the
-      input/output tokens of every ``usage.tokens`` event attributed to this
-      issue while it was the Active issue, **summed across every iteration** that
-      worked it (the same accumulate-not-reset rule as ``active_duration``). The
-      Queue's per-issue **Cost** is :func:`estimate_cost` over these.
-    * ``model`` — the model the usage was billed against (first non-None wins,
-      mirroring :class:`~ralph_afk.ui.summary.RunSummary`); the basis for the
-      per-issue cost estimate. ``None`` until a usage event names one.
+    * ``usage`` — per-issue **Consumption** (issue #36) as a shared
+      :class:`~ralph_afk.usage.UsageTally` (issue #41): the input/output tokens
+      of every ``usage.tokens`` event attributed to this issue while it was the
+      Active issue, plus the model they were billed against (first non-None
+      wins), **summed across every iteration** that worked it (the same
+      accumulate-not-reset rule as ``active_duration``). The Queue's per-issue
+      **Cost** is :meth:`UsageTally.cost` over it. The accrual rule and the
+      unknown-model cost guard live in the tally, not a second copy here.
     * ``ended_at`` — when a terminal closure (closed / advanced) was recorded.
     * ``active_since`` — internal: start of the current active stint, or
       ``None`` when not currently active.
@@ -210,9 +212,7 @@ class IssueLedgerEntry:
     started_wall: datetime | None = None
     waiting_duration: float | None = None
     active_duration: float = 0.0
-    tokens_in: int = 0
-    tokens_out: int = 0
-    model: str | None = None
+    usage: UsageTally = field(default_factory=UsageTally)
     ended_at: float | None = None
     active_since: float | None = None
 
@@ -319,15 +319,14 @@ class LiveRunState:
         #: attribution). Reset at each ``iteration.start``; bounded like a Log.
         self._pending: deque[LogLine] = deque(maxlen=_LOG_TAIL_LINES)
         #: Pending pre-marker token usage for the current iteration (issue #36),
-        #: the consumption analogue of ``_pending``: ``usage.tokens`` that arrive
-        #: before the active issue is known accrue here and are flushed onto the
-        #: active issue on activation (including the late ``Closes #N`` /
+        #: the consumption analogue of ``_pending``: a shared
+        #: :class:`~ralph_afk.usage.UsageTally` (issue #41) that ``usage.tokens``
+        #: arriving before the active issue is known accrue into, flushed onto
+        #: the active issue on activation (including the late ``Closes #N`` /
         #: single-member-pool backstop). Reset at each ``iteration.start``; an
-        #: iteration that never names an active issue discards them, the same
+        #: iteration that never names an active issue discards it, the same
         #: orphan treatment as ``_pending``.
-        self._pending_tokens_in = 0
-        self._pending_tokens_out = 0
-        self._pending_model: str | None = None
+        self._pending_usage = UsageTally()
         #: The in-progress (newline-less) streamed line and which stream it
         #: belongs to, surfaced as a provisional trailing line by :meth:`log`
         #: so output appears live (not only on newline). ``_partial_started`` is
@@ -596,47 +595,32 @@ class LiveRunState:
                 self._accrue_usage(entry, name, tin, tout)
             return
         # Pre-marker: hold until the active issue is known (flushed in _activate).
-        if self._pending_model is None and name is not None:
-            self._pending_model = name
-        self._pending_tokens_in += tin
-        self._pending_tokens_out += tout
+        self._pending_usage.add(name, tin, tout)
 
     @staticmethod
     def _accrue_usage(
         entry: IssueLedgerEntry, model: str | None, tokens_in: int, tokens_out: int
     ) -> None:
-        """Fold a token sample into ``entry``; first non-None model wins.
+        """Fold a token sample into ``entry``'s tally via the shared rule.
 
-        The model selection mirrors :meth:`RunSummary.record_usage` so the
-        per-issue cost basis matches the run-level Summary's per-iteration basis,
-        keeping the two reconcilable.
+        Delegates to :meth:`UsageTally.add` (issues #39/#41) — *first non-None
+        model wins; tokens sum* — so the per-issue cost basis matches the
+        run-level Summary's per-iteration basis, keeping the two reconcilable by
+        construction rather than by a duplicated rule.
         """
-        if entry.model is None and model is not None:
-            entry.model = model
-        entry.tokens_in += tokens_in
-        entry.tokens_out += tokens_out
+        entry.usage.add(model, tokens_in, tokens_out)
 
     def _flush_pending_usage(self, entry: IssueLedgerEntry) -> None:
-        """Drain the pending pre-marker token buckets onto ``entry`` and reset.
+        """Drain the pending pre-marker token tally onto ``entry`` and reset.
 
-        Called from :meth:`_activate` once the active issue is known. After the
-        first activation the buckets are empty, so a later same-iteration switch
-        of active issue is a no-op (pre-marker usage belongs to the first one).
+        Called from :meth:`_activate` once the active issue is known; folds the
+        pending tally in via :meth:`UsageTally.merge` (the same shared accrual
+        rule). After the first activation the buffer is empty, so merging it is a
+        no-op — a later same-iteration switch of active issue leaves the
+        pre-marker usage with the first one.
         """
-        if (
-            self._pending_tokens_in
-            or self._pending_tokens_out
-            or self._pending_model is not None
-        ):
-            self._accrue_usage(
-                entry,
-                self._pending_model,
-                self._pending_tokens_in,
-                self._pending_tokens_out,
-            )
-        self._pending_tokens_in = 0
-        self._pending_tokens_out = 0
-        self._pending_model = None
+        entry.usage.merge(self._pending_usage)
+        self._pending_usage = UsageTally()
 
     def _stream_into(self, kind: str, delta: str) -> None:
         """Append a streamed delta, committing each completed (``\\n``) line.
@@ -791,9 +775,7 @@ class LiveRunState:
         # identified an active issue is discarded here (it lives on in the JSONL
         # replay log / the run-level Summary).
         self._pending.clear()
-        self._pending_tokens_in = 0
-        self._pending_tokens_out = 0
-        self._pending_model = None
+        self._pending_usage = UsageTally()
         self._partial_kind = None
         self._partial_text = ""
         self._partial_started = None
@@ -1260,9 +1242,9 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 started_wall=entry.started_wall,
                 active_seconds=entry.active_seconds(base),
                 is_active=is_active,
-                tokens_in=entry.tokens_in,
-                tokens_out=entry.tokens_out,
-                model=entry.model,
+                tokens_in=entry.usage.tokens_in,
+                tokens_out=entry.usage.tokens_out,
+                model=entry.usage.model,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))
