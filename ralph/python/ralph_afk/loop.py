@@ -73,19 +73,22 @@ Design notes:
   GitHub backend. Adding a new backend (e.g. a remote API) means
   adding one ``IssueSource`` impl and one factory branch — the
   iteration body never changes.
-* **Inter-module fan-out via the sink list.** Every wrapper-level event
-  (``wrapper.run.start``, ``wrapper.iteration.start``, etc.) goes through
-  :meth:`_emit` which:
+* **Inter-module fan-out via the shared ``EventEmitter``.** Every
+  wrapper-level event (``wrapper.run.start``, ``wrapper.iteration.start``,
+  etc.) goes through :meth:`_emit`, a one-line delegator onto the shared
+  :class:`~ralph_afk.emit.EventEmitter` (issue #45). The emitter:
   1. Constructs an envelope via :func:`ralph_afk.events.make_event`.
-  2. Writes the JSONL line via the event log writer (scrubber pipeline) —
-     always-on and independent of which sinks are registered.
-  3. Hands it to the :class:`~ralph_afk.sinks.SinkFanout`, which dispatches
-     to every registered sink (issue #22). For the non-interactive path the
-     sole sink is the line-printer :class:`~ralph_afk.ui.renderer.Renderer`,
-     which drives the Rich terminal output and RunSummary accumulator
-     updates; the same fan-out is handed to each
-     :class:`~ralph_afk.session.IterationSession` so SDK events and streaming
-     deltas flow through the identical seam.
+  2. Scrubs it **once**, then writes that scrubbed dict as the JSONL line via
+     the event log writer — always-on and independent of which sinks are
+     registered.
+  3. Hands the *same scrubbed* dict to the :class:`~ralph_afk.sinks.SinkFanout`,
+     which dispatches to every registered sink (issue #22) — so the sinks
+     receive an already-scrubbed envelope (the sink contract), closing the
+     pre-#45 scrub gap. For the non-interactive path the sole sink is the
+     line-printer :class:`~ralph_afk.ui.renderer.Renderer`, which drives the
+     Rich terminal output and RunSummary accumulator updates; the same fan-out
+     is handed to each :class:`~ralph_afk.session.IterationSession` so SDK
+     events and streaming deltas flow through the identical seam.
 * **SDK + source failure containment.** ``send_and_wait`` failures are
   caught and treated as no-progress. Per-issue ``gh.issue_close`` failures are
   logged via the diagnostics logger inside the source impl and the
@@ -115,6 +118,7 @@ from rich.console import Console
 from ralph_afk import events as events_module
 from ralph_afk import git as git_module
 from ralph_afk.config import RunConfig
+from ralph_afk.emit import EventEmitter
 from ralph_afk.persist import (
     IterationCounters,
     WritersBundle,
@@ -350,6 +354,18 @@ class _Loop:
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
         )
+        # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
+        # write the replay JSONL + fan out to the sinks. Built here so ``_emit``
+        # is a one-line delegator and the sinks receive the *scrubbed* envelope
+        # by construction — #45 closed the loop's scrub gap (the pre-#45 inline
+        # copy fanned the raw envelope out to the sinks). ``diag=self._diag``
+        # preserves the loop's warn-and-continue policy on a write / sink failure.
+        self._emitter = EventEmitter(
+            run_id=self._writers.run_id,
+            event_log=self._writers.event_log,
+            sinks=self._sinks,
+            diag=self._diag,
+        )
 
     # -- event fan-out ------------------------------------------------------
 
@@ -360,27 +376,20 @@ class _Loop:
         iter_num: int | None,
         **payload: Any,
     ) -> dict[str, Any]:
-        """Compose, persist, then fan out one wrapper-level event.
+        """Compose, scrub, persist, then fan out one wrapper-level event.
 
-        JSONL writing is always-on and independent of the sink list: the
-        envelope is written to the event log *before* the
-        :class:`~ralph_afk.sinks.SinkFanout` hand-off.
+        Delegates to the shared :class:`~ralph_afk.emit.EventEmitter` (issue
+        #45): it composes the envelope via :func:`ralph_afk.events.make_event`,
+        scrubs it **once**, writes that scrubbed dict as the replay JSONL line
+        (always-on, independent of the sink list), and fans the *same scrubbed*
+        dict out to the :class:`~ralph_afk.sinks.SinkFanout` — so the on-screen
+        sinks receive an already-scrubbed envelope (the sink contract), not the
+        raw one the pre-#45 inline copy leaked. The write and render are each
+        individually guarded; on failure the emitter warns via the loop's
+        ``diag`` (warn-and-continue). Returns the composed **pre-scrub** envelope
+        so callers can still read the SHA / subject off their own events.
         """
-        envelope = events_module.make_event(
-            type=event_type,
-            run_id=self._writers.run_id,
-            iter=iter_num,
-            **payload,
-        )
-        try:
-            self._writers.event_log.write(envelope)
-        except Exception as exc:  # pragma: no cover - defensive
-            self._diag.warning("event log write failed: %s", exc)
-        try:
-            self._sinks.render(envelope)
-        except Exception as exc:  # pragma: no cover - defensive
-            self._diag.warning("sink fan-out failed on %s: %s", event_type, exc)
-        return envelope
+        return self._emitter.emit(event_type, iter_num=iter_num, **payload)
 
     # -- iteration body ----------------------------------------------------
 

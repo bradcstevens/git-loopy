@@ -35,10 +35,11 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from uuid import uuid4
 
 import pytest
+from copilot import CopilotClient
 from copilot.generated.session_events import (
     AssistantMessageData,
     AssistantUsageData,
@@ -51,6 +52,12 @@ from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
 from ralph_afk import loop as loop_module
 from ralph_afk.config import RunConfig
+from ralph_afk.emit import EventEmitter
+from ralph_afk.events import REDACTED_SECRET
+from ralph_afk.persist import WritersBundle, create_writers
+from ralph_afk.pricing import Pricing
+from ralph_afk.sinks import SinkFanout
+from ralph_afk.ui import RunSummary
 from ralph_afk.wrapper import is_checkpoint_message
 
 
@@ -1712,3 +1719,117 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     assert iter_row["commits"] == 0
     assert iter_row["auto_closures"] == 1
     assert iter_row["strikes"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Loop event fan-out through the shared EventEmitter (issue #45)
+# ---------------------------------------------------------------------------
+
+
+class _NoopSource:
+    """Inert :class:`~ralph_afk.sources.IssueSource` stand-in.
+
+    ``_Loop.__init__`` merely stores the source; ``_emit`` never reaches it, so
+    a no-op is enough to construct a ``_Loop`` in isolation for a focused
+    fan-out test.
+    """
+
+    def preflight(self) -> int | None:
+        return None
+
+    def collect_afk_ready(self) -> list[Any]:
+        return []
+
+    def handle_completions(
+        self, *, pool: list[Any], new_commits: list[Any]
+    ) -> list[Any]:
+        return []
+
+
+class _RecordingSink:
+    """Records each envelope handed to ``render`` (the sink contract surface)."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def render(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+
+    def stream_reasoning(self, delta: str) -> None:  # pragma: no cover
+        pass
+
+    def stream_message(self, delta: str) -> None:  # pragma: no cover
+        pass
+
+
+def _make_loop(
+    repo_root: Path, sinks: SinkFanout
+) -> tuple[loop_module._Loop, WritersBundle]:
+    """Construct a real ``_Loop`` wired to ``sinks``.
+
+    Only the collaborators ``_emit`` reaches — ``writers`` (its ``run_id`` /
+    ``event_log``), ``sinks``, and ``diag`` — are meaningful here; the rest are
+    inert stand-ins the constructor merely stores.
+    """
+    writers = create_writers(repo_root)
+    pricing = Pricing(models={})
+    loop = loop_module._Loop(
+        config=RunConfig(),
+        repo_root=repo_root,
+        prompt_text="",
+        pricing=pricing,
+        writers=writers,
+        sinks=sinks,
+        summary=RunSummary(pricing=pricing),
+        client=cast(CopilotClient, None),
+        source=_NoopSource(),
+        diag=writers.diagnostics,
+    )
+    return loop, writers
+
+
+def test_loop_emit_fans_scrubbed_envelope_to_sink_via_emitter(tmp_path) -> None:
+    """``_Loop._emit`` fans the *scrubbed* envelope out to the sinks (issue #45).
+
+    #45 shrinks ``_emit`` to ``self._emitter.emit(...)`` with the emitter built
+    in ``__init__`` (``diag=self._diag``). This pins two things the pre-#45
+    inline ``_emit`` violated:
+
+    * the loop composes its fan-out on a shared :class:`EventEmitter` — the
+      ``_emitter`` assertion fails against the pre-#45 ``_Loop`` (which had no
+      emitter);
+    * the sink contract that ``render`` only ever sees an *already-scrubbed*
+      envelope — a secret on a wrapper event reaches the sink **redacted**,
+      closing the loop's scrub gap (the pre-#45 ``_emit`` fanned the *unscrubbed*
+      envelope out to the sinks). ``emit`` still returns the *pre-scrub* envelope
+      the loop reads its SHA / subject off, and the JSONL writer + sink agree on
+      the same scrubbed bytes.
+    """
+    secret = "ghp_" + "A" * 36
+    sink = _RecordingSink()
+    loop, writers = _make_loop(tmp_path, SinkFanout([sink]))
+
+    # The loop composes its fan-out on the shared EventEmitter (diag=self._diag).
+    assert isinstance(loop._emitter, EventEmitter)
+
+    with writers.event_log:
+        returned = loop._emit(
+            "wrapper.commit.recorded", iter_num=1, subject=f"landed {secret}"
+        )
+
+    # The sink saw the *scrubbed* envelope — the loop's scrub gap is closed.
+    assert sink.events, "sink never received the emitted envelope"
+    received = sink.events[0]
+    assert secret not in json.dumps(received)
+    assert REDACTED_SECRET in received["subject"]
+    # ``emit`` returns the pre-scrub envelope the loop inspects (SHA / subject).
+    assert returned["subject"] == f"landed {secret}"
+    assert returned is not received
+    # Writer and sink agree — both got the same scrubbed bytes.
+    log_lines = [
+        json.loads(ln)
+        for ln in writers.event_log.path.read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
+    assert log_lines[-1] == received

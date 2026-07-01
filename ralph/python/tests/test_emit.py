@@ -19,6 +19,9 @@ Covered here:
   regression guard for the loop's scrub gap.
 * :meth:`EventEmitter.emit` composes via :func:`ralph_afk.events.make_event`
   (``iter=iter_num``) and **returns** the composed (pre-scrub) envelope.
+* Configured as ``_Loop.__init__`` configures it (``diag`` **set**, unlike the
+  session's ``diag=None``), the ``emit`` path fans the *scrubbed* envelope out
+  to its sinks — the #45 regression guard for the loop's scrub gap.
 * Write and render are **each individually guarded**; on failure ``diag.warning``
   is called iff a ``diag`` was injected (with the loop's message strings, for the
   #45 parity switch), and one failure never starves the other.
@@ -177,6 +180,40 @@ def test_emit_returns_the_pre_scrub_envelope() -> None:
     # ...while the seam received the scrubbed copy (a distinct object).
     assert returned is not sink.events[0]
     assert sink.events[0]["subject"] == REDACTED_SECRET
+
+
+def test_emit_path_scrubs_before_render_as_the_loop_configures_it() -> None:
+    """The loop's emit path fans the *scrubbed* envelope out to its sinks (#45).
+
+    #45 shrinks ``_Loop._emit`` to ``self._emitter.emit(...)`` with the emitter
+    constructed exactly as ``_Loop.__init__`` builds it — ``diag`` **set** to
+    the loop's diagnostics logger (warn-and-continue), unlike the session's
+    ``diag=None``. Against the pre-#45 inline ``_emit`` — which fanned the
+    *unscrubbed* envelope out to the sinks — the sink would receive the raw
+    ``ghp_`` token. Through the emitter the sink only ever sees the scrubbed
+    envelope, the writer and sink agree on the same scrubbed bytes, ``emit``
+    still returns the pre-scrub envelope the loop reads its SHA / subject off,
+    and the clean path warns nothing.
+    """
+    log = _RecordingLog()
+    sink = _RecordingSink()
+    diag = _RecordingDiag()
+    # Configured as ``_Loop.__init__`` configures it: diag = the loop's logger.
+    emitter = EventEmitter(run_id="RUN", event_log=log, sinks=sink, diag=diag)
+
+    secret = "ghp_" + "C" * 36
+    returned = emitter.emit("wrapper.commit.recorded", iter_num=4, subject=secret)
+
+    # The sink saw the scrubbed envelope — the loop's scrub gap is closed.
+    assert sink.events[0]["subject"] == REDACTED_SECRET
+    assert secret not in repr(sink.events[0])
+    # Writer + sink agree on the same scrubbed dict.
+    assert log.events[0] is sink.events[0]
+    # ``emit`` returns the pre-scrub envelope (the loop's SHA / subject reads).
+    assert returned["subject"] == secret
+    assert returned is not sink.events[0]
+    # Clean path: warn-and-continue never fired.
+    assert diag.warnings == []
 
 
 # ---------------------------------------------------------------------------
