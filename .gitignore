@@ -38,6 +38,7 @@ venv/
 # Ralph runtime
 copiloop/.tmp/
 .ralph-grill.lock
+.ralph/
 
 # copiloop/python/ persisted observability artefacts (JSONL event logs +
 # per-run summary JSONs; never commit).
