@@ -101,6 +101,15 @@ The per-run, per-iteration accounting band of the **Dashboard** (tokens, cost,
 commits, closures, strikes), updated each iteration and mirrored in the run-end
 table. A band of the **Dashboard**, not a separate screen.
 
+**Activity**:
+The **Dashboard** band that renders the live current tail — the **Active issue**'s
+**Log**, or the pre-marker pending output — always visible below the **Queue** (between
+it and the **Summary**). An active-only, auto-scrolling glance at what the agent is
+doing right now, so a run reads as active instead of appearing stuck while issues sit
+**queued**; it complements, and does not replace, the per-issue **Log** that enter opens
+for the full, scrollable history. A band of the **Dashboard**, not a separate screen.
+_Avoid_: stream, feed.
+
 **Consumption**:
 The tokens-in / tokens-out and the model they were billed against, attributed to a
 scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or an
