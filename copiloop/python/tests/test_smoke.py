@@ -147,6 +147,10 @@ def test_copiloop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
         text=True,
         check=False,
         timeout=30,
+        # Non-interactive stdin: with no config.toml this bare run would
+        # otherwise auto-run the first-run `init` wizard on a TTY (#55). DEVNULL
+        # keeps the smoke run deterministic (never prompts) wherever pytest runs.
+        stdin=subprocess.DEVNULL,
     )
     assert result.returncode == 0, (
         f"expected exit 0 on empty PRDs pool; "
@@ -204,6 +208,10 @@ def test_copiloop_no_copiloop_folder_runs_off_packaged_prompt(
         text=True,
         check=False,
         timeout=30,
+        # Non-interactive stdin: with no config.toml anywhere this bare run would
+        # otherwise auto-run the first-run `init` wizard on a TTY (#55). DEVNULL
+        # keeps the smoke run deterministic (never prompts) wherever pytest runs.
+        stdin=subprocess.DEVNULL,
     )
     assert result.returncode == 0, (
         "a repo with no copiloop/ folder should run off the packaged default "

@@ -1041,6 +1041,33 @@ def _should_run_interactive(interactive: bool | None) -> bool:
     )
 
 
+def _should_auto_init(
+    tables: settings.ConfigTables,
+    interactive: bool | None,
+    stdin_isatty: bool,
+) -> bool:
+    """Decide whether a bare run auto-runs the first-run ``init`` wizard (#55).
+
+    Returns ``True`` only for a genuine first run that can prompt:
+
+    * **No Config resolves anywhere** — both the project and global
+      ``config.toml`` tables are empty. Once either scope has Config, a bare run
+      goes straight to the loop (this slice's "no wizard once configured" rule).
+    * **Not opted out of interactivity** — ``interactive is False``
+      (``COPILOOP_INTERACTIVE=0`` / ``--no-interactive``, already merged across
+      the config chain by :func:`resolve_config`) suppresses the prompt.
+    * **stdin is an interactive terminal** — the wizard prompts on stdin, so a
+      non-TTY (CI, a pipe) never prompts and the built-in defaults carry the run.
+      This is what keeps automated runs from ever hanging on the wizard
+      (ADR-0006 / ADR-0007 first-run / CI behavior).
+    """
+    if tables.project or tables.global_:
+        return False
+    if interactive is False:
+        return False
+    return stdin_isatty
+
+
 def _should_select_model(args: argparse.Namespace) -> bool:
     """Resolve whether this invocation opens the startup model picker.
 
@@ -1123,6 +1150,33 @@ def main(argv: list[str] | None = None) -> int:
     resolved = resolve_config(
         args, os.environ, project=tables.project, global_=tables.global_
     )
+
+    # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
+    # scope, an interactive TTY auto-runs the `init` wizard first, then continues
+    # into the loop on the just-written Config. A non-TTY (CI) or an explicit
+    # opt-out (COPILOOP_INTERACTIVE=0 / --no-interactive) keeps the built-in
+    # defaults and never prompts, so automated runs never hang on the wizard.
+    # Cancelling the wizard aborts the whole command — it writes nothing, runs
+    # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
+    # loop). The wizard module is imported lazily so a configured bare run (the
+    # common case) never pays its import.
+    if _should_auto_init(tables, resolved.interactive, sys.stdin.isatty()):
+        from copiloop import init as _init
+
+        init_rc = _init.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=repo_root,
+            env=os.environ,
+        )
+        if init_rc != 0:
+            return init_rc
+        # Re-read + re-resolve so the loop consumes the Config the wizard wrote.
+        tables = settings.load_configs(repo_root, os.environ)
+        resolved = resolve_config(
+            args, os.environ, project=tables.project, global_=tables.global_
+        )
+
     config = resolved.run
 
     # Import here so the SDK / Rich / pricing only load if we're

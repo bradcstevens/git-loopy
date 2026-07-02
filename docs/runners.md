@@ -49,11 +49,13 @@ COPILOOP_ISSUE_SOURCE=prds uv run --project copiloop/python copiloop
 INCLUDE_PRS=1 uv run --project copiloop/python copiloop
 ```
 
-Optional first-run setup: `copiloop init` is an interactive wizard that writes a
+First-run setup: `copiloop init` is an interactive wizard that writes a
 `config.toml` (and, by default, scaffolds an editable `PROMPT.md` override and
 copiloop's agent skills) into a **global** or **project** scope, then exits
-without running the loop. It is never required — a bare `copiloop` runs
-zero-config off the packaged defaults. See
+without running the loop. You rarely run it by hand: the **first** bare
+`copiloop` with no Config in either scope auto-runs it on a TTY, then continues
+into the loop; with no TTY (or `COPILOOP_INTERACTIVE=0`) it is skipped and the
+run falls back to the built-in defaults, so CI never hangs on a prompt. See
 [`copiloop/python/README.md`](../copiloop/python/README.md#first-run-setup-copiloop-init).
 
 ## Per-iteration flow

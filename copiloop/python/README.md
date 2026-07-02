@@ -91,9 +91,11 @@ you by [`copiloop init`](#first-run-setup-copiloop-init) — when you want them.
 `copiloop init` is an interactive wizard that writes a
 [`config.toml`](#persistent-config-configtoml) (and, by default, scaffolds
 editable asset overrides) into a chosen **scope**, then **exits** — it never
-starts the loop. It is optional: a bare `copiloop` already runs zero-config off
-the packaged defaults; reach for `init` when you want to pin a model / reasoning
-effort or get editable copies of the prompt and skills.
+starts the loop. You rarely run it by hand: the **first** bare `copiloop` in a
+repo with no Config anywhere auto-runs it for you on a TTY (see [First run
+(auto-setup)](#first-run-auto-setup)), then continues into the loop. Invoke it
+explicitly to (re)configure a scope, pin a model / reasoning effort, or get
+editable copies of the prompt and skills.
 
 ```bash
 # Interactive: pick a scope, then a model + reasoning effort from the live list.
@@ -122,11 +124,24 @@ The wizard:
 - **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
   runs nothing, and exits non-zero.
 
-With **no TTY** (or under `--yes`) the wizard never blocks: it takes the built-in
-defaults so automated runs can't hang on a prompt. Hand-editing `config.toml`
-directly stays fully supported — `init` is a convenience over it, not a
-replacement. (A `config` subcommand group to inspect and edit persisted settings
-is reserved now and implemented in issue #56.)
+Hand-editing `config.toml` directly stays fully supported — `init` is a
+convenience over it, not a replacement. (A `config` subcommand group to inspect
+and edit persisted settings is reserved now and implemented in issue #56.)
+
+### First run (auto-setup)
+
+The **very first** bare `copiloop` — when no `config.toml` resolves in *either*
+scope — sets itself up:
+
+- On an **interactive TTY** it auto-runs the wizard above, then **continues into
+  the loop** on the Config it just wrote. Cancelling aborts the whole command
+  (writes nothing, runs nothing, non-zero exit) — an aborted setup never starts
+  an unconfirmed loop.
+- With **no TTY** or `COPILOOP_INTERACTIVE=0` (CI, pipes) it **never prompts**: it
+  falls back to the built-in defaults and goes straight to the loop, so automated
+  runs can't hang on the wizard.
+- Once Config exists in either scope, a bare `copiloop` skips the wizard entirely
+  and goes straight to the loop.
 
 ---
 
