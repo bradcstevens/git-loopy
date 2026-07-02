@@ -1030,6 +1030,21 @@ class _Lane:
     pre_sha: str | None = None
 
 
+def _lane_sort_key(lane: _Lane) -> tuple[int, int, str]:
+    """Ascending, deterministic Integration order for a Wave's Lanes.
+
+    Lanes are only ever created for **integer** issue numbers (Wave eligibility
+    requires an ``int`` ref), so this orders by that number. The leading
+    discriminator keeps the key total-orderable even if a non-int ref ever
+    slipped through — ints first (by value), then any string refs
+    (lexicographically) — so the sort can never raise on a mixed key.
+    """
+    ref = lane.item.ref
+    if isinstance(ref, int):
+        return (0, ref, "")
+    return (1, 0, str(ref))
+
+
 class _ParallelLoop:
     """Opt-in Parallel-mode Wave/Lane orchestrator (#61, ADR-0008).
 
@@ -1047,11 +1062,15 @@ class _ParallelLoop:
     per-worktree Checkpoint (ADR-0004) runs on each Lane branch; at the Wave
     barrier the worktrees are torn down (branches kept as breadcrumbs).
 
-    **Scope of this slice.** Dispatch + isolated concurrent execution up to,
-    but *not* including, landing branches on base — that is Integration
-    (#62/#63). A Wave here therefore makes no base-branch merges or closures;
-    the injected :class:`~ralph_afk.gate.GateRunner` seam is stored for those
-    slices but unused here.
+    **Integration (#62, ADR-0009).** A Wave ends by landing its green Lanes on
+    base: for each finished Lane branch in ascending issue-number order, merge
+    into base, re-run the feedback loops from the runner side via the injected
+    :class:`~ralph_afk.gate.GateRunner` as the load-bearing gate, and on green
+    close the issue (the same runner-driven closure as serial mode) + delete the
+    integrated branch — a successful Integration is the round's Strike progress
+    signal. This is the **happy path only**; conflict / red-gate handling
+    (revert + auto-resolution + serial fallback) is the next slice (#63), so a
+    failed Lane is skipped here and its branch kept as a breadcrumb.
 
     Composes a serial :class:`_Loop` (``self._serial``) both for the serial
     fallback rounds and to share ONE Strike machine, event emitter, summary,
@@ -1086,10 +1105,10 @@ class _ParallelLoop:
         self._client = client
         self._source = source
         self._diag = diag
-        # Injected runner-side Integration gate (#60, ADR-0009). Held for the
-        # Integration slices (#62/#63) that land green Lanes on base and re-run
-        # the feedback loops as the load-bearing gate; this slice dispatches
-        # Lanes but does NOT integrate, so the gate is deliberately unused here.
+        # Injected runner-side Integration gate (#60, ADR-0009): re-runs the
+        # feedback loops from the runner side as the load-bearing gate when
+        # landing a Lane branch on base. Consumed by `_integrate_wave` (#62);
+        # the conflict / red-gate recovery paths are the next slice (#63).
         self._gate_runner = gate_runner
         self._run_id = writers.run_id
         self._repo_root = git.root
@@ -1237,9 +1256,9 @@ class _ParallelLoop:
         concurrently on one client via :func:`asyncio.gather` — each pinned to
         its Lane's worktree via ``working_directory`` — then, at the Wave
         barrier, does per-Lane commit accounting + a per-worktree Checkpoint and
-        tears the worktrees down (keeping branches as breadcrumbs). Landing
-        green Lanes on base and closing their issues is Integration (#62/#63),
-        NOT this slice, so a Wave here makes no base-branch closures.
+        tears the worktrees down (keeping branches as breadcrumbs), then runs
+        :meth:`_integrate_wave` to land the green Lanes on base and close their
+        issues in ascending issue-number order (#62).
         """
         self._serial._emit(
             events_module.WRAPPER_ITERATION_START, iter_num=iter_num
@@ -1304,7 +1323,8 @@ class _ParallelLoop:
 
         # 3) Per-Lane accounting + per-worktree Checkpoint (sequential and
         #    deterministic), then tear the worktree down. Run after the barrier
-        #    so the concurrent phase is pure session work.
+        #    so the concurrent phase is pure session work. Branches survive the
+        #    teardown (kept as breadcrumbs) so Integration can land them next.
         total_commits = 0
         for lane in lanes:
             total_commits += self._account_lane(iter_num, lane)
@@ -1315,12 +1335,18 @@ class _ParallelLoop:
                     "worktree remove for %s failed: %s", lane.path, exc
                 )
 
-        # 4) Strike tick — once per round. Integration (#62) will make a
-        #    successful land the progress signal; for this slice the Lanes' own
-        #    new commits are the round's observable progress.
-        auto_closures = 0
+        # 3.5) Integration (#62, ADR-0009): serialized, deterministic land of the
+        #     green Lane branches on base + issue closure. Operates on branch
+        #     names in the main worktree, so it runs after the worktrees are gone
+        #     and before the round's single Strike tick.
+        integration_successes = self._integrate_wave(iter_num, lanes)
+
+        # 4) Strike tick — once per round. A successful Integration is the round's
+        #    progress signal (ADR-0009): Lane commits count only once they LAND on
+        #    base, so a round that lands nothing adds a strike even if the agents
+        #    committed inside their worktrees.
         outcome = self._tick_round(
-            iter_num, commits=total_commits, closures=auto_closures
+            iter_num, commits=0, closures=integration_successes
         )
 
         self._serial._emit(
@@ -1329,8 +1355,8 @@ class _ParallelLoop:
         self._serial._record_counters(iter_num)
 
         if outcome == "aborted":
-            return ("aborted", total_commits, auto_closures)
-        return ("continue", total_commits, auto_closures)
+            return ("aborted", total_commits, integration_successes)
+        return ("continue", total_commits, integration_successes)
 
     async def _run_lane_session(
         self, iter_num: int, lane: _Lane, commits_block: str
@@ -1456,6 +1482,106 @@ class _ParallelLoop:
             issue=lane.item.ref,
         )
         return sha
+
+    def _integrate_wave(self, iter_num: int, lanes: list[_Lane]) -> int:
+        """Serialized happy-path Integration for a Wave's Lanes (#62, ADR-0009).
+
+        Ends the Wave by landing each green Lane branch on the base branch in
+        **ascending issue-number order** (see :func:`_lane_sort_key`), so the
+        merge sequence is deterministic and reproducible. Per Lane, in order:
+
+        1. Merge the Lane branch into base (a merge commit — see
+           :meth:`~ralph_afk.git.GitClient.merge`).
+        2. Re-run the full feedback loops from the *runner* side via the injected
+           :class:`~ralph_afk.gate.GateRunner` as the load-bearing quality gate.
+        3. On **green**, count the Integration a success (the round's Strike
+           progress signal), close the issue via the same runner-driven closure
+           as serial mode (``source.handle_completions`` -> ``gh issue close`` +
+           the ``Closes #N`` backstop, emitting one ``wrapper.auto_close`` per
+           closure), and delete the integrated Lane branch.
+
+        A merge that conflicts, a gate that cannot run (:exc:`~ralph_afk.gate.
+        GateError`), or a **red** gate is warned and that Lane is skipped, leaving
+        its branch as a breadcrumb — robust conflict / failure handling (revert +
+        auto-resolution + serial fallback) is the next slice (#63); this slice is
+        the happy path only.
+
+        Returns the number of Lanes whose Integration went green — the round's
+        progress for the Strike tick. Closure firing is *decoupled* from that
+        count: an already-closed (or un-closable) issue whose branch still landed
+        green counts as a successful Integration.
+        """
+        successes = 0
+        for lane in sorted(lanes, key=_lane_sort_key):
+            ref = lane.item.ref
+            try:
+                pre_base = self._git.head_sha()
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "integration #%s: base head_sha failed: %s; skipping",
+                    ref, exc,
+                )
+                continue
+
+            try:
+                self._git.merge(lane.branch)
+            except git_module.GitError as exc:
+                # A conflict (or other merge failure): base did not advance.
+                # #63 owns revert + auto-resolution; here we skip and keep the
+                # branch as a breadcrumb.
+                self._diag.warning(
+                    "integration #%s: merge of %s failed: %s; skipping "
+                    "(auto-resolution is #63)",
+                    ref, lane.branch, exc,
+                )
+                continue
+
+            try:
+                result = self._gate_runner.run(self._repo_root)
+            except gate_module.GateError as exc:
+                self._diag.warning(
+                    "integration #%s: gate could not run: %s; skipping",
+                    ref, exc,
+                )
+                continue
+            if not result.passed:
+                self._diag.warning(
+                    "integration #%s: gate failed on %r; skipping "
+                    "(auto-resolution is #63)",
+                    ref,
+                    result.failure.name if result.failure else "unknown",
+                )
+                continue
+
+            # Green: the Lane landed on base and the feedback loops pass.
+            successes += 1
+            try:
+                post_base = self._git.head_sha()
+                landed = self._git.commits_between(pre_base, post_base)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "integration #%s: post-merge accounting failed: %s",
+                    ref, exc,
+                )
+                landed = []
+            for completion in self._serial._handle_completions_safely(
+                [lane.item], landed
+            ):
+                self._serial._emit(
+                    events_module.WRAPPER_AUTO_CLOSE,
+                    iter_num=iter_num,
+                    issue=completion.ref,
+                    sha=completion.sha,
+                    shas=list(completion.shas),
+                )
+            try:
+                self._git.delete_branch(lane.branch)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "integration #%s: delete of %s failed: %s",
+                    ref, lane.branch, exc,
+                )
+        return successes
 
     def _tick_round(
         self, iter_num: int, *, commits: int, closures: int

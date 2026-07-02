@@ -76,12 +76,18 @@ class _ParallelFakeSession:
             target = self._fake_git.worktree_client(
                 Path(self._working_directory)
             )
+            # The Lane's agent commit references its issue so the reused serial
+            # closure path fires at Integration. The worktree dir is named
+            # ``issue-<N>`` (see ``_lane_worktree_path``), so parse N from it.
+            ref = Path(self._working_directory).name.removeprefix("issue-")
+            body = f"Closes #{ref}"
         else:
             target = self._fake_git
+            body = ""
         if target is not None:
             target.simulate_agent_commit(
                 subject="feat(lane): implement issue",
-                body="",
+                body=body,
             )
         last: SessionEvent | None = None
         for evt in self._scripted_events:
@@ -212,14 +218,15 @@ def _wire_repo(tmp_path: Path) -> FakeGitClient:
 
 
 def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
-    """A two-Lane Wave: two isolated worktrees, two advanced Lane branches.
+    """A two-Lane Wave, then Integration lands + closes both green Lanes.
 
     Both issues carry ``ready-for-agent`` + ``parallel-safe``, so with
     ``parallel=2`` the round is a Wave. Asserts (observable effects only): one
     worktree + Lane branch per issue created in a sibling directory, each
-    session pinned to its Lane's worktree via ``working_directory``, each
-    Lane's commit landing on its *own* branch (base head unchanged), and the
-    worktrees torn down at the barrier.
+    session pinned to its Lane's worktree via ``working_directory``, each Lane's
+    commit landing on its own branch, the worktrees torn down at the barrier,
+    then Integration (#62) merging both green Lanes onto base and closing their
+    issues in ascending issue-number order with the integrated branches deleted.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -293,15 +300,22 @@ def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
         f"expected one commit per Lane, got {len(commit_events)}"
     )
 
-    # Base head is UNCHANGED — this slice never lands Lanes on base (#62 does),
-    # and no issues were closed (Integration is a later slice).
-    assert fake_git.head_sha() == "0000000000000000000000000000000000000001"
-    assert fake_gh.issue_close_calls == []
-
-    # Worktrees torn down at the Wave barrier (branches kept as breadcrumbs).
+    # Worktrees torn down at the Wave barrier (before Integration lands the
+    # branches), keeping the branches as breadcrumbs for the merge.
     assert len(fake_git.worktree_removes) == 2
     assert set(fake_git.worktree_removes) == add_paths
     assert fake_git.active_worktrees == []
+
+    # Integration (#62) landed both green Lanes on base — base advanced past the
+    # prior commit — and closed both issues via the serial closure path, in
+    # ascending issue-number order.
+    assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    # One wrapper.auto_close event per landed + closed Lane, same order.
+    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    assert [e["issue"] for e in auto_closes] == [42, 43]
+    # Both integrated Lane branches deleted (breadcrumbs are for failures only).
+    assert sorted(fake_git.branch_deletes) == sorted(branches)
 
 
 def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
@@ -363,3 +377,75 @@ def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
     prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
     assert "Issue #42" in prompt
     assert "Issue #43" in prompt
+
+
+def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
+    tmp_path, monkeypatch
+) -> None:
+    """Integration merges + closes green Lanes in ascending issue-number order.
+
+    The pool is seeded in DESCENDING order (43 before 42) to prove Integration
+    imposes its own deterministic ascending-issue-number sequence rather than
+    inheriting pool / dispatch order: with an all-green gate both Lanes land on
+    base and their issues close in ``[42, 43]`` order, and both integrated
+    branches are deleted. Assertions are on observable effects, not call order.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    # All-green gate: every Lane's feedback loops pass, so every Lane lands.
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # Both Lanes dispatched, but Integration closes issues ASCENDING regardless
+    # of the descending pool / dispatch order.
+    assert len(fake_client.created) == 2
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    # Serial closure semantics: both issues actually flipped CLOSED in the store.
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert fake_gh.issue_view(43).state == "CLOSED"
+
+    # One wrapper.auto_close event per landed Lane, ascending.
+    events = _logged_events(tmp_path)
+    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    assert [e["issue"] for e in auto_closes] == [42, 43]
+
+    # Both green Lanes landed on base (base advanced past the prior commit) and
+    # both integrated branches were deleted.
+    assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
+    deleted = sorted(fake_git.branch_deletes)
+    assert len(deleted) == 2
+    assert deleted[0].endswith("/issue-42")
+    assert deleted[1].endswith("/issue-43")
+
+    # Integration ran after the Wave barrier — no worktrees left live.
+    assert fake_git.active_worktrees == []

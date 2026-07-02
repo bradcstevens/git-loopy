@@ -206,6 +206,61 @@ def test_fake_worktree_child_satisfies_gitclient_protocol(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# FakeGitClient — Integration: merge + delete_branch (#62 / ADR-0009)
+# ---------------------------------------------------------------------------
+
+
+def test_fake_merge_lands_a_lane_branch_on_base_after_teardown(tmp_path: Path) -> None:
+    """merge appends a Lane branch's own commits to base — even post-teardown."""
+    parent = FakeGitClient(tmp_path, commits=[Commit(sha="base", subject="r", body="")])
+    base_head = parent.head_sha()
+    branch = "copiloop/R/issue-7"
+    lane = parent.add_worktree(tmp_path.parent / "wt-7", branch=branch, base="main")
+    lane.simulate_agent_commit(subject="feat: lane", body="Closes #7", sha="lane7")
+    parent.remove_worktree(tmp_path.parent / "wt-7")  # branch survives as breadcrumb
+
+    parent.merge(branch)
+
+    # Base advanced and the landed range carries the Lane's ``Closes #7`` commit.
+    assert parent.head_sha() == "lane7"
+    landed = parent.commits_between(base_head, parent.head_sha())
+    assert [c.sha for c in landed] == ["lane7"]
+    assert any("Closes #7" in c.message for c in landed)
+    assert parent.merge_calls == [branch]
+
+
+def test_fake_merge_raises_for_unknown_branch(tmp_path: Path) -> None:
+    """Merging a branch that was never added (or already deleted) is a typed error."""
+    parent = FakeGitClient(tmp_path)
+    with pytest.raises(GitError):
+        parent.merge("copiloop/R/issue-999")
+
+
+def test_fake_delete_branch_drops_an_integrated_branch(tmp_path: Path) -> None:
+    """delete_branch forgets the branch and is recorded; re-use is then an error."""
+    parent = FakeGitClient(tmp_path)
+    branch = "copiloop/R/issue-7"
+    parent.add_worktree(tmp_path.parent / "wt-7", branch=branch, base="main")
+    parent.remove_worktree(tmp_path.parent / "wt-7")
+
+    parent.delete_branch(branch)
+
+    assert parent.branch_deletes == [branch]
+    # The branch is gone: a later merge or delete of it is a typed error.
+    with pytest.raises(GitError):
+        parent.merge(branch)
+    with pytest.raises(GitError):
+        parent.delete_branch(branch)
+
+
+def test_fake_delete_branch_raises_for_unknown_branch(tmp_path: Path) -> None:
+    """Deleting a branch that was never added is a typed error."""
+    parent = FakeGitClient(tmp_path)
+    with pytest.raises(GitError):
+        parent.delete_branch("copiloop/R/issue-999")
+
+
+# ---------------------------------------------------------------------------
 # FakeGitHubClient (the gh seam, #47)
 # ---------------------------------------------------------------------------
 

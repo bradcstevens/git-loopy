@@ -856,3 +856,70 @@ def test_add_worktree_duplicate_branch_raises(tmp_path: Path) -> None:
     client.add_worktree(siblings / "lane-a", branch=branch, base="main")
     with pytest.raises(GitError):
         client.add_worktree(siblings / "lane-b", branch=branch, base="main")
+
+
+# --------------------------------------------------------------------------- #
+# Integration: merge + delete_branch (Parallel-mode Lanes, ADR-0009)          #
+# --------------------------------------------------------------------------- #
+
+
+def _committed_lane_branch(
+    tmp_path: Path, *, issue: int = 7, file_name: str = "lane_only.txt"
+) -> tuple[Path, str, SubprocessGitClient]:
+    """Create a Lane worktree, commit ``Closes #<issue>`` in it, tear it down.
+
+    Returns ``(repo, branch, client)`` with the Lane branch left as a breadcrumb
+    (worktree removed, branch retained) — the state Integration merges from.
+    """
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    branch = lane_branch_name("RUN", issue)
+    lane = client.add_worktree(siblings / f"lane-{issue}", branch=branch, base="main")
+    (lane.root / file_name).write_text(f"lane {issue} work")
+    lane.add_all()
+    lane.commit(f"feat: lane work\n\nCloses #{issue}")
+    client.remove_worktree(siblings / f"lane-{issue}")
+    return repo, branch, client
+
+
+def test_merge_lands_a_lane_branch_on_base(tmp_path: Path) -> None:
+    """``merge`` brings a Lane branch's commits onto the checked-out base branch."""
+    repo, branch, client = _committed_lane_branch(tmp_path, issue=7)
+    base_head = client.head_sha()
+
+    client.merge(branch)
+
+    # Base advanced and now contains the Lane's ``Closes #7`` commit.
+    head = client.head_sha()
+    assert head != base_head
+    merged = client.commits_between(base_head, head)
+    assert any("Closes #7" in c.message for c in merged)
+
+
+def test_merge_raises_on_conflict(tmp_path: Path) -> None:
+    """A conflicting merge surfaces a typed ``GitError`` (auto-resolution is #63)."""
+    repo, branch, client = _committed_lane_branch(
+        tmp_path, issue=7, file_name="base.txt"
+    )
+    # Diverge base on the same file the Lane edited, so the merge conflicts.
+    _commit(repo, "base edit", file_name="base.txt", content="base version")
+
+    with pytest.raises(GitError):
+        client.merge(branch)
+
+
+def test_delete_branch_removes_an_integrated_branch(tmp_path: Path) -> None:
+    """``delete_branch`` drops a merged Lane branch after it lands (ADR-0008)."""
+    repo, branch, client = _committed_lane_branch(tmp_path, issue=7)
+    client.merge(branch)
+    assert _branch_exists(repo, branch) is True
+
+    client.delete_branch(branch)
+
+    assert _branch_exists(repo, branch) is False
+
+
+def test_delete_branch_raises_for_unknown_branch(tmp_path: Path) -> None:
+    """Deleting a non-existent branch surfaces a typed ``GitError``."""
+    _repo, _siblings, client = _sibling_worktree_repo(tmp_path)
+    with pytest.raises(GitError):
+        client.delete_branch(lane_branch_name("RUN", 999))

@@ -52,6 +52,11 @@ class FakeGitClient:
     commit in one Lane never leaks into another or the main worktree.
     :attr:`worktree_adds` / :attr:`worktree_removes` are spies and
     :attr:`active_worktrees` lists the live ones, for orchestrator assertions.
+
+    **Integration (#62 / ADR-0009).** :meth:`merge` lands a Lane branch's own
+    commits onto this (base) log and :meth:`delete_branch` drops an integrated
+    branch; the branch registry outlives worktree teardown so both work at the
+    Wave barrier. :attr:`merge_calls` / :attr:`branch_deletes` are spies.
     """
 
     def __init__(
@@ -97,6 +102,13 @@ class FakeGitClient:
         self._worktrees: dict[Path, FakeGitClient] = {}
         self.worktree_adds: list[tuple[Path, str, str]] = []
         self.worktree_removes: list[Path] = []
+        # Integration (#62 / ADR-0009): a branch registry keyed by Lane branch
+        # name, populated on add_worktree and — unlike _worktrees — **kept** past
+        # remove_worktree (a branch outlives its worktree as a breadcrumb), so
+        # merge/delete_branch can land or drop a Lane branch after teardown.
+        self._branches: dict[str, FakeGitClient] = {}
+        self.merge_calls: list[str] = []
+        self.branch_deletes: list[str] = []
 
     @property
     def root(self) -> Path:
@@ -205,14 +217,16 @@ class FakeGitClient:
             sha_prefix=f"wt{self._worktree_seq}",
         )
         self._worktrees[wt_path] = child
+        self._branches[branch] = child
         return child
 
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
-        """Model ``git worktree remove`` — drop the child, keep no branch state.
+        """Model ``git worktree remove`` — drop the child, keep the branch.
 
-        Records the teardown in :attr:`worktree_removes` and forgets the child.
-        The fake tracks no branch registry, so (as with real git) removing a
-        worktree leaves its branch a breadcrumb — nothing here deletes it.
+        Records the teardown in :attr:`worktree_removes` and forgets the child
+        worktree, but **keeps** the branch in :attr:`_branches` — as with real git,
+        removing a worktree leaves its branch a breadcrumb, so Integration can
+        still :meth:`merge` (or later :meth:`delete_branch`) it after the barrier.
         """
         wt_path = Path(path)
         self.worktree_removes.append(wt_path)
@@ -233,6 +247,42 @@ class FakeGitClient:
         Complements :attr:`active_worktrees` (which lists the paths).
         """
         return self._worktrees.get(Path(path))
+
+    def merge(self, branch: str) -> None:
+        """Model ``git merge --no-ff <branch>`` — land a Lane branch on base.
+
+        Looks up the branch's child client (registered by :meth:`add_worktree` and
+        retained past :meth:`remove_worktree`) and appends its **own** commits —
+        those whose SHA is not already in this base log — advancing ``head_sha`` and
+        making them visible to ``commits_between(pre, post)`` so Integration can read
+        the landed ``Closes #N`` commit and drive closure. Records the branch in
+        :attr:`merge_calls`.
+
+        Raises:
+            GitError: If ``branch`` is unknown (never added, or already deleted).
+        """
+        child = self._branches.get(branch)
+        if child is None:
+            raise GitError(["git", "merge", "--no-ff", branch], 1, f"merge: {branch}")
+        self.merge_calls.append(branch)
+        known = {commit.sha for commit in self._log}
+        for commit in child._log:
+            if commit.sha not in known:
+                self._log.append(commit)
+
+    def delete_branch(self, branch: str) -> None:
+        """Model ``git branch -D <branch>`` — drop an integrated Lane branch.
+
+        Removes the branch from the registry and records it in
+        :attr:`branch_deletes`.
+
+        Raises:
+            GitError: If ``branch`` is unknown (never added, or already deleted).
+        """
+        if branch not in self._branches:
+            raise GitError(["git", "branch", "-D", branch], 1, f"not found: {branch}")
+        del self._branches[branch]
+        self.branch_deletes.append(branch)
 
     # -- test scripting ----------------------------------------------------
 

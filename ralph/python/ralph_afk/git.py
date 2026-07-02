@@ -333,6 +333,32 @@ class GitClient(Protocol):
         """
         ...
 
+    def merge(self, branch: str) -> None:
+        """Merge ``branch`` into the checked-out base branch at the Wave barrier.
+
+        The Integration primitive (ADR-0009): with the base branch checked out in
+        the main worktree, land a finished Lane branch onto it. Deterministic and
+        revertable — a merge commit is always created (no fast-forward) so #63's
+        auto-resolution can revert a bad landing cleanly.
+
+        Raises:
+            GitError: If the merge conflicts (or ``git`` is otherwise unhappy).
+                Happy-path Integration (#62) skips a conflicting Lane; the
+                auto-resolution slice (#63) owns recovery.
+        """
+        ...
+
+    def delete_branch(self, branch: str) -> None:
+        """Delete the local ``branch`` after it has been integrated.
+
+        ADR-0008: Integration deletes a landed Lane branch, while failed branches
+        are kept as breadcrumbs (:meth:`remove_worktree` never touches the branch).
+
+        Raises:
+            GitError: If the branch does not exist or ``git`` refuses to delete it.
+        """
+        ...
+
 
 class SubprocessGitClient:
     """Root-bound :class:`GitClient` shelling out to the real ``git`` CLI.
@@ -687,6 +713,42 @@ class SubprocessGitClient:
             args.append("--force")
         args.append(str(Path(path)))
         _run(args, cwd=self._root)
+
+    def merge(self, branch: str) -> None:
+        """Merge ``branch`` into the current branch via ``git merge --no-ff``.
+
+        Run from the repo root with the base branch checked out. ``--no-ff`` forces
+        a merge commit even when the base has not diverged, so Integration history
+        is uniform and a landing is revertable by a single ``git revert -m 1`` (the
+        seam #63 builds on); ``--no-edit`` takes git's default merge message
+        non-interactively.
+
+        Args:
+            branch: The Lane branch to land (see :func:`lane_branch_name`).
+
+        Raises:
+            GitError: If ``git`` is not on PATH or the merge conflicts. A conflicted
+                merge leaves the repo mid-merge for the caller to resolve or abort;
+                happy-path Integration (#62) never reaches a conflict, and the
+                auto-resolution slice (#63) owns recovery.
+        """
+        _run(["merge", "--no-ff", "--no-edit", branch], cwd=self._root)
+
+    def delete_branch(self, branch: str) -> None:
+        """Delete the local ``branch`` via ``git branch -D``.
+
+        Run from the repo root to remove an integrated Lane branch (ADR-0008). Uses
+        ``-D`` (force) so the runner deletes deterministically without first
+        re-checking merge status — a Lane branch merged with ``--no-ff`` is already
+        fully contained in the base branch.
+
+        Args:
+            branch: The branch to delete.
+
+        Raises:
+            GitError: If ``git`` is not on PATH or ``branch`` does not exist.
+        """
+        _run(["branch", "-D", branch], cwd=self._root)
 
 
 # --------------------------------------------------------------------------- #
