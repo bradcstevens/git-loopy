@@ -276,7 +276,7 @@ def run_set(
 
     The value is coerced + validated per the key registry, then merged into the
     scope's existing table (so sibling keys survive) and re-dumped. Returns 0 on
-    success, 2 on a bad key / value / unavailable scope / malformed target file.
+    success, 1 on a bad key / value / unavailable scope / malformed target file.
     """
     try:
         typed = coerce_value(key, value)
@@ -287,7 +287,7 @@ def run_set(
         settings.write_config(path, table)
     except (ConfigCommandError, settings.SettingsError) as exc:
         err(f"copiloop: error: {exc}")
-        return 2
+        return 1
     out(
         f"Set {key} = {_display_value(typed)} in the {resolved_scope} config "
         f"({path})"
@@ -344,18 +344,18 @@ def run_get(
     """Print one key's **effective merged** value (env > project > global > default).
 
     Ignores scope by design — it shows what a run resolves, not one file's
-    contents. Returns 0 on success, 2 on an unknown key or a malformed config
+    contents. Returns 0 on success, 1 on an unknown key or a malformed config
     file.
     """
     entry = _KEYS.get(key)
     if entry is None:
         err(f"copiloop: error: {_unknown_key_message(key)}")
-        return 2
+        return 1
     try:
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"copiloop: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"copiloop: error: {exc}")
-        return 2
+        return 1
     out(_display_value(entry.read(resolved)))
     return 0
 
@@ -372,7 +372,7 @@ def run_list(
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"copiloop: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"copiloop: error: {exc}")
-        return 2
+        return 1
     for name in SETTABLE_KEYS:
         out(f"{name} = {_display_value(_KEYS[name].read(resolved))}")
     return 0
@@ -403,7 +403,7 @@ def run_path(
             resolved_scope = _resolve_scope(scope, repo_root)
         except ConfigCommandError as exc:
             err(f"copiloop: error: {exc}")
-            return 2
+            return 1
         out(str(_scope_config_path(resolved_scope, repo_root, env)))
         return 0
 
@@ -442,13 +442,13 @@ def run_edit(
     Resolves the scope (like ``init``), seeds a header-only stub when the file is
     absent (so the editor opens a documented, valid, empty file — and the scope
     dir exists), then launches the editor with the config path appended. Returns
-    the editor's exit code, or 2 on an unavailable scope / no editor configured.
+    the editor's exit code, or 1 on an unavailable scope / no editor configured.
     """
     try:
         resolved_scope = _resolve_scope(scope, repo_root)
     except ConfigCommandError as exc:
         err(f"copiloop: error: {exc}")
-        return 2
+        return 1
 
     editor = env.get("VISUAL") or env.get("EDITOR")
     if not (editor and editor.strip()):
@@ -457,7 +457,7 @@ def run_edit(
             "(e.g. `EDITOR=vi copiloop config edit`), or hand-edit "
             "config.toml (see `copiloop config path`)."
         )
-        return 2
+        return 1
 
     path = _scope_config_path(resolved_scope, repo_root, env)
     if not path.exists():

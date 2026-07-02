@@ -175,7 +175,7 @@ def test_set_rejects_unknown_key(tmp_path: Path) -> None:
         "bogus", "x", scope="project", repo_root=tmp_path, env=_env(tmp_path),
         out=_Sink(), err=err,
     )
-    assert rc != 0
+    assert rc == 1
     assert "bogus" in err.text
     assert not settings.project_config_path(tmp_path).exists()
 
@@ -186,7 +186,7 @@ def test_set_rejects_bad_value(tmp_path: Path) -> None:
         "max_nmt_strikes", "0", scope="project", repo_root=tmp_path,
         env=_env(tmp_path), out=_Sink(), err=err,
     )
-    assert rc != 0
+    assert rc == 1
     assert "max_nmt_strikes" in err.text
     assert not settings.project_config_path(tmp_path).exists()
 
@@ -197,7 +197,7 @@ def test_set_project_scope_outside_repo_errors(tmp_path: Path) -> None:
         "model", "gpt-5.4", scope="project", repo_root=None, env=_env(tmp_path),
         out=_Sink(), err=err,
     )
-    assert rc != 0
+    assert rc == 1
     assert "project" in err.text and "repository" in err.text
 
 
@@ -279,7 +279,7 @@ def test_get_unknown_key_errors(tmp_path: Path) -> None:
     rc = configcmd.run_get(
         "bogus", repo_root=tmp_path, env=_env(tmp_path), out=_Sink(), err=err
     )
-    assert rc != 0
+    assert rc == 1
     assert "bogus" in err.text
 
 
@@ -321,7 +321,7 @@ def test_get_malformed_config_errors_cleanly(tmp_path: Path) -> None:
     rc = configcmd.run_get(
         "model", repo_root=tmp_path, env=_env(tmp_path), out=_Sink(), err=err
     )
-    assert rc != 0
+    assert rc == 1
     assert "TOML" in err.text or "config" in err.text.lower()
 
 
@@ -376,7 +376,7 @@ def test_path_project_flag_outside_repo_errors(tmp_path: Path) -> None:
     rc = configcmd.run_path(
         scope="project", repo_root=None, env=_env(tmp_path), out=_Sink(), err=err
     )
-    assert rc != 0
+    assert rc == 1
     assert "project" in err.text and "repository" in err.text
 
 
@@ -474,7 +474,7 @@ def test_edit_without_any_editor_errors(tmp_path: Path) -> None:
         scope="project", repo_root=tmp_path, env=_env(tmp_path), out=_Sink(),
         err=err, launch_editor=editor,
     )
-    assert rc != 0
+    assert rc == 1
     assert "EDITOR" in err.text or "editor" in err.text
     assert editor.calls == []  # never launched
 
@@ -485,7 +485,7 @@ def test_edit_project_outside_repo_errors(tmp_path: Path) -> None:
         scope="project", repo_root=None, env=_env(tmp_path, EDITOR="nano"),
         out=_Sink(), err=err, launch_editor=_FakeEditor(),
     )
-    assert rc != 0
+    assert rc == 1
     assert "project" in err.text and "repository" in err.text
 
 
