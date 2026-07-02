@@ -168,7 +168,10 @@ class _ActivityBand(Vertical):
 
     Its height is the named :data:`_ACTIVITY_BAND_HEIGHT` constant, set here so
     that constant is the single source of truth; the Queue takes the remaining
-    space (``1fr``) and is never crushed by the band.
+    space (``1fr``) and is never crushed by the band. The band is a single
+    toggleable ``#activity`` widget: the ``a`` key (issue #70) collapses it
+    (``display = False``) so the Queue's ``1fr`` reclaims the freed height, and
+    expands it again — an in-session toggle only, no persisted state.
     """
 
     def compose(self) -> ComposeResult:
@@ -247,7 +250,8 @@ class CopiloopApp(App[None]):
     loop writes via the #22 sink fan-out. ``q`` / ``Ctrl+C`` request a **Stop**
     (the app exits and the interactive driver — the app's peer — Stop-cancels the
     loop task); ``d`` requests a **Detach** (the driver swaps the live sink back
-    to the line printer and the run keeps going).
+    to the line printer and the run keeps going); ``a`` collapses / expands the
+    always-on **Activity** band (issue #70, in-session only).
     """
 
     TITLE = "copiloop"
@@ -317,6 +321,10 @@ class CopiloopApp(App[None]):
         # of focus; hidden from the footer since it duplicates `q`.
         Binding("ctrl+c", "stop", "Stop", priority=True, show=False),
         Binding("d", "detach", "Detach"),
+        # `a` collapses / expands the always-on Activity band (issue #70). A
+        # normal (non-priority) binding like `q`/`d`: the Queue does not bind
+        # `a`, so it bubbles up even while the Queue holds focus.
+        Binding("a", "toggle_activity", "Activity"),
         Binding("escape", "dashboard", "Back"),
     ]
 
@@ -390,6 +398,24 @@ class CopiloopApp(App[None]):
         """Esc: close an open Log (return to the Dashboard); else a no-op."""
         if self._open_ref is not None:
             self._close_log()
+
+    def action_toggle_activity(self) -> None:
+        """``a``: collapse / expand the always-on **Activity** band (issue #70).
+
+        Toggles the band's visibility so a long Queue on a short terminal is not
+        squeezed: collapsing the band (``display = False``) removes it from the
+        Dashboard layout, so the Queue's ``1fr`` reclaims the freed height;
+        pressing ``a`` again restores it and the Queue gives the space back.
+
+        The toggle is purely **in-session** — the band widget's own ``display``
+        flag is the single source of truth, so there is no persisted Config /
+        settings / ``state.py`` change (ADR-0011 scopes this follow-on to
+        in-session only). It rides the existing display toggle: while a Level-2
+        Log hides the whole Dashboard the flag is untouched, so the collapse
+        state persists when Esc returns to the Dashboard.
+        """
+        band = self.query_one("#activity", _ActivityBand)
+        band.display = not band.display
 
     # -- Level 2: per-issue Log -------------------------------------------
 

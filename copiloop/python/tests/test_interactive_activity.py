@@ -28,6 +28,7 @@ pytest.importorskip("textual")
 from rich.text import Text  # noqa: E402
 from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Static  # noqa: E402
+from textual.widgets._footer import FooterKey  # noqa: E402
 
 from copiloop import events as events_module  # noqa: E402
 from copiloop.interactive.app import (  # noqa: E402
@@ -312,6 +313,81 @@ async def test_detach_tears_down_the_band_with_the_tui() -> None:
         await pilot.pause()
     assert app.detach_requested is True
     assert app.is_running is False
+
+
+# ---------------------------------------------------------------------------
+# Collapse / expand: the ``a`` key toggles the band; the Queue reclaims the
+# freed space (issue #70 — in-session only, no persisted Config / state)
+# ---------------------------------------------------------------------------
+
+
+async def test_a_key_collapses_and_expands_the_band_queue_reclaims_space() -> None:
+    """``a`` toggles the always-on band: collapsing it hides the band and the
+    Queue's ``1fr`` reclaims the freed height; ``a`` again restores it, and the
+    Queue gives the space back (issue #70). Purely in-session — no state change.
+    """
+    app = CopiloopApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        # Visible by default: the band is exactly its named-constant height.
+        assert band.display is True
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+        queue_expanded = queue.size.height
+
+        # ``a`` collapses the band -> hidden, and the Queue reclaims the space.
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.display is False
+        assert band.size.height == 0
+        assert queue.size.height == queue_expanded + _ACTIVITY_BAND_HEIGHT
+
+        # ``a`` again restores the band -> the Queue gives the space back.
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.display is True
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+        assert queue.size.height == queue_expanded
+
+
+async def test_activity_binding_appears_in_footer_labelled_activity() -> None:
+    """The ``a`` collapse/expand binding is surfaced in the Footer, labelled
+    "Activity" (issue #70) — alongside the unchanged Stop / Detach / Back."""
+    app = CopiloopApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test():
+        entries = {key.key: key.description for key in app.query(FooterKey)}
+        # The new ``a`` -> Activity entry is present...
+        assert entries.get("a") == "Activity"
+        # ...and the existing bindings are unaffected.
+        assert entries.get("q") == "Stop"
+        assert entries.get("d") == "Detach"
+        assert entries.get("escape") == "Back"
+
+
+async def test_collapse_state_persists_across_a_log_open_and_close() -> None:
+    """The in-session collapse rides the existing Log open/close display toggle:
+    collapse the band, open then Esc-close a Level-2 Log, and it stays collapsed
+    (issue #70 — in-session only, no new teardown/state)."""
+    app = CopiloopApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        dashboard = app.query_one("#dashboard", _Dashboard)
+
+        # Collapse the band on the Dashboard.
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.display is False
+
+        # Open the active issue's Log (hides the whole Dashboard)...
+        await pilot.press("enter")
+        await pilot.pause()
+        assert dashboard.display is False
+
+        # ...and Esc back to the Dashboard: the band is still collapsed.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert dashboard.display is True
+        assert band.display is False
 
 
 
