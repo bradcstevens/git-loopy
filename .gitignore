@@ -36,14 +36,14 @@ venv/
 *.egg-info/
 
 # Ralph runtime
-ralph/.tmp/
+copiloop/.tmp/
 .ralph-grill.lock
 
-# ralph/python/ persisted observability artefacts (JSONL event logs +
+# copiloop/python/ persisted observability artefacts (JSONL event logs +
 # per-run summary JSONs; never commit).
-.ralph/
+.copiloop/
 
-# Per-iteration scratch from ralph/afk.sh's mktemp tmpfiles (in case TMPDIR is local)
+# Per-iteration scratch from copiloop/afk.sh's mktemp tmpfiles (in case TMPDIR is local)
 afk-iter.*
 
 # Project-local PRDs and issues for the legacy ISSUE_SOURCE=prds mode.

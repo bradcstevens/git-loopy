@@ -107,12 +107,12 @@ scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or 
 **Active issue** — summed across every **Iteration** that worked it — the basis for the
 **Queue**'s per-issue Cost. Every Cost figure derives from Consumption by one shared
 rule (first non-None model wins; tokens sum), represented in code by the `UsageTally`
-value object (`ralph_afk.usage`).
+value object (`copiloop.usage`).
 _Avoid_: usage, spend (for the token measure); billing.
 
 **ModelSelectionMode**:
 The opt-in startup state — entered with the `--select-model` flag or
-`RALPH_MODEL_SELECT=1` — that shows the live model + reasoning-effort picker before the
+`COPILOOP_MODEL_SELECT=1` — that shows the live model + reasoning-effort picker before the
 run starts. Off by default: an ordinary launch uses the configured model and reasoning
 effort with no prompt.
 _Avoid_: picker mode, interactive model prompt.
