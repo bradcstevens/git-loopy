@@ -39,6 +39,7 @@ __all__ = [
     "REASONING_EFFORTS",
     "MODEL_REASONING_EFFORTS",
     "SUPPORTED_MODELS",
+    "DEFAULT_SEND_TIMEOUT_SECONDS",
 ]
 
 #: Per-model reasoning-effort capability matrix for the models the kit
@@ -93,6 +94,13 @@ SUPPORTED_MODELS: frozenset[str] = frozenset(MODEL_REASONING_EFFORTS)
 REASONING_EFFORTS: frozenset[str] = frozenset(
     {"low", "medium", "high", "xhigh", "max"}
 )
+
+#: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for
+#: an hour or more, so the SDK's own 60s default is far too aggressive. Lives
+#: here (not in :mod:`copiloop.loop`) because it is now a persisted, resolver-fed
+#: :class:`RunConfig` knob (issue #51): the loop reads
+#: :attr:`RunConfig.send_timeout_seconds` rather than the env directly.
+DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +157,11 @@ class RunConfig:
             :mod:`copiloop.cli` resolves it from ``--parallel N`` /
             ``COPILOOP_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
             mode is requested without an explicit cap). Must be ≥ 1.
+        send_timeout_seconds: SDK ``send_and_wait`` timeout in seconds. A
+            persisted knob (issue #51) resolved through the precedence chain
+            (``COPILOOP_SEND_TIMEOUT_SECONDS`` env > project Config > global
+            Config > :data:`DEFAULT_SEND_TIMEOUT_SECONDS`) rather than read from
+            the env inside the loop. Must be > 0.
     """
 
     model: str | None = None
@@ -164,6 +177,7 @@ class RunConfig:
     otel_enabled: bool = False
     pricing_file: Path | None = None
     parallel: int = 1
+    send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):
@@ -187,6 +201,11 @@ class RunConfig:
         if self.parallel < 1:
             raise ValueError(
                 f"parallel must be ≥ 1 (1 = serial), got {self.parallel}"
+            )
+        if self.send_timeout_seconds <= 0:
+            raise ValueError(
+                f"send_timeout_seconds must be > 0, got "
+                f"{self.send_timeout_seconds}"
             )
         if (
             self.reasoning_effort is not None

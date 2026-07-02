@@ -122,6 +122,50 @@ flags. See `copiloop --help` for the full list.
 
 ---
 
+## Persistent Config (`config.toml`)
+
+For a from-anywhere install (ADR-0006) the same knobs can be persisted in a
+hand-editable `config.toml`, so a bare `copiloop` needs no wrapper script. Two
+scopes are read, resolved in this order (highest wins), **key by key**:
+
+```
+CLI flag  >  env var  >  project config  >  global config  >  built-in default
+```
+
+- **project** — `<repo-root>/copiloop/config.toml` (checked into, or ignored
+  per, the repo).
+- **global** — `$XDG_CONFIG_HOME/copiloop/config.toml` (honouring
+  `$XDG_CONFIG_HOME`), else `~/.config/copiloop/config.toml`.
+
+Keys are flat and named after the knob (env var minus the `COPILOOP_` prefix,
+lower-cased):
+
+```toml
+model = "gpt-5.4"
+reasoning_effort = "high"
+issue_source = "github"
+max_nmt_strikes = 5
+include_prs = true
+otel_enabled = false
+interactive = false
+send_timeout_seconds = 7200
+deny_tools = ["bash"]
+deny_skills = []
+```
+
+The **persisted** knobs are `model`, `reasoning_effort`, `issue_source`,
+`include_prs`, `max_nmt_strikes`, `otel_enabled`, `interactive`,
+`send_timeout_seconds`, and the two denylists. The model/effort **capability
+gate** (below) still applies to a config-supplied model. The two denylists are
+**unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
+overridden — matching the security-positive env-var behavior. **Per-run-only**
+knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
+verbosity, `--no-reasoning`, `--parallel`, and `COPILOOP_PRICING_FILE`. A
+malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
+never a traceback.
+
+---
+
 ## Supported models
 
 `COPILOOP_MODEL` accepts any id the Copilot CLI exposes, but the runner ships a

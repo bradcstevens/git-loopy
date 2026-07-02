@@ -1,21 +1,29 @@
 """``copiloop`` console-script entry point.
 
 Composes a :class:`copiloop.config.RunConfig` from CLI flags + env vars
-+ defaults, then hands off to :func:`copiloop.loop.run` via
-:func:`asyncio.run`.
++ persisted ``config.toml`` files + defaults, then hands off to
+:func:`copiloop.loop.run` via :func:`asyncio.run`.
 
-Precedence rules:
+Precedence rules (ADR-0006), applied key by key:
 
+* The full chain is **CLI flag > env var > project ``config.toml`` > global
+  ``config.toml`` > built-in default** (see :func:`resolve_config`). The two
+  persisted scopes are loaded by :mod:`copiloop.settings`
+  (project = ``<repo-root>/copiloop/config.toml``; global =
+  ``$XDG_CONFIG_HOME/copiloop/config.toml`` then ``~/.config/...``).
 * CLI flags win over environment variables for scalar knobs (``COPILOOP_MODEL``,
   ``COPILOOP_ISSUE_SOURCE``, ``COPILOOP_MAX_NMT_STRIKES``, verbosity, ``--no-reasoning``).
 * For the collection-valued denylists (``--deny-tool`` / ``--deny-skill``
-  vs ``COPILOOP_DENY_TOOLS`` / ``COPILOOP_DENY_SKILLS``), **CLI flags are
-  ADDITIVE to the env-var baseline** — the final denylist is the set
-  union of both sources. This is a deliberate security-positive
-  divergence from "CLI wins": a wrapper script that sets an env-var
-  baseline (e.g. ``COPILOOP_DENY_TOOLS=bash``) must not be silently
+  vs ``COPILOOP_DENY_TOOLS`` / ``COPILOOP_DENY_SKILLS`` and the config
+  ``deny_tools`` / ``deny_skills`` keys), **all sources are ADDITIVE** — the
+  final denylist is the set union across every tier. This is a deliberate
+  security-positive divergence from "CLI wins": a wrapper script that sets an
+  env-var baseline (e.g. ``COPILOOP_DENY_TOOLS=bash``) must not be silently
   overridden by an absent CLI flag. To remove an env baseline, unset
   the env var or use ``-E`` semantics in the wrapper script.
+* Per-run-only knobs (the positional ``<max-iterations>``, ``-v`` verbosity,
+  ``--no-reasoning``, ``--parallel``, ``COPILOOP_PRICING_FILE``) are NEVER read
+  from a persisted ``config.toml`` — only from flags / env.
 
 CLI surface — mirrors ``copiloop/afk.sh`` and extends it with the new
 deep-module knobs:
@@ -62,15 +70,24 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable, Mapping
 
+from copiloop import settings
 from copiloop.config import (
+    DEFAULT_SEND_TIMEOUT_SECONDS,
     MODEL_REASONING_EFFORTS,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
     RunConfig,
 )
 
-__all__ = ["main", "build_parser", "resolve_repo_root"]
+__all__ = [
+    "main",
+    "build_parser",
+    "resolve_repo_root",
+    "resolve_config",
+    "ResolvedConfig",
+]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
 #: Concurrent-Lane cap applied when Parallel mode (ADR-0008) is requested
@@ -340,34 +357,74 @@ def _is_truthy(value: str | None) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _otel_enabled() -> bool:
-    """Derive ``otel_enabled`` from the two recognised env vars."""
-    if _is_truthy(os.environ.get("COPILOOP_OTEL_ENABLED")):
+def _otel_enabled(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool:
+    """Resolve ``otel_enabled`` across the precedence chain.
+
+    An **env signal** wins over the config tiers: the OTel-ecosystem
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` (presence enables) or an explicit
+    ``COPILOOP_OTEL_ENABLED`` (truthy/falsy). Only when *neither* env var is
+    present do the ``project`` then ``global`` config tiers decide; the built-in
+    default is ``False``.
+    """
+    endpoint = env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    if endpoint.strip():
         return True
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-    return bool(endpoint.strip())
+    raw = env.get("COPILOOP_OTEL_ENABLED")
+    if raw is not None and raw.strip():
+        return _is_truthy(raw)
+    pv = settings.table_bool(project, "otel_enabled", scope="project")
+    if pv is not None:
+        return pv
+    gv = settings.table_bool(global_, "otel_enabled", scope="global")
+    if gv is not None:
+        return gv
+    return False
 
 
-def _resolve_max_nmt_strikes() -> int:
-    """Read and validate ``COPILOOP_MAX_NMT_STRIKES`` env var; fall back to default."""
-    raw = os.environ.get("COPILOOP_MAX_NMT_STRIKES")
-    if raw is None or not raw.strip():
-        return _DEFAULT_MAX_NMT_STRIKES
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise SystemExit(
-            f"copiloop: error: COPILOOP_MAX_NMT_STRIKES must be a positive integer, "
-            f"got {raw!r}"
-        ) from exc
+def _resolve_max_nmt_strikes(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> int:
+    """Resolve the strike threshold: env > project > global > default.
+
+    A malformed or sub-1 value aborts the run (via :class:`SystemExit`) rather
+    than silently degrading — an unattended run must never quietly disable its
+    own get-a-human safety valve.
+    """
+    raw = env.get("COPILOOP_MAX_NMT_STRIKES")
+    if raw is not None and raw.strip():
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise SystemExit(
+                f"copiloop: error: COPILOOP_MAX_NMT_STRIKES must be a positive "
+                f"integer, got {raw!r}"
+            ) from exc
+        return _validate_max_nmt_strikes(value, source="COPILOOP_MAX_NMT_STRIKES")
+    pv = settings.table_int(project, "max_nmt_strikes", scope="project")
+    if pv is not None:
+        return _validate_max_nmt_strikes(pv, source="project config max_nmt_strikes")
+    gv = settings.table_int(global_, "max_nmt_strikes", scope="global")
+    if gv is not None:
+        return _validate_max_nmt_strikes(gv, source="global config max_nmt_strikes")
+    return _DEFAULT_MAX_NMT_STRIKES
+
+
+def _validate_max_nmt_strikes(value: int, *, source: str) -> int:
+    """Reject a sub-1 strike threshold with a clear, source-attributed error."""
     if value < 1:
         raise SystemExit(
-            f"copiloop: error: COPILOOP_MAX_NMT_STRIKES must be ≥ 1, got {value}"
+            f"copiloop: error: {source} must be ≥ 1, got {value}"
         )
     return value
 
 
-def _resolve_parallel(args: argparse.Namespace) -> int:
+def _resolve_parallel(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     """Resolve the Parallel-mode Lane cap: ``--parallel`` > ``COPILOOP_MAX_PARALLEL`` > 1.
 
     Precedence (matching the kit's flag-over-env convention):
@@ -378,13 +435,16 @@ def _resolve_parallel(args: argparse.Namespace) -> int:
     2. ``COPILOOP_MAX_PARALLEL`` env var when the flag is absent.
     3. Built-in default ``1`` (serial).
 
+    Parallelism is a **per-run** knob (like ``max_iterations``): it is NEVER
+    read from a persisted ``config.toml``, only from the flag or env.
+
     Unlike ``COPILOOP_MAX_NMT_STRIKES``, a malformed or sub-1 ``COPILOOP_MAX_PARALLEL``
     **degrades to serial** rather than aborting the run — an unattended run should
     never fail to launch over a stray env value; it just runs one issue at a time.
     """
     if args.parallel is not None:
         return int(args.parallel)
-    raw = os.environ.get("COPILOOP_MAX_PARALLEL")
+    raw = env.get("COPILOOP_MAX_PARALLEL")
     if raw is None or not raw.strip():
         return 1
     try:
@@ -396,38 +456,179 @@ def _resolve_parallel(args: argparse.Namespace) -> int:
     return value
 
 
-def _resolve_issue_source() -> str:
-    """Read and validate ``COPILOOP_ISSUE_SOURCE`` env var; default ``"github"``."""
-    source = os.environ.get("COPILOOP_ISSUE_SOURCE", "github")
-    if source not in {"github", "prds"}:
+def _resolve_issue_source(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> str:
+    """Resolve the issue backend: env > project > global > ``"github"``.
+
+    An unrecognised value at any tier aborts with a clear, source-attributed
+    message (the env-tier message keeps the ``COPILOOP_ISSUE_SOURCE`` token the
+    smoke suite pins).
+    """
+    raw = env.get("COPILOOP_ISSUE_SOURCE")
+    if raw is not None and raw.strip():
+        return _validate_issue_source(raw.strip(), source="COPILOOP_ISSUE_SOURCE")
+    pv = settings.table_str(project, "issue_source", scope="project")
+    if pv is not None:
+        return _validate_issue_source(pv.strip(), source="project config issue_source")
+    gv = settings.table_str(global_, "issue_source", scope="global")
+    if gv is not None:
+        return _validate_issue_source(gv.strip(), source="global config issue_source")
+    return "github"
+
+
+def _validate_issue_source(value: str, *, source: str) -> str:
+    """Reject an unknown issue-source value with a source-attributed error."""
+    if value not in {"github", "prds"}:
         raise SystemExit(
-            f"copiloop: error: COPILOOP_ISSUE_SOURCE must be 'github' or 'prds' "
-            f"(got {source!r})."
+            f"copiloop: error: {source} must be 'github' or 'prds' (got {value!r})."
         )
-    return source
+    return value
 
 
-def _resolve_include_prs() -> bool | None:
+def _resolve_include_prs(env: Mapping[str, str] | None = None) -> bool | None:
     """Read the ``COPILOOP_INCLUDE_PRS`` env override; ``None`` when unset.
 
-    ``None`` means "no explicit override" — the loop then auto-detects the
-    PR surface from ``docs/agents/issue-tracker.md`` (the
+    ``None`` means "no explicit env override" — the resolver then falls to the
+    project / global config tiers, and finally to the loop's auto-detection of
+    the PR surface from ``docs/agents/issue-tracker.md`` (the
     ``PRs as a request surface: yes/no`` flag the skills write). A set value
     forces the behaviour: ``1`` / ``true`` / ``yes`` / ``on`` enable PRs;
     anything else (``0`` / ``false`` / ``no`` / ``off`` / ...) disables them.
+
+    ``env`` defaults to :data:`os.environ` so the historical no-arg call site
+    (and its tests) keep working.
     """
-    raw = os.environ.get("COPILOOP_INCLUDE_PRS")
+    if env is None:
+        env = os.environ
+    raw = env.get("COPILOOP_INCLUDE_PRS")
     if raw is None or not raw.strip():
         return None
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_pricing_file() -> Path | None:
-    """Read ``COPILOOP_PRICING_FILE`` and return a Path or None."""
-    raw = os.environ.get("COPILOOP_PRICING_FILE")
+def _resolve_include_prs_tiered(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool | None:
+    """Resolve ``include_prs`` across the chain: env > project > global > ``None``."""
+    override = _resolve_include_prs(env)
+    if override is not None:
+        return override
+    pv = settings.table_bool(project, "include_prs", scope="project")
+    if pv is not None:
+        return pv
+    return settings.table_bool(global_, "include_prs", scope="global")
+
+
+def _resolve_pricing_file(env: Mapping[str, str]) -> Path | None:
+    """Read ``COPILOOP_PRICING_FILE`` and return a Path or None.
+
+    Like ``parallel``, the pricing-file override is a per-run/env knob and is
+    never sourced from a persisted ``config.toml`` this slice.
+    """
+    raw = env.get("COPILOOP_PRICING_FILE")
     if raw is None or not raw.strip():
         return None
     return Path(raw)
+
+
+def _resolve_send_timeout_seconds(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> float:
+    """Resolve the per-send timeout: env > project > global > default.
+
+    A malformed / non-positive value at any tier is *skipped* (falls through)
+    rather than aborting — the timeout is a lenient safety bound, so a stray
+    value degrades to the next tier and finally the built-in default.
+    """
+    parsed = _parse_positive_float(env.get("COPILOOP_SEND_TIMEOUT_SECONDS"))
+    if parsed is not None:
+        return parsed
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_float(table, "send_timeout_seconds", scope=scope)
+        if value is not None and value > 0:
+            return value
+    return DEFAULT_SEND_TIMEOUT_SECONDS
+
+
+def _parse_positive_float(raw: str | None) -> float | None:
+    """Parse a positive float from an env string; ``None`` if unset/invalid/≤0."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _resolve_interactive_intent(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool | None:
+    """Merge the interactive *intent*: flag > env > project > global > ``None``.
+
+    This produces only the operator's *stated* preference across the config
+    chain; the live TTY / ``[tui]``-extra gating is applied separately by
+    :func:`_should_run_interactive` (which keeps
+    :func:`copiloop.interactive.detect.resolve_interactive` unchanged).
+    """
+    flag = getattr(args, "interactive", None)
+    if flag is not None:
+        return bool(flag)
+    raw = env.get("COPILOOP_INTERACTIVE")
+    if raw is not None and raw.strip():
+        return _is_truthy(raw)
+    pv = settings.table_bool(project, "interactive", scope="project")
+    if pv is not None:
+        return pv
+    return settings.table_bool(global_, "interactive", scope="global")
+
+
+def _resolve_persisted_str(
+    env_var: str,
+    key: str,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> str | None:
+    """Resolve a persisted string knob: env > project > global > ``None``."""
+    raw = env.get(env_var)
+    if raw is not None and raw.strip():
+        return raw
+    pv = settings.table_str(project, key, scope="project")
+    if pv is not None:
+        return pv
+    return settings.table_str(global_, key, scope="global")
+
+
+def _resolve_denylist(
+    cli_values: list[str],
+    env_var: str,
+    key: str,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> frozenset[str]:
+    """Union a denylist across all four sources (CLI ∪ env ∪ project ∪ global).
+
+    The denylists are additive — a security-positive divergence from "CLI wins"
+    (see the module docstring) — so every source contributes and none is
+    silently overridden by an absent higher tier.
+    """
+    result: set[str] = set(cli_values)
+    result |= set(_parse_csv_env(env.get(env_var)))
+    result |= set(settings.table_str_list(project, key, scope="project"))
+    result |= set(settings.table_str_list(global_, key, scope="global"))
+    return frozenset(result)
 
 
 def _warn(message: str) -> None:
@@ -482,7 +683,10 @@ def _derive_reasoning_effort_from_model(model: str | None) -> str | None:
 
 
 def _resolve_model_and_effort(
-    model_env: str | None, effort_env: str | None
+    model_env: str | None,
+    effort_env: str | None,
+    *,
+    warn: Callable[[str], None] = _warn,
 ) -> tuple[str, str | None]:
     """Resolve the ``(model_id, reasoning_effort)`` pair the loop sends.
 
@@ -539,7 +743,7 @@ def _resolve_model_and_effort(
     # 2) per-model capability gate.
     allowed = MODEL_REASONING_EFFORTS.get(base_model)
     if allowed is None:
-        _warn(
+        warn(
             f"model {base_model!r} is not in the kit's supported model set "
             f"({sorted(SUPPORTED_MODELS)}); passing it through to the "
             f"Copilot CLI unchanged."
@@ -549,13 +753,13 @@ def _resolve_model_and_effort(
         # Model accepts no reasoning effort at all — must send None or the
         # CLI rejects session.create.
         if effort is not None and effort_explicit:
-            _warn(
+            warn(
                 f"model {base_model!r} does not support reasoning-effort "
                 f"configuration; ignoring requested effort {effort!r}."
             )
         return base_model, None
     if effort is not None and effort not in allowed:
-        _warn(
+        warn(
             f"model {base_model!r} documents reasoning efforts "
             f"{sorted(allowed)}; passing {effort!r} through anyway "
             f"(the Copilot CLI is the final authority)."
@@ -563,50 +767,105 @@ def _resolve_model_and_effort(
     return base_model, effort
 
 
-def _build_config(args: argparse.Namespace) -> RunConfig:
-    """Compose a :class:`RunConfig` from parsed CLI args + env vars."""
-    # CLI flags + env-var union for the denylists.
-    deny_tools = set(args.deny_tools) | set(
-        _parse_csv_env(os.environ.get("COPILOOP_DENY_TOOLS"))
+@dataclasses.dataclass(frozen=True)
+class ResolvedConfig:
+    """The fully-resolved run configuration plus the interactive *intent*.
+
+    ``run`` is the effective :class:`RunConfig` the loop consumes.
+    ``interactive`` is the merged interactive preference across the chain
+    (flag > env > project > global > ``None``); it is kept *outside* ``RunConfig``
+    because the loop never consumes it — the live TTY / ``[tui]`` gating happens
+    in :func:`_should_run_interactive`.
+    """
+
+    run: RunConfig
+    interactive: bool | None
+
+
+def resolve_config(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    *,
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+    warn: Callable[[str], None] = _warn,
+) -> ResolvedConfig:
+    """Merge CLI args + env + the two config tables into a :class:`ResolvedConfig`.
+
+    Implements ADR-0006's precedence chain — **CLI flag > env var > project
+    config > global config > built-in default** — key by key, with the two
+    denylists taken as the *set union* across all four sources.
+
+    Pure over its injected inputs (no ``os.environ`` / filesystem / TTY access),
+    so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
+    ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
+    ``include_prs``, ``deny_tools``, ``deny_skills``, ``otel_enabled``,
+    ``interactive`` and ``send_timeout_seconds``. The per-run-only knobs
+    (``max_iterations``, ``verbosity``, ``render_reasoning``, ``parallel``, and
+    the ``pricing_file`` override) are NEVER read from a config file — they
+    resolve from flags / env only.
+
+    The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
+    per-model capability gate) sits at the *bottom* of the chain, fed the raw
+    model/effort resolved across the tiers. A ``model`` / ``reasoning_effort``
+    attribute on ``args`` (the flag tier, wired ahead of #54) wins when present.
+    """
+    deny_tools = _resolve_denylist(
+        args.deny_tools, "COPILOOP_DENY_TOOLS", "deny_tools", env, project, global_
     )
-    deny_skills = set(args.deny_skills) | set(
-        _parse_csv_env(os.environ.get("COPILOOP_DENY_SKILLS"))
+    deny_skills = _resolve_denylist(
+        args.deny_skills, "COPILOOP_DENY_SKILLS", "deny_skills", env, project, global_
     )
 
     verbosity = min(max(int(args.verbosity), 0), 3)
 
-    issue_source = _resolve_issue_source()
-    include_prs = _resolve_include_prs()
-    max_nmt_strikes = _resolve_max_nmt_strikes()
+    issue_source = _resolve_issue_source(env, project, global_)
+    include_prs = _resolve_include_prs_tiered(env, project, global_)
+    max_nmt_strikes = _resolve_max_nmt_strikes(env, project, global_)
 
-    model = os.environ.get("COPILOOP_MODEL")
-    reasoning_effort = os.environ.get("COPILOOP_REASONING_EFFORT")
-    model, reasoning_effort = _resolve_model_and_effort(model, reasoning_effort)
+    model_raw = _resolve_persisted_str("COPILOOP_MODEL", "model", env, project, global_)
+    effort_raw = _resolve_persisted_str(
+        "COPILOOP_REASONING_EFFORT", "reasoning_effort", env, project, global_
+    )
+    # Flag tier (wired ahead of #54 adding the actual flags).
+    model_flag = getattr(args, "model", None)
+    if model_flag is not None:
+        model_raw = model_flag
+    effort_flag = getattr(args, "reasoning_effort", None)
+    if effort_flag is not None:
+        effort_raw = effort_flag
+    model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
-    return RunConfig(
+    run = RunConfig(
         model=model,
         reasoning_effort=reasoning_effort,
         issue_source=issue_source,  # type: ignore[arg-type]
         include_prs=include_prs,
         max_iterations=int(args.max_iterations),
         max_nmt_strikes=max_nmt_strikes,
-        deny_tools=frozenset(deny_tools),
-        deny_skills=frozenset(deny_skills),
+        deny_tools=deny_tools,
+        deny_skills=deny_skills,
         verbosity=verbosity,
         render_reasoning=bool(args.render_reasoning),
-        otel_enabled=_otel_enabled(),
-        pricing_file=_resolve_pricing_file(),
-        parallel=_resolve_parallel(args),
+        otel_enabled=_otel_enabled(env, project, global_),
+        pricing_file=_resolve_pricing_file(env),
+        parallel=_resolve_parallel(args, env),
+        send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
     )
+    interactive = _resolve_interactive_intent(args, env, project, global_)
+    return ResolvedConfig(run=run, interactive=interactive)
 
 
-def _should_run_interactive(args: argparse.Namespace) -> bool:
+def _should_run_interactive(interactive: bool | None) -> bool:
     """Resolve whether this invocation takes the interactive (TUI) path.
 
-    Gathers the live inputs — the ``--interactive`` / ``--no-interactive``
-    flag, the ``COPILOOP_INTERACTIVE`` env override, stdout TTY-ness, and whether
-    the optional ``[tui]`` extra (Textual) is importable — and delegates the
-    precedence to :func:`copiloop.interactive.detect.resolve_interactive`.
+    Takes the merged interactive *intent* (already resolved across the flag /
+    env / project / global chain by :func:`resolve_config`) and applies the live
+    gating — stdout TTY-ness and whether the optional ``[tui]`` extra (Textual)
+    is importable — delegating the precedence to
+    :func:`copiloop.interactive.detect.resolve_interactive` (which stays
+    unchanged: the merged intent is passed as its ``flag`` with no separate
+    ``env_value``, since the env tier is already folded into ``intent``).
     Imported lazily so a non-interactive invocation never pays the import.
     """
     from copiloop.interactive.detect import (
@@ -615,8 +874,8 @@ def _should_run_interactive(args: argparse.Namespace) -> bool:
     )
 
     return resolve_interactive(
-        flag=args.interactive,
-        env_value=os.environ.get("COPILOOP_INTERACTIVE"),
+        flag=interactive,
+        env_value=None,
         isatty=sys.stdout.isatty(),
         textual_importable=textual_available(),
         warn=_warn,
@@ -676,12 +935,23 @@ def main(argv: list[str] | None = None) -> int:
     # message before we pay the cost of importing the loop module
     # (which transitively pulls in the SDK and Rich).
     try:
-        resolve_repo_root()
+        repo_root = resolve_repo_root()
     except RuntimeError as exc:
         print(f"copiloop: error: {exc}", file=sys.stderr)
         return 1
 
-    config = _build_config(args)
+    # Load the two persisted Config scopes (project + global) and merge them
+    # with CLI flags + env vars into the effective RunConfig (ADR-0006). A
+    # malformed config.toml surfaces a clean stderr message, not a traceback.
+    try:
+        tables = settings.load_configs(repo_root, os.environ)
+    except settings.SettingsError as exc:
+        print(f"copiloop: error: {exc}", file=sys.stderr)
+        return 1
+    resolved = resolve_config(
+        args, os.environ, project=tables.project, global_=tables.global_
+    )
+    config = resolved.run
 
     # Import here so the SDK / Rich / pricing only load if we're
     # actually going to run. Keeps `copiloop --help` snappy.
@@ -693,7 +963,7 @@ def main(argv: list[str] | None = None) -> int:
     # [tui] extra is importable. Every non-interactive condition keeps today's
     # exact line-printer behavior (driver left as None).
     select_model = _should_select_model(args)
-    if _should_run_interactive(args):
+    if _should_run_interactive(resolved.interactive):
         return asyncio.run(
             _drive_interactive(config, select_model=select_model)
         )

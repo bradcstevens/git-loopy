@@ -32,6 +32,20 @@ def test_run_config_defaults_are_safe() -> None:
     assert cfg.otel_enabled is False
     assert cfg.pricing_file is None
     assert cfg.parallel == 1
+    assert cfg.send_timeout_seconds == 7200.0
+
+
+def test_run_config_send_timeout_default_matches_constant() -> None:
+    """The default ``send_timeout_seconds`` is the module's shared constant."""
+    from copiloop.config import DEFAULT_SEND_TIMEOUT_SECONDS
+
+    assert RunConfig().send_timeout_seconds == DEFAULT_SEND_TIMEOUT_SECONDS
+
+
+def test_run_config_accepts_custom_send_timeout() -> None:
+    """A resolved per-run timeout is preserved verbatim (now flows from the resolver)."""
+    cfg = RunConfig(send_timeout_seconds=3600.0)
+    assert cfg.send_timeout_seconds == 3600.0
 
 
 def test_run_config_accepts_parallel_cap() -> None:
@@ -73,6 +87,8 @@ def test_run_config_satisfies_session_config_protocol() -> None:
         ("max_nmt_strikes", 0),
         ("parallel", 0),
         ("parallel", -1),
+        ("send_timeout_seconds", 0),
+        ("send_timeout_seconds", -1.0),
         ("verbosity", 4),
         ("verbosity", -1),
         ("reasoning_effort", "medium-high"),

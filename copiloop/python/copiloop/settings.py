@@ -1,0 +1,219 @@
+"""``copiloop.settings`` — persistent-Config loader (issue #51, ADR-0006).
+
+This is the thin **I/O half** of the persistent-Config seam: it locates and
+parses the two hand-editable ``config.toml`` files and returns their raw tables.
+The pure **resolver** that merges those tables with CLI flags + env vars into an
+effective :class:`copiloop.config.RunConfig` lives in :mod:`copiloop.cli`
+(``resolve_config``) so it can reuse the model/effort policy without a circular
+import.
+
+Two scopes, resolved exactly as ADR-0006 specifies:
+
+* **global** — ``$XDG_CONFIG_HOME/copiloop/config.toml`` (honouring
+  ``$XDG_CONFIG_HOME``), falling back to ``$HOME/.config/copiloop/config.toml``.
+* **project** — ``<repo-root>/copiloop/config.toml``.
+
+Design notes:
+
+* **I/O confined to the load functions.** Everything else is a pure table
+  reader, mirroring how :func:`copiloop.pricing.load_pricing` isolates its
+  ``open()`` while the rest of :mod:`copiloop.pricing` is pure. Enforced by
+  ``tests/test_settings.py::test_settings_module_imports_only_stdlib``.
+* **Missing / empty is not an error.** A missing or empty ``config.toml`` yields
+  an empty table (``{}``) — "no config in this scope", the common case. Only
+  *malformed* TOML raises :exc:`SettingsError`, surfaced with the offending path.
+* **Injected environment.** Path resolution takes an environment *mapping* (not
+  ``os.environ`` directly) so the resolver stays fully unit-testable and no test
+  ever touches the developer's real ``$HOME`` / ``$XDG_CONFIG_HOME``.
+* **stdlib only.** Keeps the base install light and the loader isolable.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping
+
+__all__ = [
+    "SettingsError",
+    "ConfigTables",
+    "CONFIG_FILENAME",
+    "global_config_path",
+    "project_config_path",
+    "load_config_table",
+    "load_configs",
+    "table_str",
+    "table_bool",
+    "table_int",
+    "table_float",
+    "table_str_list",
+]
+
+#: The persisted-Config filename in both scopes.
+CONFIG_FILENAME = "config.toml"
+
+#: The XDG-relative config subdirectory (``<config-home>/copiloop/``).
+_APP_DIR = "copiloop"
+
+
+class SettingsError(ValueError):
+    """Raised when a ``config.toml`` cannot be parsed.
+
+    Subclasses :class:`ValueError` so callers that catch ``ValueError`` still
+    work, but the named class keeps the failure type visible in tracebacks and
+    tests (mirrors :class:`copiloop.pricing.PricingError`).
+    """
+
+
+@dataclass(frozen=True)
+class ConfigTables:
+    """The two parsed Config scopes.
+
+    ``project`` overrides ``global_`` key-by-key in the resolver's precedence
+    chain (CLI flag > env > project > global > default).
+    """
+
+    project: Mapping[str, object]
+    global_: Mapping[str, object]
+
+
+def global_config_path(env: Mapping[str, str]) -> Path:
+    """Resolve the global ``config.toml`` path from an environment mapping.
+
+    ``$XDG_CONFIG_HOME`` wins when set (and non-blank); otherwise the XDG
+    default ``$HOME/.config`` is used. Falls back to :meth:`Path.home` only if
+    ``$HOME`` is absent from the mapping (defensive — ``os.environ`` always has
+    it in practice).
+    """
+    xdg = env.get("XDG_CONFIG_HOME")
+    if xdg and xdg.strip():
+        base = Path(xdg)
+    else:
+        home = env.get("HOME")
+        base = (Path(home) if home and home.strip() else Path.home()) / ".config"
+    return base / _APP_DIR / CONFIG_FILENAME
+
+
+def project_config_path(repo_root: Path) -> Path:
+    """Resolve the project ``config.toml`` path: ``<repo-root>/copiloop/config.toml``."""
+    return repo_root / _APP_DIR / CONFIG_FILENAME
+
+
+def load_config_table(path: Path | None) -> dict[str, object]:
+    """Parse one ``config.toml`` into a table.
+
+    Returns an empty ``dict`` when ``path`` is ``None`` or the file is missing
+    or empty. Raises :exc:`SettingsError` (with the offending path) on malformed
+    TOML — parse failures are surfaced clearly rather than silently ignored.
+    """
+    if path is None:
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            return tomllib.load(fh)
+    except FileNotFoundError:
+        return {}
+    except IsADirectoryError:  # pragma: no cover - defensive
+        return {}
+    except tomllib.TOMLDecodeError as exc:
+        raise SettingsError(
+            f"Config file {path} is not valid TOML: {exc}"
+        ) from exc
+
+
+def load_configs(repo_root: Path, env: Mapping[str, str]) -> ConfigTables:
+    """Load both Config scopes for a run.
+
+    Args:
+        repo_root: The enclosing repository root (for the project scope).
+        env: An environment mapping (for the global scope's XDG resolution).
+
+    Returns:
+        A :class:`ConfigTables` bundling the parsed ``project`` and ``global_``
+        tables (each ``{}`` when that scope has no config).
+    """
+    project = load_config_table(project_config_path(repo_root))
+    global_ = load_config_table(global_config_path(env))
+    return ConfigTables(project=project, global_=global_)
+
+
+# ---------------------------------------------------------------------------
+# Typed table readers — return None (or []) when a key is absent, and raise
+# SettingsError with the scope + key on a type mismatch so a hand-edited
+# config.toml fails loud and early instead of surfacing as a confusing crash
+# deep in the loop.
+# ---------------------------------------------------------------------------
+
+
+def _type_error(scope: str, key: str, expected: str, value: object) -> SettingsError:
+    return SettingsError(
+        f"{scope} config: {key!r} must be {expected}, got "
+        f"{type(value).__name__} ({value!r})"
+    )
+
+
+def table_str(table: Mapping[str, object], key: str, *, scope: str) -> str | None:
+    """Read a string value; ``None`` when absent. Raises on a non-string."""
+    if key not in table:
+        return None
+    value = table[key]
+    if not isinstance(value, str):
+        raise _type_error(scope, key, "a string", value)
+    return value
+
+
+def table_bool(table: Mapping[str, object], key: str, *, scope: str) -> bool | None:
+    """Read a boolean value; ``None`` when absent. Raises on a non-bool."""
+    if key not in table:
+        return None
+    value = table[key]
+    if not isinstance(value, bool):
+        raise _type_error(scope, key, "a boolean", value)
+    return value
+
+
+def table_int(table: Mapping[str, object], key: str, *, scope: str) -> int | None:
+    """Read an integer value; ``None`` when absent.
+
+    Rejects ``bool`` explicitly — Python's ``bool`` is an ``int`` subclass, so a
+    stray ``max_nmt_strikes = true`` would otherwise silently read as ``1``.
+    """
+    if key not in table:
+        return None
+    value = table[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _type_error(scope, key, "an integer", value)
+    return value
+
+
+def table_float(table: Mapping[str, object], key: str, *, scope: str) -> float | None:
+    """Read a numeric value as ``float``; ``None`` when absent.
+
+    Accepts TOML integers and floats (a bare ``3600`` is a fine timeout) but
+    rejects ``bool`` and strings.
+    """
+    if key not in table:
+        return None
+    value = table[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _type_error(scope, key, "a number", value)
+    return float(value)
+
+
+def table_str_list(table: Mapping[str, object], key: str, *, scope: str) -> list[str]:
+    """Read a list-of-strings value; ``[]`` when absent.
+
+    Raises when the value is not a list or any element is not a string.
+    """
+    if key not in table:
+        return []
+    value = table[key]
+    if not isinstance(value, list):
+        raise _type_error(scope, key, "a list of strings", value)
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise _type_error(scope, key, "a list of strings", value)
+        result.append(item)
+    return result

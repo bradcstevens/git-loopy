@@ -148,12 +148,6 @@ from copiloop.wrapper import (
 
 __all__ = ["run"]
 
-# Default SDK ``send_and_wait`` timeout. AFK iterations can run for an
-# hour or more; the SDK's default 60s is far too aggressive. Tunable
-# via the ``COPILOOP_SEND_TIMEOUT_SECONDS`` env var so an operator can
-# tighten it when debugging a wedged session.
-_DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
-
 
 def _build_telemetry_config() -> dict[str, Any] | None:
     """Construct the SDK telemetry config used by :func:`_make_client`.
@@ -261,7 +255,8 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     scripted fake. Production callers get a
     :class:`~copiloop.worktree.CommandWorktreeSetup` bound to the
     ``COPILOOP_WORKTREE_SETUP`` command when one is set (env-only, like
-    :func:`_send_timeout_seconds`'s ``COPILOOP_SEND_TIMEOUT_SECONDS``); when it is
+    :attr:`~copiloop.config.RunConfig.send_timeout_seconds`'s
+    ``COPILOOP_SEND_TIMEOUT_SECONDS``); when it is
     unset or blank the adapter falls back to
     :func:`~copiloop.worktree.detect_setup_command`'s best-effort auto-detect.
 
@@ -350,20 +345,6 @@ def _resolve_include_prs(config: RunConfig, repo_root: Path) -> bool:
     if match is None:
         return False
     return match.group(1).lower() == "yes"
-
-
-def _send_timeout_seconds() -> float:
-    """Resolve the ``send_and_wait`` timeout from env or default."""
-    raw = os.environ.get("COPILOOP_SEND_TIMEOUT_SECONDS")
-    if raw is None or not raw.strip():
-        return _DEFAULT_SEND_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-    except ValueError:
-        return _DEFAULT_SEND_TIMEOUT_SECONDS
-    if value <= 0:
-        return _DEFAULT_SEND_TIMEOUT_SECONDS
-    return value
 
 
 def _read_prompt(repo_root: Path) -> str:
@@ -652,7 +633,7 @@ class _Loop:
                 return ("continue", 0, 0)
 
             # 5) Run the SDK session.
-            send_timeout = _send_timeout_seconds()
+            send_timeout = self._config.send_timeout_seconds
             with telemetry.span("copiloop.session"):
                 try:
                     async with IterationSession(
@@ -1480,7 +1461,7 @@ class _ParallelLoop:
             f"Previous commits: {commits_block} "
             f"Issues: {lane.item.rendered_block} {self._prompt_text}"
         )
-        send_timeout = _send_timeout_seconds()
+        send_timeout = self._config.send_timeout_seconds
         try:
             async with IterationSession(
                 self._client,
@@ -1859,7 +1840,7 @@ class _ParallelLoop:
         the attempt just reads as still-red and the bound advances.
         """
         prompt = self._resolution_prompt(lane, attempt)
-        send_timeout = _send_timeout_seconds()
+        send_timeout = self._config.send_timeout_seconds
         try:
             async with IterationSession(
                 self._client,

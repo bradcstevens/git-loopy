@@ -95,17 +95,23 @@ def test_should_select_model_flag_wins_over_env(
 # ---------------------------------------------------------------------------
 
 
-def test_should_run_interactive_respects_no_interactive_flag() -> None:
+def test_should_run_interactive_false_intent_is_off() -> None:
+    # A resolved-false interactive intent takes the non-interactive path.
+    assert cli_module._should_run_interactive(False) is False
+
+
+def test_should_run_interactive_none_intent_without_tty_is_off() -> None:
+    # Under pytest stdout is captured (not a TTY), so a None intent (no explicit
+    # preference anywhere) resolves to the non-interactive line-printer path.
+    assert cli_module._should_run_interactive(None) is False
+
+
+def test_no_interactive_flag_resolves_to_false_intent() -> None:
+    # The flag → intent merge now lives in resolve_config; the gate then honors it.
     args = cli_module.build_parser().parse_args(["--no-interactive"])
-    assert cli_module._should_run_interactive(args) is False
-
-
-def test_should_run_interactive_env_zero_forces_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("COPILOOP_INTERACTIVE", "0")
-    args = cli_module.build_parser().parse_args([])
-    assert cli_module._should_run_interactive(args) is False
+    resolved = cli_module.resolve_config(args, {}, project={}, global_={})
+    assert resolved.interactive is False
+    assert cli_module._should_run_interactive(resolved.interactive) is False
 
 
 # ---------------------------------------------------------------------------

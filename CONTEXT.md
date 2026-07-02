@@ -134,8 +134,10 @@ _Avoid_: ralph-afk (the retired brand); "ralph" as a symbol, directory, or env-v
 
 **Config**:
 The persisted settings (model, reasoning effort, strike policy, denylists, ...) that carry across
-runs so they need not be re-passed each time. Resolved **project** scope over **global** scope.
-Replaces the per-run environment the retired bash launcher used to hard-code.
+runs so they need not be re-passed each time. Held on disk as a hand-editable `config.toml` in a
+**project** and/or **global** **scope**, and merged key by key along the precedence chain
+**CLI flag > env var > project > global > built-in default** (the denylists are the set *union*
+across every tier). Replaces the per-run environment the retired bash launcher used to hard-code.
 _Avoid_: settings file, profile.
 
 **init**:

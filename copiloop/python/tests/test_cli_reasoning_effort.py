@@ -16,7 +16,7 @@ These tests pin the resolution behaviour:
 * the ``REASONING_EFFORT`` env override + validation (an invalid override
   is a hard ``SystemExit``, not a mid-iteration crash).
 
-The CLI's ``_build_config`` is exercised end-to-end via :func:`main`
+The CLI's ``resolve_config`` is exercised end-to-end via :func:`main`
 with monkeypatched env + a faked loop runner, so the test covers the
 real env-var precedence and not just an isolated helper.
 """
