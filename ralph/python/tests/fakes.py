@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from ralph_afk.gate import GateResult, LoopFailure
 from ralph_afk.gh import GhError, Issue, PullRequest, Repo
 from ralph_afk.git import Commit, GitError
 
@@ -421,3 +422,62 @@ class FakeGitHubClient:
         ``_detect_pr_advances`` sees the branch move.
         """
         self._prs[number] = replace(self._prs[number], head_sha=head_sha)
+
+
+class FakeGateRunner:
+    """Scriptable in-memory :class:`~ralph_afk.gate.GateRunner` for Integration tests.
+
+    Extends the seam-fake pattern (#46 git, #47 gh) to the runner-side Integration
+    gate (#60, ADR-0009). Integration tests (#62 happy-path, #63 auto-resolution)
+    need to script whether the feedback loops go **green** or **red** for a given
+    worktree / integration attempt *without* really running any loops, so they can
+    assert land-on-green / revert-on-red and the K=3 retry bound deterministically.
+
+    Outcomes for each :meth:`run` resolve in this order:
+
+    1. a **per-worktree** queue (``by_worktree={path: [True, False, ...]}``) — models
+       repeated Integration attempts on the *same* worktree (e.g. the dedicated
+       integration worktree the auto-resolution agent reuses: red-then-green);
+    2. the **global call-ordered** queue (``outcomes=[...]``), popped once per call;
+    3. the ``default`` (green unless overridden).
+
+    Every worktree passed to :meth:`run` is recorded in :attr:`calls` for assertions.
+    Red results carry ``failure`` (a shared :class:`~ralph_afk.gate.LoopFailure`) so a
+    test can assert failure detail flows through, exactly as the production runner's
+    does.
+    """
+
+    def __init__(
+        self,
+        *,
+        outcomes: Sequence[bool] | None = None,
+        by_worktree: Mapping[Path, Sequence[bool]] | None = None,
+        default: bool = True,
+        failure: LoopFailure | None = None,
+    ) -> None:
+        self._outcomes: list[bool] = list(outcomes) if outcomes else []
+        self._by_worktree: dict[Path, list[bool]] = {
+            Path(key): list(value) for key, value in (by_worktree or {}).items()
+        }
+        self._default = default
+        self._failure = failure or LoopFailure(
+            name="gate",
+            command="<scripted>",
+            returncode=1,
+            output_tail="scripted red",
+        )
+        self.calls: list[Path] = []
+
+    def run(self, worktree: Path) -> GateResult:
+        worktree = Path(worktree)
+        self.calls.append(worktree)
+        queue = self._by_worktree.get(worktree)
+        if queue:
+            passed = queue.pop(0)
+        elif self._outcomes:
+            passed = self._outcomes.pop(0)
+        else:
+            passed = self._default
+        if passed:
+            return GateResult.green(("scripted",))
+        return GateResult.red(("scripted",), self._failure)

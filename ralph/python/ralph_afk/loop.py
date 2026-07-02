@@ -116,6 +116,7 @@ from copilot import CopilotClient
 from rich.console import Console
 
 from ralph_afk import events as events_module
+from ralph_afk import gate as gate_module
 from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
 from ralph_afk.config import RunConfig
@@ -228,6 +229,25 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     ``prds`` backend has no GitHub dependency.
     """
     return gh_module.SubprocessGitHubClient()
+
+
+def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
+    """Construct the per-invocation runner-side Integration gate (#60, ADR-0009).
+
+    Factored to its own module-level function — mirroring :func:`_make_git_client`
+    / :func:`_make_github_client` — so the later Wave/Lane orchestrator (#61) and
+    Integration slices (#62/#63) inject it, and their tests monkeypatch it
+    (``monkeypatch.setattr("ralph_afk.loop._make_gate_runner", ...)``) to a scripted
+    ``tests.fakes.FakeGateRunner``. Production callers get a
+    :class:`~ralph_afk.gate.AgentsMdGateRunner`, which runs a worktree's ``AGENTS.md``
+    feedback loops as the load-bearing Integration gate.
+
+    **Unused by the serial path.** Integration only exists in Parallel mode; the
+    serial loop never gates from the runner side (the agent runs the loops inside its
+    own session), so :func:`run` does not call this factory. It ships now purely as
+    the injectable seam the parallel slices consume.
+    """
+    return gate_module.AgentsMdGateRunner()
 
 
 def _make_issue_source(

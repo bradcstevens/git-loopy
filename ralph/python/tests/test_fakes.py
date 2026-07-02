@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from ralph_afk.gate import GateRunner, LoopFailure
 from ralph_afk.gh import GhError, GitHubClient, Issue, PullRequest, Repo
 from ralph_afk.git import Commit, GitClient, GitError
-from tests.fakes import FakeGitClient, FakeGitHubClient
+from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
 
 def test_fake_git_client_satisfies_gitclient_protocol(tmp_path: Path) -> None:
@@ -354,3 +355,54 @@ def test_unknown_number_views_raise_gherror() -> None:
     # issue_close on an unknown number is a silent no-op (recorded, nothing to flip).
     gh.issue_close(999, "c")
     assert gh.issue_close_calls == [(999, "c")]
+
+
+# --------------------------------------------------------------------------- #
+# FakeGateRunner — runner-side Integration gate double (#60)                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_fake_gate_runner_satisfies_gate_runner_protocol() -> None:
+    """The fake satisfies the ``@runtime_checkable`` ``GateRunner`` structurally."""
+    assert isinstance(FakeGateRunner(), GateRunner)
+    assert not isinstance(object(), GateRunner)
+
+
+def test_fake_gate_runner_defaults_to_green_and_records_calls(tmp_path: Path) -> None:
+    gate = FakeGateRunner()
+    worktree = tmp_path / "wt"
+    result = gate.run(worktree)
+    assert result.passed is True
+    assert result.failure is None
+    assert gate.calls == [worktree]
+
+
+def test_fake_gate_runner_call_ordered_queue_then_default(tmp_path: Path) -> None:
+    # Models #63's red-then-green: the first attempt fails, the second passes,
+    # and once the queue is exhausted it falls back to the default (green).
+    gate = FakeGateRunner(outcomes=[False, True])
+    assert gate.run(tmp_path).passed is False
+    assert gate.run(tmp_path).passed is True
+    assert gate.run(tmp_path).passed is True
+
+
+def test_fake_gate_runner_red_carries_failure_detail(tmp_path: Path) -> None:
+    gate = FakeGateRunner(
+        default=False,
+        failure=LoopFailure("Tests", "false", 2, "kaboom"),
+    )
+    result = gate.run(tmp_path)
+    assert result.passed is False
+    assert result.failure is not None
+    assert result.failure.returncode == 2
+    assert result.failure.output_tail == "kaboom"
+
+
+def test_fake_gate_runner_per_worktree_queue(tmp_path: Path) -> None:
+    green_wt = tmp_path / "green"
+    red_wt = tmp_path / "red"
+    gate = FakeGateRunner(by_worktree={green_wt: [True], red_wt: [False]})
+    assert gate.run(green_wt).passed is True
+    assert gate.run(red_wt).passed is False
+    assert gate.calls == [green_wt, red_wt]
+
