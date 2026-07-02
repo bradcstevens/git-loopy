@@ -398,18 +398,27 @@ def test_invalid_config_effort_aborts() -> None:
         _resolve(project={"reasoning_effort": "turbo"})
 
 
-def test_model_flag_tier_ready_for_override() -> None:
-    # The flag tier is wired (getattr) ahead of #54 adding the actual flag:
-    # a ``model`` attribute on the namespace wins over env + config.
-    args = _args()
-    args.model = "gpt-5.4"
-    resolved = cli.resolve_config(
-        args,
-        {"COPILOOP_MODEL": "gpt-5.5"},
+def test_model_flag_overrides_env_and_config() -> None:
+    # The real ``--model`` flag (#54) sits at the top of the chain: it wins
+    # over env + project + global config.
+    resolved = _resolve(
+        ["--model", "gpt-5.4"],
+        env={"COPILOOP_MODEL": "gpt-5.5"},
         project={"model": "claude-sonnet-4.6"},
-        global_={},
+        global_={"model": "claude-opus-4.6"},
     )
     assert resolved.run.model == "gpt-5.4"
+
+
+def test_reasoning_effort_flag_overrides_env_and_config() -> None:
+    # ``--reasoning-effort`` wins over env + config for the effort axis.
+    resolved = _resolve(
+        ["--model", "claude-opus-4.8", "--reasoning-effort", "low"],
+        env={"COPILOOP_REASONING_EFFORT": "high"},
+        project={"reasoning_effort": "medium"},
+        global_={"reasoning_effort": "xhigh"},
+    )
+    assert resolved.run.reasoning_effort == "low"
 
 
 # ---------------------------------------------------------------------------

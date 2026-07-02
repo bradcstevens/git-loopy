@@ -43,9 +43,6 @@ copiloop/.tmp/
 # per-run summary JSONs; never commit).
 .copiloop/
 
-# Per-iteration scratch from copiloop/afk.sh's mktemp tmpfiles (in case TMPDIR is local)
-afk-iter.*
-
 # Project-local PRDs and issues for the legacy ISSUE_SOURCE=prds mode.
 # GitHub Issues is the default in this kit; uncomment the lines below if you
 # want to track local markdown issues in version control instead.

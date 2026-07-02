@@ -37,7 +37,6 @@
 │   ├── microsoft-foundry/          # Azure AI Foundry helpers (delete if not on Microsoft tech).
 │   └── caveman/                    # Token-compressed output mode (off by default in the loop).
 └── copiloop/
-    ├── afk.sh                      # Optional one-line convenience launcher for the Python runner.
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
     └── python/                     # The AFK runner, on the GitHub Copilot Python SDK. See copiloop/python/README.md.
 ```

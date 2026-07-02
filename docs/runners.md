@@ -2,7 +2,7 @@
 
 > Everything you need to invoke the AFK runner correctly and understand what it'll do on each iteration.
 
-The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-copilooppython)). The kit ships a single runner — the Python AFK runner at [`copiloop/python/`](../copiloop/python/), built on the GitHub Copilot Python SDK. [`copiloop/afk.sh`](../afk.sh) is an optional one-line convenience launcher that just invokes it with a default model; there is no separate shell runner.
+The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-copilooppython)). The kit ships a single runner — the Python AFK runner at [`copiloop/python/`](../copiloop/python/), built on the GitHub Copilot Python SDK. Launch it with `copiloop` (see [`copiloop/python/README.md`](../copiloop/python/README.md) for install and invocation); there is no separate shell runner.
 
 ## The runner: `copiloop/python/`
 

@@ -285,3 +285,160 @@ def test_main_rejects_invalid_reasoning_effort_env(
         cli_module.main([])
 
     assert captured == [], "loop must not be invoked when env validation fails"
+
+
+# ---------------------------------------------------------------------------
+# CLI flags — --model / --reasoning-effort (per-run overrides, #54 / ADR-0007)
+#
+# These flags sit at the TOP of the precedence chain (flag > env > project
+# config > global config > built-in default); the model/effort policy
+# (suffix-peel + per-model capability gate) stays at the BOTTOM, fed whatever
+# the tiers resolve.
+# ---------------------------------------------------------------------------
+
+
+def test_model_flag_defaults_to_none() -> None:
+    """An omitted ``--model`` leaves the namespace attribute ``None``.
+
+    ``None`` is the "no override" sentinel the resolver keys on, so an absent
+    flag never disturbs the env / config / default tiers below it.
+    """
+    args = cli_module.build_parser().parse_args([])
+    assert args.model is None
+
+
+def test_reasoning_effort_flag_defaults_to_none() -> None:
+    """An omitted ``--reasoning-effort`` leaves the namespace attribute ``None``."""
+    args = cli_module.build_parser().parse_args([])
+    assert args.reasoning_effort is None
+
+
+def test_model_flag_parses() -> None:
+    """``--model <id>`` lands verbatim on the namespace (unknown ids allowed)."""
+    args = cli_module.build_parser().parse_args(["--model", "gpt-5.4"])
+    assert args.model == "gpt-5.4"
+
+
+def test_reasoning_effort_flag_parses() -> None:
+    """``--reasoning-effort <effort>`` lands on the namespace."""
+    args = cli_module.build_parser().parse_args(["--reasoning-effort", "high"])
+    assert args.reasoning_effort == "high"
+
+
+def test_reasoning_effort_flag_is_case_insensitive() -> None:
+    """``--reasoning-effort`` is normalised to lower-case at parse time.
+
+    Mirrors the leniency the env path already applies
+    (``COPILOOP_REASONING_EFFORT=XHigh`` → ``xhigh``).
+    """
+    args = cli_module.build_parser().parse_args(["--reasoning-effort", "XHigh"])
+    assert args.reasoning_effort == "xhigh"
+
+
+def test_reasoning_effort_flag_rejects_invalid_choice() -> None:
+    """An unrecognised effort is rejected eagerly by argparse (exit 2)."""
+    with pytest.raises(SystemExit):
+        cli_module.build_parser().parse_args(["--reasoning-effort", "ultra"])
+
+
+def test_main_model_flag_overrides_env_and_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--model`` (top of the chain) wins over ``COPILOOP_MODEL`` env + default."""
+    monkeypatch.setenv("COPILOOP_MODEL", "claude-opus-4.8")
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(["--model", "gpt-5.4"])
+
+    assert exit_code == 0
+    assert captured[0].model == "gpt-5.4"
+
+
+def test_main_reasoning_effort_flag_overrides_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--reasoning-effort`` wins over ``COPILOOP_REASONING_EFFORT`` env."""
+    monkeypatch.setenv("COPILOOP_MODEL", "claude-opus-4.8")
+    monkeypatch.setenv("COPILOOP_REASONING_EFFORT", "high")
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(["--reasoning-effort", "low"])
+
+    assert exit_code == 0
+    assert captured[0].reasoning_effort == "low"
+
+
+def test_main_reasoning_effort_flag_overrides_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--reasoning-effort`` alone overrides the kit default effort (``max``).
+
+    With no ``--model`` / env, the default model (``claude-opus-4.8``) still
+    resolves, but the flag replaces the default ``max`` effort.
+    """
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(["--reasoning-effort", "high"])
+
+    assert exit_code == 0
+    assert captured[0].model == "claude-opus-4.8"
+    assert captured[0].reasoning_effort == "high"
+
+
+def test_main_model_flag_suffix_is_peeled_to_base(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A suffixed ``--model`` still goes through the bottom-of-chain suffix-peel.
+
+    The model/effort policy is unchanged and now consumes the flag tier: a
+    ``--model claude-opus-4.7-xhigh`` resolves to the bare base id plus the
+    ``xhigh`` effort, exactly as the env path does.
+    """
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(["--model", "claude-opus-4.7-xhigh"])
+
+    assert exit_code == 0
+    assert captured[0].model == "claude-opus-4.7"
+    assert captured[0].reasoning_effort == "xhigh"
+
+
+def test_main_model_flag_capability_gate_forces_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A reasoning-incapable ``--model`` gates a flag effort to ``None``.
+
+    The per-model capability gate (bottom of the chain) applies to the flag
+    tier too: ``claude-haiku-4.5`` accepts no effort, so an explicitly
+    flagged effort is dropped.
+    """
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(
+        ["--model", "claude-haiku-4.5", "--reasoning-effort", "high"]
+    )
+
+    assert exit_code == 0
+    assert captured[0].model == "claude-haiku-4.5"
+    assert captured[0].reasoning_effort is None
+
+
+def test_main_flags_win_over_env_for_both_axes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both ``--model`` and ``--reasoning-effort`` override their env twins at once."""
+    monkeypatch.setenv("COPILOOP_MODEL", "gpt-5.5")
+    monkeypatch.setenv("COPILOOP_REASONING_EFFORT", "low")
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(["--model", "gpt-5.4", "--reasoning-effort", "xhigh"])
+
+    assert exit_code == 0
+    assert captured[0].model == "gpt-5.4"
+    assert captured[0].reasoning_effort == "xhigh"

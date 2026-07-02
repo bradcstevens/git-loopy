@@ -25,10 +25,12 @@ Precedence rules (ADR-0006), applied key by key:
   ``--no-reasoning``, ``--parallel``, ``COPILOOP_PRICING_FILE``) are NEVER read
   from a persisted ``config.toml`` — only from flags / env.
 
-CLI surface — mirrors ``copiloop/afk.sh`` and extends it with the new
-deep-module knobs:
+CLI surface — ``copiloop`` is the single, canonical entrypoint (ADR-0007; the
+old bash launcher is retired):
 
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
+* ``--model ID`` — per-run model override (top of the precedence chain).
+* ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
 * ``-v`` / ``-vv`` / ``-vvv`` — verbosity ladder owned by the renderer.
 * ``--no-reasoning`` — suppresses assistant reasoning output.
 * ``--deny-tool TOOL`` — repeatable; permission-handler denylist.
@@ -234,8 +236,34 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="<max-iterations>",
         help=(
             "Cap the number of iterations (0 or omitted = unlimited; "
-            "default: 0). Mirrors the positional arg accepted by "
-            "copiloop/afk.sh."
+            "default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        dest="model",
+        default=None,
+        metavar="ID",
+        help=(
+            "Per-run model override (bare base id, e.g. claude-opus-4.8). "
+            "Top of the precedence chain: wins over COPILOOP_MODEL, project / "
+            "global config, and the built-in default. A recognised trailing "
+            "-<effort> segment is peeled off into the reasoning effort; an "
+            "unknown id is passed through to the Copilot CLI with a warning."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        dest="reasoning_effort",
+        default=None,
+        type=str.lower,
+        choices=sorted(REASONING_EFFORTS),
+        metavar="EFFORT",
+        help=(
+            "Per-run reasoning-effort override (%s; case-insensitive). Wins "
+            "over COPILOOP_REASONING_EFFORT, config, and the default. Still "
+            "gated per model: a model that supports no reasoning effort drops "
+            "it." % "|".join(sorted(REASONING_EFFORTS))
         ),
     )
     parser.add_argument(
@@ -827,7 +855,8 @@ def resolve_config(
     effort_raw = _resolve_persisted_str(
         "COPILOOP_REASONING_EFFORT", "reasoning_effort", env, project, global_
     )
-    # Flag tier (wired ahead of #54 adding the actual flags).
+    # Flag tier (top of the chain): --model / --reasoning-effort per-run
+    # overrides win over every lower tier when present (#54, ADR-0007).
     model_flag = getattr(args, "model", None)
     if model_flag is not None:
         model_raw = model_flag

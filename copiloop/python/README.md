@@ -17,9 +17,10 @@ OpenTelemetry tracing — after a one-time `uv sync` bootstrap. See the kit
 root [`README.md`](../../README.md#prerequisites) for prerequisites and
 [`docs/runners.md`](../../docs/runners.md) for the full runner reference.
 
-[`copiloop/afk.sh`](../afk.sh) is an optional one-line convenience launcher
-that invokes this runner with a default model; there is no separate shell
-runner.
+`copiloop` is the single, canonical entrypoint (ADR-0007). Model and reasoning
+effort are set with the per-run `--model` / `--reasoning-effort` flags (top of
+the precedence chain) or persisted `config.toml` knobs — there is no bash
+launcher and no environment-only launch shim.
 
 ---
 
@@ -94,8 +95,9 @@ uv run --project copiloop/python copiloop
 # Cap at 50 iterations.
 uv run --project copiloop/python copiloop 50
 
-# Pick a different model.
-COPILOOP_MODEL=gpt-5.4 uv run --project copiloop/python copiloop
+# Pick a different model + reasoning effort for one run. Flags are the top of
+# the chain (flag > env > project config > global config > built-in default).
+uv run --project copiloop/python copiloop --model gpt-5.4 --reasoning-effort high
 
 # Opt into the live model + reasoning-effort picker (ModelSelectionMode) at
 # startup — off by default (equivalently set COPILOOP_MODEL_SELECT=1).
@@ -138,8 +140,8 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COPILOOP_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id. Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `COPILOOP_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `COPILOOP_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `COPILOOP_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
-| `COPILOOP_REASONING_EFFORT`                | `max` (kit default model only) | One of `low` / `medium` / `high` / `xhigh` / `max`. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `COPILOOP_MODEL` → the kit default (`max`, applied only when `COPILOOP_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `COPILOOP_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `COPILOOP_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `COPILOOP_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `COPILOOP_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `COPILOOP_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
+| `COPILOOP_REASONING_EFFORT`                | `max` (kit default model only) | One of `low` / `medium` / `high` / `xhigh` / `max` (the `--reasoning-effort` flag overrides this). Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `COPILOOP_MODEL` → the kit default (`max`, applied only when `COPILOOP_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `COPILOOP_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `COPILOOP_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `COPILOOP_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `COPILOOP_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `COPILOOP_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
@@ -154,10 +156,13 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | `COPILOOP_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker (see `COPILOOP_INTERACTIVE`). Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. The picker is a TUI action: when requested on a non-interactive run (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent) the run warns and falls back to the configured model. |
 
-CLI flags (`-v` / `-vv` / `-vvv`, `--no-reasoning`, `--deny-tool`,
-`--deny-skill`, `--interactive` / `--no-interactive`, `--select-model` /
-`--no-select-model`, `--parallel N`) are the runner's only non-positional
-flags. See `copiloop --help` for the full list.
+CLI flags (`--model ID`, `--reasoning-effort EFFORT`, `-v` / `-vv` / `-vvv`,
+`--no-reasoning`, `--deny-tool`, `--deny-skill`, `--interactive` /
+`--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`)
+are the runner's only non-positional flags. `--model` / `--reasoning-effort`
+are per-run overrides at the **top** of the precedence chain (they win over
+env, project / global config, and the built-in default). See `copiloop --help`
+for the full list.
 
 ---
 
@@ -345,5 +350,3 @@ runner pays **zero observability cost**.
 - [`copiloop/PROMPT.md`](../PROMPT.md) — the project prompt override loaded each
   iteration (see [Prompt resolution](#prompt-resolution) for the
   project > global > packaged chain).
-- [`copiloop/afk.sh`](../afk.sh) — optional one-line convenience launcher for
-  this runner.
