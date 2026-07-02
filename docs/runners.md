@@ -49,6 +49,13 @@ COPILOOP_ISSUE_SOURCE=prds uv run --project copiloop/python copiloop
 INCLUDE_PRS=1 uv run --project copiloop/python copiloop
 ```
 
+Optional first-run setup: `copiloop init` is an interactive wizard that writes a
+`config.toml` (and, by default, scaffolds an editable `PROMPT.md` override and
+copiloop's agent skills) into a **global** or **project** scope, then exits
+without running the loop. It is never required — a bare `copiloop` runs
+zero-config off the packaged defaults. See
+[`copiloop/python/README.md`](../copiloop/python/README.md#first-run-setup-copiloop-init).
+
 ## Per-iteration flow
 
 1. **Branch hygiene (PR mode).** When PR support is on, it restores the base branch first — a prior PR iteration may have left HEAD on a PR branch from `gh pr checkout`. A dirty worktree no longer aborts the run: leftover changes are captured by the **Checkpoint** step below (ADR-0004).

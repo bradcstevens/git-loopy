@@ -86,6 +86,7 @@ from copiloop.config import (
 __all__ = [
     "main",
     "build_parser",
+    "build_subcommand_parser",
     "resolve_repo_root",
     "resolve_config",
     "ResolvedConfig",
@@ -192,6 +193,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Autonomous AFK loop on the GitHub Copilot Python SDK."
         ),
         epilog=(
+            "Subcommands:\n"
+            "  init                           First-run setup wizard: write "
+            "config.toml (+ optional\n"
+            "                                 PROMPT.md / skills) into a scope, "
+            "then exit.\n"
+            "                                 See `copiloop init -h`.\n"
+            "  config                         Manage persisted settings "
+            "(coming in issue #56).\n"
+            "\n"
             "Environment variables:\n"
             "  COPILOOP_MODEL              Copilot model id override "
             "(bare base id, e.g. claude-opus-4.8).\n"
@@ -365,6 +375,126 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+#: Reserved subcommand names. :func:`main` pre-dispatches on the first argv token
+#: against this set; anything else is the bare run (``copiloop [N] [flags]``).
+#: They are kept out of :func:`build_parser` because argparse cannot host an
+#: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
+#: parser without misreading ``copiloop 5`` as an invalid subcommand choice.
+_SUBCOMMANDS = ("init", "config")
+
+
+def build_subcommand_parser() -> argparse.ArgumentParser:
+    """Construct the argparse parser for copiloop's subcommands (``init`` / ``config``).
+
+    Kept separate from :func:`build_parser` on purpose (see :data:`_SUBCOMMANDS`):
+    :func:`main` pre-dispatches on the first token, so this parser is only ever
+    handed an argv that *starts* with a reserved subcommand. It imports no SDK /
+    renderer, so ``copiloop init --help`` and ``copiloop config --help`` stay as
+    snappy as ``copiloop --help``.
+    """
+    parser = argparse.ArgumentParser(
+        prog="copiloop",
+        description="copiloop subcommands (first-run setup and config management).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{init,config}")
+
+    init = sub.add_parser(
+        "init",
+        help=(
+            "First-run setup: write config.toml (+ optionally an editable "
+            "PROMPT.md override and copiloop's agent skills) into a scope, then "
+            "exit."
+        ),
+        description=(
+            "Interactive first-run setup wizard. Chooses a scope (global or "
+            "project), seeds model / reasoning effort from the live model list, "
+            "writes config.toml, and — default yes — scaffolds an editable "
+            "PROMPT.md override and copiloop's agent skills. Writes config and "
+            "exits; it never starts the loop. Cancelling writes nothing and "
+            "exits non-zero."
+        ),
+    )
+    scope = init.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--global",
+        dest="scope",
+        action="store_const",
+        const="global",
+        help="Configure the global scope (~/.config/copiloop/, honouring $XDG_CONFIG_HOME).",
+    )
+    scope.add_argument(
+        "--project",
+        dest="scope",
+        action="store_const",
+        const="project",
+        help="Configure the project scope (<repo-root>/copiloop/).",
+    )
+    init.set_defaults(scope=None)
+    init.add_argument(
+        "-y",
+        "--yes",
+        dest="assume_yes",
+        action="store_true",
+        help=(
+            "Assume defaults and never prompt (CI-friendly). Uses the project "
+            "scope unless --global is given, the built-in default model / "
+            "effort, and scaffolds the prompt + skills."
+        ),
+    )
+
+    sub.add_parser(
+        "config",
+        help=(
+            "Manage persisted settings: edit / set / get / list / path "
+            "(implemented in issue #56)."
+        ),
+        description=(
+            "Manage persisted Config without hand-finding the file. The "
+            "subcommand group (edit / set / get / list / path) lands in issue "
+            "#56; the name is reserved here."
+        ),
+    )
+    return parser
+
+
+def _run_init(args: argparse.Namespace) -> int:
+    """Dispatch ``copiloop init`` to the first-run wizard.
+
+    The wizard module (:mod:`copiloop.init`) is imported lazily so the subcommand
+    parser stays SDK-free; the SDK is only touched when the wizard actually
+    fetches the live model list (never on the ``--yes`` non-interactive path).
+    """
+    from copiloop import init as _init
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        # ``init`` can still configure the *global* scope outside a repo.
+        repo_root = None
+    return _init.run_init(
+        scope=args.scope,
+        assume_yes=bool(args.assume_yes),
+        repo_root=repo_root,
+        env=os.environ,
+    )
+
+
+def _run_config(args: argparse.Namespace) -> int:
+    """Reserve ``copiloop config`` ahead of its implementation (issue #56).
+
+    Reserving the word here means ``copiloop config`` routes to this clean
+    "not yet implemented" message instead of falling through to the bare run,
+    where ``config`` would be rejected as a malformed ``<max-iterations>``.
+    """
+    print(
+        "copiloop: error: `copiloop config` is not implemented yet "
+        "(coming in issue #56). Hand-edit config.toml or run `copiloop init` "
+        "for now.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _parse_csv_env(value: str | None) -> list[str]:
@@ -957,6 +1087,19 @@ def main(argv: list[str] | None = None) -> int:
             via argparse-style stderr handling (negative iterations,
             unknown ISSUE_SOURCE, malformed MAX_NMT_STRIKES).
     """
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Pre-dispatch on the first token: a reserved subcommand (init / config)
+    # routes to its own parser, so the bare run's optional positional
+    # <max-iterations> can coexist with subcommands (argparse cannot host both
+    # in one parser — `copiloop 5` would be misread as an invalid subcommand).
+    # This path imports no SDK / renderer, keeping subcommand dispatch snappy.
+    if argv and argv[0] in _SUBCOMMANDS:
+        sub_args = build_subcommand_parser().parse_args(argv)
+        if sub_args.command == "init":
+            return _run_init(sub_args)
+        return _run_config(sub_args)
+
     parser = build_parser()
     args = parser.parse_args(argv)
 

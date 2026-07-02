@@ -81,8 +81,52 @@ uv run copiloop
 A fresh install runs with **zero setup**: the default prompt ships inside the
 wheel (see [Prompt resolution](#prompt-resolution)), so a bare `copiloop` works
 in a repo that has no `copiloop/` folder at all. Persist per-run knobs in a
-[`config.toml`](#persistent-config-configtoml) (or, in a later slice, scaffold
-editable overrides with `copiloop init`) when you want them.
+[`config.toml`](#persistent-config-configtoml) — hand-written, or scaffolded for
+you by [`copiloop init`](#first-run-setup-copiloop-init) — when you want them.
+
+---
+
+## First-run setup (`copiloop init`)
+
+`copiloop init` is an interactive wizard that writes a
+[`config.toml`](#persistent-config-configtoml) (and, by default, scaffolds
+editable asset overrides) into a chosen **scope**, then **exits** — it never
+starts the loop. It is optional: a bare `copiloop` already runs zero-config off
+the packaged defaults; reach for `init` when you want to pin a model / reasoning
+effort or get editable copies of the prompt and skills.
+
+```bash
+# Interactive: pick a scope, then a model + reasoning effort from the live list.
+copiloop init
+
+# Non-interactive (CI-friendly): accept every default, never prompt.
+copiloop init --yes
+
+# Force a scope (skips the scope question).
+copiloop init --global      # ~/.config/copiloop/ (honours $XDG_CONFIG_HOME)
+copiloop init --project     # <repo-root>/copiloop/
+```
+
+The wizard:
+
+- **Asks the scope first** — **global** (this machine) or **project** (this
+  repo). `--global` / `--project` skip the question; outside a git repository
+  only **global** is available.
+- **Always writes `config.toml`** to that scope with your chosen `model` /
+  `reasoning_effort`, seeded from the same live model list the `--select-model`
+  picker uses, rendered as a plain numbered list (no `[tui]` extra required).
+- **Then offers (default yes)** to scaffold an editable `PROMPT.md` override and
+  copiloop's agent skills into the scope — project `./copiloop/PROMPT.md` +
+  `./.copilot/skills/`, global `~/.config/copiloop/PROMPT.md` +
+  `~/.copilot/skills/`.
+- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
+  runs nothing, and exits non-zero.
+
+With **no TTY** (or under `--yes`) the wizard never blocks: it takes the built-in
+defaults so automated runs can't hang on a prompt. Hand-editing `config.toml`
+directly stays fully supported — `init` is a convenience over it, not a
+replacement. (A `config` subcommand group to inspect and edit persisted settings
+is reserved now and implemented in issue #56.)
 
 ---
 
