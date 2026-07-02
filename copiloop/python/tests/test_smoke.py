@@ -6,9 +6,9 @@ across slices:
 * ``copiloop --help`` exits 0 and surfaces the documented flags.
 * Negative ``<max-iterations>`` is rejected before any I/O.
 * Unknown ``ISSUE_SOURCE`` is rejected via argparse-style stderr.
-* Missing prompt file inside a git repo raises a clear stderr message
-  rather than a stack trace (replaces the original scaffold-stub
-  echo-ISSUE_SOURCE assertion).
+* A repo with **no** ``copiloop/`` folder runs off the **packaged default**
+  prompt — the "run from anywhere" story (issue #52, ADR-0006) — rather than
+  aborting on a missing prompt file.
 
 Deeper behaviour (the iteration driver itself) is covered by
 :mod:`tests.test_iteration_end_to_end`.
@@ -182,10 +182,21 @@ def test_copiloop_outside_git_repo_fails_cleanly(tmp_path) -> None:
     )
 
 
-def test_copiloop_missing_prompt_fails_cleanly(tmp_path) -> None:
-    """``copiloop`` inside a repo that lacks ``copiloop/prompt.md`` fails with a clean message."""
+def test_copiloop_no_copiloop_folder_runs_off_packaged_prompt(
+    tmp_path, monkeypatch
+) -> None:
+    """A repo with no ``copiloop/`` folder runs off the packaged default prompt.
+
+    This is the "run from anywhere" contract (issue #52, ADR-0006): prompt
+    resolution falls through project > global > **packaged default**, so a bare
+    run in an unrelated repo no longer aborts on a missing prompt file. Driven
+    with ``ISSUE_SOURCE=prds`` (no ``prds/`` dir -> empty pool) so the run
+    reaches the clean empty-pool exit 0 deterministically, proving prompt
+    resolution succeeded off the packaged default with zero setup.
+    """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    # No copiloop/ directory.
+    # Deliberately no copiloop/ directory: force the packaged-default fallback.
+    monkeypatch.setenv("COPILOOP_ISSUE_SOURCE", "prds")
     result = subprocess.run(
         _copiloop_command(),
         cwd=tmp_path,
@@ -194,15 +205,15 @@ def test_copiloop_missing_prompt_fails_cleanly(tmp_path) -> None:
         check=False,
         timeout=30,
     )
-    assert result.returncode != 0, (
-        "copiloop should fail when prompt file is absent; "
-        f"got exit 0 with stdout={result.stdout!r}"
+    assert result.returncode == 0, (
+        "a repo with no copiloop/ folder should run off the packaged default "
+        f"prompt and exit 0 on an empty PRDs pool; got exit={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    assert "Traceback" not in result.stderr, (
-        f"expected friendly error, got traceback:\n{result.stderr}"
-    )
-    assert "prompt" in result.stderr.lower(), (
-        f"expected mention of prompt file in stderr; stderr was:\n{result.stderr}"
+    # And crucially, it must NOT have failed on prompt resolution.
+    assert "prompt" not in result.stderr.lower(), (
+        "the packaged default should satisfy prompt resolution with no "
+        f"copiloop/ folder; stderr was:\n{result.stderr}"
     )
 
 

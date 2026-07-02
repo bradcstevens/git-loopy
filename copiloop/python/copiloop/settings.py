@@ -39,7 +39,9 @@ __all__ = [
     "SettingsError",
     "ConfigTables",
     "CONFIG_FILENAME",
+    "PROMPT_FILENAME",
     "global_config_path",
+    "global_prompt_path",
     "project_config_path",
     "load_config_table",
     "load_configs",
@@ -52,6 +54,10 @@ __all__ = [
 
 #: The persisted-Config filename in both scopes.
 CONFIG_FILENAME = "config.toml"
+
+#: The prompt-override filename in the global scope (parallel to the packaged
+#: default shipped inside the wheel; see ``copiloop.loop._read_prompt``).
+PROMPT_FILENAME = "PROMPT.md"
 
 #: The XDG-relative config subdirectory (``<config-home>/copiloop/``).
 _APP_DIR = "copiloop"
@@ -78,13 +84,14 @@ class ConfigTables:
     global_: Mapping[str, object]
 
 
-def global_config_path(env: Mapping[str, str]) -> Path:
-    """Resolve the global ``config.toml`` path from an environment mapping.
+def _global_dir(env: Mapping[str, str]) -> Path:
+    """Resolve the global scope directory ``<config-home>/copiloop/``.
 
     ``$XDG_CONFIG_HOME`` wins when set (and non-blank); otherwise the XDG
     default ``$HOME/.config`` is used. Falls back to :meth:`Path.home` only if
     ``$HOME`` is absent from the mapping (defensive — ``os.environ`` always has
-    it in practice).
+    it in practice). Both the global ``config.toml`` and the global ``PROMPT.md``
+    override live in this one directory.
     """
     xdg = env.get("XDG_CONFIG_HOME")
     if xdg and xdg.strip():
@@ -92,7 +99,28 @@ def global_config_path(env: Mapping[str, str]) -> Path:
     else:
         home = env.get("HOME")
         base = (Path(home) if home and home.strip() else Path.home()) / ".config"
-    return base / _APP_DIR / CONFIG_FILENAME
+    return base / _APP_DIR
+
+
+def global_config_path(env: Mapping[str, str]) -> Path:
+    """Resolve the global ``config.toml`` path from an environment mapping.
+
+    ``$XDG_CONFIG_HOME`` wins when set (and non-blank); otherwise the XDG
+    default ``$HOME/.config`` is used (see :func:`_global_dir`).
+    """
+    return _global_dir(env) / CONFIG_FILENAME
+
+
+def global_prompt_path(env: Mapping[str, str]) -> Path:
+    """Resolve the global ``PROMPT.md`` override path from an environment mapping.
+
+    Shares the global scope directory with :func:`global_config_path`
+    (``$XDG_CONFIG_HOME/copiloop/PROMPT.md``, else
+    ``$HOME/.config/copiloop/PROMPT.md``). The runtime prompt seam
+    (:func:`copiloop.loop._read_prompt`) resolves **project > this global
+    override > the packaged default** (ADR-0006).
+    """
+    return _global_dir(env) / PROMPT_FILENAME
 
 
 def project_config_path(repo_root: Path) -> Path:

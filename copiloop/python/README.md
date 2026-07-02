@@ -2,7 +2,8 @@
 
 `copiloop/python/` is the AFK loop runner for this kit, built on the
 [GitHub Copilot Python SDK](https://github.com/github/copilot-sdk/tree/main/python).
-It loads [`copiloop/PROMPT.md`](../PROMPT.md) each iteration and enforces the
+It loads [`copiloop/PROMPT.md`](../PROMPT.md) (or the packaged default; see
+[Prompt resolution](#prompt-resolution)) each iteration and enforces the
 **wrapper contract** — a `ready-for-agent` filter, a `## What to build` +
 `## Acceptance criteria` discriminator, a `Closes/Fixes/Resolves #N`
 auto-close backstop, the `COPILOOP_MODEL` / `COPILOOP_ISSUE_SOURCE` / `COPILOOP_MAX_NMT_STRIKES`
@@ -43,6 +44,44 @@ are listed in the kit root
 
 The bootstrap is per-clone; subsequent invocations of `copiloop` use
 the cached environment under `copiloop/python/.venv/`.
+
+---
+
+## Install (run from anywhere)
+
+The bootstrap above is the **in-repo dev** path. To run `copiloop` from **any**
+repository, install it once as a global engine (ADR-0006). Publishing to PyPI is
+deferred, so the install string points at this repo's nested package via
+`#subdirectory=copiloop/python`:
+
+```bash
+# Put a single `copiloop` command on PATH (user-global).
+uv tool install "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=copiloop/python"
+
+# ...then run it from inside any git repo:
+cd ~/some/other/repo && copiloop
+```
+
+For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
+bare `uvx copiloop` is reserved for a future PyPI release):
+
+```bash
+uvx --from "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=copiloop/python" copiloop
+```
+
+Repos already on Python/uv can instead add it as a **project-local dev
+dependency** and run it through their own environment:
+
+```bash
+uv add --dev "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=copiloop/python"
+uv run copiloop
+```
+
+A fresh install runs with **zero setup**: the default prompt ships inside the
+wheel (see [Prompt resolution](#prompt-resolution)), so a bare `copiloop` works
+in a repo that has no `copiloop/` folder at all. Persist per-run knobs in a
+[`config.toml`](#persistent-config-configtoml) (or, in a later slice, scaffold
+editable overrides with `copiloop init`) when you want them.
 
 ---
 
@@ -91,7 +130,7 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 | Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                                                                                                                                                                              |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
 | Aborted — stuck       | `1`  | `COPILOOP_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                                                                                                                                                                             |
-| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, prompt file missing, malformed `COPILOOP_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `COPILOOP_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
+| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, malformed `COPILOOP_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `COPILOOP_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
 ---
 
@@ -163,6 +202,25 @@ knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
 verbosity, `--no-reasoning`, `--parallel`, and `COPILOOP_PRICING_FILE`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
+
+---
+
+## Prompt resolution
+
+The prompt loaded each iteration resolves like the model/effort config —
+**project > global > packaged default** (ADR-0006), first hit wins:
+
+1. **project** — `<repo-root>/copiloop/PROMPT.md` (lowercase `prompt.md` is also
+   accepted, for case-sensitive filesystems).
+2. **global** — `$XDG_CONFIG_HOME/copiloop/PROMPT.md` (honouring
+   `$XDG_CONFIG_HOME`), else `~/.config/copiloop/PROMPT.md`.
+3. **packaged default** — a `PROMPT.md` shipped **inside the wheel** (as
+   `pricing.toml` already is), so a bare run in a repo with no `copiloop/`
+   folder still has a working prompt.
+
+Only the packaged default is guaranteed present; drop a `PROMPT.md` into either
+scope to override it (a project file overrides a global one, which overrides the
+packaged default). The seam lives in `copiloop.loop._read_prompt`.
 
 ---
 
@@ -284,7 +342,8 @@ runner pays **zero observability cost**.
 - [`docs/runners.md`](../../docs/runners.md) — the full runner reference:
   per-iteration flow, exit conditions, commit-message contract, and skill
   routing.
-- [`copiloop/PROMPT.md`](../PROMPT.md) — the prompt loaded into every
-  iteration.
+- [`copiloop/PROMPT.md`](../PROMPT.md) — the project prompt override loaded each
+  iteration (see [Prompt resolution](#prompt-resolution) for the
+  project > global > packaged chain).
 - [`copiloop/afk.sh`](../afk.sh) — optional one-line convenience launcher for
   this runner.

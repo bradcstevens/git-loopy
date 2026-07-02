@@ -110,8 +110,9 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Iterable, Protocol
+from typing import Any, Callable, Coroutine, Iterable, Mapping, Protocol
 
 from copilot import CopilotClient
 from rich.console import Console
@@ -120,6 +121,7 @@ from copiloop import events as events_module
 from copiloop import gate as gate_module
 from copiloop import gh as gh_module
 from copiloop import git as git_module
+from copiloop import settings as settings_module
 from copiloop import worktree as worktree_module
 from copiloop.config import RunConfig
 from copiloop.emit import EventEmitter
@@ -347,24 +349,50 @@ def _resolve_include_prs(config: RunConfig, repo_root: Path) -> bool:
     return match.group(1).lower() == "yes"
 
 
-def _read_prompt(repo_root: Path) -> str:
-    """Load the runner's prompt file.
+def _packaged_prompt_path() -> Path:
+    """Resolve the packaged default ``PROMPT.md`` to a real filesystem path.
 
-    Checks ``<repo>/copiloop/prompt.md`` first, then ``<repo>/copiloop/PROMPT.md``.
-    The kit ships the uppercase variant; on case-insensitive filesystems
-    (HFS+ default on macOS) either lookup succeeds, but case-sensitive
-    filesystems (most Linux setups) need the explicit fallback.
+    Mirrors :func:`copiloop.pricing._packaged_path`: the wheel ships a default
+    prompt as package data (alongside ``pricing.toml``) so a bare run in a repo
+    with no ``copiloop/`` folder still has a working prompt — the "run from
+    anywhere" story (ADR-0006).
+    """
+    return Path(str(files("copiloop") / "PROMPT.md"))
+
+
+def _read_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
+    """Load the runner's prompt, resolving **project > global > packaged** (ADR-0006).
+
+    Resolution order (first hit wins):
+
+    1. **project** — ``<repo>/copiloop/prompt.md`` then ``<repo>/copiloop/PROMPT.md``.
+       The kit ships the uppercase variant; the lowercase probe keeps
+       case-sensitive filesystems (most Linux setups) working while
+       case-insensitive ones (HFS+/APFS on macOS) accept either.
+    2. **global** — :func:`copiloop.settings.global_prompt_path` (i.e.
+       ``$XDG_CONFIG_HOME/copiloop/PROMPT.md``, else
+       ``$HOME/.config/copiloop/PROMPT.md``).
+    3. **packaged** — the default ``PROMPT.md`` shipped inside the wheel, so a
+       fresh install runs anywhere with zero setup.
+
+    ``env`` is injected (rather than read from ``os.environ`` here) so the
+    resolver is fully unit-testable against tmp directories. Only raises
+    :exc:`FileNotFoundError` if even the packaged default is absent — a
+    defensive last resort, since the wheel always ships it.
     """
     candidates = (
         repo_root / "copiloop" / "prompt.md",
         repo_root / "copiloop" / "PROMPT.md",
+        settings_module.global_prompt_path(env),
+        _packaged_prompt_path(),
     )
     for cand in candidates:
         if cand.exists():
             return cand.read_text(encoding="utf-8")
     raise FileNotFoundError(
-        f"prompt file not found under {repo_root}/copiloop/ "
-        f"(looked for prompt.md / PROMPT.md)"
+        "prompt file not found: no project override "
+        f"(under {repo_root}/copiloop/), no global override "
+        f"({settings_module.global_prompt_path(env)}), and no packaged default"
     )
 
 
@@ -2036,7 +2064,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     repo_root = git.root
 
     try:
-        prompt_text = _read_prompt(repo_root)
+        prompt_text = _read_prompt(repo_root, os.environ)
     except FileNotFoundError as exc:
         print(f"copiloop: {exc}", file=sys.stderr)
         return 1

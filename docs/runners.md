@@ -66,7 +66,7 @@ INCLUDE_PRS=1 uv run --project copiloop/python copiloop
 | Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                  |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
 | **Aborted — stuck**   | `1`  | `COPILOOP_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
-| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing `copiloop/PROMPT.md`, missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, or malformed pricing. |
+| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, or malformed pricing. |
 
 The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
 

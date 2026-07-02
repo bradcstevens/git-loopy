@@ -53,6 +53,36 @@ def test_project_config_path_is_repo_copiloop_config_toml(tmp_path: Path) -> Non
     assert path == tmp_path / "copiloop" / "config.toml"
 
 
+def test_global_prompt_path_honours_xdg_config_home(tmp_path: Path) -> None:
+    """``$XDG_CONFIG_HOME`` wins for the global prompt-override location (ADR-0006)."""
+    xdg = tmp_path / "xdg"
+    path = settings.global_prompt_path({"XDG_CONFIG_HOME": str(xdg)})
+    assert path == xdg / "copiloop" / "PROMPT.md"
+
+
+def test_global_prompt_path_falls_back_to_home_dot_config(tmp_path: Path) -> None:
+    """With ``$XDG_CONFIG_HOME`` unset, the global prompt lives under ``$HOME/.config``."""
+    home = tmp_path / "home"
+    path = settings.global_prompt_path({"HOME": str(home)})
+    assert path == home / ".config" / "copiloop" / "PROMPT.md"
+
+
+def test_global_prompt_path_blank_xdg_falls_back_to_home(tmp_path: Path) -> None:
+    """A blank ``$XDG_CONFIG_HOME`` is treated as unset (same rule as the config path)."""
+    home = tmp_path / "home"
+    path = settings.global_prompt_path({"XDG_CONFIG_HOME": "   ", "HOME": str(home)})
+    assert path == home / ".config" / "copiloop" / "PROMPT.md"
+
+
+def test_global_prompt_and_config_share_the_same_scope_dir(tmp_path: Path) -> None:
+    """The global prompt and config resolve into the same ``<config-home>/copiloop/`` dir."""
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    assert (
+        settings.global_prompt_path(env).parent
+        == settings.global_config_path(env).parent
+    )
+
+
 # ---------------------------------------------------------------------------
 # load_config_table — found / missing / empty / malformed
 # ---------------------------------------------------------------------------
