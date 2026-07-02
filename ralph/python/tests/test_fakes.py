@@ -128,6 +128,83 @@ def test_commits_between_unknown_sha_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FakeGitClient worktree lifecycle (Parallel-mode Lanes, #59 / ADR-0008)
+# ---------------------------------------------------------------------------
+
+
+def test_fake_add_worktree_is_branch_from_base_with_independent_log(
+    tmp_path: Path,
+) -> None:
+    """A worktree child snapshots the base log, then advances independently."""
+    seed = Commit(sha="base", subject="root", body="", date="2026-01-01")
+    parent = FakeGitClient(tmp_path, commits=[seed])
+    base_head = parent.head_sha()
+
+    wt_path = tmp_path.parent / "worktrees" / "lane-7"
+    branch = "copiloop/RUN/issue-7"
+    lane = parent.add_worktree(wt_path, branch=branch, base="main")
+
+    # The child is a GitClient bound to the worktree path, on the new branch.
+    assert isinstance(lane, GitClient)
+    assert lane.root == Path(wt_path)
+    assert lane.current_branch() == branch
+    # Branch-from-base: the child starts at the base branch's head.
+    assert lane.head_sha() == base_head
+    # The add is recorded for orchestrator assertions.
+    assert parent.worktree_adds == [(Path(wt_path), branch, "main")]
+
+    # Work in the Lane advances only the child's log...
+    lane_sha = lane.simulate_agent_commit(subject="feat", sha="lane7-c1")
+    assert lane.head_sha() == lane_sha == "lane7-c1"
+    assert [c.sha for c in lane.commits_between(base_head, lane_sha)] == ["lane7-c1"]
+    # ...the parent (base) log is untouched — per-worktree commit log.
+    assert parent.head_sha() == base_head
+    assert [c.sha for c in parent.recent_commits(10)] == ["base"]
+
+
+def test_fake_worktrees_have_independent_logs_from_each_other(tmp_path: Path) -> None:
+    """Two Lanes off the same base each keep their own commit log."""
+    parent = FakeGitClient(tmp_path, commits=[Commit(sha="base", subject="r", body="")])
+    a = parent.add_worktree(tmp_path.parent / "wt-a", branch="copiloop/R/issue-1", base="main")
+    b = parent.add_worktree(tmp_path.parent / "wt-b", branch="copiloop/R/issue-2", base="main")
+
+    a.simulate_agent_commit(subject="a-work", sha="a1")
+    b.simulate_agent_commit(subject="b-work", sha="b1")
+
+    assert a.head_sha() == "a1"
+    assert b.head_sha() == "b1"
+    # Neither Lane sees the other's commit; auto-generated SHAs never collide.
+    assert "b1" not in [c.sha for c in a.recent_commits(10)]
+    assert "a1" not in [c.sha for c in b.recent_commits(10)]
+    assert a.commit("chore: cap").startswith("wt1")  # distinct per-worktree sha prefix
+    assert b.commit("chore: cap").startswith("wt2")
+
+
+def test_fake_remove_worktree_is_recorded_and_drops_the_worktree(
+    tmp_path: Path,
+) -> None:
+    """remove_worktree records the teardown and forgets the child."""
+    parent = FakeGitClient(tmp_path)
+    wt_path = tmp_path.parent / "wt-7"
+    parent.add_worktree(wt_path, branch="copiloop/R/issue-7", base="main")
+    assert parent.active_worktrees == [Path(wt_path)]
+
+    parent.remove_worktree(wt_path)
+
+    assert parent.worktree_removes == [Path(wt_path)]
+    assert parent.active_worktrees == []
+    # The parent client keeps working normally after a teardown.
+    assert parent.head_sha()
+
+
+def test_fake_worktree_child_satisfies_gitclient_protocol(tmp_path: Path) -> None:
+    """A worktree child is itself a structural ``GitClient`` (injectable as a Lane)."""
+    parent = FakeGitClient(tmp_path)
+    lane = parent.add_worktree(tmp_path.parent / "wt", branch="copiloop/R/issue-1", base="main")
+    assert isinstance(lane, GitClient)
+
+
+# ---------------------------------------------------------------------------
 # FakeGitHubClient (the gh seam, #47)
 # ---------------------------------------------------------------------------
 

@@ -51,6 +51,14 @@ The client's mechanics:
 * :meth:`~SubprocessGitClient.recent_commits` — last ``n`` commits, newest-first.
 * :meth:`~SubprocessGitClient.range_count` — ``git rev-list --count`` for
   ``pre..head``.
+* :meth:`~SubprocessGitClient.add_worktree` /
+  :meth:`~SubprocessGitClient.remove_worktree` — the Parallel-mode **Lane**
+  worktree lifecycle (ADR-0008): ``git worktree add -b <branch> <path> <base>``
+  returns a fresh root-bound client for the worktree (so every mechanic above
+  then addresses *that* worktree), and ``git worktree remove`` tears it down
+  while keeping its branch as a breadcrumb. :func:`lane_branch_name` is the pure
+  ``copiloop/<run_id>/issue-<N>`` branch-naming helper the Lane orchestrator
+  feeds to ``add_worktree``.
 
 Design notes:
 
@@ -78,6 +86,7 @@ __all__ = [
     "Commit",
     "GitClient",
     "SubprocessGitClient",
+    "lane_branch_name",
 ]
 
 _GIT_BIN: Final[str] = "git"
@@ -197,6 +206,32 @@ def _stderr_tail(stderr: str | None) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Parallel-mode Lane branch naming (ADR-0005 / ADR-0008)                       #
+# --------------------------------------------------------------------------- #
+
+
+def lane_branch_name(run_id: str, issue_number: int) -> str:
+    """Return the branch name for a Parallel-mode **Lane**.
+
+    Parallel mode (ADR-0008) gives each **Lane** its own worktree on a dedicated
+    branch cut from base. The branch follows the **copiloop** convention from
+    ADR-0005: ``copiloop/<run_id>/issue-<N>``. Keeping this as a pure,
+    seam-level helper lets the Wave/Lane orchestrator (a later slice) construct
+    the branch it hands to :meth:`GitClient.add_worktree` without restating the
+    format, and pins the convention under test here.
+
+    Args:
+        run_id: The run identifier (a 26-char ULID in production, but any
+            string is accepted — the helper is a pure formatter).
+        issue_number: The Lane's ``parallel-safe`` issue number.
+
+    Returns:
+        ``f"copiloop/{run_id}/issue-{issue_number}"``.
+    """
+    return f"copiloop/{run_id}/issue-{issue_number}"
+
+
+# --------------------------------------------------------------------------- #
 # GitClient seam                                                              #
 # --------------------------------------------------------------------------- #
 
@@ -259,6 +294,33 @@ class GitClient(Protocol):
 
     def range_count(self, pre: str, head: str) -> int:
         """Return the number of commits in ``pre..head``."""
+        ...
+
+    def add_worktree(self, path: Path, *, branch: str, base: str) -> GitClient:
+        """Create a git worktree at ``path`` on a new ``branch`` cut from ``base``.
+
+        The Parallel-mode **Lane** primitive (ADR-0008): each Lane works in its
+        own worktree on a dedicated branch (``copiloop/<run_id>/issue-<N>`` — see
+        :func:`lane_branch_name`) branched from the base branch, created in a
+        sibling directory **outside** the repo (never nested inside it).
+
+        Returns a **root-bound** :class:`GitClient` for the new worktree, so every
+        mechanic above (``head_sha`` / ``is_dirty`` / ``has_untracked`` / ``add_all``
+        / ``commit`` / ``commits_between`` / ...) then addresses *that* worktree
+        independently of the main worktree — the same root-binding trick, one
+        client per worktree. ``path`` must not already exist (git creates it).
+        """
+        ...
+
+    def remove_worktree(self, path: Path, *, force: bool = False) -> None:
+        """Remove the worktree at ``path`` at the Wave barrier.
+
+        Tears down the worktree directory but **keeps its branch** — ADR-0008
+        deletes integrated branches during Integration and retains failed ones as
+        breadcrumbs, so worktree teardown never touches the branch. ``force=True``
+        discards any uncommitted changes still in the worktree (a plain remove
+        refuses to drop a dirty worktree).
+        """
         ...
 
 
@@ -557,6 +619,64 @@ class SubprocessGitClient:
             return 0
         out = _run(["rev-list", "--count", f"{pre}..{head}"], cwd=self._root)
         return int(out.strip())
+
+    def add_worktree(
+        self, path: Path, *, branch: str, base: str
+    ) -> SubprocessGitClient:
+        """Create a worktree at ``path`` on a new ``branch`` cut from ``base``.
+
+        Shells out to ``git worktree add -b <branch> <path> <base>`` from the
+        repo root, then returns a fresh :class:`SubprocessGitClient` **bound to
+        the worktree** so every subsequent git call runs there — the per-Lane
+        primitive for Parallel mode (ADR-0008). ``git`` creates ``path`` (and any
+        missing parent directories); we defensively ensure the parent exists so
+        an older ``git`` that does not create intermediate directories still
+        succeeds. ``path`` itself must not already exist.
+
+        Args:
+            path: Directory for the new worktree — a sibling **outside** the repo
+                by convention (never nested inside it).
+            branch: Name of the new branch to create (see :func:`lane_branch_name`).
+            base: Commit-ish the branch is cut from (typically the base branch,
+                e.g. ``"main"``).
+
+        Returns:
+            A :class:`SubprocessGitClient` bound to ``path``.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, ``branch`` already exists, ``path``
+                already exists, or ``base`` is unknown.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            ["worktree", "add", "-b", branch, str(target), base],
+            cwd=self._root,
+        )
+        return SubprocessGitClient(target)
+
+    def remove_worktree(self, path: Path, *, force: bool = False) -> None:
+        """Remove the worktree at ``path`` via ``git worktree remove``.
+
+        Run from the repo root. Tears down the worktree directory but leaves its
+        branch intact (ADR-0008 keeps failed Lane branches as breadcrumbs; the
+        Integration slice deletes integrated ones separately). A plain remove
+        refuses to discard a dirty worktree; ``force=True`` passes ``--force`` to
+        drop it anyway.
+
+        Args:
+            path: The worktree directory to remove.
+            force: When ``True``, discard uncommitted changes in the worktree.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, ``path`` is not a worktree, or a
+                dirty worktree is removed without ``force``.
+        """
+        args = ["worktree", "remove"]
+        if force:
+            args.append("--force")
+        args.append(str(Path(path)))
+        _run(args, cwd=self._root)
 
 
 # --------------------------------------------------------------------------- #

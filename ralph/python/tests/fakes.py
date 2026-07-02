@@ -43,6 +43,14 @@ class FakeGitClient:
     ``dirty`` / ``untracked`` are plain test-controlled booleans; :meth:`commit`
     does **not** clear them (a real agent re-dirties the tree each iteration), so
     a multi-iteration test that leaves ``dirty=True`` Checkpoints every iteration.
+
+    **Worktree lifecycle (#59 / ADR-0008).** :meth:`add_worktree` models a
+    Parallel-mode **Lane**: it returns a child :class:`FakeGitClient` whose log is
+    a snapshot copy of this client's (branch-from-base) and which then advances its
+    **own** per-worktree log independently — consistent-by-construction, so a
+    commit in one Lane never leaks into another or the main worktree.
+    :attr:`worktree_adds` / :attr:`worktree_removes` are spies and
+    :attr:`active_worktrees` lists the live ones, for orchestrator assertions.
     """
 
     def __init__(
@@ -55,9 +63,11 @@ class FakeGitClient:
         branch: str | None = "main",
         commit_error: GitError | None = None,
         push_error: GitError | None = None,
+        sha_prefix: str = "face",
     ) -> None:
         self._root = Path(root)
         self._sha_counter = 0
+        self._sha_prefix = sha_prefix
         if commits is None:
             commits = [
                 Commit(
@@ -80,6 +90,12 @@ class FakeGitClient:
         self.commit_messages: list[str] = []
         self.push_calls = 0
         self.switch_calls: list[str] = []
+        # Parallel-mode worktree lifecycle (#59 / ADR-0008): per-worktree child
+        # clients plus add/remove spies, kept consistent-by-construction.
+        self._worktree_seq = 0
+        self._worktrees: dict[Path, FakeGitClient] = {}
+        self.worktree_adds: list[tuple[Path, str, str]] = []
+        self.worktree_removes: list[Path] = []
 
     @property
     def root(self) -> Path:
@@ -93,7 +109,9 @@ class FakeGitClient:
         # 40-char hex with a distinctive ``face`` prefix so auto-generated SHAs
         # never collide with the explicit SHAs tests pass to
         # simulate_agent_commit (e.g. "abcdef..." / "a" * 40 / "cap0...").
-        return f"face{self._sha_counter:036x}"
+        # Worktree children get a distinct ``sha_prefix`` (``wt1``, ``wt2``, ...)
+        # so per-Lane auto-SHAs never collide across worktrees either.
+        return f"{self._sha_prefix}{self._sha_counter:036x}"
 
     def _index(self, sha: str) -> int:
         for i, commit in enumerate(self._log):
@@ -162,6 +180,47 @@ class FakeGitClient:
 
     def range_count(self, pre: str, head: str) -> int:
         return len(self.commits_between(pre, head))
+
+    def add_worktree(self, path: Path, *, branch: str, base: str) -> FakeGitClient:
+        """Model ``git worktree add -b <branch> <path> <base>``.
+
+        Records the add in :attr:`worktree_adds` and returns a **child**
+        :class:`FakeGitClient` bound to ``path`` on ``branch``. Branch-from-base
+        is modelled consistent-by-construction: the child's log is a snapshot copy
+        of this client's current log (this fake's single linear log represents the
+        base branch), so the child starts at the base head and then advances its
+        **own** per-worktree log independently — a commit in one Lane never
+        appears in another or in the main worktree. The child carries a distinct
+        ``sha_prefix`` (``wt1``, ``wt2``, ...) so auto-generated SHAs never collide
+        across worktrees.
+        """
+        wt_path = Path(path)
+        self.worktree_adds.append((wt_path, branch, base))
+        self._worktree_seq += 1
+        child = FakeGitClient(
+            wt_path,
+            commits=list(self._log),
+            branch=branch,
+            sha_prefix=f"wt{self._worktree_seq}",
+        )
+        self._worktrees[wt_path] = child
+        return child
+
+    def remove_worktree(self, path: Path, *, force: bool = False) -> None:
+        """Model ``git worktree remove`` — drop the child, keep no branch state.
+
+        Records the teardown in :attr:`worktree_removes` and forgets the child.
+        The fake tracks no branch registry, so (as with real git) removing a
+        worktree leaves its branch a breadcrumb — nothing here deletes it.
+        """
+        wt_path = Path(path)
+        self.worktree_removes.append(wt_path)
+        self._worktrees.pop(wt_path, None)
+
+    @property
+    def active_worktrees(self) -> list[Path]:
+        """Paths of the worktrees currently live (added and not yet removed)."""
+        return list(self._worktrees)
 
     # -- test scripting ----------------------------------------------------
 

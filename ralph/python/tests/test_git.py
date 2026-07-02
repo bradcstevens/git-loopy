@@ -24,6 +24,7 @@ from ralph_afk.git import (
     GitClient,
     GitError,
     SubprocessGitClient,
+    lane_branch_name,
 )
 
 # --------------------------------------------------------------------------- #
@@ -95,6 +96,32 @@ def _commit(
         text=True,
     )
     return completed.stdout.strip()
+
+
+def _branch_exists(repo: Path, branch: str) -> bool:
+    """Return ``True`` if ``branch`` exists in the repo at ``repo``."""
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "branch", "--list", branch],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return bool(completed.stdout.strip())
+
+
+def _worktree_paths(repo: Path) -> list[str]:
+    """Return the worktree paths git tracks for the repo at ``repo``."""
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [
+        line[len("worktree ") :]
+        for line in completed.stdout.splitlines()
+        if line.startswith("worktree ")
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -693,3 +720,139 @@ def test_commits_between_excludes_a_runner_checkpoint(tmp_path: Path) -> None:
     between = git.commits_between(pre, head)
     assert [c.sha for c in between] == [agent_sha]
     assert all(c.sha != checkpoint_sha for c in between)
+
+
+# --------------------------------------------------------------------------- #
+# lane_branch_name (Parallel-mode Lane branch naming, ADR-0005 / ADR-0008)     #
+# --------------------------------------------------------------------------- #
+
+
+def test_lane_branch_name_follows_copiloop_convention() -> None:
+    """A Lane's branch is ``copiloop/<run_id>/issue-<N>`` (ADR-0005 prefix)."""
+    assert lane_branch_name("01JAX7QZ8K9M", 7) == "copiloop/01JAX7QZ8K9M/issue-7"
+
+
+def test_lane_branch_name_is_pure_string_policy() -> None:
+    """Distinct run_ids / issue numbers produce distinct, well-formed branches."""
+    assert lane_branch_name("RUNA", 1) == "copiloop/RUNA/issue-1"
+    assert lane_branch_name("RUNB", 123) == "copiloop/RUNB/issue-123"
+    # run_id and issue number are the only variables; the prefix is fixed.
+    assert lane_branch_name("RUNA", 1) != lane_branch_name("RUNA", 2)
+    assert lane_branch_name("RUNA", 1) != lane_branch_name("RUNB", 1)
+
+
+# --------------------------------------------------------------------------- #
+# Worktree lifecycle (Parallel-mode Lanes, ADR-0008)                          #
+# --------------------------------------------------------------------------- #
+
+
+def _sibling_worktree_repo(tmp_path: Path) -> tuple[Path, Path, SubprocessGitClient]:
+    """Init a repo in ``tmp_path/repo`` with one commit; return (repo, sibling, client).
+
+    ``sibling`` is a directory *outside* the repo (``tmp_path/worktrees``) where a
+    Lane worktree lives — never nested inside the repo, per ADR-0008.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _commit(repo, "base", file_name="base.txt")
+    return repo, tmp_path / "worktrees", SubprocessGitClient(repo)
+
+
+def test_add_worktree_creates_branch_from_base_in_sibling_dir(tmp_path: Path) -> None:
+    """``add_worktree`` cuts a new branch from base into a sibling dir outside the repo."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    base_head = client.head_sha()
+    wt_path = siblings / "lane-7"
+    branch = lane_branch_name("RUN123", 7)
+
+    lane = client.add_worktree(wt_path, branch=branch, base="main")
+
+    # On-disk effect: the worktree directory exists, outside the repo tree.
+    assert wt_path.is_dir()
+    assert repo not in wt_path.parents
+    # The returned client is a GitClient bound to the worktree.
+    assert isinstance(lane, GitClient)
+    assert lane.root == wt_path
+    # Branch-from-base: new branch, checked out in the worktree, at base's head.
+    assert lane.current_branch() == branch
+    assert lane.head_sha() == base_head
+    # git now tracks two worktrees (main + the Lane).
+    tracked = {Path(p).resolve() for p in _worktree_paths(repo)}
+    assert repo.resolve() in tracked
+    assert wt_path.resolve() in tracked
+
+
+def test_worktree_commits_are_isolated_from_the_main_worktree(tmp_path: Path) -> None:
+    """A commit in the Lane advances only its own branch; the main worktree is untouched."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    base_head = client.head_sha()
+    lane = client.add_worktree(
+        siblings / "lane-7", branch=lane_branch_name("RUN", 7), base="main"
+    )
+
+    # Work in the Lane's own worktree.
+    (lane.root / "lane_only.txt").write_text("lane work")
+    assert lane.has_untracked() is True
+    # ...the main worktree stays clean (per-worktree probes are independent).
+    assert client.has_untracked() is False
+
+    lane.add_all()
+    lane_sha = lane.commit("feat: lane work\n\nCloses #7")
+
+    # The Lane branch advanced; the main worktree's HEAD did not move.
+    assert lane.head_sha() == lane_sha
+    assert lane_sha != base_head
+    assert client.head_sha() == base_head
+    # Per-Lane commit accounting: the Lane's own pre/post range holds its commit.
+    between = lane.commits_between(base_head, lane_sha)
+    assert [c.sha for c in between] == [lane_sha]
+    assert lane.range_count(base_head, lane_sha) == 1
+
+
+def test_remove_worktree_deletes_dir_but_keeps_branch(tmp_path: Path) -> None:
+    """Teardown removes the worktree dir yet retains the branch as a breadcrumb (ADR-0008)."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    wt_path = siblings / "lane-7"
+    branch = lane_branch_name("RUN", 7)
+    lane = client.add_worktree(wt_path, branch=branch, base="main")
+    lane.add_all()  # nothing staged; worktree is clean
+
+    client.remove_worktree(wt_path)
+
+    assert not wt_path.exists()
+    # git no longer tracks the Lane worktree...
+    tracked = {Path(p).resolve() for p in _worktree_paths(repo)}
+    assert wt_path.resolve() not in tracked
+    # ...but the branch survives so a failed Lane leaves a breadcrumb.
+    assert _branch_exists(repo, branch) is True
+
+
+def test_remove_worktree_force_removes_a_dirty_worktree(tmp_path: Path) -> None:
+    """``force=True`` tears down a worktree with uncommitted changes; plain remove refuses."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    wt_path = siblings / "lane-7"
+    lane = client.add_worktree(
+        wt_path, branch=lane_branch_name("RUN", 7), base="main"
+    )
+    # Dirty the Lane worktree (a tracked-file modification).
+    (lane.root / "base.txt").write_text("modified in lane")
+    assert lane.is_dirty() is True
+
+    # A plain remove refuses to discard uncommitted work.
+    with pytest.raises(GitError):
+        client.remove_worktree(wt_path)
+    assert wt_path.exists()
+
+    # force=True tears it down anyway.
+    client.remove_worktree(wt_path, force=True)
+    assert not wt_path.exists()
+
+
+def test_add_worktree_duplicate_branch_raises(tmp_path: Path) -> None:
+    """Re-using a branch name for a second live worktree is a git error, surfaced typed."""
+    _repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    branch = lane_branch_name("RUN", 7)
+    client.add_worktree(siblings / "lane-a", branch=branch, base="main")
+    with pytest.raises(GitError):
+        client.add_worktree(siblings / "lane-b", branch=branch, base="main")
