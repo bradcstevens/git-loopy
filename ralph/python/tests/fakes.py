@@ -223,6 +223,17 @@ class FakeGitClient:
         """Paths of the worktrees currently live (added and not yet removed)."""
         return list(self._worktrees)
 
+    def worktree_client(self, path: Path) -> FakeGitClient | None:
+        """Return the live child client bound to ``path`` (or ``None``).
+
+        A public accessor over :attr:`_worktrees` so a Parallel-mode
+        orchestrator test can reach into a Lane's worktree — while it is still
+        live, i.e. after :meth:`add_worktree` and before :meth:`remove_worktree`
+        — and drive :meth:`simulate_agent_commit` on the right per-Lane log.
+        Complements :attr:`active_worktrees` (which lists the paths).
+        """
+        return self._worktrees.get(Path(path))
+
     # -- test scripting ----------------------------------------------------
 
     def simulate_agent_commit(

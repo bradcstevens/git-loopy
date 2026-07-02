@@ -583,6 +583,61 @@ async def test_iteration_session_passes_reasoning_effort_through(
     assert fake_client.create_calls[0]["reasoning_effort"] == "xhigh"
 
 
+async def test_iteration_session_passes_working_directory_through(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """``working_directory`` is forwarded to ``create_session`` (#61, ADR-0008).
+
+    Parallel mode pins each concurrent **Lane**'s session to its own git
+    worktree via the SDK's per-session ``working_directory`` — in-process
+    isolation, one client, N sessions. The loop passes the Lane's worktree
+    path; we assert the exact kwarg propagates.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,  # type: ignore[arg-type]
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+            working_directory="/tmp/worktrees/issue-42",
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["working_directory"] == (
+        "/tmp/worktrees/issue-42"
+    )
+
+
+async def test_iteration_session_omits_working_directory_by_default(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """Serial path: no ``working_directory`` means ``None`` flows through.
+
+    The SDK then runs the session in the process cwd — the serial loop's
+    single-worktree behaviour is untouched.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,  # type: ignore[arg-type]
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["working_directory"] is None
+
+
 async def test_iteration_session_omits_reasoning_effort_by_default(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,

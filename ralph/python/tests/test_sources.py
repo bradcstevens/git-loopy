@@ -144,6 +144,10 @@ class TestDataclassShapes:
         with pytest.raises(Exception):
             item.ref = 99  # type: ignore[misc]
 
+    def test_afk_ready_item_defaults_labels_to_empty_tuple(self) -> None:
+        item = AfkReadyItem(ref=1, title="t", rendered_block="x")
+        assert item.labels == ()
+
     def test_completion_defaults_shas_to_empty_tuple(self) -> None:
         c = Completion(ref=1, sha="deadbeef")
         assert c.shas == ()
@@ -252,6 +256,19 @@ class TestGitHubCollectAfkReady:
         )
         assert "## What to build" in block
         assert "## Acceptance criteria" in block
+
+    def test_item_carries_issue_labels_for_parallel_eligibility(self) -> None:
+        """The item exposes the issue's labels so Parallel mode (#61, ADR-0008)
+
+        can read a human's ``parallel-safe`` assertion off the pool without a
+        second round-trip. Eligibility is never inferred — it is a label.
+        """
+        issue = _make_issue(42, labels=["ready-for-agent", "parallel-safe"])
+        impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
+        items = impl.collect_afk_ready()
+        assert len(items) == 1
+        assert items[0].labels == ("ready-for-agent", "parallel-safe")
+        assert "parallel-safe" in items[0].labels
 
     def test_renders_block_with_recent_comments_newest_first(self) -> None:
         comments = (

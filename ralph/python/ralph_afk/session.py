@@ -468,6 +468,12 @@ class IterationSession:
             resolves and per-model-gates the value (a reasoning-incapable
             model such as ``claude-haiku-4.5`` is sent ``None`` because
             the CLI hard-rejects ``session.create`` otherwise).
+        working_directory: Optional filesystem path the SDK session runs
+            in, forwarded as ``create_session(working_directory=...)``.
+            ``None`` (the serial default) runs in the process cwd. Parallel
+            mode (#61, ADR-0008) pins each concurrent **Lane** to its own
+            git worktree by passing that worktree's path here, so one
+            client can host N isolated in-process sessions.
     """
 
     def __init__(
@@ -481,6 +487,7 @@ class IterationSession:
         iter_num: int,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        working_directory: str | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -490,6 +497,7 @@ class IterationSession:
         self._iter_num = iter_num
         self._model = model
         self._reasoning_effort = reasoning_effort
+        self._working_directory = working_directory
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -538,6 +546,7 @@ class IterationSession:
             on_event=self._on_sdk_event,
             model=self._model,
             reasoning_effort=self._reasoning_effort,
+            working_directory=self._working_directory,
             # NB: on_user_input_request is intentionally NOT set.
             # Leaving it None tells the SDK to not enable ask_user; the
             # permission handler is the second line of defence.

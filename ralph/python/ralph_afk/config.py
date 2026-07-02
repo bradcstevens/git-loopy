@@ -142,6 +142,13 @@ class RunConfig:
         pricing_file: Optional explicit path to a ``pricing.toml``.
             ``None`` lets :func:`ralph_afk.pricing.load_pricing` resolve
             from ``RALPH_PRICING_FILE`` or the packaged default.
+        parallel: Opt-in **Parallel mode** cap (ADR-0008). ``1`` (the
+            default) is serial — :func:`ralph_afk.loop.run` drives the
+            existing single-worktree loop byte-for-byte unchanged. ``> 1``
+            requests up to that many concurrent **Lanes** per **Wave**;
+            :mod:`ralph_afk.cli` resolves it from ``--parallel N`` /
+            ``COPILOOP_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
+            mode is requested without an explicit cap). Must be ≥ 1.
     """
 
     model: str | None = None
@@ -156,6 +163,7 @@ class RunConfig:
     render_reasoning: bool = True
     otel_enabled: bool = False
     pricing_file: Path | None = None
+    parallel: int = 1
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):
@@ -175,6 +183,10 @@ class RunConfig:
         if self.verbosity < 0 or self.verbosity > 3:
             raise ValueError(
                 f"verbosity must be in 0..3, got {self.verbosity}"
+            )
+        if self.parallel < 1:
+            raise ValueError(
+                f"parallel must be ≥ 1 (1 = serial), got {self.parallel}"
             )
         if (
             self.reasoning_effort is not None

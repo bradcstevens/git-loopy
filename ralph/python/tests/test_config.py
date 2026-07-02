@@ -31,6 +31,13 @@ def test_run_config_defaults_are_safe() -> None:
     assert cfg.render_reasoning is True
     assert cfg.otel_enabled is False
     assert cfg.pricing_file is None
+    assert cfg.parallel == 1
+
+
+def test_run_config_accepts_parallel_cap() -> None:
+    """``parallel`` opts into Parallel mode with N concurrent Lanes (ADR-0008)."""
+    cfg = RunConfig(parallel=3)
+    assert cfg.parallel == 3
 
 
 def test_run_config_is_frozen() -> None:
@@ -64,6 +71,8 @@ def test_run_config_satisfies_session_config_protocol() -> None:
         ("issue_source", "gitlab"),
         ("max_iterations", -1),
         ("max_nmt_strikes", 0),
+        ("parallel", 0),
+        ("parallel", -1),
         ("verbosity", 4),
         ("verbosity", -1),
         ("reasoning_effort", "medium-high"),

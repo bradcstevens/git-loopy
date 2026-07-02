@@ -73,6 +73,11 @@ from ralph_afk.config import (
 __all__ = ["main", "build_parser", "resolve_repo_root"]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
+#: Concurrent-Lane cap applied when Parallel mode (ADR-0008) is requested
+#: without an explicit number (bare ``--parallel``). Serial (``parallel=1``)
+#: remains the default when neither ``--parallel`` nor ``COPILOOP_MAX_PARALLEL``
+#: is given.
+_DEFAULT_MAX_PARALLEL = 3
 # Default model used when ``MODEL`` is unset. A bare base id (model id and
 # reasoning effort are separate axes on the live Copilot CLI — a suffixed
 # id like ``claude-opus-4.7-xhigh`` is rejected as "not available").
@@ -145,6 +150,21 @@ def _parse_max_iterations(raw: str) -> int:
     return value
 
 
+def _parse_parallel(raw: str) -> int:
+    """Validate the ``--parallel N`` cap as an integer ≥ 1 (1 = serial)."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--parallel must be an integer, got {raw!r}"
+        ) from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"--parallel must be ≥ 1 (1 = serial), got {value}"
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for the ``ralph-afk`` console script."""
     parser = argparse.ArgumentParser(
@@ -165,6 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  ISSUE_SOURCE                'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
             "  MAX_NMT_STRIKES             Strike threshold (default: 3).\n"
+            "  COPILOOP_MAX_PARALLEL       Parallel-mode Lane cap "
+            "(default: serial; --parallel wins).\n"
             "  RALPH_DENY_TOOLS            Comma-separated tool denylist.\n"
             "  RALPH_DENY_SKILLS           Comma-separated skill denylist.\n"
             "  RALPH_PRICING_FILE          Explicit pricing.toml path.\n"
@@ -193,6 +215,21 @@ def build_parser() -> argparse.ArgumentParser:
             "Cap the number of iterations (0 or omitted = unlimited; "
             "default: 0). Mirrors the positional arg accepted by "
             "ralph/afk.sh."
+        ),
+    )
+    parser.add_argument(
+        "--parallel",
+        dest="parallel",
+        nargs="?",
+        type=_parse_parallel,
+        const=_DEFAULT_MAX_PARALLEL,
+        default=None,
+        metavar="N",
+        help=(
+            "Opt into Parallel mode (ADR-0008): work up to N parallel-safe "
+            "issues concurrently, each in its own git worktree + branch. "
+            "Bare --parallel uses N=%d. Omitted = serial. Overrides "
+            "COPILOOP_MAX_PARALLEL." % _DEFAULT_MAX_PARALLEL
         ),
     )
     parser.add_argument(
@@ -323,6 +360,35 @@ def _resolve_max_nmt_strikes() -> int:
         raise SystemExit(
             f"ralph-afk: error: MAX_NMT_STRIKES must be ≥ 1, got {value}"
         )
+    return value
+
+
+def _resolve_parallel(args: argparse.Namespace) -> int:
+    """Resolve the Parallel-mode Lane cap: ``--parallel`` > ``COPILOOP_MAX_PARALLEL`` > 1.
+
+    Precedence (matching the kit's flag-over-env convention):
+
+    1. ``--parallel N`` on the CLI (``args.parallel`` — already validated ≥ 1 by
+       :func:`_parse_parallel`; a bare ``--parallel`` arrives as
+       :data:`_DEFAULT_MAX_PARALLEL` via the flag's ``const``).
+    2. ``COPILOOP_MAX_PARALLEL`` env var when the flag is absent.
+    3. Built-in default ``1`` (serial).
+
+    Unlike ``MAX_NMT_STRIKES``, a malformed or sub-1 ``COPILOOP_MAX_PARALLEL``
+    **degrades to serial** rather than aborting the run — an unattended run should
+    never fail to launch over a stray env value; it just runs one issue at a time.
+    """
+    if args.parallel is not None:
+        return int(args.parallel)
+    raw = os.environ.get("COPILOOP_MAX_PARALLEL")
+    if raw is None or not raw.strip():
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    if value < 1:
+        return 1
     return value
 
 
@@ -526,6 +592,7 @@ def _build_config(args: argparse.Namespace) -> RunConfig:
         render_reasoning=bool(args.render_reasoning),
         otel_enabled=_otel_enabled(),
         pricing_file=_resolve_pricing_file(),
+        parallel=_resolve_parallel(args),
     )
 
 

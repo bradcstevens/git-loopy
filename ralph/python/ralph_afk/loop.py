@@ -109,6 +109,7 @@ import logging
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Iterable, Protocol
 
@@ -374,6 +375,25 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     if not parts:
         return "No commits found"
     return "\n".join(parts)
+
+
+def _lane_worktree_path(
+    repo_root: Path, run_id: str, issue_number: int | str
+) -> Path:
+    """Compute a Lane's worktree path (ADR-0008: sibling, outside the repo).
+
+    Lanes live in ``<repo_root>.worktrees/<run_id>/issue-<N>`` — a sibling
+    directory of the repository, grouped by run so a run's worktrees are easy
+    to find and reap, and one directory per issue so concurrent Lanes never
+    share a tree. Kept *outside* the repo so a Lane's worktree is never itself
+    picked up as untracked content by the main worktree's git status.
+    """
+    return (
+        repo_root.parent
+        / f"{repo_root.name}.worktrees"
+        / run_id
+        / f"issue-{issue_number}"
+    )
 
 
 class _Loop:
@@ -991,6 +1011,496 @@ class _Loop:
         return exit_code
 
 
+@dataclass
+class _Lane:
+    """One Parallel-mode Lane: an issue pinned to its own worktree + branch.
+
+    Bundles the per-Lane state the Wave orchestrator threads from worktree
+    creation, through the concurrent session, to post-barrier accounting: the
+    :class:`~ralph_afk.sources.AfkReadyItem` it works, the branch cut for it,
+    the worktree path, the root-bound child :class:`~ralph_afk.git.GitClient`
+    addressing that worktree, and the pre-session head SHA captured at creation
+    for per-Lane commit accounting.
+    """
+
+    item: AfkReadyItem
+    branch: str
+    path: Path
+    git: git_module.GitClient
+    pre_sha: str | None = None
+
+
+class _ParallelLoop:
+    """Opt-in Parallel-mode Wave/Lane orchestrator (#61, ADR-0008).
+
+    The concurrent-execution core: each *round* is either a **Wave** — up to
+    ``config.parallel`` **Lanes**, each an agent working one ``parallel-safe``
+    issue in its own git worktree + branch, run concurrently on one long-lived
+    client via :func:`asyncio.gather` and pinned to its worktree via the SDK's
+    per-session ``working_directory`` — or, when fewer than two eligible issues
+    are available, a single serial **Iteration** fallback (the proven path), so
+    opting into Parallel mode never strands eligible work.
+
+    Eligibility is a **human assertion**, never inferred: only pool items
+    carrying ``parallel-safe`` (alongside ``ready-for-agent``) may become a
+    Lane. Commit accounting is per-Lane (each branch's own pre/post SHA) and a
+    per-worktree Checkpoint (ADR-0004) runs on each Lane branch; at the Wave
+    barrier the worktrees are torn down (branches kept as breadcrumbs).
+
+    **Scope of this slice.** Dispatch + isolated concurrent execution up to,
+    but *not* including, landing branches on base — that is Integration
+    (#62/#63). A Wave here therefore makes no base-branch merges or closures;
+    the injected :class:`~ralph_afk.gate.GateRunner` seam is stored for those
+    slices but unused here.
+
+    Composes a serial :class:`_Loop` (``self._serial``) both for the serial
+    fallback rounds and to share ONE Strike machine, event emitter, summary,
+    and Checkpoint policy — so a Wave round and a serial round tick the same
+    Strike machine and write one consistent event / counter stream. The serial
+    path is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
+    ``config.parallel > 1``.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: RunConfig,
+        git: git_module.GitClient,
+        prompt_text: str,
+        pricing: Pricing,
+        writers: WritersBundle,
+        sinks: SinkFanout,
+        summary: RunSummary,
+        client: CopilotClient,
+        source: IssueSource,
+        diag: logging.Logger,
+        gate_runner: gate_module.GateRunner,
+        include_prs: bool = False,
+    ) -> None:
+        self._config = config
+        self._git = git
+        self._prompt_text = prompt_text
+        self._writers = writers
+        self._sinks = sinks
+        self._summary = summary
+        self._client = client
+        self._source = source
+        self._diag = diag
+        # Injected runner-side Integration gate (#60, ADR-0009). Held for the
+        # Integration slices (#62/#63) that land green Lanes on base and re-run
+        # the feedback loops as the load-bearing gate; this slice dispatches
+        # Lanes but does NOT integrate, so the gate is deliberately unused here.
+        self._gate_runner = gate_runner
+        self._run_id = writers.run_id
+        self._repo_root = git.root
+        # Issues already dispatched to a Lane this run. A Lane branch name is
+        # derived from the issue number, so re-dispatching the same issue would
+        # collide on ``git worktree add -b``; tracking worked refs keeps a Wave
+        # idempotent across rounds — a still-open issue falls through to a
+        # serial Iteration, never a second Lane.
+        self._worked: set[int | str] = set()
+        # Compose a serial ``_Loop`` for fallback rounds AND to share its Strike
+        # machine / event emitter / summary counters / Checkpoint policy, so a
+        # Wave round and a serial fallback round tick ONE Strike machine and
+        # write ONE consistent event + counter stream.
+        self._serial = _Loop(
+            config=config,
+            git=git,
+            prompt_text=prompt_text,
+            pricing=pricing,
+            writers=writers,
+            sinks=sinks,
+            summary=summary,
+            client=client,
+            source=source,
+            diag=diag,
+            include_prs=include_prs,
+        )
+
+    async def drive(self) -> int:
+        """Drive the Parallel-mode round loop to its terminal outcome.
+
+        Mirrors :meth:`_Loop.drive` — same preflight, ``wrapper.run.start`` /
+        ``wrapper.run.end`` envelope, ``max_iterations`` cap, and exit-code
+        contract — but each round is either a **Wave** (>= 2 eligible
+        ``parallel-safe`` issues) or a single serial **Iteration** fallback. The
+        shared Strike machine ticks exactly once per round.
+        """
+        rc = self._source.preflight()
+        if rc is not None:
+            return rc
+
+        self._serial._emit(
+            events_module.WRAPPER_RUN_START,
+            iter_num=None,
+            issue_source=self._config.issue_source,
+            max_iterations=self._config.max_iterations,
+            max_nmt_strikes=self._config.max_nmt_strikes,
+        )
+
+        exit_code = 0
+        outcome_label = "iteration_cap"
+        iter_num = 0
+        try:
+            try:
+                while True:
+                    iter_num += 1
+                    if (
+                        self._config.max_iterations != 0
+                        and iter_num > self._config.max_iterations
+                    ):
+                        outcome_label = "iteration_cap"
+                        break
+
+                    outcome, _commits, _closures = await self._run_one_round(
+                        iter_num
+                    )
+                    if outcome == "empty_pool":
+                        outcome_label = "empty_pool"
+                        exit_code = 0
+                        break
+                    if outcome == "aborted":
+                        outcome_label = "stuck"
+                        exit_code = 1
+                        break
+            except Exception as exc:
+                outcome_label = "crashed"
+                exit_code = 1
+                self._diag.error(
+                    "ralph_afk parallel round %d crashed: %s: %s",
+                    iter_num, type(exc).__name__, exc,
+                )
+                raise
+        finally:
+            try:
+                self._serial._emit(
+                    events_module.WRAPPER_RUN_END,
+                    iter_num=None,
+                    outcome=outcome_label,
+                    iterations_run=(
+                        iter_num
+                        if outcome_label != "iteration_cap"
+                        else iter_num - 1
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                self._diag.warning("wrapper.run.end emit failed: %s", exc)
+        return exit_code
+
+    async def _run_one_round(self, iter_num: int) -> tuple[str, int, int]:
+        """Run one round: a Wave when eligible, else a serial Iteration.
+
+        Peeks the AFK-ready pool and counts eligible ``parallel-safe`` issues
+        (int-ref, carrying the label, not already worked this run). Two or more
+        dispatches a Wave; otherwise the round is a single serial Iteration —
+        the proven path that also handles the empty pool, a lone issue, and any
+        plain ``ready-for-agent`` work — so Parallel mode drains everything.
+        """
+        pool = self._collect_pool_safely()
+        eligible = [
+            item
+            for item in pool
+            if isinstance(item.ref, int)
+            and "parallel-safe" in item.labels
+            and item.ref not in self._worked
+        ]
+        if len(eligible) >= 2:
+            return await self._run_one_wave(iter_num, eligible)
+        # < 2 fresh eligible parallel-safe issues: a normal serial Iteration.
+        # It re-collects the pool itself (authoritative) and owns the
+        # empty-pool / single-issue exit semantics.
+        return await self._serial._run_one_iteration(iter_num)
+
+    def _collect_pool_safely(self) -> list[AfkReadyItem]:
+        """Peek the AFK-ready pool for the Wave-vs-serial decision.
+
+        A source failure degrades to an empty pool (the serial fallback then
+        re-collects and owns the real error path), so a transient collection
+        error never crashes the round loop.
+        """
+        try:
+            return list(self._source.collect_afk_ready())
+        except Exception as exc:
+            self._diag.warning(
+                "parallel pool peek failed: %s: %s; treating as empty",
+                type(exc).__name__, exc,
+            )
+            return []
+
+    async def _run_one_wave(
+        self, iter_num: int, eligible: list[AfkReadyItem]
+    ) -> tuple[str, int, int]:
+        """Dispatch a Wave of up to N concurrent, isolated Lanes.
+
+        Creates a worktree + branch per Lane (cut from base, in a sibling
+        directory outside the repo), runs N :class:`IterationSession`s
+        concurrently on one client via :func:`asyncio.gather` — each pinned to
+        its Lane's worktree via ``working_directory`` — then, at the Wave
+        barrier, does per-Lane commit accounting + a per-worktree Checkpoint and
+        tears the worktrees down (keeping branches as breadcrumbs). Landing
+        green Lanes on base and closing their issues is Integration (#62/#63),
+        NOT this slice, so a Wave here makes no base-branch closures.
+        """
+        self._serial._emit(
+            events_module.WRAPPER_ITERATION_START, iter_num=iter_num
+        )
+        lane_items = eligible[: self._config.parallel]
+        self._serial._emit(
+            events_module.WRAPPER_AFK_READY_COLLECTED,
+            iter_num=iter_num,
+            issues=[item.ref for item in lane_items],
+        )
+
+        base = self._resolve_base_ref()
+        try:
+            recent = self._git.recent_commits(5)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "recent_commits failed: %s; using empty prefix", exc
+            )
+            recent = []
+        commits_block = _format_recent_commits(recent)
+
+        # 1) Create each Lane's worktree + branch (before the barrier). A failed
+        #    add (e.g. a leftover branch) drops just that Lane and leaves its
+        #    issue un-worked so it can fall through to a later round.
+        lanes: list[_Lane] = []
+        for item in lane_items:
+            ref = item.ref
+            if not isinstance(ref, int):
+                # Eligibility (see `_run_one_round`) already guarantees an
+                # int issue number; this narrows the type for the branch-name
+                # helper and defends against a future non-int ref slipping in.
+                continue
+            branch = git_module.lane_branch_name(self._run_id, ref)
+            path = _lane_worktree_path(self._repo_root, self._run_id, ref)
+            try:
+                wt_git = self._git.add_worktree(path, branch=branch, base=base)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "worktree add for issue #%s failed: %s; skipping lane",
+                    ref, exc,
+                )
+                continue
+            lane = _Lane(item=item, branch=branch, path=path, git=wt_git)
+            try:
+                lane.pre_sha = wt_git.head_sha()
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "lane #%s pre head_sha failed: %s", ref, exc
+                )
+            lanes.append(lane)
+            self._worked.add(ref)
+
+        # 2) Dispatch the Lanes concurrently, joined at the Wave barrier. One
+        #    long-lived client hosts N sessions, each pinned to its worktree.
+        if lanes:
+            await asyncio.gather(
+                *(
+                    self._run_lane_session(iter_num, lane, commits_block)
+                    for lane in lanes
+                )
+            )
+
+        # 3) Per-Lane accounting + per-worktree Checkpoint (sequential and
+        #    deterministic), then tear the worktree down. Run after the barrier
+        #    so the concurrent phase is pure session work.
+        total_commits = 0
+        for lane in lanes:
+            total_commits += self._account_lane(iter_num, lane)
+            try:
+                self._git.remove_worktree(lane.path, force=True)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "worktree remove for %s failed: %s", lane.path, exc
+                )
+
+        # 4) Strike tick — once per round. Integration (#62) will make a
+        #    successful land the progress signal; for this slice the Lanes' own
+        #    new commits are the round's observable progress.
+        auto_closures = 0
+        outcome = self._tick_round(
+            iter_num, commits=total_commits, closures=auto_closures
+        )
+
+        self._serial._emit(
+            events_module.WRAPPER_ITERATION_END, iter_num=iter_num
+        )
+        self._serial._record_counters(iter_num)
+
+        if outcome == "aborted":
+            return ("aborted", total_commits, auto_closures)
+        return ("continue", total_commits, auto_closures)
+
+    async def _run_lane_session(
+        self, iter_num: int, lane: _Lane, commits_block: str
+    ) -> None:
+        """Run one Lane's SDK session, pinned to its worktree.
+
+        The only concurrent phase of a Wave. Bulletproof by construction — a
+        timeout, a send failure, or a session-lifecycle error is logged and
+        swallowed so one Lane can never abort the :func:`asyncio.gather` join or
+        the barrier teardown; the post-barrier accounting then records that Lane
+        as no-progress.
+        """
+        prompt = (
+            f"Previous commits: {commits_block} "
+            f"Issues: {lane.item.rendered_block} {self._prompt_text}"
+        )
+        send_timeout = _send_timeout_seconds()
+        try:
+            async with IterationSession(
+                self._client,
+                config=self._config,
+                event_log=self._writers.event_log,
+                sinks=self._sinks,
+                run_id=self._run_id,
+                iter_num=iter_num,
+                model=self._config.model,
+                reasoning_effort=self._config.reasoning_effort,
+                working_directory=str(lane.git.root),
+            ) as sdk_session:
+                try:
+                    await sdk_session.send_and_wait(
+                        prompt, timeout=send_timeout
+                    )
+                except asyncio.TimeoutError:
+                    self._diag.warning(
+                        "lane #%s send_and_wait timed out after %ss; "
+                        "treating as no-progress",
+                        lane.item.ref, send_timeout,
+                    )
+                except Exception as exc:
+                    self._diag.warning(
+                        "lane #%s send_and_wait raised %s: %s; "
+                        "treating as no-progress",
+                        lane.item.ref, type(exc).__name__, exc,
+                    )
+        except Exception as exc:
+            self._diag.error(
+                "lane #%s IterationSession lifecycle failed: %s: %s",
+                lane.item.ref, type(exc).__name__, exc,
+            )
+
+    def _account_lane(self, iter_num: int, lane: _Lane) -> int:
+        """Post-barrier per-Lane commit accounting + per-worktree Checkpoint.
+
+        Reads the Lane branch's post-session head, emits one
+        ``wrapper.commit.recorded`` per new commit (each Lane's Consumption
+        attributed to its own issue), then captures any dirty / untracked work
+        in a per-worktree Checkpoint on the Lane branch (ADR-0004) so no agent
+        work is lost before teardown. Returns the Lane's new-commit count for
+        the round's Strike accounting.
+        """
+        wt_git = lane.git
+        if lane.pre_sha is None:
+            new_commits: list[git_module.Commit] = []
+        else:
+            try:
+                head = wt_git.head_sha()
+                new_commits = wt_git.commits_between(lane.pre_sha, head)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "lane #%s commit accounting failed: %s",
+                    lane.item.ref, exc,
+                )
+                new_commits = []
+
+        for c in new_commits:
+            self._serial._emit(
+                events_module.WRAPPER_COMMIT_RECORDED,
+                iter_num=iter_num,
+                sha=c.sha,
+                subject=c.subject,
+                date=c.date,
+            )
+
+        self._maybe_checkpoint_lane(iter_num, lane)
+        return len(new_commits)
+
+    def _maybe_checkpoint_lane(
+        self, iter_num: int, lane: _Lane
+    ) -> str | None:
+        """Per-worktree Checkpoint on a Lane branch (ADR-0004, per-Lane).
+
+        Mirrors :meth:`_Loop._maybe_checkpoint` but scoped to the Lane's own
+        worktree and attributed to the Lane's issue, so uncommitted agent work
+        in a Lane is captured on that Lane's branch before the barrier tears the
+        worktree down. Non-fatal — a git error warns and returns ``None``.
+        """
+        wt_git = lane.git
+        try:
+            dirty = wt_git.is_dirty()
+            untracked = wt_git.has_untracked()
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s checkpoint dirty-check failed: %s; skipping",
+                lane.item.ref, exc,
+            )
+            return None
+        if not (dirty or untracked):
+            return None
+        try:
+            wt_git.add_all()
+            sha = wt_git.commit(checkpoint_message(lane.item.ref))
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s checkpoint commit failed: %s; continuing without it",
+                lane.item.ref, exc,
+            )
+            return None
+        self._serial._emit(
+            events_module.WRAPPER_CHECKPOINT_RECORDED,
+            iter_num=iter_num,
+            sha=sha,
+            issue=lane.item.ref,
+        )
+        return sha
+
+    def _tick_round(
+        self, iter_num: int, *, commits: int, closures: int
+    ) -> str:
+        """Tick the shared Strike machine once for a round + emit its event.
+
+        A single tick per round (a Wave or a serial Iteration), mirroring the
+        serial loop's step-10 semantics: progress (a Lane commit or a closure)
+        resets strikes, a no-progress round adds one, and the threshold aborts
+        the run.
+        """
+        outcome = self._serial._strike_machine.tick(
+            commits_in_iter=commits,
+            auto_closures_in_iter=closures,
+        )
+        if outcome == "aborted" or (commits == 0 and closures == 0):
+            self._serial._emit(
+                events_module.WRAPPER_STRIKE,
+                iter_num=iter_num,
+                strikes=self._serial._strike_machine.strikes,
+                max_strikes=self._config.max_nmt_strikes,
+                outcome=("abort" if outcome == "aborted" else "warn"),
+            )
+        return outcome
+
+    def _resolve_base_ref(self) -> str:
+        """The base ref new Lane branches are cut from.
+
+        The current branch name when on one (the natural base per ADR-0008),
+        else the current commit SHA (detached HEAD), else the literal ``HEAD``
+        — so ``git worktree add -b <lane> <path> <base>`` always has a valid
+        start point.
+        """
+        try:
+            branch = self._git.current_branch()
+        except git_module.GitError:
+            branch = None
+        if branch:
+            return branch
+        try:
+            return self._git.head_sha()
+        except git_module.GitError:
+            return "HEAD"
+
+
 class InteractiveDriver(Protocol):
     """Strategy that runs the loop as an *observed peer* of a Textual app.
 
@@ -1183,19 +1693,40 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             pass
         return 1
 
-    loop = _Loop(
-        config=config,
-        git=git,
-        prompt_text=prompt_text,
-        pricing=pricing,
-        writers=writers,
-        sinks=sinks,
-        summary=summary,
-        client=client,
-        source=source,
-        diag=diag,
-        include_prs=include_prs,
-    )
+    # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
+    # Wave/Lane orchestrator with the injected runner-side Integration gate
+    # (#60); serial (the default, parallel == 1) drives the existing loop
+    # byte-for-byte unchanged. Both expose the same ``drive()`` contract.
+    loop: _Loop | _ParallelLoop
+    if config.parallel > 1:
+        loop = _ParallelLoop(
+            config=config,
+            git=git,
+            prompt_text=prompt_text,
+            pricing=pricing,
+            writers=writers,
+            sinks=sinks,
+            summary=summary,
+            client=client,
+            source=source,
+            diag=diag,
+            gate_runner=_make_gate_runner(),
+            include_prs=include_prs,
+        )
+    else:
+        loop = _Loop(
+            config=config,
+            git=git,
+            prompt_text=prompt_text,
+            pricing=pricing,
+            writers=writers,
+            sinks=sinks,
+            summary=summary,
+            client=client,
+            source=source,
+            diag=diag,
+            include_prs=include_prs,
+        )
 
     exit_code = 1
     try:

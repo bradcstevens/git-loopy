@@ -69,6 +69,11 @@ MAX_NMT_STRIKES=5 uv run --project ralph/python ralph-afk
 # with RALPH_DENY_TOOLS / RALPH_DENY_SKILLS env vars).
 uv run --project ralph/python ralph-afk --deny-tool bash --deny-skill caveman
 
+# Opt into Parallel mode (ADR-0008): work up to N `parallel-safe` issues
+# concurrently, each in its own git worktree + branch. Bare `--parallel`
+# uses N=3; omitted = serial (equivalently set COPILOOP_MAX_PARALLEL=3).
+uv run --project ralph/python ralph-afk --parallel 3
+
 # Use the legacy local-markdown mode (prds/<feature>/NNN-*.md).
 ISSUE_SOURCE=prds uv run --project ralph/python ralph-afk
 ```
@@ -98,6 +103,7 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 | `REASONING_EFFORT`                | `max` (kit default model only) | One of `low` / `medium` / `high` / `xhigh` / `max`. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `MODEL` → the kit default (`max`, applied only when `MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `RALPH_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
+| `COPILOOP_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
 | `RALPH_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `RALPH_DENY_SKILLS`               | _(empty)_                      | Comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags.                                                                                   |
 | `RALPH_PRICING_FILE`              | packaged `pricing.toml`        | Explicit `pricing.toml` path. A malformed file aborts the run with exit `1` (no silent fallback — operator intent is preserved).                                                                                 |
@@ -110,8 +116,8 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 CLI flags (`-v` / `-vv` / `-vvv`, `--no-reasoning`, `--deny-tool`,
 `--deny-skill`, `--interactive` / `--no-interactive`, `--select-model` /
-`--no-select-model`) are the runner's only non-positional flags. See
-`ralph-afk --help` for the full list.
+`--no-select-model`, `--parallel N`) are the runner's only non-positional
+flags. See `ralph-afk --help` for the full list.
 
 ---
 

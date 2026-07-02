@@ -145,6 +145,11 @@ class AfkReadyItem:
             SHA after the iteration; a change means the agent pushed to the
             PR branch (progress) even though nothing landed on the base
             branch locally. Empty for issues / PRDs.
+        labels: The source item's labels, lowest-cost carrier of the human
+            eligibility assertions Parallel mode (ADR-0008) reads — e.g.
+            ``parallel-safe``. Populated by the GitHub backend from the
+            issue/PR labels; empty for the PRDs backend (local markdown has
+            no labels). Eligibility is a label, never an inference.
     """
 
     ref: int | str
@@ -152,6 +157,7 @@ class AfkReadyItem:
     rendered_block: str
     kind: str = "issue"
     head_sha: str = ""
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -349,6 +355,7 @@ class GitHubIssueSource:
                     ref=full.number,
                     title=full.title,
                     rendered_block=_format_github_issue_block(full),
+                    labels=tuple(full.labels),
                 )
             )
 

@@ -252,6 +252,16 @@ class GitClient(Protocol):
     GitClient)`` works because the decorator marks it ``@runtime_checkable``.
     """
 
+    @property
+    def root(self) -> Path:
+        """The repository (or worktree) root this client is bound to.
+
+        Root-bound by construction: :meth:`add_worktree` returns a client whose
+        ``root`` is the new worktree, so a Parallel-mode Lane can pin its agent
+        session to ``str(client.root)`` via the SDK's ``working_directory``.
+        """
+        ...
+
     def head_sha(self) -> str:
         """Return the current ``HEAD`` commit SHA (full 40-char form)."""
         ...
