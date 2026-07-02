@@ -120,6 +120,7 @@ from ralph_afk import events as events_module
 from ralph_afk import gate as gate_module
 from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
+from ralph_afk import worktree as worktree_module
 from ralph_afk.config import RunConfig
 from ralph_afk.emit import EventEmitter
 from ralph_afk.persist import (
@@ -249,6 +250,29 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
     the injectable seam the parallel slices consume.
     """
     return gate_module.AgentsMdGateRunner()
+
+
+def _make_worktree_setup() -> worktree_module.WorktreeSetup:
+    """Construct the per-Lane worktree setup seam (#65, ADR-0008).
+
+    Factored to its own module-level function — mirroring :func:`_make_gate_runner`
+    — so the Wave orchestrator (#61) injects it and tests monkeypatch it
+    (``monkeypatch.setattr("ralph_afk.loop._make_worktree_setup", ...)``) to a
+    scripted fake. Production callers get a
+    :class:`~ralph_afk.worktree.CommandWorktreeSetup` bound to the
+    ``COPILOOP_WORKTREE_SETUP`` command when one is set (env-only, like
+    :func:`_send_timeout_seconds`'s ``RALPH_SEND_TIMEOUT_SECONDS``); when it is
+    unset or blank the adapter falls back to
+    :func:`~ralph_afk.worktree.detect_setup_command`'s best-effort auto-detect.
+
+    **Unused by the serial path.** Per-worktree setup only exists in Parallel mode
+    (each **Lane** gets a fresh worktree that needs its environment prepared); the
+    serial loop works in place on the repo worktree, so :func:`run` only wires this
+    into the ``_ParallelLoop``.
+    """
+    raw = os.environ.get("COPILOOP_WORKTREE_SETUP")
+    command = raw.strip() if raw else None
+    return worktree_module.CommandWorktreeSetup(command=command or None)
 
 
 def _make_issue_source(
@@ -1129,6 +1153,7 @@ class _ParallelLoop:
         source: IssueSource,
         diag: logging.Logger,
         gate_runner: gate_module.GateRunner,
+        worktree_setup: worktree_module.WorktreeSetup,
         include_prs: bool = False,
     ) -> None:
         self._config = config
@@ -1145,6 +1170,11 @@ class _ParallelLoop:
         # landing a Lane branch on base. Consumed by `_integrate_wave` (#62);
         # the conflict / red-gate recovery paths are the next slice (#63).
         self._gate_runner = gate_runner
+        # Injected per-Lane worktree setup (#65, ADR-0008): after a Lane's
+        # worktree is created and before its agent session starts, prepare its
+        # environment (the configured ``COPILOOP_WORKTREE_SETUP`` command, or a
+        # best-effort auto-detected install) so the feedback loops can run there.
+        self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
         # Issues already dispatched to a Lane this run. A Lane branch name is
@@ -1345,6 +1375,10 @@ class _ParallelLoop:
                 )
             lanes.append(lane)
             self._worked.add(ref)
+            # Prepare the freshly created worktree before its agent session
+            # starts (#65): run COPILOOP_WORKTREE_SETUP, or a best-effort
+            # auto-detected install, so the feedback loops can run in the Lane.
+            self._setup_lane_worktree(lane)
 
         # 2) Dispatch the Lanes concurrently, joined at the Wave barrier. One
         #    long-lived client hosts N sessions, each pinned to its worktree.
@@ -1394,6 +1428,42 @@ class _ParallelLoop:
         if outcome == "aborted":
             return ("aborted", total_commits, integration_successes)
         return ("continue", total_commits, integration_successes)
+
+    def _setup_lane_worktree(self, lane: _Lane) -> None:
+        """Prepare a Lane's freshly created worktree before its session (#65).
+
+        Runs the injected :class:`~ralph_afk.worktree.WorktreeSetup` — the
+        configured ``COPILOOP_WORKTREE_SETUP`` command or a best-effort
+        auto-detected install — in ``lane.path``. Called synchronously in the
+        worktree-creation phase, so setup completes for every Lane **before** the
+        concurrent session barrier. A setup **failure is surfaced** (a warning,
+        never silently ignored) but never aborts the Wave: a broken environment
+        still lets the agent try (its own feedback loops then fail visibly), and
+        one Lane's setup can never take down the barrier — consistent with the
+        bulletproof-Lane discipline of :meth:`_run_lane_session`.
+        """
+        try:
+            result = self._worktree_setup.run(lane.path)
+        except Exception as exc:  # never let setup abort the Wave
+            self._diag.warning(
+                "worktree setup for issue #%s raised %s: %s; continuing",
+                lane.item.ref, type(exc).__name__, exc,
+            )
+            return
+        if not result.ran:
+            return
+        if result.passed:
+            self._diag.info(
+                "worktree setup for issue #%s ran %r",
+                lane.item.ref, result.command,
+            )
+            return
+        self._diag.warning(
+            "worktree setup for issue #%s FAILED (exit %s): %r; continuing "
+            "(agent will still run). Output tail: %s",
+            lane.item.ref, result.returncode, result.command,
+            result.output_tail,
+        )
 
     async def _run_lane_session(
         self, iter_num: int, lane: _Lane, commits_block: str
@@ -2105,6 +2175,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             source=source,
             diag=diag,
             gate_runner=_make_gate_runner(),
+            worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
         )
     else:

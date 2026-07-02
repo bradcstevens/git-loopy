@@ -22,6 +22,13 @@ a breadcrumb (revert + auto-resolution is #63).
 ``ready-for-agent`` issue, in one run, draining all eligible work with the
 Strike machine ticking once per round (a Wave or a serial Iteration): see
 :func:`test_parallel_run_drains_waves_then_serial_in_one_run`.
+
+**Per-Lane worktree setup (#65, ADR-0008).** Before a Lane's session starts the
+runner prepares its worktree via the injected
+:class:`~ralph_afk.worktree.WorktreeSetup` (``COPILOOP_WORKTREE_SETUP`` or a
+best-effort auto-detect); the setup runs once per Lane creation, before the
+concurrent barrier, and a failure is surfaced (in the diagnostics log) rather
+than aborting the Wave: see the ``test_parallel_wave_*worktree_setup*`` tests.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from ralph_afk import gh as gh_module
 from ralph_afk import git as git_module
 from ralph_afk import loop as loop_module
 from ralph_afk.config import RunConfig
+from ralph_afk.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
 
@@ -937,3 +945,172 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
         e["issue"] for e in events if e["type"] == "wrapper.auto_close"
     ]
     assert auto_closes == [42, 43, 44]
+
+
+# ---------------------------------------------------------------------------
+# Per-Lane worktree setup (#65, ADR-0008)
+# ---------------------------------------------------------------------------
+
+
+class _SpyWorktreeSetup:
+    """A scripted :class:`~ralph_afk.worktree.WorktreeSetup` for the Wave e2e.
+
+    Records each ``run(worktree)`` call together with how many sessions the fake
+    client had created *at that moment* — the observable proof that setup runs
+    **before** any Lane session starts: sessions are created in the concurrent
+    phase (``_run_lane_session``), so a ``0`` snapshot at every setup call means
+    every worktree was prepared before the barrier. Returns a scripted
+    :class:`~ralph_afk.worktree.SetupResult` so a test can drive the green path
+    or a surfaced-failure path without touching a real subprocess.
+    """
+
+    def __init__(
+        self, client: _ParallelFakeClient, *, result: SetupResult | None = None
+    ) -> None:
+        self._client = client
+        self._result = result or SetupResult(command="echo prepared")
+        self.calls: list[tuple[Path, int]] = []
+
+    def run(self, worktree: Path) -> SetupResult:
+        self.calls.append((Path(worktree), len(self._client.created)))
+        return self._result
+
+
+def _diag_log(tmp_path: Path) -> str:
+    """The run's human-readable diagnostics log (``.ralph/logs/<...>.log``)."""
+    logs_dir = tmp_path / ".ralph" / "logs"
+    return next(logs_dir.glob("*.log")).read_text(encoding="utf-8")
+
+
+def _wire_two_lane_wave(
+    tmp_path: Path, monkeypatch
+) -> tuple[FakeGitClient, FakeGitHubClient, _ParallelFakeClient, RunConfig]:
+    """Wire a green two-Lane Wave (issues 42/43, ``parallel-safe``) via ``run``.
+
+    Returns the fakes so a test can assert on them and inject its own
+    ``_make_worktree_setup`` seam (else the real factory's auto-detect no-op runs
+    against the fake's on-disk-absent worktrees).
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    return fake_git, fake_gh, fake_client, cfg
+
+
+def test_parallel_wave_runs_worktree_setup_per_lane_before_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Each Lane worktree is prepared once, before that Lane's session starts.
+
+    Acceptance (#65): ``COPILOOP_WORKTREE_SETUP`` runs in each newly created Lane
+    worktree before its agent session. The spy records the session count at each
+    ``run`` call; a ``0`` snapshot every time proves setup precedes the concurrent
+    session barrier, and the recorded worktrees equal exactly the created Lane
+    worktrees (one setup per Lane creation) — observable effects, not call order.
+    """
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_wave(
+        tmp_path, monkeypatch
+    )
+    spy = _SpyWorktreeSetup(fake_client)
+    monkeypatch.setattr(loop_module, "_make_worktree_setup", lambda: spy)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # Setup ran exactly once per Lane worktree (once per Lane creation)...
+    add_paths = {p for (p, _b, _base) in fake_git.worktree_adds}
+    assert len(add_paths) == 2
+    setup_paths = [wt for (wt, _n) in spy.calls]
+    assert sorted(setup_paths) == sorted(add_paths)
+
+    # ...and every setup ran BEFORE any Lane session was created (0 sessions
+    # existed at each setup call; sessions are created in the concurrent phase).
+    assert [n for (_wt, n) in spy.calls] == [0, 0]
+    assert len(fake_client.created) == 2, "both Lane sessions still dispatched"
+
+
+def test_parallel_wave_surfaces_worktree_setup_failure_and_continues(
+    tmp_path, monkeypatch
+) -> None:
+    """A failed setup is surfaced (not swallowed) and never aborts the Wave.
+
+    Acceptance (#65): a setup failure is surfaced rather than silently ignored.
+    The spy returns a red :class:`SetupResult`; the failure is written to the
+    run's diagnostics log for each Lane, yet both Lanes are still dispatched (a
+    broken environment does not take down the barrier).
+    """
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_wave(tmp_path, monkeypatch)
+    failing = _SpyWorktreeSetup(
+        fake_client,
+        result=SetupResult(command="./setup.sh", returncode=3, output_tail="boom"),
+    )
+    monkeypatch.setattr(loop_module, "_make_worktree_setup", lambda: failing)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # The failure is surfaced in the diagnostics log for BOTH Lanes...
+    diag = _diag_log(tmp_path)
+    assert "worktree setup for issue #42 FAILED" in diag
+    assert "worktree setup for issue #43 FAILED" in diag
+    assert "./setup.sh" in diag and "boom" in diag
+
+    # ...but the Wave still ran both Lanes (setup failure is non-fatal).
+    assert len(failing.calls) == 2
+    assert len(fake_client.created) == 2
+    assert len(fake_git.worktree_adds) == 2
+
+
+def test_make_worktree_setup_binds_env_command(tmp_path, monkeypatch) -> None:
+    """The ``_make_worktree_setup`` factory binds ``COPILOOP_WORKTREE_SETUP``.
+
+    Proves the env-only knob (like ``RALPH_SEND_TIMEOUT_SECONDS``) reaches the
+    adapter: the configured command runs in the target worktree.
+    """
+    monkeypatch.setenv("COPILOOP_WORKTREE_SETUP", "  touch fromenv.marker  ")
+    setup = loop_module._make_worktree_setup()
+    result = setup.run(tmp_path)
+
+    assert (tmp_path / "fromenv.marker").exists()
+    assert result.command == "touch fromenv.marker"
+    assert result.passed is True
+
+
+def test_make_worktree_setup_blank_env_treated_as_unset(tmp_path, monkeypatch) -> None:
+    """A blank ``COPILOOP_WORKTREE_SETUP`` falls back to auto-detect, not a stub.
+
+    On an empty worktree the auto-detect finds nothing, so a blank env yields a
+    passing no-op (``command is None``) — had the factory not treated blank as
+    unset, a whitespace command would have been run and ``command`` set instead.
+    """
+    monkeypatch.setenv("COPILOOP_WORKTREE_SETUP", "   ")
+    setup = loop_module._make_worktree_setup()
+
+    assert setup.run(tmp_path).command is None
