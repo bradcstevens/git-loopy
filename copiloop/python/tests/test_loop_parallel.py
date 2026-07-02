@@ -368,6 +368,80 @@ def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
     assert sorted(fake_git.branch_deletes) == sorted(branches)
 
 
+def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> None:
+    """Each Lane's streamed events carry the deterministic ``lane_issue`` (#66).
+
+    The multi-active Dashboard (ADR-0008) folds each Lane's output by an
+    explicit runner stamp rather than the ``<working issue=N>`` marker: the Lane
+    session stamps its recorded events (here the per-turn ``usage.tokens``), and
+    the runner stamps the per-Lane ``commit.recorded`` / ``auto_close`` emits.
+    This pins that end-to-end — every per-Lane event names its issue, and the
+    Wave-scope envelopes (run / iteration boundaries) stay unstamped so the
+    serial dispatch is untouched.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    events = _logged_events(tmp_path)
+
+    # Each Lane's per-turn usage is session-stamped with its own issue (proving
+    # the Lane session was created with ``issue_ref``).
+    usage_events = [e for e in events if e["type"] == "usage.tokens"]
+    assert usage_events, "expected per-Lane usage events"
+    assert {e["lane_issue"] for e in usage_events} == {42, 43}
+
+    # Each per-Lane commit is runner-stamped with its Lane's issue.
+    commit_events = [e for e in events if e["type"] == "wrapper.commit.recorded"]
+    assert {e["lane_issue"] for e in commit_events} == {42, 43}
+
+    # Each landed closure is stamped, and the stamp matches the closed issue.
+    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    assert auto_closes, "expected per-Lane closures"
+    for e in auto_closes:
+        assert e["lane_issue"] == e["issue"]
+
+    # Wave-scope envelopes stay unstamped — the serial dispatch is untouched.
+    for e in events:
+        if e["type"] in (
+            "wrapper.run.start",
+            "wrapper.run.end",
+            "wrapper.iteration.start",
+            "wrapper.iteration.end",
+        ):
+            assert "lane_issue" not in e
+
+
 def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
     tmp_path, monkeypatch
 ) -> None:

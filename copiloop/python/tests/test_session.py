@@ -638,6 +638,155 @@ async def test_iteration_session_omits_working_directory_by_default(
     assert fake_client.create_calls[0]["working_directory"] is None
 
 
+def test_lane_session_stamps_events_with_lane_issue(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    """A Lane session stamps ``lane_issue`` on every event (#66, ADR-0008).
+
+    In Parallel mode the runner assigns each **Lane** its issue deterministically
+    and passes it as ``issue_ref``. The session then stamps every recorded
+    envelope with ``lane_issue=<ref>`` — the deterministic Lane-to-issue
+    attribution the multi-active Dashboard folds by — and that stamp is durable
+    in the replay JSONL. Both the sink and the writer see the same stamped bytes.
+    """
+
+    class _RecordingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+
+        def render(self, event: dict[str, Any]) -> None:
+            self.events.append(event)
+
+        def stream_reasoning(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+        def stream_message(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+    sink = _RecordingSink()
+    iter_session = IterationSession(
+        fake_client,  # type: ignore[arg-type]
+        config=_StubConfig(),
+        event_log=event_log,
+        sinks=SinkFanout([sink]),
+        run_id=_FIXED_RUN_ID,
+        iter_num=3,
+        issue_ref=66,
+    )
+    envelope = events_module.make_event(
+        ASSISTANT_MESSAGE, _FIXED_RUN_ID, 3, content="lane output"
+    )
+    with event_log:
+        iter_session._record(envelope)
+
+    assert sink.events, "sink never received the recorded envelope"
+    assert sink.events[0]["lane_issue"] == 66
+    log_lines = [
+        json.loads(ln) for ln in event_log.path.read_text().strip().splitlines()
+    ]
+    assert log_lines[-1]["lane_issue"] == 66
+    # The caller's envelope is not mutated in place.
+    assert "lane_issue" not in envelope
+
+
+def test_serial_session_leaves_events_unstamped(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    """Serial path (no ``issue_ref``) stamps nothing — events are unchanged."""
+
+    class _RecordingSink:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+
+        def render(self, event: dict[str, Any]) -> None:
+            self.events.append(event)
+
+        def stream_reasoning(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+        def stream_message(self, delta: str) -> None:  # pragma: no cover
+            pass
+
+    sink = _RecordingSink()
+    iter_session = IterationSession(
+        fake_client,  # type: ignore[arg-type]
+        config=_StubConfig(),
+        event_log=event_log,
+        sinks=SinkFanout([sink]),
+        run_id=_FIXED_RUN_ID,
+        iter_num=1,
+    )
+    envelope = events_module.make_event(
+        ASSISTANT_MESSAGE, _FIXED_RUN_ID, 1, content="serial output"
+    )
+    with event_log:
+        iter_session._record(envelope)
+
+    assert sink.events, "sink never received the recorded envelope"
+    assert "lane_issue" not in sink.events[0]
+
+
+def test_lane_session_forwards_issue_on_streaming_deltas(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    """A Lane session forwards ``issue`` on every streaming delta (#66).
+
+    The reasoning/message deltas never hit JSONL, but they must reach the sinks
+    tagged with the Lane's issue so a multi-active Dashboard accumulates them in
+    the right per-issue **Log** without interleaving with sibling Lanes. Driven
+    through ``_on_sdk_event`` directly — exactly the callback the SDK invokes on
+    each delta — so no real TTY / SDK session is entered.
+    """
+    seen: list[tuple[str, str, int | str | None]] = []
+
+    class _IssueAwareSink:
+        def render(self, event: dict[str, Any]) -> None: ...
+
+        def stream_reasoning(
+            self, delta: str, issue: int | str | None = None
+        ) -> None:
+            seen.append(("reason", delta, issue))
+
+        def stream_message(
+            self, delta: str, issue: int | str | None = None
+        ) -> None:
+            seen.append(("message", delta, issue))
+
+    iter_session = IterationSession(
+        fake_client,  # type: ignore[arg-type]
+        config=_StubConfig(),
+        event_log=event_log,
+        sinks=SinkFanout([_IssueAwareSink()]),
+        run_id=_FIXED_RUN_ID,
+        iter_num=1,
+        issue_ref=66,
+    )
+    iter_session._on_sdk_event(
+        _sdk_event(
+            SessionEventType.ASSISTANT_REASONING_DELTA,
+            AssistantReasoningDeltaData(
+                delta_content="lane-thinking", reasoning_id="r1"
+            ),
+        )
+    )
+    iter_session._on_sdk_event(
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE_DELTA,
+            AssistantMessageDeltaData(
+                delta_content="lane-answer", message_id="m1"
+            ),
+        )
+    )
+
+    assert seen == [
+        ("reason", "lane-thinking", 66),
+        ("message", "lane-answer", 66),
+    ]
+
+
 async def test_iteration_session_omits_reasoning_effort_by_default(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,

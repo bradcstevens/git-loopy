@@ -116,7 +116,7 @@ Design notes
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
 from copilot.generated.rpc import (
@@ -474,6 +474,18 @@ class IterationSession:
             mode (#61, ADR-0008) pins each concurrent **Lane** to its own
             git worktree by passing that worktree's path here, so one
             client can host N isolated in-process sessions.
+        issue_ref: Optional **deterministic Lane attribution** (issue #66,
+            ADR-0008): the ``parallel-safe`` issue this session's Lane is
+            working. When set, every event this session records is stamped
+            with ``lane_issue=<ref>`` and every streaming reasoning/message
+            delta is forwarded to the sinks with ``issue=<ref>``, so a
+            multi-active sink (the live Dashboard's
+            :class:`~copiloop.interactive.state.LiveRunState`) folds this
+            Lane's output into the right per-issue **Log** and **Consumption**
+            without the ``<working issue=N>`` marker — which the runner's
+            deterministic Lane-to-issue assignment makes redundant in Parallel
+            mode. ``None`` (the serial default) stamps nothing, so the serial
+            replay log and sink stream are byte-for-byte unchanged.
     """
 
     def __init__(
@@ -488,6 +500,7 @@ class IterationSession:
         model: str | None = None,
         reasoning_effort: str | None = None,
         working_directory: str | None = None,
+        issue_ref: int | str | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -498,6 +511,7 @@ class IterationSession:
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._working_directory = working_directory
+        self._issue_ref = issue_ref
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -591,7 +605,15 @@ class IterationSession:
         callback dispatch (or, when called from the permission handler, alter
         the permission decision). ``diag=None`` keeps those failures silent,
         matching the pre-emitter inline copy.
+
+        In Parallel mode (issue #66) a Lane session (``issue_ref`` set) stamps
+        every event it records with ``lane_issue=<ref>`` — the deterministic
+        Lane-to-issue attribution the multi-active Dashboard folds by, and a
+        durable record of it in the replay JSONL. The serial path
+        (``issue_ref is None``) stamps nothing, so its events are unchanged.
         """
+        if self._issue_ref is not None and "lane_issue" not in envelope:
+            envelope = {**envelope, "lane_issue": self._issue_ref}
         self._emitter.dispatch(envelope)
 
     def _on_sdk_event(self, sdk_event: SessionEvent) -> None:
@@ -624,14 +646,14 @@ class IterationSession:
         if sdk_event.type is SessionEventType.ASSISTANT_REASONING_DELTA:
             try:
                 delta: Any = getattr(sdk_event.data, "delta_content", "") or ""
-                self._sinks.stream_reasoning(delta)
+                self._sinks.stream_reasoning(delta, issue=self._issue_ref)
             except Exception:
                 pass
             return
         if sdk_event.type is SessionEventType.ASSISTANT_MESSAGE_DELTA:
             try:
                 delta = getattr(sdk_event.data, "delta_content", "") or ""
-                self._sinks.stream_message(delta)
+                self._sinks.stream_message(delta, issue=self._issue_ref)
             except Exception:
                 pass
             return

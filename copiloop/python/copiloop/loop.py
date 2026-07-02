@@ -1501,6 +1501,7 @@ class _ParallelLoop:
                 model=self._config.model,
                 reasoning_effort=self._config.reasoning_effort,
                 working_directory=str(lane.git.root),
+                issue_ref=lane.item.ref,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
@@ -1555,6 +1556,7 @@ class _ParallelLoop:
                 sha=c.sha,
                 subject=c.subject,
                 date=c.date,
+                lane_issue=lane.item.ref,
             )
 
         self._maybe_checkpoint_lane(iter_num, lane)
@@ -1596,6 +1598,7 @@ class _ParallelLoop:
             iter_num=iter_num,
             sha=sha,
             issue=lane.item.ref,
+            lane_issue=lane.item.ref,
         )
         return sha
 
@@ -1756,6 +1759,7 @@ class _ParallelLoop:
                 issue=completion.ref,
                 sha=completion.sha,
                 shas=list(completion.shas),
+                lane_issue=completion.ref,
             )
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:

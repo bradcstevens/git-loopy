@@ -31,7 +31,7 @@ import-guard convention. Enforced by
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Iterable, Protocol, cast, runtime_checkable
 
 __all__ = ["EventSink", "SinkFanout"]
 
@@ -50,6 +50,18 @@ class EventSink(Protocol):
     **not** JSONL artefacts — the replay log carries only the final, scrubbed
     ``assistant.reasoning`` / ``assistant.message`` events.
 
+    This protocol is the **serial** sink contract. Issue #66 (ADR-0008) adds an
+    optional **deterministic Lane attribution**: an *issue-aware* sink (the live
+    :class:`~copiloop.interactive.state.LiveRunState`, the line-printer
+    :class:`~copiloop.ui.renderer.Renderer`) additionally accepts a trailing
+    ``issue`` keyword on its stream hooks, so under Parallel mode the runner's
+    per-Lane issue reference folds each Lane's deltas into the right per-issue
+    **Log**. That keyword is a *superset* of this protocol — a sink with the
+    extra optional parameter still satisfies it — and :class:`SinkFanout` only
+    forwards ``issue`` when it is non-``None`` (see
+    :meth:`SinkFanout.stream_reasoning`), so a serial sink that takes only
+    ``(delta)`` keeps working untouched.
+
     A sink should swallow its own errors to keep tracebacks legible;
     :class:`SinkFanout` additionally guards each call so one broken sink can
     never starve the others or crash an SDK event callback.
@@ -60,6 +72,25 @@ class EventSink(Protocol):
     def stream_reasoning(self, delta: str) -> None: ...
 
     def stream_message(self, delta: str) -> None: ...
+
+
+class _IssueAwareSink(Protocol):
+    """The Parallel-mode superset of :class:`EventSink` (issue #66, ADR-0008).
+
+    An *issue-aware* sink additionally accepts the runner's per-Lane ``issue``
+    on its stream hooks. :class:`SinkFanout` casts to this protocol only for the
+    non-``None`` forward, keeping the deterministic-attribution keyword off the
+    serial :class:`EventSink` surface (so serial sinks and the existing test
+    fakes conform unchanged).
+    """
+
+    def stream_reasoning(
+        self, delta: str, issue: int | str | None = ...
+    ) -> None: ...
+
+    def stream_message(
+        self, delta: str, issue: int | str | None = ...
+    ) -> None: ...
 
 
 class SinkFanout:
@@ -94,16 +125,36 @@ class SinkFanout:
             except Exception:
                 pass
 
-    def stream_reasoning(self, delta: str) -> None:
+    def stream_reasoning(
+        self, delta: str, issue: int | str | None = None
+    ) -> None:
+        # ``issue`` (the deterministic Lane attribution, issue #66) is forwarded
+        # ONLY when set, so a serial sink is still called ``stream_reasoning(
+        # delta)`` — byte-for-byte compatible with the serial :class:`EventSink`
+        # contract. The issue-bearing call targets an *issue-aware* sink whose
+        # hook takes the extra keyword (a superset of the protocol); the cast
+        # keeps that structural extension off the serial protocol surface.
         for sink in self._sinks:
             try:
-                sink.stream_reasoning(delta)
+                if issue is None:
+                    sink.stream_reasoning(delta)
+                else:
+                    cast("_IssueAwareSink", sink).stream_reasoning(
+                        delta, issue=issue
+                    )
             except Exception:
                 pass
 
-    def stream_message(self, delta: str) -> None:
+    def stream_message(
+        self, delta: str, issue: int | str | None = None
+    ) -> None:
         for sink in self._sinks:
             try:
-                sink.stream_message(delta)
+                if issue is None:
+                    sink.stream_message(delta)
+                else:
+                    cast("_IssueAwareSink", sink).stream_message(
+                        delta, issue=issue
+                    )
             except Exception:
                 pass

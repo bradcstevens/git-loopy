@@ -138,7 +138,9 @@ class Renderer:
 
     # -- live streaming ----------------------------------------------------
 
-    def stream_reasoning(self, delta: str) -> None:
+    def stream_reasoning(
+        self, delta: str, issue: int | str | None = None
+    ) -> None:
         """Stream one incremental reasoning chunk to the terminal.
 
         Called directly by the session module for each
@@ -151,7 +153,10 @@ class Renderer:
         wrap instead.
 
         ``render_reasoning=False`` suppresses streamed reasoning entirely,
-        mirroring the final-event handler's opt-out.
+        mirroring the final-event handler's opt-out. ``issue`` (the Parallel-
+        mode Lane attribution, issue #66) is accepted for sink-protocol parity
+        but ignored: the line printer renders one interleaved scrollback stream,
+        so per-Lane attribution is the interactive Dashboard's concern.
         """
         if not self.render_reasoning or not delta:
             return
@@ -168,12 +173,14 @@ class Renderer:
         )
         self._stream_open = True
 
-    def stream_message(self, delta: str) -> None:
+    def stream_message(
+        self, delta: str, issue: int | str | None = None
+    ) -> None:
         """Stream one incremental assistant-message chunk to the terminal.
 
         Called directly by the session module for each
         ``assistant.message_delta`` event. See :meth:`stream_reasoning` for
-        the ``soft_wrap`` rationale.
+        the ``soft_wrap`` rationale and the ignored ``issue`` (#66) parameter.
         """
         if not delta:
             return

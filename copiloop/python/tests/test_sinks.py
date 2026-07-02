@@ -228,6 +228,69 @@ def test_streaming_hooks_dispatch_to_every_registered_sink() -> None:
     assert a.messages == b.messages == ["answer"]
 
 
+def test_streaming_forwards_lane_issue_only_when_set() -> None:
+    """The Parallel-mode Lane attribution (#66) reaches issue-aware sinks.
+
+    A multi-active sink (the live Dashboard) declares
+    ``stream_reasoning(delta, issue=None)``; the fan-out forwards the runner's
+    deterministic Lane-to-issue stamp so the sink folds the delta into the
+    right per-issue **Log**.
+    """
+    seen: list[tuple[str, str, int | str | None]] = []
+
+    class _IssueAwareSink:
+        def render(self, event: dict[str, Any]) -> None: ...
+
+        def stream_reasoning(
+            self, delta: str, issue: int | str | None = None
+        ) -> None:
+            seen.append(("reason", delta, issue))
+
+        def stream_message(
+            self, delta: str, issue: int | str | None = None
+        ) -> None:
+            seen.append(("message", delta, issue))
+
+    fanout = SinkFanout([_IssueAwareSink()])
+    fanout.stream_reasoning("r", issue=66)
+    fanout.stream_message("m", issue="prds/x/007")
+    assert seen == [
+        ("reason", "r", 66),
+        ("message", "m", "prds/x/007"),
+    ]
+
+
+def test_serial_streaming_never_passes_issue_to_legacy_sinks() -> None:
+    """Serial dispatch stays byte-for-byte ``stream_*(delta)``.
+
+    A pre-#66 sink whose stream hooks take only ``(self, delta)`` must keep
+    working on the serial path (``issue is None``): the fan-out calls it
+    positionally with no ``issue`` keyword, so no ``TypeError`` escapes and the
+    legacy signature is honoured.
+    """
+
+    class _LegacyStrictSink:
+        def __init__(self) -> None:
+            self.reasoning: list[str] = []
+            self.messages: list[str] = []
+
+        def render(self, event: dict[str, Any]) -> None: ...
+
+        # NOTE: no ``issue`` parameter — a keyword would raise TypeError.
+        def stream_reasoning(self, delta: str) -> None:
+            self.reasoning.append(delta)
+
+        def stream_message(self, delta: str) -> None:
+            self.messages.append(delta)
+
+    sink = _LegacyStrictSink()
+    fanout = SinkFanout([sink])
+    fanout.stream_reasoning("think")  # issue defaults to None
+    fanout.stream_message("answer")
+    assert sink.reasoning == ["think"]
+    assert sink.messages == ["answer"]
+
+
 def test_dispatch_preserves_sink_order() -> None:
     calls: list[str] = []
 

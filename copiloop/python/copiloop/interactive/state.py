@@ -123,6 +123,26 @@ _TOOL_CALL = "tool.call"
 #: SDK) and kept in lockstep by the parity test.
 _USAGE_TOKENS = "usage.tokens"
 
+#: Event types that, when carrying a runner-stamped ``lane_issue`` (issue #66,
+#: ADR-0008), route to the **multi-active** per-Lane handler instead of the
+#: serial single-active dispatch: the per-iteration agent output the live
+#: Dashboard folds into a Lane's own timer / Log / Consumption. An event without
+#: ``lane_issue`` (the serial path) never consults this set — dispatch is
+#: byte-for-byte unchanged. Run/iteration-boundary events are deliberately
+#: excluded: they are Wave-scoped (one per Wave), never Lane-stamped.
+_LANE_EVENTS = frozenset(
+    {
+        _TOOL_CALL,
+        _COMMIT_RECORDED,
+        _CHECKPOINT_RECORDED,
+        _AUTO_CLOSE,
+        _PR_ADVANCED,
+        _ASSISTANT_REASONING,
+        _ASSISTANT_MESSAGE,
+        _USAGE_TOKENS,
+    }
+)
+
 #: Status shown before the first ``wrapper.run.start`` is observed.
 _STATUS_STARTING = "starting"
 #: Status while the loop is driving iterations.
@@ -255,6 +275,34 @@ def _default_wall_clock() -> datetime:
     return datetime.now()
 
 
+@dataclass
+class _StreamState:
+    """Per-attribution streaming-assembly scratch for the per-issue Log.
+
+    Bundles the in-flight state of *one* streamed reasoning/message line so it
+    can be tracked independently per attribution target. Serial mode uses a
+    single instance (:attr:`LiveRunState._stream`); in **Parallel mode** (issue
+    #66, ADR-0008) each concurrent **Lane** gets its own instance keyed by issue
+    ref, so N Lanes' interleaved reasoning/message deltas each assemble into the
+    right per-issue **Log** without gluing onto one another's open line.
+
+    * ``partial_kind`` / ``partial_text`` — the open (newline-less) streamed
+      line and its kind, surfaced live by :meth:`LiveRunState.log`.
+    * ``partial_started`` — the wall clock captured when the open line *began*
+      (issue #37), reused when it commits so the live and committed stamps agree.
+    * ``streamed_reasoning`` / ``streamed_message`` — whether the current
+      reasoning / message block arrived as deltas, so the matching final event
+      finalises instead of re-adding the whole block (mirrors the line printer's
+      de-dup).
+    """
+
+    partial_kind: str | None = None
+    partial_text: str = ""
+    partial_started: datetime | None = None
+    streamed_reasoning: bool = False
+    streamed_message: bool = False
+
+
 class LiveRunState:
     """Mutable, Textual-agnostic snapshot of one run, fed via the sink fan-out.
 
@@ -327,19 +375,23 @@ class LiveRunState:
         #: iteration that never names an active issue discards it, the same
         #: orphan treatment as ``_pending``.
         self._pending_usage = UsageTally()
-        #: The in-progress (newline-less) streamed line and which stream it
-        #: belongs to, surfaced as a provisional trailing line by :meth:`log`
-        #: so output appears live (not only on newline). ``_partial_started`` is
-        #: the wall clock captured when the open line *began* (issue #37), reused
-        #: when it commits so the live and committed stamps agree.
-        self._partial_kind: str | None = None
-        self._partial_text = ""
-        self._partial_started: datetime | None = None
-        #: Whether the *current* reasoning / message block arrived as streamed
-        #: deltas, so the matching final event finalises instead of re-adding
-        #: the whole block (mirrors the line printer's de-dup).
-        self._streamed_reasoning = False
-        self._streamed_message = False
+        #: Serial streaming-assembly scratch (issue #34): the single active
+        #: attribution's in-flight streamed line + streamed-block flags. In
+        #: **Parallel mode** (issue #66) each Lane instead assembles into its own
+        #: :class:`_StreamState` in :attr:`_lane_streams`, keyed by issue ref, so
+        #: concurrent Lane deltas never interleave onto one open line.
+        self._stream = _StreamState()
+        #: Per-Lane streaming scratch (issue #66, ADR-0008): one
+        #: :class:`_StreamState` per concurrently-active Lane, keyed by issue
+        #: ref. Reset per Wave alongside :attr:`_stream` (the Logs themselves,
+        #: in :attr:`_logs`, accumulate across iterations and are *not* reset).
+        self._lane_streams: dict[int | str, _StreamState] = {}
+        #: Per-Lane commit tally for the current Wave (issue #66): a Lane's
+        #: ``commit.recorded`` count, kept apart from the serial
+        #: :attr:`_iter_commits` so a Lane's advanced/no-progress reconciliation
+        #: at Wave end uses its *own* progress, not the serial single-active
+        #: counter. Reset per Wave.
+        self._lane_commits: dict[int | str, int] = {}
 
     # -- EventSink protocol -------------------------------------------------
 
@@ -368,6 +420,14 @@ class LiveRunState:
 
         now = self._monotonic()
         etype = event.get("type")
+        # Multi-active dispatch (issue #66, ADR-0008): a runner-stamped
+        # ``lane_issue`` routes this Lane's per-iteration output to its own
+        # timer / Log / Consumption, bypassing the serial single-active
+        # inference. Absent stamp = serial path below, byte-for-byte unchanged.
+        lane_issue = event.get("lane_issue")
+        if lane_issue is not None and etype in _LANE_EVENTS:
+            self._render_lane_event(str(etype), lane_issue, event, now)
+            return
         if etype == _RUN_START:
             self._mark_started()
             self.status = _STATUS_RUNNING
@@ -420,8 +480,8 @@ class LiveRunState:
             self.status = str(outcome) if outcome is not None else "ended"
             self._mark_ended()
 
-    def stream_reasoning(self, delta: str) -> None:
-        """Fold a reasoning delta into the active issue's Log (issue #34).
+    def stream_reasoning(self, delta: str, issue: int | str | None = None) -> None:
+        """Fold a reasoning delta into the right issue's Log (issues #34/#66).
 
         Streamed deltas build the dimmed reasoning lines of the per-issue Log;
         the open (newline-less) line is surfaced live by :meth:`log` so output
@@ -429,28 +489,43 @@ class LiveRunState:
         timestamped ``✻ Thinking:`` marker (issue #37), mirroring the line
         printer's prefix. The matching final ``assistant.reasoning`` event then
         finalises the block without re-adding it (see :meth:`_finalize_reasoning`).
-        Before the working marker is known the delta lands in the pending buffer
-        (attributed on activation).
+
+        Serial path (``issue is None``): before the working marker is known the
+        delta lands in the pending buffer (attributed on activation). Parallel
+        mode (``issue`` set, issue #66): the delta is assembled into that Lane's
+        own :class:`_StreamState` and Log directly — deterministic attribution,
+        no marker inference — so concurrent Lanes never interleave.
         """
+        if issue is not None:
+            self._lane_stream_delta(issue, LOG_REASONING, delta)
+            return
         if not delta:
             return
-        if not self._streamed_reasoning:
+        if not self._stream.streamed_reasoning:
             self._flush_partial()
             self._record_reasoning_marker()
-            self._streamed_reasoning = True
+            self._stream.streamed_reasoning = True
         self._stream_into(LOG_REASONING, delta)
 
-    def stream_message(self, delta: str) -> None:
+    def stream_message(self, delta: str, issue: int | str | None = None) -> None:
         """Fold a message delta into the Log and tap the working marker.
 
-        Two jobs (issue #25 + #34): the delta builds the assistant-message
-        lines of the per-issue Log, and — because streaming can split
-        ``<working issue=N>`` across chunks — the same text is scanned over a
-        small rolling buffer to light up the active issue in the ledger (which
-        also flushes any pending pre-marker output to it).
+        Serial path (``issue is None``): two jobs (issue #25 + #34) — the delta
+        builds the assistant-message lines of the per-issue Log, and — because
+        streaming can split ``<working issue=N>`` across chunks — the same text
+        is scanned over a small rolling buffer to light up the active issue in
+        the ledger (which also flushes any pending pre-marker output to it).
+
+        Parallel mode (``issue`` set, issue #66): the delta is assembled into
+        that Lane's own Log with **no** marker scan — the runner's deterministic
+        Lane-to-issue assignment already names the attribution, so the
+        ``<working issue=N>`` marker is redundant.
         """
+        if issue is not None:
+            self._lane_stream_delta(issue, LOG_MESSAGE, delta)
+            return
         if delta:
-            self._streamed_message = True
+            self._stream.streamed_message = True
             self._stream_into(LOG_MESSAGE, delta)
         self._scan_for_marker(delta)
 
@@ -542,18 +617,26 @@ class LiveRunState:
                 if self.active_ref is not None
                 else self._pending
             )
-            include_partial = True
+            st: _StreamState | None = self._stream
         else:
             key = self._normalize_ref(ref)
             committed = self._logs.get(key) or ()
-            include_partial = key == self.active_ref
+            # A Lane (issue #66) surfaces its own open line; the serial active
+            # issue surfaces the shared serial partial; any other issue has no
+            # in-flight line of its own.
+            if key in self._lane_streams:
+                st = self._lane_streams[key]
+            elif key == self.active_ref:
+                st = self._stream
+            else:
+                st = None
         lines = list(committed)
-        if include_partial and self._partial_kind is not None and self._partial_text:
+        if st is not None and st.partial_kind is not None and st.partial_text:
             lines.append(
                 LogLine(
-                    kind=self._partial_kind,
-                    text=self._partial_text,
-                    timestamp=self._partial_started,
+                    kind=st.partial_kind,
+                    text=st.partial_text,
+                    timestamp=st.partial_started,
                 )
             )
         return tuple(lines)
@@ -622,81 +705,98 @@ class LiveRunState:
         entry.usage.merge(self._pending_usage)
         self._pending_usage = UsageTally()
 
-    def _stream_into(self, kind: str, delta: str) -> None:
-        """Append a streamed delta, committing each completed (``\\n``) line.
+    # -- streaming-assembly cores (parametrized on a stream state + a Log
+    #    buffer provider so serial and each Lane reuse one implementation) -----
 
-        A switch of stream kind (reasoning <-> message) flushes the open
+    def _flush(
+        self, st: _StreamState, provider: Callable[[], deque[LogLine]]
+    ) -> None:
+        """Commit ``st``'s open (newline-less) streamed line, if any, and reset."""
+        if st.partial_kind is None:
+            return
+        if st.partial_text != "":
+            provider().append(
+                LogLine(
+                    kind=st.partial_kind,
+                    text=st.partial_text,
+                    timestamp=st.partial_started,
+                )
+            )
+        st.partial_kind = None
+        st.partial_text = ""
+        st.partial_started = None
+
+    def _stream_delta(
+        self,
+        st: _StreamState,
+        provider: Callable[[], deque[LogLine]],
+        kind: str,
+        delta: str,
+    ) -> None:
+        """Append a streamed delta to ``st``, committing each completed line.
+
+        A switch of stream kind (reasoning <-> message) flushes ``st``'s open
         partial first, so the two streams never glue onto one line. Completed
-        lines land in the active issue's Log (or the pending pre-marker buffer)
-        via :meth:`_commit_buffer`. Each line is stamped (issue #37) with the
-        wall clock from when its *open* line began (``_partial_started``); lines
-        that both begin and end inside this one delta share this delta's sample.
+        lines land in the buffer ``provider`` returns (the serial active issue's
+        Log / pending buffer, or a Lane's own Log). Each line is stamped (issue
+        #37) with the wall clock from when its *open* line began; lines that both
+        begin and end inside this one delta share this delta's sample.
         """
-        if self._partial_kind is not None and self._partial_kind != kind:
-            self._flush_partial()
+        if st.partial_kind is not None and st.partial_kind != kind:
+            self._flush(st, provider)
         now = self._wall_clock()
-        if self._partial_text == "":
-            self._partial_started = now
-        self._partial_kind = kind
-        self._partial_text += str(delta)
-        if "\n" in self._partial_text:
-            buf = self._commit_buffer()
+        if st.partial_text == "":
+            st.partial_started = now
+        st.partial_kind = kind
+        st.partial_text += str(delta)
+        if "\n" in st.partial_text:
+            buf = provider()
             first = True
-            while "\n" in self._partial_text:
-                line, self._partial_text = self._partial_text.split("\n", 1)
+            while "\n" in st.partial_text:
+                line, st.partial_text = st.partial_text.split("\n", 1)
                 buf.append(
                     LogLine(
                         kind=kind,
                         text=line,
-                        timestamp=self._partial_started if first else now,
+                        timestamp=st.partial_started if first else now,
                     )
                 )
                 first = False
-            self._partial_started = now if self._partial_text else None
+            st.partial_started = now if st.partial_text else None
 
-    def _flush_partial(self) -> None:
-        """Commit the open (newline-less) streamed line, if any, and reset it."""
-        if self._partial_kind is None:
-            return
-        if self._partial_text != "":
-            self._commit_buffer().append(
-                LogLine(
-                    kind=self._partial_kind,
-                    text=self._partial_text,
-                    timestamp=self._partial_started,
-                )
-            )
-        self._partial_kind = None
-        self._partial_text = ""
-        self._partial_started = None
-
-    def _append_block(self, kind: str, content: Any) -> None:
+    def _emit_block(
+        self,
+        provider: Callable[[], deque[LogLine]],
+        kind: str,
+        content: Any,
+    ) -> None:
         """Append a whole (non-streamed) reasoning/message block as lines."""
         if not isinstance(content, str) or content == "":
             return
         now = self._wall_clock()
-        buf = self._commit_buffer()
+        buf = provider()
         for line in content.split("\n"):
             buf.append(LogLine(kind=kind, text=line, timestamp=now))
 
-    def _record_event_line(self, text: str) -> None:
-        """Append a key structured-event line (flushing any open stream line)."""
+    def _emit_event_line(
+        self,
+        st: _StreamState,
+        provider: Callable[[], deque[LogLine]],
+        text: str,
+    ) -> None:
+        """Append a key structured-event line (flushing ``st``'s open line)."""
         if not text:
             return
-        self._flush_partial()
-        self._commit_buffer().append(
+        self._flush(st, provider)
+        provider().append(
             LogLine(kind=LOG_EVENT, text=text, timestamp=self._wall_clock())
         )
 
-    def _record_reasoning_marker(self) -> None:
-        """Open a reasoning block with a stamped ``✻ Thinking:`` marker (#37).
-
-        Its own dimmed (reasoning-kind) line, carrying the wall clock of the
-        block's start; the reasoning content streams or appends after it. The
-        single same-second stamp then sits on this marker (see
-        :func:`log_line_views`), so the block reads as one timestamped unit.
-        """
-        self._commit_buffer().append(
+    def _emit_reasoning_marker(
+        self, provider: Callable[[], deque[LogLine]]
+    ) -> None:
+        """Open a reasoning block with a stamped ``✻ Thinking:`` marker (#37)."""
+        provider().append(
             LogLine(
                 kind=LOG_REASONING,
                 text=_THINKING_MARKER,
@@ -704,28 +804,202 @@ class LiveRunState:
             )
         )
 
-    def _finalize_reasoning(self, content: Any) -> None:
-        """Finalise a reasoning block: close the streamed line, else append it.
+    def _finalize_reasoning_into(
+        self,
+        st: _StreamState,
+        provider: Callable[[], deque[LogLine]],
+        content: Any,
+    ) -> None:
+        """Finalise ``st``'s reasoning block: close the streamed line, else add it.
 
         A streamed block already opened with its ``✻ Thinking:`` marker on the
         first delta, so finalising only clears the per-block flag. A non-streamed
         block (deltas absent) opens its marker here, before the block's lines.
         """
-        self._flush_partial()
-        if self._streamed_reasoning:
-            self._streamed_reasoning = False
+        self._flush(st, provider)
+        if st.streamed_reasoning:
+            st.streamed_reasoning = False
             return
         if isinstance(content, str) and content != "":
-            self._record_reasoning_marker()
-            self._append_block(LOG_REASONING, content)
+            self._emit_reasoning_marker(provider)
+            self._emit_block(provider, LOG_REASONING, content)
+
+    def _finalize_message_into(
+        self,
+        st: _StreamState,
+        provider: Callable[[], deque[LogLine]],
+        content: Any,
+    ) -> None:
+        """Finalise ``st``'s message block: close the streamed line, else add it."""
+        self._flush(st, provider)
+        if st.streamed_message:
+            st.streamed_message = False
+            return
+        self._emit_block(provider, LOG_MESSAGE, content)
+
+    # -- serial streaming wrappers (bind the shared serial stream + buffer) ----
+
+    def _stream_into(self, kind: str, delta: str) -> None:
+        """Serial: append a streamed delta to the shared serial stream state."""
+        self._stream_delta(self._stream, self._commit_buffer, kind, delta)
+
+    def _flush_partial(self) -> None:
+        """Serial: commit the shared serial stream's open line, if any."""
+        self._flush(self._stream, self._commit_buffer)
+
+    def _append_block(self, kind: str, content: Any) -> None:
+        """Serial: append a whole (non-streamed) block to the serial buffer."""
+        self._emit_block(self._commit_buffer, kind, content)
+
+    def _record_event_line(self, text: str) -> None:
+        """Serial: append a key structured-event line to the serial buffer."""
+        self._emit_event_line(self._stream, self._commit_buffer, text)
+
+    def _record_reasoning_marker(self) -> None:
+        """Serial: open a reasoning block on the serial buffer."""
+        self._emit_reasoning_marker(self._commit_buffer)
+
+    def _finalize_reasoning(self, content: Any) -> None:
+        """Serial: finalise the shared serial stream's reasoning block."""
+        self._finalize_reasoning_into(self._stream, self._commit_buffer, content)
 
     def _finalize_message(self, content: Any) -> None:
-        """Finalise a message block: close the streamed line, else append it."""
-        self._flush_partial()
-        if self._streamed_message:
-            self._streamed_message = False
+        """Serial: finalise the shared serial stream's message block."""
+        self._finalize_message_into(self._stream, self._commit_buffer, content)
+
+    # -- multi-active Lane streaming (issue #66, ADR-0008) ------------------
+
+    def _lane_buffer(self, key: int | str) -> deque[LogLine]:
+        """A Lane's own accumulating, bounded Log buffer (get-or-create).
+
+        Keyed by the (already-normalized) issue ref in the shared per-issue
+        :attr:`_logs`, so a Lane's Log accumulates across the Wave — and across
+        Waves that revisit the issue — exactly like the serial per-issue Log,
+        just reached by explicit attribution rather than the active-issue pivot.
+        """
+        return self._logs.setdefault(key, deque(maxlen=_LOG_TAIL_LINES))
+
+    def _lane_stream_state(self, key: int | str) -> _StreamState:
+        """A Lane's own streaming-assembly scratch (get-or-create)."""
+        return self._lane_streams.setdefault(key, _StreamState())
+
+    def _lane_provider(
+        self, key: int | str
+    ) -> Callable[[], deque[LogLine]]:
+        """A zero-arg provider of a Lane's stable Log buffer for the cores."""
+        buf = self._lane_buffer(key)
+        return lambda: buf
+
+    def _lane_touch(self, key: int | str, now: float) -> None:
+        """Activate a Lane's ledger entry **without** disturbing sibling Lanes.
+
+        Unlike :meth:`_activate` (one-active-per-iteration, which parks the
+        previous active issue and moves ``active_ref``), a Lane activation
+        leaves every other Lane active and never touches ``active_ref`` — the
+        serial single-active header signal stays ``None`` under a pure Wave. It
+        sets the entry's ``started_at`` / ``started_wall`` / ``waiting_duration``
+        once and opens an ``active_since`` stint once; a Lane already at a
+        terminal status this run is left untouched (a late delta never
+        resurrects a closed Lane).
+        """
+        entry = self.ledger.get(key)
+        if entry is None:
+            entry = IssueLedgerEntry(
+                ref=key, first_seen_at=now, first_seen_iter=self.iteration
+            )
+            self.ledger[key] = entry
+        if entry.status in (
+            STATUS_CLOSED,
+            STATUS_ADVANCED,
+            STATUS_NO_PROGRESS,
+            STATUS_GONE,
+        ):
             return
-        self._append_block(LOG_MESSAGE, content)
+        if entry.started_at is None:
+            entry.started_at = now
+            entry.started_wall = self._wall_at(now)
+            entry.waiting_duration = max(0.0, now - entry.first_seen_at)
+        if entry.active_since is None:
+            entry.active_since = now
+        entry.status = STATUS_ACTIVE
+
+    def _lane_stream_delta(
+        self, ref: int | str, kind: str, delta: str
+    ) -> None:
+        """Assemble a Lane's streamed reasoning/message delta into its own Log."""
+        if not delta:
+            return
+        key = self._normalize_ref(ref)
+        self._lane_touch(key, self._monotonic())
+        st = self._lane_stream_state(key)
+        provider = self._lane_provider(key)
+        if kind == LOG_REASONING:
+            if not st.streamed_reasoning:
+                self._flush(st, provider)
+                self._emit_reasoning_marker(provider)
+                st.streamed_reasoning = True
+        else:
+            st.streamed_message = True
+        self._stream_delta(st, provider, kind, delta)
+
+    def _lane_close(
+        self, key: int | str, now: float, *, status: str
+    ) -> None:
+        """Record a Lane's terminal closure (closed / advanced), folding its timer."""
+        entry = self.ledger.get(key)
+        if entry is None:
+            entry = IssueLedgerEntry(
+                ref=key, first_seen_at=now, first_seen_iter=self.iteration
+            )
+            self.ledger[key] = entry
+        if entry.active_since is not None:
+            entry.active_duration += max(0.0, now - entry.active_since)
+            entry.active_since = None
+        entry.status = status
+        entry.ended_at = now
+
+    def _render_lane_event(
+        self, etype: str, issue: int | str, event: Mapping[str, Any], now: float
+    ) -> None:
+        """Fold one runner-stamped Lane event into that Lane's own view (#66).
+
+        The multi-active analogue of the serial dispatch in :meth:`render`: tool
+        calls, commits, checkpoints, closures, the final reasoning/message
+        blocks, and token usage all land in the Lane's *own* Log / timer /
+        Consumption keyed by ``issue`` — no ``active_ref`` pivot, no
+        ``<working issue=N>`` marker scan (attribution is explicit).
+        """
+        key = self._normalize_ref(issue)
+        self._lane_touch(key, now)
+        st = self._lane_stream_state(key)
+        provider = self._lane_provider(key)
+        if etype == _TOOL_CALL:
+            self._emit_event_line(st, provider, _log_tool_text(event))
+        elif etype == _COMMIT_RECORDED:
+            self._lane_commits[key] = self._lane_commits.get(key, 0) + 1
+            self._emit_event_line(st, provider, _log_commit_text(event))
+        elif etype == _CHECKPOINT_RECORDED:
+            self._emit_event_line(st, provider, _log_checkpoint_text(event))
+        elif etype == _AUTO_CLOSE:
+            self._lane_close(key, now, status=STATUS_CLOSED)
+            self._emit_event_line(st, provider, _log_auto_close_text(event))
+        elif etype == _PR_ADVANCED:
+            self._lane_close(key, now, status=STATUS_ADVANCED)
+            self._emit_event_line(st, provider, _log_pr_advanced_text(event))
+        elif etype == _ASSISTANT_REASONING:
+            self._finalize_reasoning_into(st, provider, event.get("content"))
+        elif etype == _ASSISTANT_MESSAGE:
+            self._finalize_message_into(st, provider, event.get("content"))
+        elif etype == _USAGE_TOKENS:
+            entry = self.ledger.get(key)
+            if entry is not None:
+                model = event.get("model")
+                self._accrue_usage(
+                    entry,
+                    str(model) if model else None,
+                    max(0, _coerce_int(event.get("input"), 0)),
+                    max(0, _coerce_int(event.get("output"), 0)),
+                )
 
     # -- internals ----------------------------------------------------------
 
@@ -738,16 +1012,17 @@ class LiveRunState:
         self.ended = True
         if self._ended_monotonic is None and self._started_monotonic is not None:
             self._ended_monotonic = self._monotonic()
-        # Freeze the active issue's live timer on the final frame (a Stop can
-        # land mid-iteration, with an issue still active). The ref is kept so
-        # the header still shows what was active when the run ended.
-        ref = self.active_ref
-        if ref is not None:
-            entry = self.ledger.get(ref)
-            if entry is not None and entry.active_since is not None:
-                at = self._ended_monotonic
-                if at is None:
-                    at = self._monotonic()
+        # Freeze every still-live issue's timer on the final frame (a Stop can
+        # land mid-iteration). In serial mode only the ``active_ref`` entry ever
+        # carries an open ``active_since`` (siblings are parked as QUEUED), so
+        # this folds exactly that one — unchanged; under a Parallel Wave (issue
+        # #66) it folds every concurrently-active Lane. ``active_ref`` is left
+        # as-is so the serial header still shows what was active at run end.
+        at = self._ended_monotonic
+        if at is None:
+            at = self._monotonic()
+        for entry in self.ledger.values():
+            if entry.active_since is not None:
                 entry.active_duration += max(0.0, at - entry.active_since)
                 entry.active_since = None
 
@@ -770,17 +1045,16 @@ class LiveRunState:
         # Per-issue Logs (and per-issue token tallies) ACCUMULATE across
         # iterations (issues #34 / #36), so they are never cleared here. Only the
         # per-iteration streaming scratch resets: the pending pre-marker buffer,
-        # the pending pre-marker token usage, and the open streamed line. Any
+        # the pending pre-marker token usage, the serial open streamed line, and
+        # (issue #66) the per-Lane streaming scratch + per-Lane commit tally. Any
         # orphan pre-marker output / usage from an iteration that never
         # identified an active issue is discarded here (it lives on in the JSONL
         # replay log / the run-level Summary).
         self._pending.clear()
         self._pending_usage = UsageTally()
-        self._partial_kind = None
-        self._partial_text = ""
-        self._partial_started = None
-        self._streamed_reasoning = False
-        self._streamed_message = False
+        self._stream = _StreamState()
+        self._lane_streams = {}
+        self._lane_commits = {}
 
     def _record_pool(self, issues: Any, now: float) -> None:
         """Fold one ``afk_ready.collected`` pool into the ledger.
@@ -898,15 +1172,23 @@ class LiveRunState:
             self.active_ref = None
 
     def _finalize_iteration(self, now: float) -> None:
-        """Reconcile the active issue's terminal status at ``iteration.end``.
+        """Reconcile each still-active issue's terminal status at ``iteration.end``.
 
-        A closure already set ``closed`` / ``advanced``; otherwise an active
-        issue with commits is ``advanced`` and one without is ``no-progress``
-        (a strike). With no marker and no closure, a single-member pool is
-        inferred as the active issue.
+        Serial (issue #25): a closure already set ``closed`` / ``advanced``;
+        otherwise the single active issue with commits is ``advanced`` and one
+        without is ``no-progress`` (a strike). With no marker and no closure, a
+        single-member pool is inferred as the active issue.
+
+        Parallel Wave (issue #66): each concurrently-active **Lane** that never
+        reached a terminal closure is reconciled independently — ``advanced`` if
+        it landed at least one commit this Wave (its *own* :attr:`_lane_commits`
+        count), else ``no-progress`` — and its live timer folded. Lanes set no
+        ``active_ref`` and do not touch the serial ``_iter_commits``, so the
+        serial block below is a no-op under a pure Wave and the Lane pass is a
+        no-op under a serial iteration.
         """
-        # Commit any open streamed line into the active issue's Log (or the
-        # pending buffer) before the active issue is parked, so the last
+        # Commit any open serial streamed line into the active issue's Log (or
+        # the pending buffer) before the active issue is parked, so the last
         # in-progress line is retained in the per-issue Log (issue #34).
         self._flush_partial()
         ref = self.active_ref
@@ -930,6 +1212,23 @@ class LiveRunState:
                 else:
                     entry.status = STATUS_NO_PROGRESS
             self._deactivate(ref, at=now)
+        # Multi-active Lane finalisation (issue #66): fold + reconcile every Lane
+        # still active this Wave. In serial mode no non-active_ref entry carries
+        # an open ``active_since`` (siblings are parked), so this loop never
+        # fires — the serial path is byte-for-byte unchanged.
+        for key, entry in list(self.ledger.items()):
+            if entry.status != STATUS_ACTIVE or entry.active_since is None:
+                continue
+            lane_stream = self._lane_streams.get(key)
+            if lane_stream is not None:
+                self._flush(lane_stream, self._lane_provider(key))
+            entry.active_duration += max(0.0, now - entry.active_since)
+            entry.active_since = None
+            if self._lane_commits.get(key, 0) > 0:
+                entry.status = STATUS_ADVANCED
+                entry.ended_at = now
+            else:
+                entry.status = STATUS_NO_PROGRESS
         self._iter_pool = []
         self._iter_commits = 0
         self._iter_strike = False
@@ -1152,9 +1451,26 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
     elapsed = _format_elapsed(state.elapsed_seconds(now))
 
     if state.active_ref is not None:
+        # Serial single-active header — byte-for-byte unchanged.
         active = f"#{state.active_ref} {_format_elapsed(state.active_seconds(now))}"
     else:
-        active = "—"
+        # Parallel Wave (issue #66): no serial ``active_ref``, so list the
+        # concurrently-active Lanes. A single active Lane still shows its live
+        # timer; several show their refs. No active issue → the em-dash, exactly
+        # as the serial between-iterations header reads.
+        base = now if now is not None else state._monotonic()
+        actives = [
+            entry
+            for entry in state.ledger.values()
+            if entry.status == STATUS_ACTIVE and entry.active_since is not None
+        ]
+        if not actives:
+            active = "—"
+        elif len(actives) == 1:
+            entry = actives[0]
+            active = f"#{entry.ref} {_format_elapsed(entry.active_seconds(base))}"
+        else:
+            active = " ".join(f"#{entry.ref}" for entry in actives)
 
     return (
         f"copiloop  run {run_id}"
@@ -1234,7 +1550,11 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
     base = now if now is not None else state._monotonic()
     rows: list[QueueRow] = []
     for ref, entry in state.ledger.items():
-        is_active = entry.status == STATUS_ACTIVE and ref == state.active_ref
+        # One row per **active** issue lights as active (issue #66): under a
+        # Parallel Wave every concurrently-active Lane shows its own live timer.
+        # Serial-equivalent — serial has exactly one ACTIVE entry, which is the
+        # ``active_ref`` — so the single-active Dashboard is unchanged.
+        is_active = entry.status == STATUS_ACTIVE
         rows.append(
             QueueRow(
                 ref=ref,
@@ -1286,10 +1606,12 @@ def issue_detail(
     are. An unknown ref (never in any pool) degrades to a ``gone`` detail rather
     than raising, so a stale drill-in target never crashes the app.
 
-    ``is_active`` is true only when this is the issue being worked *now* (its
-    status is ``active`` and it is the run's ``active_ref``) — the signal the
-    Log view uses to stream the active issue live versus showing the issue's
-    retained tail.
+    ``is_active`` is true whenever this is an issue being worked *now* (its
+    status is ``active``) — the signal the Log view uses to stream the issue
+    live versus showing its retained tail. Under a Parallel Wave (issue #66)
+    that holds for every concurrently-active **Lane**; serial has exactly one
+    active issue (the ``active_ref``), so the single-active drill-in is
+    unchanged.
     """
     key = state._normalize_ref(ref)
     entry = state.ledger.get(key)
@@ -1310,7 +1632,7 @@ def issue_detail(
     return IssueDetail(
         ref=key,
         status=entry.status,
-        is_active=entry.status == STATUS_ACTIVE and key == state.active_ref,
+        is_active=entry.status == STATUS_ACTIVE,
         active_seconds=entry.active_seconds(base),
         waiting_seconds=waiting,
         first_seen_iter=entry.first_seen_iter,
