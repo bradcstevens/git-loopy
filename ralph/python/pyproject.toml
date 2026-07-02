@@ -13,17 +13,18 @@ keywords = ["github-copilot", "afk", "autonomous", "agent", "ralph"]
 # breaking ways" (see PRD #1, "Further Notes"), so future slices should bump
 # this pin deliberately rather than tracking `main`.
 #
-# Pinned to 1.0.2, the latest stable release of the 1.0.x line. History: the
+# Pinned to 1.0.5, the latest stable release of the 1.0.x line. History: the
 # bundled Copilot CLI advanced to a protocol the 0.3.0 SDK could no longer
 # drive (it hung waiting for `session.idle` and rejected the `list_models`
 # billing payload); 1.0.0b9 was the first release that both spoke the live
 # protocol and exposed the `claude-opus-4.8` model the AFK loop targets. The
-# 1.0.0 line has since graduated from beta (1.0.0 -> 1.0.1 -> 1.0.2), and the
-# b9 -> 1.0.2 bump was validated by a symbol+signature contract check against
-# every SDK surface the runner touches (CopilotClient/CopilotSession
-# construction, `create_session`/`send_and_wait` signatures, the
-# `PermissionDecision*` rpc types + `PermissionRequestResult`, and the
-# `SessionEventType` members `events.py` maps) plus the full test suite.
+# 1.0.0 line has since graduated from beta (1.0.0 -> 1.0.1 -> 1.0.2 -> 1.0.4
+# -> 1.0.5), and each bump (most recently 1.0.2 -> 1.0.5) was validated by a
+# symbol+signature contract check against every SDK surface the runner
+# touches (CopilotClient/CopilotSession construction,
+# `create_session`/`send_and_wait` signatures, the `PermissionDecision*` rpc
+# types + `PermissionRequestResult`, and the `SessionEventType` members
+# `events.py` maps) plus the full test suite.
 # Because the SDK still changes the permission-request and
 # client-construction surfaces in breaking ways across versions, treat any
 # further bump as a deliberate, tested migration rather than a routine
@@ -32,7 +33,7 @@ keywords = ["github-copilot", "afk", "autonomous", "agent", "ralph"]
 # Rich is the renderer for the Python variant's terminal experience
 # (streaming prints + frozen iteration Panels + a frozen run-end Table).
 dependencies = [
-    "github-copilot-sdk==1.0.2",
+    "github-copilot-sdk==1.0.5",
     "rich>=13.7.0,<14",
 ]
 
