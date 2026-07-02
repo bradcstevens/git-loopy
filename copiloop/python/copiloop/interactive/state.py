@@ -73,6 +73,7 @@ __all__ = [
     "format_duration",
     "format_wall_clock",
     "format_detail_header",
+    "format_activity_header",
     "queue_rows",
     "log_line_views",
     "issue_detail",
@@ -1653,3 +1654,23 @@ def format_detail_header(detail: IssueDetail) -> str:
         f"  •  waiting {format_duration(detail.waiting_seconds)}"
         f"  •  first seen iter {detail.first_seen_iter}"
     )
+
+
+def format_activity_header(state: LiveRunState) -> str:
+    """Compose the **Activity** band's compact one-line header (issue #69).
+
+    Names the current serial ``active_ref`` — e.g. ``Activity · #123`` — so the
+    band stays attributable when the active row has scrolled out of a long
+    Queue. It follows ``active_ref`` **independent of the Queue cursor** (the
+    band is an active-only glance, not a projection of the selected row). With
+    no active issue — before the iteration's working marker, or in a parallel
+    **Wave** where the serial ``active_ref`` is ``None`` (ADR-0011: serial scope
+    only for v1) — it reads simply ``Activity``.
+
+    Pure and Textual-free (mirrors :func:`format_header` /
+    :func:`format_detail_header`) so the header's *content* is unit-testable
+    without a TTY.
+    """
+    if state.active_ref is not None:
+        return f"Activity · #{state.active_ref}"
+    return "Activity"

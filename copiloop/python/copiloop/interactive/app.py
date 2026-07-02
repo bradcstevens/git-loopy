@@ -52,6 +52,7 @@ from textual.widgets import DataTable, Footer, Static
 
 from copiloop.interactive.state import (
     LiveRunState,
+    format_activity_header,
     format_detail_header,
     format_duration,
     format_header,
@@ -83,6 +84,17 @@ _STAMP_WIDTH = 11
 #: the ``End`` key).
 _LOG_NEW_LINES_BELOW = "↓ new lines below — End to re-engage auto-scroll"
 
+#: Fixed height (in terminal rows) of the Level-1 **Activity** band, *including*
+#: its one-line header (issue #69, ADR-0011). A **named tunable constant**: the
+#: band is a fixed size so the Queue takes the remaining space (``1fr``) and is
+#: never crushed by it. ~9 rows leaves ~8 lines of live tail below the header.
+_ACTIVITY_BAND_HEIGHT = 9
+
+#: The single dimmed placeholder the Activity band shows when the live current
+#: tail is empty — no output yet from the agent (issue #69). Before the working
+#: marker the band instead shows the pending pre-marker buffer's output.
+_ACTIVITY_PLACEHOLDER = "Waiting for the agent..."
+
 
 def _format_queue_cost(usage: UsageTally, pricing: Pricing | None) -> str:
     """Render a Queue row's estimated **Cost** cell (issues #36/#42).
@@ -109,6 +121,7 @@ class _Dashboard(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(id="header")
         yield DataTable(id="queue", cursor_type="row", zebra_stripes=True)
+        yield _ActivityBand(id="activity")
         yield Static(id="summary-band")
 
     def on_mount(self) -> None:
@@ -120,6 +133,51 @@ class _Dashboard(Vertical):
         table.add_column("Tokens in", key="tokens_in")
         table.add_column("Tokens out", key="tokens_out")
         table.add_column("Cost USD", key="cost")
+
+
+class _ActivityScroll(VerticalScroll):
+    """The Activity band's **passive, auto-scrolling** live-tail body (issue #69).
+
+    Like :class:`_LogScroll` it is *anchored* (Textual's
+    :meth:`~textual.widget.Widget.anchor`) so it stays pinned to the latest line
+    (stick-to-bottom) as the tail grows. Unlike the Level-2 Log it is
+    **not focusable** and has no manual scroll or "new lines below" release: the
+    **Queue keeps focus** (up/down/enter unchanged) and pause / scroll-back /
+    full history stay the job of the per-issue Level-2 Log. Anchoring on mount
+    (never released) gives the always-at-bottom glance the band is for.
+    """
+
+    can_focus = False
+
+    def on_mount(self) -> None:
+        self.anchor()
+
+
+class _ActivityBand(Vertical):
+    """Level 1: the always-on **Activity** band — the live current tail below the
+    Queue (issue #69, ADR-0011).
+
+    Positioned between the Queue and the Summary, so the Dashboard stacks
+    ``header → Queue → Activity → Summary`` (with the app's Footer below). A
+    compact one-line ``#activity-header`` names the **Active issue**
+    (:func:`~copiloop.interactive.state.format_activity_header`) above a
+    fixed-height, non-focusable :class:`_ActivityScroll` holding the
+    ``#activity-body`` tail. The band is a **UI-layer view over existing
+    per-issue Log state** — it renders ``state.log()`` via ``log_line_views``,
+    the same helpers the Level-2 Log uses — so there is no new state buffer.
+
+    Its height is the named :data:`_ACTIVITY_BAND_HEIGHT` constant, set here so
+    that constant is the single source of truth; the Queue takes the remaining
+    space (``1fr``) and is never crushed by the band.
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="activity-header")
+        with _ActivityScroll(id="activity-scroll"):
+            yield Static(id="activity-body")
+
+    def on_mount(self) -> None:
+        self.styles.height = _ACTIVITY_BAND_HEIGHT
 
 
 class _LogScroll(VerticalScroll):
@@ -206,6 +264,19 @@ class CopiloopApp(App[None]):
     }
     #queue {
         height: 1fr;
+    }
+    #activity-header {
+        height: 1;
+        padding: 0 1;
+        background: $boost;
+        color: $text;
+    }
+    #activity-scroll {
+        height: 1fr;
+    }
+    #activity-body {
+        width: 1fr;
+        padding: 0 1;
     }
     #summary-band {
         height: 1;
@@ -367,8 +438,44 @@ class CopiloopApp(App[None]):
     def _refresh(self) -> None:
         self.query_one("#header", Static).update(format_header(self._state))
         self._sync_queue()
+        self._sync_activity()
         self._sync_summary_band()
         self._sync_log()
+
+    def _sync_activity(self) -> None:
+        """Repaint the always-on **Activity** band: the live current tail (#69).
+
+        A UI-layer view over existing per-issue Log state (ADR-0011): the body
+        renders ``state.log()`` with **no ref** — the live current tail, i.e. the
+        **Active issue**'s **Log** (its open partial line included so it updates
+        as the model works), or the pre-marker **pending** buffer when no issue is
+        active yet — through the same :func:`log_line_views` projection and the
+        same styling the Level-2 Log uses: reasoning dimmed, assistant messages
+        and key structured events plain, 12-hour AM/PM stamps collapsed per second
+        (issue #37). No new state buffer is read.
+
+        The compact header names the current ``active_ref`` independent of the
+        Queue cursor (:func:`format_activity_header`). When the tail is empty a
+        single dimmed placeholder is shown instead.
+
+        **Serial scope only (ADR-0011).** The band follows the single serial
+        ``active_ref``; in a parallel **Wave** (issue #61) ``active_ref`` is
+        ``None``, so ``state.log()`` yields the pending buffer / placeholder
+        only. A richer parallel-aware Activity view (a tail per **Lane**) is a
+        deliberate follow-up, not a bug.
+        """
+        self.query_one("#activity-header", Static).update(
+            format_activity_header(self._state)
+        )
+        body = Text()
+        views = log_line_views(self._state.log())
+        for view in views:
+            body.append(f"{view.stamp:<{_STAMP_WIDTH}}  ", style="dim")
+            body.append(view.text, style="dim" if view.dim else "")
+            body.append("\n")
+        if not views:
+            body.append(_ACTIVITY_PLACEHOLDER, style="dim")
+        self.query_one("#activity-body", Static).update(body)
 
     def _sync_summary_band(self) -> None:
         """Repaint the compact Summary rollup band from the loop-owned summary."""
