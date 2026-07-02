@@ -1,6 +1,7 @@
 # Retire the bash AFK runner — single Python runner
 
-**Status:** accepted
+**Status:** accepted (the retained `afk.sh` launcher is later removed — see
+[ADR-0007](0007-single-python-entrypoint-retire-afk-sh.md))
 
 ## Context
 

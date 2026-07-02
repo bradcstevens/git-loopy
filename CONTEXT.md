@@ -36,11 +36,20 @@ work is pushed to the remote. It is close-keyword-free (never auto-closes an iss
 does not count as Strike progress. Distinct from the agent's own commits.
 _Avoid_: autosave, stash, snapshot.
 
+**Sandbox**:
+The per-Iteration OS permission boundary the agent's shell commands run inside,
+confining which filesystem paths and network they may touch and resetting to a clean
+policy at each **Iteration**. Contains an issue's blast radius so one run cannot leak
+filesystem state into another; a permission boundary, not a container or a fresh
+checkout.
+_Avoid_: container, jail, VM.
+
 ### Issues and attribution
 
 **Active issue**:
 The single issue the agent is working during the current iteration, self-selected
-from the pool.
+from the pool. In **Parallel mode** each **Lane** has its own Active issue, assigned by
+the runner rather than self-selected.
 _Avoid_: current task, current ticket.
 
 **Working marker**:
@@ -55,9 +64,10 @@ _Avoid_: backlog, list.
 
 **Status**:
 An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
-(being worked now), **closed** (finished and closed via a commit close-keyword),
-**advanced** (progressed but not closed), **no-progress** (worked without meaningful
-change), **gone** (left the pool without resolution).
+(being worked now — several at once in **Parallel mode**, one per **Lane**), **closed**
+(finished and closed via a commit close-keyword), **advanced** (progressed but not
+closed), **no-progress** (worked without meaningful change), **gone** (left the pool
+without resolution).
 
 ### Leaving a run
 
@@ -107,6 +117,74 @@ run starts. Off by default: an ordinary launch uses the configured model and rea
 effort with no prompt.
 _Avoid_: picker mode, interactive model prompt.
 
+### Framework and configuration
+
+**copiloop**:
+The framework and its single CLI command — "a GitHub Copilot SDK loop-engineer framework for
+orchestrating automated ralph loops for agentic engineering." One globally-installed command
+runs, configures, and scaffolds the loop from any repository. Supersedes the retired **ralph-afk**
+brand.
+_Avoid_: ralph-afk, "the runner" as a proper name.
+
+**Ralph loop**:
+The *technique* copiloop orchestrates — the unattended, iterative AFK loop that drives the Copilot
+agent to work triaged issues one at a time. A concept, never a code identifier; "ralph" survives
+only in this sense.
+_Avoid_: ralph-afk (the retired brand); "ralph" as a symbol, directory, or env-var.
+
+**Config**:
+The persisted settings (model, reasoning effort, strike policy, denylists, ...) that carry across
+runs so they need not be re-passed each time. Resolved **project** scope over **global** scope.
+Replaces the per-run environment the retired bash launcher used to hard-code.
+_Avoid_: settings file, profile.
+
+**init**:
+First-run setup that writes **Config** — and optionally an editable prompt and skills — into a
+chosen **scope**. Runs automatically the first time on an interactive terminal; also invocable as
+`copiloop init`.
+_Avoid_: setup, bootstrap; install (install is the separate act of putting the `copiloop` command
+on PATH).
+
+**Global vs project scope**:
+Whether **Config** and assets apply machine-wide (**global**) or only within one repository
+(**project**). Project overrides global. The copiloop engine is installed once, globally; scope
+governs *which* settings and assets resolve for a run, not which binary runs.
+_Avoid_: local (ambiguous), workspace.
+
+### Parallel execution
+
+**Parallel mode**:
+The opt-in execution mode in which the runner works several independent issues at once,
+each isolated in its own worktree, instead of one at a time. Off by default — the serial,
+one-issue-at-a-time loop is the default.
+_Avoid_: concurrent mode, multi mode.
+
+**Wave**:
+One barrier-synchronized round of **Parallel mode**: the runner dispatches up to N
+**Lanes** at once, lets them work, joins them, then runs a single **Integration**. The
+Parallel-mode analogue of an **Iteration**.
+_Avoid_: batch, cohort, round.
+
+**Lane**:
+One concurrent slot within a **Wave** — a single agent working a single **Parallel-safe**
+issue in its own worktree and branch. Shown as one active row in the **Dashboard**, with
+its own timer and **Log**.
+_Avoid_: worker, slot, thread.
+
+**Integration**:
+The serialized step that ends a **Wave**: it brings each **Lane**'s branch into the base
+branch one at a time, re-running the feedback loops after each and closing the issue on
+success. A conflicting or loop-failing branch triggers a runner-driven auto-resolution
+attempt; persistent failure falls back to a serial **Iteration**. Runner-owned — it never
+waits on a human.
+_Avoid_: merge (as the name for this step), landing.
+
+**Parallel-safe**:
+An **AFK-ready** issue a human has additionally asserted is independent and well-scoped
+enough to be worked in its own **Lane**, concurrently with others. Carried as a triage
+label alongside `ready-for-agent`; the runner never infers it.
+_Avoid_: independent, parallelizable (as the label name).
+
 ## Relationships
 
 - A **Run** has many **Iterations**.
@@ -120,9 +198,21 @@ _Avoid_: picker mode, interactive model prompt.
 - A **Checkpoint** is authored by the runner (not the agent) at an **Iteration**
   boundary and is attributed to the **Active issue**, but never counts as **Strike**
   progress.
+- A **Sandbox** is scoped to an **Iteration**: each **Iteration**'s agent shell runs
+  inside a fresh **Sandbox**, so per-issue isolation follows from per-**Iteration**
+  freshness.
 - **Consumption** is attributed to a scope: an **Iteration** (the **Summary**'s Cost)
   or an **Active issue** (the **Queue**'s per-issue Cost). Both derive Cost from the
   same `UsageTally` rule, so per-issue and per-iteration figures stay reconcilable.
+- In **Parallel mode**, a **Run** is a sequence of **Waves** interleaved with serial
+  **Iterations** for any work that is not **Parallel-safe**.
+- A **Wave** dispatches up to N **Lanes** and is followed by exactly one **Integration**.
+- A **Lane** works exactly one **Parallel-safe** issue; **Integration** brings its branch
+  to base and closes the issue, so the **Queue** reaches **closed** the same way it does
+  in serial mode.
+- In **Parallel mode** the **Sandbox** is per-**Lane**: each Lane's agent runs in its own
+  **Sandbox** scoped to that Lane's worktree — the parallel analogue of the per-**Iteration**
+  Sandbox.
 
 ## Example dialogue
 
@@ -147,3 +237,14 @@ _Avoid_: picker mode, interactive model prompt.
 - `commit` was ambiguous once the runner began authoring commits — resolved: an
   agent-authored commit is a plain commit and counts as progress; a runner-authored
   one is a **Checkpoint** and does not.
+- `wave` vs `iteration` — an **Iteration** is the serial unit (one **Active issue**); a
+  **Wave** is the parallel unit (up to N **Lanes** plus one **Integration**). They are
+  the serial and parallel analogues of one round of work, not synonyms.
+- `ralph` / `ralph-afk` / `copiloop` were used interchangeably for the tool — resolved:
+  **copiloop** is the framework, CLI, and brand; a **Ralph loop** is the retained *concept* (the
+  loop technique); the **ralph-afk** brand and every `ralph` / `ralph_afk` identifier, the `ralph/`
+  and `.ralph/` directories, and the `RALPH_*` env vars are retired in favour of `copiloop`,
+  `.copiloop/`, and `COPILOOP_*`.
+- `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
+  to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
+  per-issue because every issue boundary is also an **Iteration** boundary.
