@@ -51,8 +51,23 @@ def test_subcommand_parser_parses_init() -> None:
 
 
 def test_subcommand_parser_parses_config() -> None:
-    args = cli_module.build_subcommand_parser().parse_args(["config"])
+    args = cli_module.build_subcommand_parser().parse_args(["config", "list"])
     assert args.command == "config"
+    assert args.config_command == "list"
+
+
+def test_subcommand_parser_config_requires_an_op() -> None:
+    """Bare ``config`` (no op) is an argparse error, not a fall-through run."""
+    with pytest.raises(SystemExit):
+        cli_module.build_subcommand_parser().parse_args(["config"])
+
+
+def test_subcommand_parser_parses_config_set_with_scope() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["config", "set", "model", "gpt-5.4", "--global"]
+    )
+    assert args.config_command == "set"
+    assert (args.key, args.value, args.scope) == ("model", "gpt-5.4", "global")
 
 
 # ---------------------------------------------------------------------------
@@ -110,26 +125,72 @@ def test_main_init_dispatches_and_skips_loop(
     assert captured == []  # the loop never ran
 
 
-def test_main_config_is_reserved_stub_no_loop(
+def test_main_config_routes_to_handler_no_loop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``config`` is reserved now; its implementation lands in #56.
+    """``config <op>`` routes to the configcmd handler and never starts the loop.
 
     Dispatch must not fall through to the bare run (where ``config`` would be a
-    bad ``<max-iterations>``), and must not start the loop.
+    bad ``<max-iterations>``).
     """
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
-    rc = cli_module.main(["config"])
+    rc = cli_module.main(["config", "get", "model"])
 
-    assert rc != 0
+    assert rc == 0
+    assert captured == []  # the loop never ran
+    assert capsys.readouterr().out.strip() == "claude-opus-4.8"
+
+
+def test_main_config_bad_op_errors_no_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unknown ``config`` op is an argparse error, not a bare run."""
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    with pytest.raises(SystemExit):
+        cli_module.main(["config", "bogus-op"])
     assert captured == []
-    err = capsys.readouterr().err
-    assert "config" in err
+
+
+def test_main_config_set_then_get_round_trips_through_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``config set`` writes the project file; a later ``config get`` reads it."""
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    assert cli_module.main(["config", "set", "model", "gpt-5.4", "--project"]) == 0
+    capsys.readouterr()  # drain the set confirmation
+    assert (tmp_path / "copiloop" / "config.toml").is_file()
+
+    assert cli_module.main(["config", "get", "model"]) == 0
+    assert capsys.readouterr().out.strip() == "gpt-5.4"
+    assert captured == []  # the loop never ran for either op
+
+
+def test_main_config_path_prints_resolved_location(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    assert cli_module.main(["config", "path", "--project"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == str(tmp_path / "copiloop" / "config.toml")
+    assert captured == []
 
 
 # ---------------------------------------------------------------------------
@@ -207,17 +268,18 @@ def test_dispatch_does_not_import_sdk() -> None:
     """Subcommand dispatch must not import the SDK / renderer (fast dispatch).
 
     Run in a clean subprocess so the assertion is deterministic regardless of
-    what the in-process test session has already imported. Covers both the
-    ``config`` stub *and* the ``init`` parser (``init --help`` exits before the
-    wizard's lazy SDK fetch), so neither reserved word pays the SDK cost to parse.
+    what the in-process test session has already imported. Covers a real
+    ``config`` op (``config path`` runs the handler end-to-end) *and* the
+    ``init`` parser (``init --help`` exits before the wizard's lazy SDK fetch),
+    so neither subcommand pays the SDK cost to parse or run.
     """
     import subprocess
 
     code = (
         "import sys\n"
         "from copiloop import cli\n"
-        "rc = cli.main(['config'])\n"
-        "assert rc != 0, rc\n"
+        "rc = cli.main(['config', 'path', '--global'])\n"
+        "assert rc == 0, rc\n"
         "try:\n"
         "    cli.main(['init', '--help'])\n"  # argparse prints help + SystemExit(0)
         "except SystemExit as exc:\n"

@@ -58,6 +58,15 @@ into the loop; with no TTY (or `COPILOOP_INTERACTIVE=0`) it is skipped and the
 run falls back to the built-in defaults, so CI never hangs on a prompt. See
 [`copiloop/python/README.md`](../copiloop/python/README.md#first-run-setup-copiloop-init).
 
+Managing Config: `copiloop config` is a fast (SDK-free) convenience group over
+hand-editing `config.toml`. `config set <key> <value>` persists one key to a
+scope; `config get <key>` / `config list` print the **effective merged** value(s)
+a run would use (across CLI > env > project > global > default, not one file);
+`config path` prints the resolved location(s); `config edit` opens the scope's
+file in `$VISUAL` / `$EDITOR`. Scope (`--global` / `--project`, default
+project-in-a-repo-else-global) matches the `init` wizard. See
+[`copiloop/python/README.md`](../copiloop/python/README.md#managing-config-copiloop-config).
+
 ## Per-iteration flow
 
 1. **Branch hygiene (PR mode).** When PR support is on, it restores the base branch first — a prior PR iteration may have left HEAD on a PR branch from `gh pr checkout`. A dirty worktree no longer aborts the run: leftover changes are captured by the **Checkpoint** step below (ADR-0004).

@@ -310,41 +310,6 @@ def _collect_model_and_effort(
 # ---------------------------------------------------------------------------
 
 
-def _toml_escape(value: str) -> str:
-    """Escape a string for a double-quoted TOML basic string."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _dump_config_toml(values: Mapping[str, object]) -> str:
-    """Serialize a flat scalar table to TOML (stdlib has no writer).
-
-    Only the scalar types ``copiloop init`` writes (str / bool / int) are
-    supported; the round-trip is asserted against :mod:`tomllib` in the tests.
-    """
-    lines = [
-        "# copiloop persisted Config (hand-editable).",
-        "# Written by `copiloop init`; precedence is CLI flag > env > project >",
-        "# global > built-in default (ADR-0006). Edit freely or re-run init.",
-        "",
-    ]
-    for key, value in values.items():
-        if isinstance(value, bool):
-            lines.append(f"{key} = {'true' if value else 'false'}")
-        elif isinstance(value, str):
-            lines.append(f'{key} = "{_toml_escape(value)}"')
-        elif isinstance(value, int):
-            lines.append(f"{key} = {value}")
-        else:  # pragma: no cover - defensive
-            raise TypeError(f"unsupported config value for {key!r}: {value!r}")
-    return "\n".join(lines) + "\n"
-
-
-def _write_config(config_path: Path, values: Mapping[str, object]) -> None:
-    """Write ``config.toml`` to ``config_path``, creating the scope dir."""
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(_dump_config_toml(values), encoding="utf-8")
-
-
 def _packaged_prompt_path() -> Path:
     """The default ``PROMPT.md`` shipped inside the wheel (ADR-0006 package data)."""
     return Path(str(files("copiloop") / settings.PROMPT_FILENAME))
@@ -490,7 +455,7 @@ def run_init(
     values: dict[str, object] = {"model": model}
     if effort is not None:
         values["reasoning_effort"] = effort
-    _write_config(targets.config_path, values)
+    settings.write_config(targets.config_path, values)
     output_fn(f"Wrote {targets.config_path}")
 
     if scaffold:

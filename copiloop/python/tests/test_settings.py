@@ -217,6 +217,65 @@ def test_table_str_list_rejects_non_list_and_non_str_items() -> None:
         settings.table_str_list({"deny_tools": ["a", 2]}, "deny_tools", scope="g")
 
 
+# ---------------------------------------------------------------------------
+# TOML writer (the config I/O module owns write next to read)
+# ---------------------------------------------------------------------------
+
+
+def test_dump_config_toml_round_trips_every_scalar_and_list_type() -> None:
+    import tomllib
+
+    values = {
+        "model": "gpt-5.4",
+        "reasoning_effort": "high",
+        "include_prs": True,
+        "otel_enabled": False,
+        "max_nmt_strikes": 5,
+        "send_timeout_seconds": 3600.5,
+        "deny_tools": ["bash", "write"],
+        "deny_skills": [],
+    }
+    assert tomllib.loads(settings.dump_config_toml(values)) == values
+
+
+def test_dump_config_toml_escapes_backslashes_and_quotes() -> None:
+    import tomllib
+
+    text = settings.dump_config_toml({"model": 'a"b\\c'})
+    assert tomllib.loads(text) == {"model": 'a"b\\c'}
+
+
+def test_dump_config_toml_header_is_comment_only(tmp_path: Path) -> None:
+    import tomllib
+
+    text = settings.dump_config_toml(
+        {"model": "gpt-5.4"}, header=("a header line", "and another")
+    )
+    assert "# a header line" in text
+    assert "# and another" in text
+    # Comments are ignored by tomllib — only the data round-trips.
+    assert tomllib.loads(text) == {"model": "gpt-5.4"}
+
+
+def test_dump_config_toml_rejects_unsupported_value_type() -> None:
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"nested": {"a": 1}})
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"listed": [1, 2]})
+
+
+def test_write_config_creates_scope_dir_and_round_trips(tmp_path: Path) -> None:
+    import tomllib
+
+    target = tmp_path / "copiloop" / "config.toml"
+    settings.write_config(target, {"model": "gpt-5.4", "max_nmt_strikes": 4})
+    assert target.is_file()
+    assert tomllib.loads(target.read_text(encoding="utf-8")) == {
+        "model": "gpt-5.4",
+        "max_nmt_strikes": 4,
+    }
+
+
 def test_settings_module_imports_only_stdlib() -> None:
     """The loader stays stdlib-only (like :mod:`copiloop.pricing`)."""
     import copiloop.settings as mod

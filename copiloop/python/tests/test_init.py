@@ -97,39 +97,6 @@ def _packaged(tmp_path: Path) -> _Packaged:
 
 
 # ---------------------------------------------------------------------------
-# TOML writer (stdlib serializer round-trips through tomllib)
-# ---------------------------------------------------------------------------
-
-
-def test_dump_config_toml_round_trips() -> None:
-    text = init_module._dump_config_toml(
-        {"model": "claude-opus-4.8", "reasoning_effort": "max"}
-    )
-    assert tomllib.loads(text) == {
-        "model": "claude-opus-4.8",
-        "reasoning_effort": "max",
-    }
-
-
-def test_dump_config_toml_escapes_and_types() -> None:
-    text = init_module._dump_config_toml(
-        {"model": 'a"b\\c', "include_prs": True, "max_nmt_strikes": 5}
-    )
-    assert tomllib.loads(text) == {
-        "model": 'a"b\\c',
-        "include_prs": True,
-        "max_nmt_strikes": 5,
-    }
-
-
-def test_write_config_creates_scope_dir(tmp_path: Path) -> None:
-    target = tmp_path / "copiloop" / "config.toml"
-    init_module._write_config(target, {"model": "gpt-5.4"})
-    assert target.exists()
-    assert tomllib.loads(target.read_text()) == {"model": "gpt-5.4"}
-
-
-# ---------------------------------------------------------------------------
 # Scope resolution
 # ---------------------------------------------------------------------------
 

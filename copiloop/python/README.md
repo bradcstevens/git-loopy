@@ -125,8 +125,9 @@ The wizard:
   runs nothing, and exits non-zero.
 
 Hand-editing `config.toml` directly stays fully supported — `init` is a
-convenience over it, not a replacement. (A `config` subcommand group to inspect
-and edit persisted settings is reserved now and implemented in issue #56.)
+convenience over it, not a replacement. To inspect or change persisted settings
+afterwards without hand-finding the file, use the
+[`copiloop config`](#managing-config-copiloop-config) subcommands.
 
 ### First run (auto-setup)
 
@@ -266,6 +267,57 @@ knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
 verbosity, `--no-reasoning`, `--parallel`, and `COPILOOP_PRICING_FILE`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
+
+---
+
+## Managing Config (`copiloop config`)
+
+`copiloop config` is a convenience surface over hand-editing `config.toml` (which
+stays fully supported). Dispatch is fast — like `init`, it imports no SDK or
+renderer. Scope selection matches the [`init`](#first-run-setup-copiloop-init)
+wizard: `--global` / `--project`, defaulting to **project** inside a git repo
+else **global**; `set` / `edit` / `path` target one scope, while `get` / `list`
+report the **effective merged** value across every source.
+
+```bash
+# Persist one key to a scope's config.toml (no editor). Scope defaults to
+# project-in-a-repo, else global; --global / --project force it.
+copiloop config set model gpt-5.4
+copiloop config set deny_tools "bash, write"   # list keys take a comma list
+copiloop config set --global reasoning_effort high
+
+# Show the EFFECTIVE value a run would use, merged across
+# CLI > env > project > global > built-in default (not just one file).
+copiloop config get model
+copiloop config list                # every persisted key, one per line
+
+# Print the resolved config.toml location(s) — scriptable.
+copiloop config path                # both scopes, labelled
+copiloop config path --project      # just the one path
+
+# Open the scope's config.toml in $VISUAL / $EDITOR (seeds an empty file first).
+copiloop config edit --global
+```
+
+- **`set <key> <value>`** coerces `<value>` to the key's type (bool / int /
+  float / comma-separated list), merges it into that scope's existing
+  `config.toml` (sibling keys survive), and writes — no editor. An unknown key or
+  an un-coercible value is a clean stderr error (exit `1`).
+- **`get <key>` / `list`** resolve through the same precedence chain a real run
+  uses, so they report the **effective** value (env vars and both config scopes
+  folded in), not one file's raw contents. Values go to **stdout**, warnings to
+  **stderr**, so they script cleanly.
+- **`path`** prints the resolved `config.toml` path(s) — both scopes labelled by
+  default, or a single bare path with `--global` / `--project`.
+- **`edit`** opens the scope's file in `$VISUAL` (else `$EDITOR`); it seeds an
+  empty `config.toml` first if none exists, and errors if neither editor var is
+  set.
+
+The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
+above (`model`, `reasoning_effort`, `issue_source`, `max_nmt_strikes`,
+`include_prs`, `otel_enabled`, `interactive`, `send_timeout_seconds`,
+`deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
+not `config` keys.
 
 ---
 

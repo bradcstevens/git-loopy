@@ -147,6 +147,14 @@ chosen **scope**. Runs automatically the first time on an interactive terminal; 
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `copiloop` command
 on PATH).
 
+**config (subcommands)**:
+The operator surface over **Config** — `copiloop config set / get / list / path / edit` — a
+convenience over hand-editing `config.toml` (which stays fully supported). `set` persists one key
+to a **scope**; `get` / `list` report the *effective merged* value(s) a run would use across the
+whole precedence chain (not one file); `path` prints the resolved location(s); `edit` opens the
+scope's file in `$EDITOR`. Scope selection mirrors **init**.
+_Avoid_: config command as a synonym for the persisted **Config** itself.
+
 **Global vs project scope**:
 Whether **Config** and assets apply machine-wide (**global**) or only within one repository
 (**project**). Project overrides global. The copiloop engine is installed once, globally; scope

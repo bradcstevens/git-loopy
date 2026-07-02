@@ -33,18 +33,21 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 __all__ = [
     "SettingsError",
     "ConfigTables",
     "CONFIG_FILENAME",
     "PROMPT_FILENAME",
+    "CONFIG_HEADER",
     "global_config_path",
     "global_prompt_path",
     "project_config_path",
     "load_config_table",
     "load_configs",
+    "dump_config_toml",
+    "write_config",
     "table_str",
     "table_bool",
     "table_int",
@@ -58,6 +61,16 @@ CONFIG_FILENAME = "config.toml"
 #: The prompt-override filename in the global scope (parallel to the packaged
 #: default shipped inside the wheel; see ``copiloop.loop._read_prompt``).
 PROMPT_FILENAME = "PROMPT.md"
+
+#: The default banner :func:`write_config` writes atop a generated
+#: ``config.toml`` (as comment lines). Both ``copiloop init`` and ``copiloop
+#: config set`` re-dump through the one writer, so the banner is command-neutral:
+#: it documents the precedence chain and that the file is hand-editable.
+CONFIG_HEADER: tuple[str, ...] = (
+    "copiloop persisted Config (hand-editable).",
+    "Precedence: CLI flag > env > project > global > built-in default (ADR-0006).",
+    "Edit freely, or manage with `copiloop init` / `copiloop config`.",
+)
 
 #: The XDG-relative config subdirectory (``<config-home>/copiloop/``).
 _APP_DIR = "copiloop"
@@ -164,6 +177,87 @@ def load_configs(repo_root: Path, env: Mapping[str, str]) -> ConfigTables:
     project = load_config_table(project_config_path(repo_root))
     global_ = load_config_table(global_config_path(env))
     return ConfigTables(project=project, global_=global_)
+
+
+# ---------------------------------------------------------------------------
+# TOML writer — the config I/O module owns write next to read. Serializes the
+# flat, scalar + string-list schema the persisted Config uses (stdlib has no
+# TOML writer). Both `copiloop init` and `copiloop config set` re-dump through
+# this one seam, so hand-edited files normalize to a single canonical shape.
+# ---------------------------------------------------------------------------
+
+
+def _escape_str(value: str) -> str:
+    """Escape a string for a double-quoted TOML basic string."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _format_value(key: str, value: object) -> str:
+    """Render one scalar / string-list value as its TOML literal.
+
+    Supports exactly the persisted-Config value shapes: ``str`` / ``bool`` /
+    ``int`` / ``float`` / ``list[str]``. ``bool`` is checked before ``int``
+    because ``bool`` is an ``int`` subclass. Anything else raises
+    :exc:`SettingsError` (rather than silently mangling a value the writer
+    doesn't understand — e.g. a nested table or a non-string list item).
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return f'"{_escape_str(value)}"'
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        escaped: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise SettingsError(
+                    f"cannot serialize {key!r}: only lists of strings are supported"
+                )
+            escaped.append(f'"{_escape_str(item)}"')
+        return f"[{', '.join(escaped)}]"
+    raise SettingsError(
+        f"cannot serialize {key!r}: unsupported value type "
+        f"{type(value).__name__} ({value!r})"
+    )
+
+
+def dump_config_toml(
+    values: Mapping[str, object],
+    *,
+    header: Sequence[str] = (),
+) -> str:
+    """Serialize a flat Config table to TOML text.
+
+    Only the persisted-Config value shapes (``str`` / ``bool`` / ``int`` /
+    ``float`` / ``list[str]``) are supported; the round-trip through
+    :mod:`tomllib` is asserted in ``tests/test_settings.py``. ``header`` lines
+    are emitted as ``#``-prefixed comments above the body.
+    """
+    lines = [f"# {line}" for line in header]
+    if header:
+        lines.append("")
+    for key, value in values.items():
+        lines.append(f"{key} = {_format_value(key, value)}")
+    return "\n".join(lines) + "\n"
+
+
+def write_config(
+    path: Path,
+    values: Mapping[str, object],
+    *,
+    header: Sequence[str] = CONFIG_HEADER,
+) -> None:
+    """Write ``values`` as ``config.toml`` at ``path``, creating the scope dir.
+
+    The scope directory (``<repo>/copiloop/`` or ``<config-home>/copiloop/``) is
+    created if absent. ``header`` defaults to the command-neutral
+    :data:`CONFIG_HEADER` banner.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dump_config_toml(values, header=header), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

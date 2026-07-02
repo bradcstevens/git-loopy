@@ -199,8 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
             "                                 PROMPT.md / skills) into a scope, "
             "then exit.\n"
             "                                 See `copiloop init -h`.\n"
-            "  config                         Manage persisted settings "
-            "(coming in issue #56).\n"
+            "  config                         Manage persisted settings: "
+            "set / get / list / edit / path.\n"
+            "                                 See `copiloop config -h`.\n"
             "\n"
             "Environment variables:\n"
             "  COPILOOP_MODEL              Copilot model id override "
@@ -385,6 +386,32 @@ def build_parser() -> argparse.ArgumentParser:
 _SUBCOMMANDS = ("init", "config")
 
 
+def _add_scope_flags(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--global`` / ``--project`` scope selector.
+
+    Used by ``init`` and by the scope-taking ``config`` ops (``edit`` / ``set`` /
+    ``path``) so scope handling is identical across them (ADR-0006): the flags
+    pick the scope, and with neither the handler defaults to project inside a
+    repo, else global.
+    """
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--global",
+        dest="scope",
+        action="store_const",
+        const="global",
+        help="Use the global scope (~/.config/copiloop/, honouring $XDG_CONFIG_HOME).",
+    )
+    scope.add_argument(
+        "--project",
+        dest="scope",
+        action="store_const",
+        const="project",
+        help="Use the project scope (<repo-root>/copiloop/).",
+    )
+    parser.set_defaults(scope=None)
+
+
 def build_subcommand_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for copiloop's subcommands (``init`` / ``config``).
 
@@ -416,22 +443,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "exits non-zero."
         ),
     )
-    scope = init.add_mutually_exclusive_group()
-    scope.add_argument(
-        "--global",
-        dest="scope",
-        action="store_const",
-        const="global",
-        help="Configure the global scope (~/.config/copiloop/, honouring $XDG_CONFIG_HOME).",
-    )
-    scope.add_argument(
-        "--project",
-        dest="scope",
-        action="store_const",
-        const="project",
-        help="Configure the project scope (<repo-root>/copiloop/).",
-    )
-    init.set_defaults(scope=None)
+    _add_scope_flags(init)
     init.add_argument(
         "-y",
         "--yes",
@@ -444,18 +456,73 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    sub.add_parser(
+    config = sub.add_parser(
         "config",
-        help=(
-            "Manage persisted settings: edit / set / get / list / path "
-            "(implemented in issue #56)."
-        ),
+        help="Manage persisted settings: edit / set / get / list / path.",
         description=(
-            "Manage persisted Config without hand-finding the file. The "
-            "subcommand group (edit / set / get / list / path) lands in issue "
-            "#56; the name is reserved here."
+            "Manage persisted Config without hand-finding the file, and inspect "
+            "the effective settings a run will use. Hand-editing config.toml "
+            "directly stays fully supported — this is a convenience over it."
         ),
     )
+    config_sub = config.add_subparsers(
+        dest="config_command",
+        required=True,
+        metavar="{edit,set,get,list,path}",
+    )
+
+    edit = config_sub.add_parser(
+        "edit",
+        help="Open the scope's config.toml in $VISUAL / $EDITOR.",
+        description=(
+            "Open the chosen scope's config.toml in $VISUAL / $EDITOR (a "
+            "header-only stub is created first if the file is absent)."
+        ),
+    )
+    _add_scope_flags(edit)
+
+    set_ = config_sub.add_parser(
+        "set",
+        help="Persist one setting to a scope (no editor).",
+        description=(
+            "Persist a single key to a scope's config.toml without opening an "
+            "editor. The value is typed + validated, then merged into the file "
+            "(sibling keys survive)."
+        ),
+    )
+    _add_scope_flags(set_)
+    set_.add_argument("key", metavar="KEY", help="The setting name (e.g. model).")
+    set_.add_argument("value", metavar="VALUE", help="The value to persist.")
+
+    get = config_sub.add_parser(
+        "get",
+        help="Print one setting's effective merged value.",
+        description=(
+            "Print the effective merged value of one key across all sources "
+            "(env > project > global > built-in default), i.e. what a run would "
+            "actually use — not one file's contents."
+        ),
+    )
+    get.add_argument("key", metavar="KEY", help="The setting name (e.g. model).")
+
+    config_sub.add_parser(
+        "list",
+        help="Print every setting's effective merged value.",
+        description=(
+            "Print every persisted key's effective merged value (env > project "
+            "> global > built-in default), one `key = value` per line."
+        ),
+    )
+
+    path = config_sub.add_parser(
+        "path",
+        help="Print the resolved config.toml location(s).",
+        description=(
+            "Print the resolved config.toml location(s). With --global / "
+            "--project prints just that scope's path; with neither, prints both."
+        ),
+    )
+    _add_scope_flags(path)
     return parser
 
 
@@ -482,19 +549,38 @@ def _run_init(args: argparse.Namespace) -> int:
 
 
 def _run_config(args: argparse.Namespace) -> int:
-    """Reserve ``copiloop config`` ahead of its implementation (issue #56).
+    """Dispatch ``copiloop config <op>`` to the config-management handlers.
 
-    Reserving the word here means ``copiloop config`` routes to this clean
-    "not yet implemented" message instead of falling through to the bare run,
-    where ``config`` would be rejected as a malformed ``<max-iterations>``.
+    The handler module (:mod:`copiloop.configcmd`) is imported lazily so the
+    subcommand parser stays SDK-free; ``configcmd`` itself only imports stdlib +
+    :mod:`copiloop.settings` (and lazily this module for the resolver), never the
+    loop / SDK / renderer, so ``copiloop config`` dispatch stays snappy.
+
+    The project scope needs a git repo; outside one, ``resolve_repo_root``
+    raises and the handlers fall back to the global scope (or reject a
+    ``--project`` request cleanly).
     """
-    print(
-        "copiloop: error: `copiloop config` is not implemented yet "
-        "(coming in issue #56). Hand-edit config.toml or run `copiloop init` "
-        "for now.",
-        file=sys.stderr,
-    )
-    return 2
+    from copiloop import configcmd
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+
+    command = args.config_command
+    scope = getattr(args, "scope", None)
+    env = os.environ
+    if command == "set":
+        return configcmd.run_set(
+            args.key, args.value, scope=scope, repo_root=repo_root, env=env
+        )
+    if command == "get":
+        return configcmd.run_get(args.key, repo_root=repo_root, env=env)
+    if command == "list":
+        return configcmd.run_list(repo_root=repo_root, env=env)
+    if command == "path":
+        return configcmd.run_path(scope=scope, repo_root=repo_root, env=env)
+    return configcmd.run_edit(scope=scope, repo_root=repo_root, env=env)
 
 
 def _parse_csv_env(value: str | None) -> list[str]:
