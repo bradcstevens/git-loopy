@@ -57,7 +57,7 @@ deferred, so the install string points at this repo's nested package via
 
 ```bash
 # Put a single `git-loopy` command on PATH (user-global).
-uv tool install "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=git-loopy/python"
+uv tool install "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
 
 # ...then run it from inside any git repo:
 cd ~/some/other/repo && git-loopy
@@ -67,14 +67,14 @@ For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
 bare `uvx git-loopy` is reserved for a future PyPI release):
 
 ```bash
-uvx --from "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=git-loopy/python" git-loopy
+uvx --from "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python" git-loopy
 ```
 
 Repos already on Python/uv can instead add it as a **project-local dev
 dependency** and run it through their own environment:
 
 ```bash
-uv add --dev "git+https://github.com/bradcstevens/github-copilot-ralph-starter-kit#subdirectory=git-loopy/python"
+uv add --dev "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
 uv run git-loopy
 ```
 

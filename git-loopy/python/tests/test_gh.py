@@ -165,7 +165,7 @@ def test_repo_view_happy_path(monkeypatch) -> None:
             stdout=json.dumps(
                 {
                     "owner": {"id": "id1", "login": "bradcstevens"},
-                    "name": "github-copilot-ralph-starter-kit",
+                    "name": "git-loopy",
                     "defaultBranchRef": {"name": "main"},
                 }
             ),
@@ -174,9 +174,9 @@ def test_repo_view_happy_path(monkeypatch) -> None:
     _install_fake_run(monkeypatch, fake_run)
     r = repo_view()
     assert r.owner == "bradcstevens"
-    assert r.name == "github-copilot-ralph-starter-kit"
+    assert r.name == "git-loopy"
     assert r.default_branch == "main"
-    assert r.nwo == "bradcstevens/github-copilot-ralph-starter-kit"
+    assert r.nwo == "bradcstevens/git-loopy"
     # argv shape: gh repo view --json owner,name,defaultBranchRef
     assert captured["cmd"][0] == "gh"
     assert "repo" in captured["cmd"] and "view" in captured["cmd"]
@@ -230,7 +230,7 @@ _ISSUE_JSON_LIST_PAYLOAD = [
             {"id": "L2", "name": "docs"},
         ],
         "state": "OPEN",
-        "url": "https://github.com/bradcstevens/github-copilot-ralph-starter-kit/issues/13",
+        "url": "https://github.com/bradcstevens/git-loopy/issues/13",
     },
     {
         "number": 6,
@@ -238,7 +238,7 @@ _ISSUE_JSON_LIST_PAYLOAD = [
         "body": "## Parent\n#1\n## Acceptance criteria\n",
         "labels": [{"name": "ready-for-agent"}],
         "state": "OPEN",
-        "url": "https://github.com/bradcstevens/github-copilot-ralph-starter-kit/issues/6",
+        "url": "https://github.com/bradcstevens/git-loopy/issues/6",
     },
 ]
 

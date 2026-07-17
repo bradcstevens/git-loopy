@@ -28,10 +28,10 @@ The kit is designed to be **dropped into a new repo as scaffolding**. The steps 
 
 ```bash
 # 1. Clone the kit into a new project directory and reset git history.
-git clone https://github.com/bradcstevens/github-copilot-ralph-starter-kit my-project
+git clone https://github.com/bradcstevens/git-loopy my-project
 cd my-project
 rm -rf .git
-git init && git add -A && git commit -m "Initial commit from github-copilot-ralph-starter-kit"
+git init && git add -A && git commit -m "Initial commit from git-loopy"
 
 # 2. Scaffold AGENTS.md and SPEC.md from the templates in templates/.
 #    (CONTEXT.md is already at the repo root as a stub; /grill-with-docs will

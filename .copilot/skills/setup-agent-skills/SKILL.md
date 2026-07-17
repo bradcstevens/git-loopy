@@ -1,6 +1,6 @@
 ---
 name: setup-agent-skills
-description: Configure this repo for the engineering skills — set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.
+description: Configure this repo for the engineering skills — fetch the git-loopy AFK tooling, then set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.
 disable-model-invocation: true
 ---
 
@@ -8,11 +8,34 @@ disable-model-invocation: true
 
 Scaffold the per-repo configuration that the engineering skills assume:
 
+- **git-loopy AFK tooling** — the `git-loopy/` loop runner, cloned into the repo from the starter kit
 - **Issue tracker** — where issues live (GitHub by default; local markdown is also supported out of the box)
 - **Triage labels** — the strings used for the five canonical triage roles
 - **Domain docs** — where `CONTEXT.md` and ADRs live, and the consumer rules for reading them
 
-This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write.
+Apart from the deterministic fetch step below, this is a prompt-driven skill. Fetch the tooling first, then explore, present what you found, confirm with the user, and write.
+
+## Fetch the git-loopy tooling
+
+Do this **first**, before the interactive process below. Clone **only** the [`git-loopy/`](https://github.com/bradcstevens/git-loopy/tree/main/git-loopy) directory from the starter kit into the directory the skill was invoked in (the current working directory). This is the one deterministic step in this skill — run it as-is.
+
+It uses a shallow, blobless, sparse clone into a temp dir, then moves just `git-loopy/` into place, so the invocation directory ends up with a clean `git-loopy/` (no `.git`, no other starter-kit files):
+
+```bash
+if [ -e ./git-loopy ]; then
+  echo "git-loopy/ already exists here — skipping (remove it first to re-fetch)."
+else
+  TMP="$(mktemp -d)" && \
+  git clone --depth 1 --filter=blob:none --sparse \
+    https://github.com/bradcstevens/git-loopy.git "$TMP/repo" && \
+  git -C "$TMP/repo" sparse-checkout set git-loopy && \
+  mv "$TMP/repo/git-loopy" ./git-loopy && \
+  rm -rf "$TMP" && \
+  echo "Cloned git-loopy/ into $(pwd)/git-loopy"
+fi
+```
+
+If `git-loopy/` already exists in the invocation directory, leave it untouched and tell the user (this is expected when the skill is run inside the starter kit itself). Then continue with the process below.
 
 ## Process
 

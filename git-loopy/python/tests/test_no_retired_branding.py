@@ -190,7 +190,7 @@ def test_forbidden_pattern_matches_retired_names_but_not_retained_ones() -> None
         ".git-loopy/logs/run.jsonl",
         "git-loopy/python",
         "git_loopy.run",
-        # retained concept + repo slug -- no _, -afk, ralph/, or copiloop
+        # retained concept + former repo slug -- no _, -afk, ralph/, or copiloop
         "the Ralph loop technique",
         "github-copilot-ralph-starter-kit",
     )
