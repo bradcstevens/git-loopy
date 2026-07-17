@@ -45,7 +45,7 @@ The slug is what makes a batch legible at a glance, so name it for the *content*
 
 - **One request:** name it after that single request, e.g. `stream-issue-log-to-bottom`.
 - **Multiple requests:** name it after the **core / general theme** that ties them together — e.g.
-  `copiloop-packaging-and-rebrand` for a batch spanning packaging, distribution, config, and a
+  `git-loopy-packaging-and-rebrand` for a batch spanning packaging, distribution, config, and a
   rename. Find the umbrella; don't just concatenate every request. If the requests are genuinely
   unrelated, pick the dominant area.
 - Derive it from the **refined request titles**, not the user's verbatim wording.

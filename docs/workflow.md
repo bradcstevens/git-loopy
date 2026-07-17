@@ -78,7 +78,7 @@ copilot
 > /to-issues
 ```
 
-The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## What to build` and `## Acceptance criteria`, which are the two sections the AFK runner ([`copiloop/python/`](../copiloop/python/)) looks for when filtering AFK-ready work (plus an optional `## Parent` link back to the PRD).
+The skill re-explores the codebase, quizzes you on slice boundaries, and creates one GitHub Issue per **vertical slice** (schema + service + UI through every layer — never horizontal). Each issue carries `## What to build` and `## Acceptance criteria`, which are the two sections the AFK runner ([`git-loopy/python/`](../git-loopy/python/)) looks for when filtering AFK-ready work (plus an optional `## Parent` link back to the PRD).
 
 ## Phase 5 — Triage (`/triage`)
 
@@ -88,16 +88,16 @@ The skill re-explores the codebase, quizzes you on slice boundaries, and creates
 
 Walks the open issues through the five-label state machine (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `ready-for-agent` issues are picked up by the AFK loop. The canonical label list lives in `docs/agents/triage-labels.md`.
 
-## Phase 6 — AFK Loop (`copiloop/python/`)
+## Phase 6 — AFK Loop (`git-loopy/python/`)
 
 This is the autonomous phase. Kick off the runner and walk away.
 
 ```bash
 # Unlimited iterations, default model.
-uv run --project copiloop/python copiloop
+uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.
-uv run --project copiloop/python copiloop 50
+uv run --project git-loopy/python git-loopy 50
 ```
 
 **For everything else** — env vars, per-iteration flow, exit conditions, the commit-message contract, and how the prompt routes work to `/diagnosing-bugs` / `/prototype` / `/tdd` / `/codebase-design` (with the human-only steps inlined) — see [`docs/runners.md`](runners.md).

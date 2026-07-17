@@ -16,7 +16,7 @@ This is why the workflow ([`docs/workflow.md`](workflow.md)) breaks a brief down
 
 Every iteration starts from zero (system prompt + `AGENTS.md` + the issue). The agent forgets everything between iterations. This is a feature, not a bug — **optimize for it** rather than fighting it with compaction. A cleared context is always a known, clean state. Compacted sediment is unpredictable.
 
-The AFK runner ([`copiloop/python/`](../copiloop/python/)) invokes a fresh `copilot --yolo -p` per iteration on purpose. The two channels through which state survives between iterations are deliberate and narrow:
+The AFK runner ([`git-loopy/python/`](../git-loopy/python/)) invokes a fresh `copilot --yolo -p` per iteration on purpose. The two channels through which state survives between iterations are deliberate and narrow:
 
 - **Git commits.** The previous iteration's commits are the durable record of what was done.
 - **Issue tracker state.** Closing an issue (and the wrapper's auto-close backstop) is how "this slice is done" propagates forward.

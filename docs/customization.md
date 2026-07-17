@@ -36,9 +36,9 @@
 │   ├── handoff/                    # Compact a long human-driven session into a continuation doc.
 │   ├── microsoft-foundry/          # Azure AI Foundry helpers (delete if not on Microsoft tech).
 │   └── caveman/                    # Token-compressed output mode (off by default in the loop).
-└── copiloop/
+└── git-loopy/
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
-    └── python/                     # The AFK runner, on the GitHub Copilot Python SDK. See copiloop/python/README.md.
+    └── python/                     # The AFK runner, on the GitHub Copilot Python SDK. See git-loopy/python/README.md.
 ```
 
 ### What you'll add when adopting
@@ -52,7 +52,7 @@
 │       ├── issue-tracker.md        #   Where issues live (GitHub / GitLab / local markdown / other).
 │       ├── triage-labels.md        #   Label vocabulary used by /triage.
 │       └── domain.md               #   Single- vs multi-context layout for CONTEXT.md / ADRs.
-├── prds/                           # Optional legacy local-markdown PRDs (COPILOOP_ISSUE_SOURCE=prds).
+├── prds/                           # Optional legacy local-markdown PRDs (GIT_LOOPY_ISSUE_SOURCE=prds).
 ├── issues/                         # Optional legacy local-markdown issues.
 └── <your application code>
 ```
@@ -60,7 +60,7 @@
 ## The two files you almost always edit
 
 - **`AGENTS.md`** (scaffold from [`templates/AGENTS.template.md`](../templates/AGENTS.template.md)) — fill in **Tech stack** and **Feedback loops**. The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
-- **[`copiloop/PROMPT.md`](../copiloop/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`copiloop/python/copiloop/wrapper.py`](../copiloop/python/copiloop/wrapper.py) so the auto-close backstop still matches what the agent emits.
+- **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
 The **template files** ([`templates/AGENTS.template.md`](../templates/AGENTS.template.md), [`templates/SPEC.template.md`](../templates/SPEC.template.md), and the [`CONTEXT.md`](../CONTEXT.md) stub at the repo root) each include a `> 📝` placeholder convention and a `> 🗑️ DELETE IF NOT APPLICABLE` convention. Grep for `<[A-Z_]` to find what's left to replace.
 
@@ -100,9 +100,9 @@ The kit ships with a **two-layer auto-bootstrap** so a forgotten `/setup-agent-s
 | Layer | Where | What it does |
 | --- | --- | --- |
 | **Interactive sessions** | Top of `AGENTS.md` (the "First-run bootstrap" directive in [`templates/AGENTS.template.md`](../templates/AGENTS.template.md), loaded into every Copilot CLI invocation) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
-| **AFK loop runner** | Preflight check in [`copiloop/python/`](../copiloop/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
+| **AFK loop runner** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
 
-The two layers compose: a human starts a fresh repo, runs `uv run --project copiloop/python copiloop`, gets a clear error, opens `copilot` interactively, sees the AGENTS.md directive auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
+The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, sees the AGENTS.md directive auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
 
 ## Skills reference
 

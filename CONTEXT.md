@@ -116,27 +116,28 @@ scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or 
 **Active issue** — summed across every **Iteration** that worked it — the basis for the
 **Queue**'s per-issue Cost. Every Cost figure derives from Consumption by one shared
 rule (first non-None model wins; tokens sum), represented in code by the `UsageTally`
-value object (`copiloop.usage`).
+value object (`git_loopy.usage`).
 _Avoid_: usage, spend (for the token measure); billing.
 
 **ModelSelectionMode**:
 The opt-in startup state — entered with the `--select-model` flag or
-`COPILOOP_MODEL_SELECT=1` — that shows the live model + reasoning-effort picker before the
+`GIT_LOOPY_MODEL_SELECT=1` — that shows the live model + reasoning-effort picker before the
 run starts. Off by default: an ordinary launch uses the configured model and reasoning
 effort with no prompt.
 _Avoid_: picker mode, interactive model prompt.
 
 ### Framework and configuration
 
-**copiloop**:
+**git-loopy**:
 The framework and its single CLI command — "a GitHub Copilot SDK loop-engineer framework for
 orchestrating automated ralph loops for agentic engineering." One globally-installed command
-runs, configures, and scaffolds the loop from any repository. Supersedes the retired **ralph-afk**
-brand.
-_Avoid_: ralph-afk, "the runner" as a proper name.
+runs, configures, and scaffolds the loop from any repository. Written `git-loopy` as the
+distribution and console command (and `git loopy` works as a git subcommand); `git_loopy` as
+the importable Python package. Supersedes the retired **copiloop** and **ralph-afk** brands.
+_Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Ralph loop**:
-The *technique* copiloop orchestrates — the unattended, iterative AFK loop that drives the Copilot
+The *technique* git-loopy orchestrates — the unattended, iterative AFK loop that drives the Copilot
 agent to work triaged issues one at a time. A concept, never a code identifier; "ralph" survives
 only in this sense.
 _Avoid_: ralph-afk (the retired brand); "ralph" as a symbol, directory, or env-var.
@@ -152,12 +153,12 @@ _Avoid_: settings file, profile.
 **init**:
 First-run setup that writes **Config** — and optionally an editable prompt and skills — into a
 chosen **scope**. Runs automatically the first time on an interactive terminal; also invocable as
-`copiloop init`.
-_Avoid_: setup, bootstrap; install (install is the separate act of putting the `copiloop` command
+`git-loopy init`.
+_Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
 **config (subcommands)**:
-The operator surface over **Config** — `copiloop config set / get / list / path / edit` — a
+The operator surface over **Config** — `git-loopy config set / get / list / path / edit` — a
 convenience over hand-editing `config.toml` (which stays fully supported). `set` persists one key
 to a **scope**; `get` / `list` report the *effective merged* value(s) a run would use across the
 whole precedence chain (not one file); `path` prints the resolved location(s); `edit` opens the
@@ -166,7 +167,7 @@ _Avoid_: config command as a synonym for the persisted **Config** itself.
 
 **Global vs project scope**:
 Whether **Config** and assets apply machine-wide (**global**) or only within one repository
-(**project**). Project overrides global. The copiloop engine is installed once, globally; scope
+(**project**). Project overrides global. The git-loopy engine is installed once, globally; scope
 governs *which* settings and assets resolve for a run, not which binary runs.
 _Avoid_: local (ambiguous), workspace.
 
@@ -259,11 +260,14 @@ _Avoid_: independent, parallelizable (as the label name).
 - `wave` vs `iteration` — an **Iteration** is the serial unit (one **Active issue**); a
   **Wave** is the parallel unit (up to N **Lanes** plus one **Integration**). They are
   the serial and parallel analogues of one round of work, not synonyms.
-- `ralph` / `ralph-afk` / `copiloop` were used interchangeably for the tool — resolved:
-  **copiloop** is the framework, CLI, and brand; a **Ralph loop** is the retained *concept* (the
-  loop technique); the **ralph-afk** brand and every `ralph` / `ralph_afk` identifier, the `ralph/`
-  and `.ralph/` directories, and the `RALPH_*` env vars are retired in favour of `copiloop`,
-  `.copiloop/`, and `COPILOOP_*`.
+- `ralph` / `ralph-afk` / `copiloop` / `git-loopy` were used interchangeably for the tool —
+  resolved: **git-loopy** is the framework, CLI, and brand (`git-loopy` as the distribution and
+  console command, `git_loopy` as the importable Python package); a **Ralph loop** is the
+  retained *concept* (the loop technique). Two product brands are now retired: **ralph-afk**
+  (every `ralph` / `ralph_afk` identifier, the `ralph/` and `.ralph/` directories, and the
+  `RALPH_*` env vars — ADR-0005) and **copiloop** (every `copiloop` / `Copiloop` identifier, the
+  `copiloop/` and `.copiloop/` directories, the `copiloop.*` spans, and the `COPILOOP_*` env
+  vars — ADR-0012), both in favour of `git-loopy`, `git_loopy`, `.git-loopy/`, and `GIT_LOOPY_*`.
 - `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
   to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
   per-issue because every issue boundary is also an **Iteration** boundary.

@@ -36,13 +36,12 @@ venv/
 *.egg-info/
 
 # Ralph runtime
-copiloop/.tmp/
+git-loopy/.tmp/
 .ralph-grill.lock
-.ralph/
 
-# copiloop/python/ persisted observability artefacts (JSONL event logs +
+# git-loopy/python/ persisted observability artefacts (JSONL event logs +
 # per-run summary JSONs; never commit).
-.copiloop/
+.git-loopy/
 
 # Project-local PRDs and issues for the legacy ISSUE_SOURCE=prds mode.
 # GitHub Issues is the default in this kit; uncomment the lines below if you

@@ -4,11 +4,11 @@ A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on top 
 
 > Inspired by the [AI Engineer Workshop 2026](https://github.com/mattpocock/ai-engineer-workshop-2026-project) workflow, ported to the GitHub Copilot CLI.
 
-**What you get:** a Python AFK runner on the GitHub Copilot Python SDK ([`copiloop/python/`](copiloop/python/)), per-repo configuration templates under [`templates/`](templates/), and a vendored copy of every Copilot CLI skill the workflow routes to under [`.copilot/skills/`](.copilot/skills). Stack-agnostic — customize one **Feedback loops** table and the rest of the kit follows.
+**What you get:** a Python AFK runner on the GitHub Copilot Python SDK ([`git-loopy/python/`](git-loopy/python/)), per-repo configuration templates under [`templates/`](templates/), and a vendored copy of every Copilot CLI skill the workflow routes to under [`.copilot/skills/`](.copilot/skills). Stack-agnostic — customize one **Feedback loops** table and the rest of the kit follows.
 
 This README is the **quickstart**. The deeper docs live under [`docs/`](docs/) — see [Where to go next](#where-to-go-next).
 
-> **Skills setup starts with `/setup-agent-skills`.** Once you've cloned this kit into your new project and installed the skills at the user level, the **first** thing to run in Copilot CLI is the [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) skill. It populates the `## Agent skills` block in your `AGENTS.md` and writes the per-repo `docs/agents/{issue-tracker,triage-labels,domain}.md` files that every downstream skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnosing-bugs`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads. Skip this step and those skills will guess at your issue tracker, label vocabulary, and context layout. **Safety net:** if you forget, the bootstrap directive at the top of [`AGENTS.md`](templates/AGENTS.template.md) auto-invokes the skill on your next interactive `copilot` session, and the AFK runner ([`copiloop/python/`](copiloop/python/)) refuses to start without it. Full detail in [`docs/customization.md`](docs/customization.md#setup-agent-skills--the-entry-point-skill) and [`docs/customization.md` → Auto-bootstrap behavior](docs/customization.md#auto-bootstrap-behavior).
+> **Skills setup starts with `/setup-agent-skills`.** Once you've cloned this kit into your new project and installed the skills at the user level, the **first** thing to run in Copilot CLI is the [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) skill. It populates the `## Agent skills` block in your `AGENTS.md` and writes the per-repo `docs/agents/{issue-tracker,triage-labels,domain}.md` files that every downstream skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnosing-bugs`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads. Skip this step and those skills will guess at your issue tracker, label vocabulary, and context layout. **Safety net:** if you forget, the bootstrap directive at the top of [`AGENTS.md`](templates/AGENTS.template.md) auto-invokes the skill on your next interactive `copilot` session, and the AFK runner ([`git-loopy/python/`](git-loopy/python/)) refuses to start without it. Full detail in [`docs/customization.md`](docs/customization.md#setup-agent-skills--the-entry-point-skill) and [`docs/customization.md` → Auto-bootstrap behavior](docs/customization.md#auto-bootstrap-behavior).
 
 ---
 
@@ -18,7 +18,7 @@ This README is the **quickstart**. The deeper docs live under [`docs/`](docs/) �
 - [`gh`](https://cli.github.com/) on PATH and signed in (`gh auth login`).
 - `git` on PATH.
 - A GitHub repository for your project (the loop's default issue source).
-- Python **≥ 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip` ≥ 24) for the AFK runner ([`copiloop/python/`](copiloop/python/)). See [`docs/runners.md`](docs/runners.md) for the runner contract and [`copiloop/python/README.md`](copiloop/python/README.md) for the Python bootstrap.
+- Python **≥ 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip` ≥ 24) for the AFK runner ([`git-loopy/python/`](git-loopy/python/)). See [`docs/runners.md`](docs/runners.md) for the runner contract and [`git-loopy/python/README.md`](git-loopy/python/README.md) for the Python bootstrap.
 
 ---
 
@@ -61,7 +61,7 @@ copilot
 #    to find every placeholder that still needs replacing.
 $EDITOR AGENTS.md      # project description, tech stack, feedback loops
 $EDITOR SPEC.md        # problem statement, user stories, implementation decisions
-$EDITOR copiloop/PROMPT.md  # loop-specific routing rules (usually leave defaults)
+$EDITOR git-loopy/PROMPT.md  # loop-specific routing rules (usually leave defaults)
 
 # 6. Walk through the human-in-the-loop workflow.
 copilot
@@ -100,7 +100,7 @@ The README stops here. Pick whichever doc matches what you need to do:
 | [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea → Intake → Grill → Brief → PRD → Issues → Triage → AFK loop → QA). Includes the optional [`/intake`](.copilot/skills/intake/SKILL.md) capture step, and the [`/grill-me` vs `/grill-with-docs`](docs/workflow.md#grill-me-vs-grill-with-docs--pick-the-right-one) decision tree and the greenfield-project edge case. |
 | [`docs/runners.md`](docs/runners.md) | You're ready to kick off the AFK loop and need the **runner reference** — invocation cookbook, per-iteration flow, exit conditions, commit-message contract, and skill-routing rules. |
 | [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit to your project** — repo structure, what to edit in `AGENTS.md` and `PROMPT.md`, what `/setup-agent-skills` actually writes, re-running it, and the skills reference. |
-| [`copiloop/python/README.md`](copiloop/python/README.md) | You want the AFK runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
+| [`git-loopy/python/README.md`](git-loopy/python/README.md) | You want the AFK runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
 
 A recommended reading order for first-time users: [`docs/concepts.md`](docs/concepts.md) → finish the Quick Start above → [`docs/workflow.md`](docs/workflow.md) → [`docs/runners.md`](docs/runners.md) → [`docs/customization.md`](docs/customization.md) on demand.
 

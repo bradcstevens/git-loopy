@@ -2,76 +2,76 @@
 
 > Everything you need to invoke the AFK runner correctly and understand what it'll do on each iteration.
 
-The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-copilooppython)). The kit ships a single runner — the Python AFK runner at [`copiloop/python/`](../copiloop/python/), built on the GitHub Copilot Python SDK. Launch it with `copiloop` (see [`copiloop/python/README.md`](../copiloop/python/README.md) for install and invocation); there is no separate shell runner.
+The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-git-loopypython)). The kit ships a single runner — the Python AFK runner at [`git-loopy/python/`](../git-loopy/python/), built on the GitHub Copilot Python SDK. Launch it with `git-loopy` (see [`git-loopy/python/README.md`](../git-loopy/python/README.md) for install and invocation); there is no separate shell runner.
 
-## The runner: `copiloop/python/`
+## The runner: `git-loopy/python/`
 
 The runner enforces the **wrapper contract** — `ready-for-agent` filter, `## What to build` + `## Acceptance criteria` discriminator, `Closes/Fixes/Resolves #N` auto-close backstop, env-var surface, and termination model. It also auto-stashes dirty leftovers after an iteration so a partial commit cannot make the next iteration abort or absorb unrelated tracked changes.
 
-| Surface                          | [`copiloop/python/`](../copiloop/python/) (Python SDK)                                                                                                                  |
+| Surface                          | [`git-loopy/python/`](../git-loopy/python/) (Python SDK)                                                                                                                  |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Invocation                       | `uv run --project copiloop/python copiloop`                                                                                                      |
-| Positional arg (iteration cap)   | `uv run --project copiloop/python copiloop 50` (0 / omitted = unlimited)                                                                         |
-| `COPILOOP_MODEL`                          | env var (default `claude-opus-4.8`; use a bare base id — see [`copiloop/python/README.md`](../copiloop/python/README.md))                            |
-| `COPILOOP_ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
-| `COPILOOP_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
-| `COPILOOP_MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
+| Invocation                       | `uv run --project git-loopy/python git-loopy`                                                                                                      |
+| Positional arg (iteration cap)   | `uv run --project git-loopy/python git-loopy 50` (0 / omitted = unlimited)                                                                         |
+| `GIT_LOOPY_MODEL`                          | env var (default `claude-opus-4.8`; use a bare base id — see [`git-loopy/python/README.md`](../git-loopy/python/README.md))                            |
+| `GIT_LOOPY_ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
+| `GIT_LOOPY_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
+| `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
 | Exit `0` — clean                 | empty AFK-ready pool **or** iteration cap reached                                                                                              |
-| Exit `1` — aborted               | `COPILOOP_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
-| Observability artefacts          | `.copiloop/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.copiloop/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.copiloop/logs/<iso>-<run_id>.log` (stderr mirror) |
+| Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
+| Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
 | Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + live-catalog estimated-cost signal, run-end summary table                              |
-| OpenTelemetry tracing            | opt-in via `uv sync --project copiloop/python --extra otel` + `COPILOOP_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
+| OpenTelemetry tracing            | opt-in via `uv sync --project git-loopy/python --extra otel` + `GIT_LOOPY_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
 | Prerequisites                    | `gh`, `git`, `copilot`, Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                    |
 
-The runner gives you a richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.copiloop/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. Its dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `copiloop/python/` — they do not touch your project's runtime.
+The runner gives you a richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.git-loopy/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. Its dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `git-loopy/python/` — they do not touch your project's runtime.
 
-The cost figure surfaced by the runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`copiloop/python/README.md`](../copiloop/python/README.md) for the full caveat.
+The cost figure surfaced by the runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`git-loopy/python/README.md`](../git-loopy/python/README.md) for the full caveat.
 
 ## Invocation
 
 ```bash
 # Unlimited iterations, default model (claude-opus-4.8 at `max` reasoning effort).
-uv run --project copiloop/python copiloop
+uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.
-uv run --project copiloop/python copiloop 50
+uv run --project git-loopy/python git-loopy 50
 
 # Pick a different model.
-COPILOOP_MODEL=gpt-5.4 uv run --project copiloop/python copiloop
+GIT_LOOPY_MODEL=gpt-5.4 uv run --project git-loopy/python git-loopy
 
 # Tolerate more no-progress iterations before aborting (default: 3).
-COPILOOP_MAX_NMT_STRIKES=5 uv run --project copiloop/python copiloop
+GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
 
 # Use the legacy local-markdown mode (prds/<feature>/NNN-*.md).
-COPILOOP_ISSUE_SOURCE=prds uv run --project copiloop/python copiloop
+GIT_LOOPY_ISSUE_SOURCE=prds uv run --project git-loopy/python git-loopy
 
 # Also advance ready-for-agent pull requests (GitHub mode only).
-INCLUDE_PRS=1 uv run --project copiloop/python copiloop
+INCLUDE_PRS=1 uv run --project git-loopy/python git-loopy
 ```
 
-First-run setup: `copiloop init` is an interactive wizard that writes a
+First-run setup: `git-loopy init` is an interactive wizard that writes a
 `config.toml` (and, by default, scaffolds an editable `PROMPT.md` override and
-copiloop's agent skills) into a **global** or **project** scope, then exits
+git-loopy's agent skills) into a **global** or **project** scope, then exits
 without running the loop. You rarely run it by hand: the **first** bare
-`copiloop` with no Config in either scope auto-runs it on a TTY, then continues
-into the loop; with no TTY (or `COPILOOP_INTERACTIVE=0`) it is skipped and the
+`git-loopy` with no Config in either scope auto-runs it on a TTY, then continues
+into the loop; with no TTY (or `GIT_LOOPY_INTERACTIVE=0`) it is skipped and the
 run falls back to the built-in defaults, so CI never hangs on a prompt. See
-[`copiloop/python/README.md`](../copiloop/python/README.md#first-run-setup-copiloop-init).
+[`git-loopy/python/README.md`](../git-loopy/python/README.md#first-run-setup-git-loopy-init).
 
-Managing Config: `copiloop config` is a fast (SDK-free) convenience group over
+Managing Config: `git-loopy config` is a fast (SDK-free) convenience group over
 hand-editing `config.toml`. `config set <key> <value>` persists one key to a
 scope; `config get <key>` / `config list` print the **effective merged** value(s)
 a run would use (across CLI > env > project > global > default, not one file);
 `config path` prints the resolved location(s); `config edit` opens the scope's
 file in `$VISUAL` / `$EDITOR`. Scope (`--global` / `--project`, default
 project-in-a-repo-else-global) matches the `init` wizard. See
-[`copiloop/python/README.md`](../copiloop/python/README.md#managing-config-copiloop-config).
+[`git-loopy/python/README.md`](../git-loopy/python/README.md#managing-config-git-loopy-config).
 
 ## Per-iteration flow
 
 1. **Branch hygiene (PR mode).** When PR support is on, it restores the base branch first — a prior PR iteration may have left HEAD on a PR branch from `gh pr checkout`. A dirty worktree no longer aborts the run: leftover changes are captured by the **Checkpoint** step below (ADR-0004).
 2. **Collect.** Pulls every open issue labeled `ready-for-agent` via `gh issue list`, then filters to those whose body contains both `## What to build` and `## Acceptance criteria` (a `## Parent` section is optional; bare PRDs are skipped). When PR support is on, it also pulls every open PR labeled `ready-for-agent` (discriminated by an `## Agent Brief` in the PR body or a comment) and renders them as `=== PR #N: <title> [labels: ...] (branch: <head-branch>) ===` blocks.
-3. **Run.** Feeds the filtered set, the last five commits, and [`copiloop/PROMPT.md`](../copiloop/PROMPT.md) to a fresh `copilot --yolo -p` invocation. Streams the agent's reasoning, tool calls, and tool output to the terminal. Captures Copilot's exit code via `PIPESTATUS` so a crash isn't mistaken for a clean turn.
+3. **Run.** Feeds the filtered set, the last five commits, and [`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md) to a fresh `copilot --yolo -p` invocation. Streams the agent's reasoning, tool calls, and tool output to the terminal. Captures Copilot's exit code via `PIPESTATUS` so a crash isn't mistaken for a clean turn.
 4. **Auto-close backstop.** Walks new commits for GitHub closing keywords (`Closes/Fixes/Resolves #N`, case-insensitive) **restricted to issue numbers that were in this iteration's AFK-ready pool**. Any referenced issue that's still open gets closed by the wrapper with a comment pointing at the commit SHA(s). The pool whitelist prevents a stale or mis-numbered `Closes #N` from acting on an unrelated issue — and is restricted to issues, so a PR in the pool is never closed by the backstop.
 5. **Progress accounting.** An iteration "made progress" if it produced commits or wrapper closures. A PR also counts as progress when its head SHA advances (the agent pushed to the PR branch) — detected by re-fetching each pool PR and comparing its live head SHA. The wrapper never merges or closes PRs; advancement is the only signal it records. Otherwise the iteration counts as a strike.
 6. **Checkpoint (durability net).** After accounting, if the working tree has any uncommitted or untracked changes, the runner stages everything (`git add -A`, honouring `.gitignore`) and makes a single **close-keyword-free** Checkpoint commit attributed to the active issue — so no work is ever lost and the next iteration starts from a clean tree. Checkpoints are **excluded from strike progress** (only agent commits and closures reset strikes, so the stuck-agent abort still fires) and from the run-summary commit tally. A Checkpoint failure (e.g. nothing to commit) warns but never aborts.
@@ -83,7 +83,7 @@ project-in-a-repo-else-global) matches the `init` wizard. See
 | --------------------- | ---- | -------------------------------------------------------------------------------------- |
 | Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                  |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
-| **Aborted — stuck**   | `1`  | `COPILOOP_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
+| **Aborted — stuck**   | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
 | **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, or malformed pricing. |
 
 The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
@@ -95,7 +95,7 @@ The auto-close backstop relies on commit messages following the GitHub closing-k
 - **Completion commits:** `Closes #N`, `Fixes #N`, or `Resolves #N` (case-insensitive forms — `close[sd]?`, `fix(es|ed)?`, `resolve[sd]?` — followed by whitespace then `#N`).
 - **Partial-progress commits:** use `Refs #N` or `Progress on #N` so the wrapper does **not** auto-close.
 
-[`copiloop/PROMPT.md`](../copiloop/PROMPT.md) instructs the agent in this contract and also lays out a **FINAL SEQUENCE** for issue closure (re-fetch state → `gh issue close` → verify state is `CLOSED` → retry once → fall through to wrapper backstop). If you customize `PROMPT.md`, keep that contract intact or the backstop will misfire — and update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`copiloop/python/copiloop/wrapper.py`](../copiloop/python/copiloop/wrapper.py) so it still matches.
+[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md) instructs the agent in this contract and also lays out a **FINAL SEQUENCE** for issue closure (re-fetch state → `gh issue close` → verify state is `CLOSED` → retry once → fall through to wrapper backstop). If you customize `PROMPT.md`, keep that contract intact or the backstop will misfire — and update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so it still matches.
 
 ## Pull requests as a request surface
 
@@ -108,7 +108,7 @@ By default the loop only works **issues**. A repo can opt into also advancing **
 
 ## Skill routing
 
-[`copiloop/PROMPT.md`](../copiloop/PROMPT.md) directs each iteration's work to the right **model-invocable** skill:
+[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md) directs each iteration's work to the right **model-invocable** skill:
 
 - `/diagnosing-bugs` for hard bugs
 - `/prototype` for sketchy areas
@@ -124,5 +124,5 @@ Skills the loop **will not invoke** (out of scope for unattended runs): `/setup-
 **Next:**
 - [`docs/workflow.md`](workflow.md) — where the AFK loop fits in the broader Idea → QA workflow.
 - [`docs/customization.md`](customization.md) — adjusting `AGENTS.md` feedback loops and `PROMPT.md` skill routing.
-- [`copiloop/python/README.md`](../copiloop/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.
+- [`git-loopy/python/README.md`](../git-loopy/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.
 - Back to [`README.md`](../README.md).
