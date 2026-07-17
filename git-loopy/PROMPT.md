@@ -38,12 +38,27 @@ The marker changes nothing else: you still **pick exactly one task** by the prio
 
 # SKILLS NOT TO INVOKE
 
-These skills exist but are **out of scope for this autonomous loop** — they're either upstream/setup or session-management tools meant for a human-driven session:
+Many skills in `.copilot/skills` exist for **human-driven sessions or upstream work** and are out of scope for this autonomous loop. Leave the ones below alone — they're grouped by *why* they don't belong in an unattended iteration.
 
-- `/triage`, `/to-prd`, `/to-issues` — these create or relabel issues. The loop only works tickets that humans (or `/triage`) have already marked `ready-for-agent`.
-- `/handoff` — pointless in this loop because each iteration is a fresh one-shot `copilot -p` invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
-- `/caveman` — reviewability of your output matters more than token compression while running unattended.
-- `/grill-with-docs`, `/zoom-out`, `/improve-codebase-architecture`, `/grill-me` — human-only skills (`disable-model-invocation: true`); you cannot auto-invoke them in this loop. The instructions above already inline what you need: plan stress-testing against the domain docs, going up a layer to map an unfamiliar area, and deep-module design via `/codebase-design`.
+**Upstream issue-creation & requirements capture** — these run *before* the loop; the loop only works tickets that a human (or `/triage`) has already marked `ready-for-agent`:
+
+- `/triage` — relabels issues into the `ready-for-agent` pool.
+- `/to-spec`, `/to-tickets` — create or relabel issues (a spec and its sliced tickets) upstream of the loop.
+- `/to-questionnaire`, `/intake`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
+
+**Human-in-the-loop skills** — they need a person to answer, so they can't run unattended. Most are `disable-model-invocation: true`; `/grilling` is model-invocable but still needs a human to grill:
+
+- `/grill-me`, `/batch-grill-me`, `/grill-with-docs`, `/grilling` — interrogate a human about a plan or decision.
+- `/improve-codebase-architecture` — a human-driven architecture review; for autonomous refactors use `/codebase-design` instead.
+- `/teach` — walks a human through an area of the code.
+
+**Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
+
+- `/handoff` — pointless here because each iteration is a fresh one-shot invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
+- `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
+- `/setup-agent-skills`, `/writing-great-skills` — install or author skills, not loop work.
+
+The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 
 # EXPLORATION
 
@@ -109,12 +124,13 @@ When a block is headed `=== PR #N: ... (branch: <head-branch>) ===`, you're adva
 1. **Check out the PR branch.** `gh pr checkout <N>` switches your worktree to `<head-branch>`. The wrapper restores the base branch at the start of the next iteration, so you don't need to switch back manually — but don't start unrelated work while checked out.
 2. **Read the brief.** Find the `## Agent Brief` (in the PR body or a comment) plus any review threads, and implement exactly what it asks using `/tdd`.
 3. **Run the relevant feedback loops** from `AGENTS.md`, same as issue mode.
-4. **Commit to the PR branch** with a message recording key decisions and files changed. Do **not** use a `Closes #N` / `Fixes #N` / `Resolves #N` keyword for the PR's number — you are not closing it.
-5. **Push to the PR branch.** `git push`. The wrapper detects progress by the PR's head SHA moving, so a successful push is what registers as an advance.
-6. **Comment progress** with `gh pr comment <N> --body-file <path>` only when there's genuinely new information — same restraint as issue comments.
-7. **Never merge or close the PR.** A human reviews and merges it in QA. Your job is to push the diff forward, not to land it.
+4. **(Optional) Self-review with `/code-review`.** On a non-trivial diff, run `/code-review` over your changes to catch bugs or drift from the brief before you commit.
+5. **Commit to the PR branch** with a message recording key decisions and files changed. Do **not** use a `Closes #N` / `Fixes #N` / `Resolves #N` keyword for the PR's number — you are not closing it.
+6. **Push to the PR branch.** `git push`. The wrapper detects progress by the PR's head SHA moving, so a successful push is what registers as an advance.
+7. **Comment progress** with `gh pr comment <N> --body-file <path>` only when there's genuinely new information — same restraint as issue comments.
+8. **Never merge or close the PR.** A human reviews and merges it in QA. Your job is to push the diff forward, not to land it.
 
-If the PR is in a state you can't advance (merge conflicts you can't resolve without more context, a brief blocked on a dependency), post one comment explaining the blocker and end the turn.
+If the branch has diverged and you hit merge conflicts, use `/resolving-merge-conflicts` to work through the ones you can resolve from the diff and the brief. If the PR is in a state you genuinely can't advance (conflicts you can't resolve without more context, a brief blocked on a dependency), post one comment explaining the blocker and end the turn.
 
 ## Local-markdown mode (legacy)
 
