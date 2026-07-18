@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "event_types": {
+    "WRAPPER_RUN_START": "wrapper.run.start",
+    "WRAPPER_RUN_END": "wrapper.run.end",
+    "WRAPPER_ITERATION_START": "wrapper.iteration.start",
+    "WRAPPER_ITERATION_END": "wrapper.iteration.end",
+    "WRAPPER_AFK_READY_COLLECTED": "wrapper.afk_ready.collected",
+    "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
+    "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
+    "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
+    "WRAPPER_AUTO_CLOSE": "wrapper.auto_close",
+    "WRAPPER_PR_ADVANCED": "wrapper.pr.advanced",
+    "WRAPPER_STRIKE": "wrapper.strike",
+    "WRAPPER_ASK_USER_ATTEMPTED": "wrapper.ask_user.attempted",
+    "SESSION_CREATED": "session.created",
+    "SESSION_IDLE": "session.idle",
+    "SESSION_DELETED": "session.deleted",
+    "ASSISTANT_MESSAGE": "assistant.message",
+    "ASSISTANT_REASONING": "assistant.reasoning",
+    "TOOL_CALL": "tool.call",
+    "TOOL_RESULT": "tool.result",
+    "TOOL_PERMISSION_REQUESTED": "tool.permission_requested",
+    "TOOL_PERMISSION_DENIED": "tool.permission_denied",
+    "USAGE_TOKENS": "usage.tokens"
+  },
+  "serialization_cases": [
+    {
+      "id": "envelope-before-sorted-payload",
+      "event": {
+        "zeta": "last",
+        "type": "wrapper.iteration.start",
+        "alpha": "first",
+        "iter": 3,
+        "run_id": "01HXR0000000000000000000AA",
+        "ts": "2026-05-16T00:00:00.123Z"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.123Z\", \"run_id\": \"01HXR0000000000000000000AA\", \"iter\": 3, \"type\": \"wrapper.iteration.start\", \"alpha\": \"first\", \"zeta\": \"last\"}\n"
+    },
+    {
+      "id": "run-scope-null-iteration",
+      "event": {
+        "issues": [79, 80],
+        "ts": "2026-05-16T00:00:00.000Z",
+        "type": "wrapper.run.start",
+        "run_id": "01HXR0000000000000000000BB",
+        "iter": null,
+        "count": 2
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000BB\", \"iter\": null, \"type\": \"wrapper.run.start\", \"count\": 2, \"issues\": [79, 80]}\n"
+    }
+  ]
+}

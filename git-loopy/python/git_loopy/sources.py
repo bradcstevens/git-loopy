@@ -50,7 +50,11 @@ from typing import Protocol, runtime_checkable
 
 from git_loopy import gh as gh_module
 from git_loopy.git import Commit
-from git_loopy.wrapper import extract_close_refs, filter_to_pool
+from git_loopy.wrapper import (
+    actionable_close_refs,
+    exit_code_for,
+    extract_close_refs,
+)
 
 __all__ = [
     "AfkReadyItem",
@@ -312,13 +316,13 @@ class GitHubIssueSource:
                 "https://cli.github.com/.",
                 exc,
             )
-            return 1
+            return exit_code_for("preflight_failed")
         if not authed:
             self._diag.error(
                 "gh is not authenticated. Run `gh auth login` and re-run "
                 "git_loopy."
             )
-            return 1
+            return exit_code_for("preflight_failed")
         try:
             repo = self._gh.repo_view()
         except gh_module.GhError as exc:
@@ -327,7 +331,7 @@ class GitHubIssueSource:
                 "clone of a GitHub repository.",
                 exc,
             )
-            return 1
+            return exit_code_for("preflight_failed")
         self._diag.info("preflight ok: %s", repo.nwo)
         return None
 
@@ -506,19 +510,11 @@ class GitHubIssueSource:
         if not new_commits:
             return []
 
-        # Restrict to issues: a ``Closes #<prnum>`` must never trigger
-        # ``gh issue close`` on a PR sharing that number space.
-        pool_numbers: set[int] = {
-            item.ref
-            for item in pool
-            if item.kind == "issue" and isinstance(item.ref, int)
-        }
-        if not pool_numbers:
-            return []
-
         concatenated = "\n".join(c.message for c in new_commits)
-        refs = extract_close_refs(concatenated)
-        surviving = filter_to_pool(refs, pool_numbers)
+        surviving = actionable_close_refs(
+            concatenated,
+            ((item.ref, item.kind) for item in pool),
+        )
 
         completions: list[Completion] = []
         for ref in surviving:

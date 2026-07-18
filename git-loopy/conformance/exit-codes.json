@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "cases": [
+    {
+      "id": "empty-pool-is-clean",
+      "reason": "empty_pool",
+      "exit_code": 0
+    },
+    {
+      "id": "iteration-cap-is-clean",
+      "reason": "iteration_cap",
+      "exit_code": 0
+    },
+    {
+      "id": "stuck-run-is-aborted",
+      "reason": "stuck",
+      "exit_code": 1
+    },
+    {
+      "id": "preflight-failure-is-aborted",
+      "reason": "preflight_failed",
+      "exit_code": 1
+    },
+    {
+      "id": "malformed-invocation-is-usage-error",
+      "reason": "usage_error",
+      "exit_code": 2
+    }
+  ]
+}

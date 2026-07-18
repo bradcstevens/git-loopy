@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "cases": [
+    {
+      "id": "no-progress-records-a-strike",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agent-commit-is-progress",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 1,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 0,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wrapper-closure-is-progress",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 1,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 0,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "checkpoint-alone-is-not-progress",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 1,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pr-advance-is-progress",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 1,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 0,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "progress-resets-consecutive-strikes",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 1,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 2,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 1,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 0,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        }
+      ]
+    },
+    {
+      "id": "abort-at-threshold-and-remain-terminal",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 2,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 1,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": true
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 3,
+            "outcome": "aborted"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 1,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": false
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 3,
+            "outcome": "aborted"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nmt-sentinel-is-informational",
+      "max_strikes": 3,
+      "steps": [
+        {
+          "signals": {
+            "commits_in_iter": 0,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 0,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": true
+          },
+          "expected": {
+            "progress": false,
+            "strikes": 1,
+            "outcome": "running"
+          }
+        },
+        {
+          "signals": {
+            "commits_in_iter": 1,
+            "auto_closures_in_iter": 0,
+            "checkpoints_in_iter": 1,
+            "pr_advances_in_iter": 0,
+            "saw_nmt_sentinel": true
+          },
+          "expected": {
+            "progress": true,
+            "strikes": 0,
+            "outcome": "running"
+          }
+        }
+      ]
+    }
+  ]
+}

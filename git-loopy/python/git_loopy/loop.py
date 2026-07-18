@@ -144,6 +144,8 @@ from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
     NMTStrikeStateMachine,
     checkpoint_message,
+    did_iteration_make_progress,
+    exit_code_for,
     extract_close_refs,
     filter_to_pool,
 )
@@ -750,7 +752,13 @@ class _Loop:
                         sha=completion.sha,
                         shas=list(completion.shas),
                     )
-            auto_closures = len(completions)
+            auto_closures = sum(
+                1
+                for completion in completions
+                if getattr(completion, "kind", "issue") != "pr"
+            )
+            pr_advances = len(completions) - auto_closures
+            completion_count = len(completions)
 
             # 8) Runner Checkpoint (ADR-0004). Capture any dirty / untracked
             #    work-in-progress in a single close-keyword-free Checkpoint
@@ -776,13 +784,21 @@ class _Loop:
             self._maybe_push(iter_num, new_commits, checkpoint_sha)
 
             # 10) Strike state machine + emit appropriate events.
-            outcome = self._strike_machine.tick(
-                commits_in_iter=len(new_commits),
-                auto_closures_in_iter=auto_closures,
+            commits_in_iter = len(new_commits)
+            checkpoints_in_iter = int(checkpoint_sha is not None)
+            made_progress = did_iteration_make_progress(
+                commits_in_iter,
+                auto_closures,
+                checkpoints_in_iter=checkpoints_in_iter,
+                pr_advances_in_iter=pr_advances,
             )
-            if outcome == "aborted" or (
-                len(new_commits) == 0 and auto_closures == 0
-            ):
+            outcome = self._strike_machine.tick(
+                commits_in_iter=commits_in_iter,
+                auto_closures_in_iter=auto_closures,
+                checkpoints_in_iter=checkpoints_in_iter,
+                pr_advances_in_iter=pr_advances,
+            )
+            if outcome == "aborted" or not made_progress:
                 # Either we just hit the strike threshold OR this iteration
                 # had no progress (a single strike). Either way emit the
                 # wrapper.strike event so the renderer + persist see it.
@@ -799,8 +815,8 @@ class _Loop:
             self._record_counters(iter_num)
 
             if outcome == "aborted":
-                return ("aborted", len(new_commits), auto_closures)
-            return ("continue", len(new_commits), auto_closures)
+                return ("aborted", len(new_commits), completion_count)
+            return ("continue", len(new_commits), completion_count)
 
     def _maybe_checkpoint(
         self,
@@ -1024,7 +1040,7 @@ class _Loop:
             max_nmt_strikes=self._config.max_nmt_strikes,
         )
 
-        exit_code = 0
+        exit_code = exit_code_for("iteration_cap")
         outcome_label = "iteration_cap"
         iter_num = 0
         try:
@@ -1043,11 +1059,11 @@ class _Loop:
                     )
                     if outcome == "empty_pool":
                         outcome_label = "empty_pool"
-                        exit_code = 0
+                        exit_code = exit_code_for("empty_pool")
                         break
                     if outcome == "aborted":
                         outcome_label = "stuck"
-                        exit_code = 1
+                        exit_code = exit_code_for("stuck")
                         break
             except Exception as exc:
                 # An unhandled crash inside an iteration MUST surface in
@@ -1231,7 +1247,7 @@ class _ParallelLoop:
             max_nmt_strikes=self._config.max_nmt_strikes,
         )
 
-        exit_code = 0
+        exit_code = exit_code_for("iteration_cap")
         outcome_label = "iteration_cap"
         iter_num = 0
         try:
@@ -1250,11 +1266,11 @@ class _ParallelLoop:
                     )
                     if outcome == "empty_pool":
                         outcome_label = "empty_pool"
-                        exit_code = 0
+                        exit_code = exit_code_for("empty_pool")
                         break
                     if outcome == "aborted":
                         outcome_label = "stuck"
-                        exit_code = 1
+                        exit_code = exit_code_for("stuck")
                         break
             except Exception as exc:
                 outcome_label = "crashed"

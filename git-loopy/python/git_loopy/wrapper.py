@@ -8,10 +8,12 @@ of the AFK runner. Its load-bearing surface is intentionally small:
   blob of commit messages, in first-encounter order.
 * :func:`filter_to_pool` — restricts a list of refs to a given AFK-ready
   pool, preserving order.
+* :func:`actionable_close_refs` — applies the typed, issues-only Pool policy.
 * :func:`did_iteration_make_progress` — the truth function for whether an
   iteration counts as work.
 * :class:`NMTStrikeStateMachine` — the no-more-tasks strike state machine
   that decides when to abort a stuck run.
+* :func:`exit_code_for` — the Wrapper-contract termination matrix.
 
 Design notes:
 
@@ -33,25 +35,25 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Iterable, Literal
 
 __all__ = [
     "CLOSE_KEYWORD_RE",
     "extract_close_refs",
     "filter_to_pool",
+    "actionable_close_refs",
     "did_iteration_make_progress",
     "NMTStrikeStateMachine",
+    "exit_code_for",
     "CHECKPOINT_TRAILER_KEY",
     "checkpoint_message",
     "is_checkpoint_message",
 ]
 
-# Byte-for-byte the PRD-specified close-keyword pattern. The convention is
-# specified against POSIX ``grep`` semantics (``[[:space:]]`` ≈ ``\s``,
-# ``[0-9]`` ≈ ``\d``); drift is detected by ``tests/test_wrapper.py``.
+# Byte-for-byte the language-neutral Wrapper-contract pattern. Line splitting
+# below supplies the specified POSIX ``grep`` boundary semantics.
 CLOSE_KEYWORD_RE: re.Pattern[str] = re.compile(
-    r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)",
-    re.IGNORECASE,
+    r"(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)",
 )
 
 
@@ -81,7 +83,7 @@ def extract_close_refs(commit_messages: str) -> list[int]:
     out: list[int] = []
     for line in commit_messages.split("\n"):
         for match in CLOSE_KEYWORD_RE.finditer(line):
-            num = int(match.group("num"))
+            num = int(match.group(2))
             if num in seen:
                 continue
             seen.add(num)
@@ -108,22 +110,74 @@ def filter_to_pool(refs: list[int], afk_pool: set[int]) -> list[int]:
     return [n for n in refs if n in afk_pool]
 
 
+def actionable_close_refs(
+    commit_messages: str,
+    pool: Iterable[tuple[int | str, str]],
+) -> list[int]:
+    """Return first-seen close refs for issues in the current Pool.
+
+    Pull requests and source-native string refs are deliberately excluded. The
+    primitive tuple input keeps this policy independent of any Orchestrator's
+    item type while preserving the Wrapper contract's issues-only boundary.
+    """
+    issue_pool = {
+        ref
+        for ref, kind in pool
+        if kind == "issue" and isinstance(ref, int)
+    }
+    return filter_to_pool(extract_close_refs(commit_messages), issue_pool)
+
+
 def did_iteration_make_progress(
-    commits_in_iter: int, auto_closures_in_iter: int
+    commits_in_iter: int,
+    auto_closures_in_iter: int,
+    *,
+    checkpoints_in_iter: int = 0,
+    pr_advances_in_iter: int = 0,
+    saw_nmt_sentinel: bool = False,
 ) -> bool:
     """Decide whether an iteration counts as work.
 
-    An iteration "made progress" if either at least one commit landed OR
-    the wrapper auto-closed at least one issue.
+    An iteration "made progress" if at least one agent commit landed, the
+    wrapper closed an issue, or a PR head advanced. Runner Checkpoints and the
+    legacy no-more-tasks sentinel are explicitly informational.
 
     Args:
-        commits_in_iter: Number of new commits the iteration produced.
+        commits_in_iter: Number of new agent commits the iteration produced.
         auto_closures_in_iter: Number of issues the wrapper auto-closed.
+        checkpoints_in_iter: Number of runner Checkpoints produced.
+        pr_advances_in_iter: Number of PR heads the wrapper observed advance.
+        saw_nmt_sentinel: Whether the legacy no-more-tasks sentinel appeared.
 
     Returns:
-        ``True`` if either count is non-zero.
+        ``True`` if an agent commit, issue closure, or PR advance occurred.
     """
-    return commits_in_iter > 0 or auto_closures_in_iter > 0
+    _ = (checkpoints_in_iter, saw_nmt_sentinel)
+    return (
+        commits_in_iter > 0
+        or auto_closures_in_iter > 0
+        or pr_advances_in_iter > 0
+    )
+
+
+ExitReason = Literal[
+    "empty_pool",
+    "iteration_cap",
+    "stuck",
+    "preflight_failed",
+    "usage_error",
+]
+
+
+def exit_code_for(reason: ExitReason) -> int:
+    """Return the process exit code for a Wrapper-contract termination."""
+    if reason in {"empty_pool", "iteration_cap"}:
+        return 0
+    if reason in {"stuck", "preflight_failed"}:
+        return 1
+    if reason == "usage_error":
+        return 2
+    raise ValueError(f"unknown Wrapper-contract exit reason: {reason!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -237,13 +291,18 @@ class NMTStrikeStateMachine:
         *,
         commits_in_iter: int,
         auto_closures_in_iter: int,
+        checkpoints_in_iter: int = 0,
+        pr_advances_in_iter: int = 0,
         saw_nmt_sentinel: bool = False,
     ) -> Outcome:
         """Record one completed iteration and return the resulting outcome.
 
         Args:
-            commits_in_iter: Number of commits the iteration produced.
+            commits_in_iter: Number of agent commits the iteration produced.
             auto_closures_in_iter: Number of wrapper-issued auto-closes.
+            checkpoints_in_iter: Number of runner Checkpoints produced.
+                Informational only and never progress.
+            pr_advances_in_iter: Number of PR heads that advanced.
             saw_nmt_sentinel: ``True`` if the agent emitted the
                 ``<promise>NO MORE TASKS</promise>`` sentinel this
                 iteration. Informational only — the state machine never
@@ -256,16 +315,18 @@ class NMTStrikeStateMachine:
         Returns:
             The new outcome (``"running"`` or ``"aborted"``).
         """
-        # saw_nmt_sentinel is informational only; it only varies the
-        # warning message, not the state-machine outcome.
-        _ = saw_nmt_sentinel
-
         # Terminal state. On abort the state machine freezes — further
         # ticks neither reset strikes nor flip the outcome.
         if self.outcome == "aborted":
             return self.outcome
 
-        if did_iteration_make_progress(commits_in_iter, auto_closures_in_iter):
+        if did_iteration_make_progress(
+            commits_in_iter,
+            auto_closures_in_iter,
+            checkpoints_in_iter=checkpoints_in_iter,
+            pr_advances_in_iter=pr_advances_in_iter,
+            saw_nmt_sentinel=saw_nmt_sentinel,
+        ):
             self.strikes = 0
             return self.outcome
 

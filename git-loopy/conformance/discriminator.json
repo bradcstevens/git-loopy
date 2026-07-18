@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "cases": [
+    {
+      "id": "required-headings-without-parent",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true
+    },
+    {
+      "id": "required-headings-with-parent",
+      "body": "## Parent\n\n- #78\n\n## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true
+    },
+    {
+      "id": "required-headings-in-reverse-order",
+      "body": "## Acceptance criteria\n- It works.\n\n## What to build\nImplement the slice.",
+      "eligible": true
+    },
+    {
+      "id": "heading-suffix-is-accepted",
+      "body": "## What to build (phase 1)\nImplement the slice.\n\n## Acceptance criteria - required\n- It works.",
+      "eligible": true
+    },
+    {
+      "id": "missing-what-to-build",
+      "body": "## Parent\n\n- #78\n\n## Acceptance criteria\n- It works.",
+      "eligible": false
+    },
+    {
+      "id": "missing-acceptance-criteria",
+      "body": "## What to build\nImplement the slice.",
+      "eligible": false
+    },
+    {
+      "id": "no-required-headings",
+      "body": "A bare planning document with no task sections.",
+      "eligible": false
+    },
+    {
+      "id": "headings-must-start-a-line",
+      "body": "Intro ## What to build\nImplement it.\nIntro ## Acceptance criteria\n- It works.",
+      "eligible": false
+    },
+    {
+      "id": "headings-must-not-be-indented",
+      "body": "  ## What to build\nImplement it.\n\n  ## Acceptance criteria\n- It works.",
+      "eligible": false
+    },
+    {
+      "id": "headings-are-literal-and-case-sensitive",
+      "body": "## what to build\nImplement it.\n\n## acceptance criteria\n- It works.",
+      "eligible": false
+    }
+  ]
+}

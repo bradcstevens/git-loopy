@@ -38,10 +38,11 @@
 │   └── code-review/                # Review against standards and the originating spec.
 └── git-loopy/
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
+    ├── conformance/                # Language-neutral Wrapper-contract fixtures.
     └── python/                     # Python reference runner (GitHub Copilot Python SDK). See git-loopy/python/README.md.
 ```
 
-> As the [runner family](adr/0013-multi-language-runner-family.md) ports land, `git-loopy/` also gains `shell/`, `powershell/`, `tui/` (the shared TUI helper binary), and `conformance/` (the language-neutral parity suite). Until then, the Python runner is the only shippable member.
+> As the [Runner family](adr/0013-multi-language-runner-family.md) ports land, `git-loopy/` also gains `shell/`, `powershell/`, and `tui/` (the shared TUI helper binary). The [Conformance suite](../git-loopy/conformance/README.md) is already shared infrastructure; until the ports land, the Python Orchestrator is the only shippable member.
 
 ### What you customize when adopting
 

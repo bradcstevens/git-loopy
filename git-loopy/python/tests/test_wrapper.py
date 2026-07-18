@@ -31,14 +31,14 @@ from git_loopy.wrapper import (
 # --------------------------------------------------------------------------- #
 
 
-def test_close_keyword_regex_is_pattern_specified_by_prd() -> None:
-    """The compiled regex pattern is byte-for-byte the PRD-mandated string.
+def test_close_keyword_regex_is_pattern_specified_by_wrapper_contract() -> None:
+    """The compiled regex is byte-for-byte the Wrapper-contract string.
 
-    Drift here implies the PRD-specified close-keyword convention has been
+    Drift here implies the shared close-keyword convention has been
     broken; the regex cannot be reformulated.
     """
     assert CLOSE_KEYWORD_RE.pattern == (
-        r"(?P<kw>close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(?P<num>\d+)"
+        r"(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)"
     )
     assert CLOSE_KEYWORD_RE.flags & re.IGNORECASE
 

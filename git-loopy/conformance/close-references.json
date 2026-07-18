@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "reference_regex": "(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\\s+#(\\d+)",
+  "cases": [
+    {
+      "id": "empty-message",
+      "commit_messages": "",
+      "issue_pool": [],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "every-keyword-form",
+      "commit_messages": "close #1 closes #2 closed #3 fix #4 fixes #5 fixed #6 resolve #7 resolves #8 resolved #9",
+      "issue_pool": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "pr_pool": [],
+      "extracted_refs": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "actionable_refs": [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    },
+    {
+      "id": "case-and-horizontal-whitespace",
+      "commit_messages": "CLOSES #10\nFixes\t#11\nrEsOlVeD   #12",
+      "issue_pool": [10, 11, 12],
+      "pr_pool": [],
+      "extracted_refs": [10, 11, 12],
+      "actionable_refs": [10, 11, 12]
+    },
+    {
+      "id": "first-encounter-deduplication",
+      "commit_messages": "Closes #9 fixes #1\nResolved #9\nClosed #5\nFixes #1",
+      "issue_pool": [1, 5, 9],
+      "pr_pool": [],
+      "extracted_refs": [9, 1, 5],
+      "actionable_refs": [9, 1, 5]
+    },
+    {
+      "id": "pool-whitelist-preserves-order",
+      "commit_messages": "Closes #9 fixes #1 resolves #5",
+      "issue_pool": [1, 5],
+      "pr_pool": [],
+      "extracted_refs": [9, 1, 5],
+      "actionable_refs": [1, 5]
+    },
+    {
+      "id": "newline-is-a-hard-boundary",
+      "commit_messages": "Closes\n#42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "carriage-return-is-inline-whitespace",
+      "commit_messages": "Closes\r#42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [42],
+      "actionable_refs": [42]
+    },
+    {
+      "id": "unicode-line-separator-is-inline-whitespace",
+      "commit_messages": "Closes\u2028#42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [42],
+      "actionable_refs": [42]
+    },
+    {
+      "id": "cross-repository-reference-does-not-match",
+      "commit_messages": "Closes octo/other#42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "keyword-glued-to-hash-does-not-match",
+      "commit_messages": "Closes#42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "keyword-inside-compound-does-not-match",
+      "commit_messages": "Close-related #42",
+      "issue_pool": [42],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "non-closing-reference-does-not-match",
+      "commit_messages": "Refs #42 and implements #43",
+      "issue_pool": [42, 43],
+      "pr_pool": [],
+      "extracted_refs": [],
+      "actionable_refs": []
+    },
+    {
+      "id": "pull-request-reference-is-not-actionable",
+      "commit_messages": "Closes #7",
+      "issue_pool": [],
+      "pr_pool": [7],
+      "extracted_refs": [7],
+      "actionable_refs": []
+    },
+    {
+      "id": "mixed-pool-closes-issues-only",
+      "commit_messages": "Closes #7\nFixes #42\nResolves #99",
+      "issue_pool": [42],
+      "pr_pool": [7],
+      "extracted_refs": [7, 42, 99],
+      "actionable_refs": [42]
+    },
+    {
+      "id": "multiple-commit-boundaries",
+      "commit_messages": "Closes #20\n---COMMIT-BOUNDARY---\nFixes #21\n---COMMIT-BOUNDARY---\nResolves #22",
+      "issue_pool": [20, 21, 22],
+      "pr_pool": [],
+      "extracted_refs": [20, 21, 22],
+      "actionable_refs": [20, 21, 22]
+    }
+  ]
+}
