@@ -1,90 +1,163 @@
-# GitHub Copilot Ralph Starter Kit
+# git-loopy
 
-A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on the **GitHub Copilot CLI**. Drop it into a new repo, fill in `AGENTS.md`, point the loop at a kanban of triaged GitHub Issues, and let an agent implement them autonomously while you do something else.
+## Intro to git-loopy
 
-**What you get:**
+**git-loopy** is a GitHub Copilot SDK framework for **loop engineering**: turning
+well-shaped issues into bounded, observable, autonomous software delivery. It
+orchestrates a Runner family around one shared Wrapper contract. The Python
+reference runner is available now; shell, PowerShell, and Rust Orchestrators are
+planned.
 
-- A **Python AFK runner** on the GitHub Copilot Python SDK — [`git-loopy/python/`](git-loopy/python/). The reference implementation of git-loopy's [**runner family**](docs/adr/0013-multi-language-runner-family.md); shell + PowerShell ports for Linux/macOS/Windows are on the roadmap.
-- A **vendored copy of every Copilot CLI skill** the workflow routes to — [`.copilot/skills/`](.copilot/skills).
+Models can produce code quickly, but an unstructured prompt-to-code process loses
+intent, overruns useful context, and hides whether the result is actually good.
+git-loopy exists to make that work explicit and reviewable: durable domain
+language, acceptance-tested issues, one Active issue per Iteration, repository
+feedback loops, progress accounting, strikes, Checkpoints, pushed commits, and
+human judgment.
 
-Stack-agnostic: customize one **Feedback loops** table in `AGENTS.md` and the rest of the kit follows.
+```mermaid
+flowchart LR
+    Engineer["Loop engineer<br/>intent, guardrails, judgment"]
+    Skills["Skills<br/>shape, slice, verify"]
+    Tracker["Issue tracker<br/>spec and ready-for-agent issues"]
+    Runner["git-loopy Runner family<br/>repeatable autonomous Iterations"]
+    Repo["Repository<br/>validated commits and closed issues"]
 
----
-
-## Prerequisites
-
-- [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in (`npm install -g @github/copilot`, then run `copilot` once).
-- [`gh`](https://cli.github.com/) and `git` on `PATH`; `gh` signed in (`gh auth login`).
-- A GitHub repository for your project (the loop's default issue source).
-- Python **>= 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip >= 24`) — only needed once you reach the AFK loop, and only for the Python reference runner (the planned shell/PowerShell ports will need no Python; see [ADR-0013](docs/adr/0013-multi-language-runner-family.md)).
-
-Detailed prerequisites are in [`docs/skills-setup.md`](docs/skills-setup.md#prerequisites).
-
----
-
-## Quick Start
-
-From `git clone` to running the AFK loop. Every step below has a detailed walkthrough in [`docs/skills-setup.md`](docs/skills-setup.md).
-
-```bash
-# 1. Clone the kit into a new project and reset git history.
-git clone https://github.com/bradcstevens/git-loopy my-project
-cd my-project
-rm -rf .git && git init && git add -A && git commit -m "Initial commit from starter kit"
-
-# 2. Install the vendored skills at the user level (once per machine).
-mkdir -p ~/.copilot/skills
-cp -R .copilot/skills/* ~/.copilot/skills/
-
-# 3. Configure this repo — run /setup-agent-skills FIRST, before any other skill.
-#    It writes docs/agents/{issue-tracker,triage-labels,domain}.md and the
-#    AGENTS.md `## Agent skills` block that every downstream skill reads.
-copilot
-> /setup-agent-skills
-
-# 4. Make AGENTS.md describe YOUR project: fill in the Tech stack and the
-#    load-bearing Feedback loops table, then capture your brief in SPEC.md.
-#    docs/customization.md has the AGENTS.md structure; docs/skills-setup.md the full walkthrough.
+    Engineer --> Skills --> Tracker --> Runner --> Repo --> Engineer
+    Runner -. "Dashboard and Summary" .-> Engineer
 ```
 
-Then walk the skills workflow, inside `copilot`, up to the loop:
+The framework implements the Ralph loop technique, but the product, command, and
+on-disk brand are **git-loopy**. Run it as `git-loopy` or the equivalent git
+subcommand, `git loopy`. See the [skills setup](docs/skills-setup.md), the
+[detailed workflow](docs/workflow.md), and the [Runner family
+reference](docs/runners.md) to adopt it.
 
-```text
-/grill-me          # align on the change (greenfield: start here)
-/grill-with-docs   # once vocabulary stabilises, compile CONTEXT.md + docs/adr/
-/to-prd            # publish the brief as the parent PRD issue
-/to-issues         # slice the PRD into vertical-slice issues
-/triage            # label ready-for-agent work for the loop
-```
+## Loop engineer
 
-Finally, kick off the autonomous AFK loop and walk away:
+The **loop engineer** is the human who designs, triages, and supervises the loop.
+They own intent, domain language, issue slicing, acceptance criteria, guardrails,
+and final judgment. git-loopy owns repeatable execution.
 
-```bash
-uv run --project git-loopy/python git-loopy        # unlimited iterations
-uv run --project git-loopy/python git-loopy 50     # cap at 50 iterations
-```
+This role matters because the leverage point is moving. The scarce skill is no
+longer producing every line by hand; it is creating a system in which an agent can
+make small, verifiable moves without drifting from the goal. A strong loop
+engineer gives each Iteration enough context to succeed, makes failure visible,
+and judges the result rather than outsourcing accountability.
 
-> **Run `/setup-agent-skills` first.** Installing the skills (step 2) only makes the commands _exist_; `/setup-agent-skills` (step 3) makes them _correct for this repo_ — it writes your issue tracker, labels, and context layout, and sets up the `AGENTS.md` `## Agent skills` block. Skip it and the planning skills guess — though the AFK runner refuses to start without it and interactive sessions auto-trigger it. Full walkthrough: [`docs/skills-setup.md`](docs/skills-setup.md).
+## The skills and their purpose
 
-You don't need every phase — the skills are independent, so pick what helps. The end-to-end workflow is documented in [`docs/workflow.md`](docs/workflow.md).
+The vendored [skills](.copilot/skills/) are small, composable disciplines rather
+than one monolithic process. Use only the skills the work needs; run
+`/setup-agent-skills` once before the rest.
 
----
+### Shape intent and gather evidence
 
-## Where to go next
-
-| Doc | Read when... |
+| Skill | Purpose |
 | --- | --- |
-| [`docs/skills-setup.md`](docs/skills-setup.md) | You're **adopting the kit** and want the detailed install + `/setup-agent-skills` walkthrough, with verification and troubleshooting. |
-| [`docs/concepts.md`](docs/concepts.md) | You want to understand **why** the workflow is shaped this way — the Smart Zone and Memento Model the kit is built around. |
-| [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea -> Intake -> Grill -> Brief -> PRD -> Issues -> Triage -> AFK loop -> QA), including the `/grill-me` vs `/grill-with-docs` decision. |
-| [`docs/runners.md`](docs/runners.md) | You need the **runner reference** — invocation, per-iteration flow, exit conditions, commit-message contract, and skill routing. |
-| [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit** — repo structure, `AGENTS.md`/`PROMPT.md`, re-running `/setup-agent-skills`, and the skills reference. |
-| [`git-loopy/python/README.md`](git-loopy/python/README.md) | You want the runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
+| [`/intake`](.copilot/skills/intake/SKILL.md) | Capture messy requests and supporting material as a grill-ready brief. |
+| [`/grill-me`](.copilot/skills/grill-me/SKILL.md) | Interview a human until a general plan or design has no hidden decision branches. |
+| [`/batch-grill-me`](.copilot/skills/batch-grill-me/SKILL.md) | Ask all unresolved interview questions in rounds when a serial grill would be too slow. |
+| [`/grill-with-docs`](.copilot/skills/grill-with-docs/SKILL.md) | Grill a repository change while sharpening `CONTEXT.md` and recording non-obvious decisions in ADRs. |
+| [`/grilling`](.copilot/skills/grilling/SKILL.md) | Supply the reusable interview discipline behind the grilling workflows. |
+| [`/wayfinder`](.copilot/skills/wayfinder/SKILL.md) | Map work too large or unclear for one planning session into linked investigation tickets. |
+| [`/research`](.copilot/skills/research/SKILL.md) | Resolve factual uncertainty from high-trust primary sources and save cited findings in the repository. |
+| [`/prototype`](.copilot/skills/prototype/SKILL.md) | Build a throwaway logic or UI artifact when a runnable answer is cheaper than more discussion. |
+| [`/domain-modeling`](.copilot/skills/domain-modeling/SKILL.md) | Sharpen the project's shared language and capture architectural decisions. |
+| [`/handoff`](.copilot/skills/handoff/SKILL.md) | Compact a human-driven session so another agent can resume it without reconstructing the thread. |
+| [`/to-questionnaire`](.copilot/skills/to-questionnaire/SKILL.md) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
 
-First-time reading order: [`docs/skills-setup.md`](docs/skills-setup.md) -> [`docs/concepts.md`](docs/concepts.md) -> [`docs/workflow.md`](docs/workflow.md) -> [`docs/runners.md`](docs/runners.md) -> [`docs/customization.md`](docs/customization.md) on demand.
+### Turn intent into delivered work
 
----
+| Skill | Purpose |
+| --- | --- |
+| [`/to-spec`](.copilot/skills/to-spec/SKILL.md) | Synthesize the agreed destination into a durable spec on the configured issue tracker. |
+| [`/to-tickets`](.copilot/skills/to-tickets/SKILL.md) | Slice a plan or spec into dependency-aware tracer-bullet tickets sized for focused execution. |
+| [`/triage`](.copilot/skills/triage/SKILL.md) | Verify issue readiness and move executable work into the `ready-for-agent` Pool. |
+| [`/implement`](.copilot/skills/implement/SKILL.md) | Drive one human-selected spec or ticket through implementation, TDD, review, and commit. |
+| [`/tdd`](.copilot/skills/tdd/SKILL.md) | Build one behavior at a time with a red-to-green vertical slice at a public seam. |
+| [`/diagnosing-bugs`](.copilot/skills/diagnosing-bugs/SKILL.md) | Reproduce, minimize, hypothesize, instrument, fix, and regression-test a difficult bug. |
+| [`/codebase-design`](.copilot/skills/codebase-design/SKILL.md) | Design deep modules with small interfaces at clean, testable seams. |
+| [`/improve-codebase-architecture`](.copilot/skills/improve-codebase-architecture/SKILL.md) | Find module-deepening opportunities and grill through a selected architectural change. |
+| [`/code-review`](.copilot/skills/code-review/SKILL.md) | Review a diff in fresh contexts against both repository standards and the originating spec. |
+| [`/resolving-merge-conflicts`](.copilot/skills/resolving-merge-conflicts/SKILL.md) | Resolve merge or rebase conflicts hunk by hunk from each side's documented intent. |
 
-## License
+### Set up and extend the workflow
 
-MIT — see [`LICENSE`](LICENSE).
+| Skill | Purpose |
+| --- | --- |
+| [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
+| [`/find-skills`](.copilot/skills/find-skills/SKILL.md) | Discover an installable skill when the current catalog does not cover a task. |
+| [`/teach`](.copilot/skills/teach/SKILL.md) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
+| [`/writing-great-skills`](.copilot/skills/writing-great-skills/SKILL.md) | Apply the vocabulary and design principles that make skills predictable. |
+| [`/skill-creator`](.copilot/skills/skill-creator/SKILL.md) | Create, edit, evaluate, and improve agent skills. |
+| [`/playwright-cli`](.copilot/skills/playwright-cli/SKILL.md) | Exercise browser behavior, capture screenshots, and automate web interactions. |
+| [`/microsoft-docs`](.copilot/skills/microsoft-docs/SKILL.md) | Ground Microsoft technology questions in official documentation. |
+| [`/microsoft-foundry`](.copilot/skills/microsoft-foundry/SKILL.md) | Deploy, evaluate, optimize, and operate Microsoft Foundry agents. |
+
+## The complete loop workflow, start to finish
+
+1. **Start with the vague idea.** Use `/intake` when the request is still a pile
+   of notes. Use `/grill-with-docs` for repository or domain work and `/grill-me`
+   for a general plan. If planning itself is too large for one useful context,
+   use `/wayfinder` to turn the fog into a shared map of investigation tickets.
+2. **Buy evidence where discussion is not enough.** Use `/research` for factual
+   questions and `/prototype` for behavior or visual questions. Feed the evidence
+   back into the grill instead of guessing.
+3. **Record the destination.** Keep the shared vocabulary in `CONTEXT.md`, record
+   consequential decisions in `docs/adr/`, and run `/to-spec` once the human and
+   agent agree on the outcome.
+4. **Create the route.** Run `/to-tickets` to produce small vertical slices with
+   explicit acceptance criteria and blocking edges. Each ticket should fit inside
+   one focused execution context.
+5. **Open the execution gate.** `/triage` checks that a ticket is actionable and
+   applies `ready-for-agent`. That label is an explicit human decision, not a
+   guess made by the runner.
+6. **Start the Run.** Launch `git-loopy`. At the start of an Iteration, the
+   Orchestrator collects the current Pool, and the agent selects exactly one
+   Active issue and emits its Working marker.
+7. **Complete one Iteration.** The agent reads the issue and domain docs, works in
+   vertical slices, and runs the repository's feedback loops. It commits with a
+   close keyword and closes the issue. The Orchestrator captures leftover work in
+   a Checkpoint when necessary, pushes new commits, updates the Dashboard and
+   Summary, and records a Strike when no meaningful progress occurred.
+8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
+   The Run stops when work is exhausted, the configured limit is reached, or
+   strikes trip the guardrail. The loop engineer reviews the pushed result against
+   the spec and repository standards, accepts it, reopens it, or creates a new
+   sliced issue. Closed issues and commits preserve the state between Iterations.
+
+```mermaid
+flowchart TD
+    Idea["Vague idea"] --> Scope{"Fits one planning context?"}
+    Scope -- "No" --> Wayfinder["/wayfinder<br/>investigation map"]
+    Scope -- "Yes" --> Grill["/grill-with-docs or /grill-me"]
+    Wayfinder --> Evidence{"Need more evidence?"}
+    Grill --> Evidence
+    Evidence -- "Primary-source facts" --> Research["/research"] --> Agreed["Shared understanding"]
+    Evidence -- "Runnable answer" --> Prototype["/prototype"] --> Agreed
+    Evidence -- "No" --> Agreed
+    Agreed --> Spec["/to-spec<br/>durable destination"]
+    Spec --> Tickets["/to-tickets<br/>vertical slices and dependencies"]
+    Tickets --> Triage["/triage<br/>ready-for-agent"]
+    Triage --> Pool["Issue Pool"]
+
+    subgraph Iteration["One git-loopy Iteration"]
+        Collect["Collect the Pool"] --> Select["Select one Active issue<br/>emit Working marker"]
+        Select --> Execute["Execute one vertical slice<br/>run feedback loops"]
+        Execute --> Close["Commit with close keyword<br/>close the issue"]
+        Close --> Account["Checkpoint if needed<br/>push and account for progress"]
+    end
+
+    Pool --> Collect
+    Account --> Continue{"More ready work<br/>and strikes remain?"}
+    Continue -- "Yes" --> Collect
+    Continue -- "No" --> Review["Loop engineer review<br/>spec and standards"]
+    Review --> Value["Accepted value<br/>or a new sliced issue"]
+```
+
+The [workflow guide](docs/workflow.md) expands this path. The
+[concepts guide](docs/concepts.md) explains the context model, the [Wrapper
+contract](docs/wrapper-contract.md) defines every Orchestrator's behavior, and
+the [Python reference runner](git-loopy/python/README.md) documents the currently
+available implementation. Licensed under the [MIT License](LICENSE).
