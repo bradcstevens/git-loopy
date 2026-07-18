@@ -20,8 +20,13 @@ implementation-specific expected-value generation.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
-native Event-schema adapters call their production serialization and replay
+native discovery adapters call their production discriminator and exit-code
 seams from
+[`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
+and
+[`powershell/tests/test-orchestrator-conformance.ps1`](../powershell/tests/test-orchestrator-conformance.ps1).
+Their Event-schema adapters call the production serialization and replay seams
+from
 [`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
@@ -30,7 +35,9 @@ Run them from the repository root:
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
 bash git-loopy/shell/tests/test-event-conformance.sh
+bash git-loopy/shell/tests/test-orchestrator-conformance.sh
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
+pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-orchestrator-conformance.ps1
 ```
 
 To change the Wrapper contract, update the written contract and its version,

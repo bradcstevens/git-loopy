@@ -1,0 +1,76 @@
+name: Native Orchestrator smoke
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: shell / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shell prerequisites
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install bash jq
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          else
+            sudo apt-get update
+            sudo apt-get install --yes jq
+          fi
+
+      - name: Run shell smoke suite
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            BASH_BIN="$(brew --prefix)/bin/bash"
+          else
+            BASH_BIN="$(command -v bash)"
+          fi
+          "$BASH_BIN" --version
+          "$BASH_BIN" -n \
+            git-loopy/shell/git-loopy.sh \
+            git-loopy/shell/lib/events.sh \
+            git-loopy/shell/lib/orchestrator.sh \
+            git-loopy/shell/tests/*.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-boundary.sh
+
+  powershell:
+    name: PowerShell / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run PowerShell smoke suite
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion.Major -lt 7) {
+            throw "PowerShell 7+ is required."
+          }
+          pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-event-conformance.ps1
+          pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-orchestrator-conformance.ps1
+          pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-orchestrator-boundary.ps1
