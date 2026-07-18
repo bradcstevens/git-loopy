@@ -313,6 +313,51 @@ try {
     Assert-Contains $GhLog "repo view" "GitHub repo preflight"
     Assert-Contains $GhLog "issue list" "GitHub Pool collection"
 
+    $env:GIT_LOOPY_MODEL = "env-model"
+    $env:GIT_LOOPY_REASONING_EFFORT = "high"
+    $env:GIT_LOOPY_ISSUE_SOURCE = "prds"
+    $env:GIT_LOOPY_MAX_NMT_STRIKES = "7"
+    $env:GIT_LOOPY_DENY_TOOLS = "env-tool"
+    $env:GIT_LOOPY_DENY_SKILLS = "env-skill"
+    $env:GIT_LOOPY_SEND_TIMEOUT_SECONDS = "90"
+    $EnvStdout = Join-Path $TempDir "env.stdout"
+    $EnvStderr = Join-Path $TempDir "env.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $EmptyRepo `
+        -FakeBin $EmptyBin `
+        -StdoutPath $EnvStdout `
+        -StderrPath $EnvStderr
+    foreach ($Name in @(
+        "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_ISSUE_SOURCE",
+        "GIT_LOOPY_MAX_NMT_STRIKES",
+        "GIT_LOOPY_DENY_TOOLS",
+        "GIT_LOOPY_DENY_SKILLS",
+        "GIT_LOOPY_SEND_TIMEOUT_SECONDS"
+    )) {
+        [Environment]::SetEnvironmentVariable($Name, $null)
+    }
+    Assert-Equal 0 $Status "environment-only Run exit"
+    $EnvEvents = Read-Events -Path $EnvStdout
+    Assert-Equal "env-model" $EnvEvents[0]["model"] "environment model"
+    Assert-Equal "high" (
+        $EnvEvents[0]["reasoning_effort"]
+    ) "environment reasoning effort"
+    Assert-Equal "prds" $EnvEvents[0]["issue_source"] "environment issue source"
+    Assert-Equal 7 (
+        $EnvEvents[0]["max_nmt_strikes"]
+    ) "environment Strike threshold"
+    Assert-Equal "env-tool" (
+        [string]::Join(",", $EnvEvents[0]["deny_tools"])
+    ) "environment tool denylist"
+    Assert-Equal "env-skill" (
+        [string]::Join(",", $EnvEvents[0]["deny_skills"])
+    ) "environment skill denylist"
+    Assert-Equal 90.0 (
+        $EnvEvents[0]["send_timeout_seconds"]
+    ) "environment send timeout"
+
     $CapRepo = Join-Path $TempDir "github-cap"
     $CapBin = Join-Path $TempDir "github-cap-bin"
     New-TestRepo -Root $CapRepo
@@ -413,9 +458,27 @@ try {
     New-TestRepo -Root $PrdsRepo
     Write-FakeTools -BinDir $PrdsBin
     $FeatureDir = Join-Path $PrdsRepo "prds/feature"
+    $AlphaDir = Join-Path $PrdsRepo "prds/alpha"
+    $AlphaBetaDir = Join-Path $PrdsRepo "prds/alpha-beta"
     [IO.Directory]::CreateDirectory((Join-Path $FeatureDir "done")) | Out-Null
+    [IO.Directory]::CreateDirectory((Join-Path $AlphaDir "done")) | Out-Null
+    [IO.Directory]::CreateDirectory((Join-Path $AlphaBetaDir "done")) | Out-Null
     $OutsidePrds = Join-Path $TempDir "outside-prds"
     [IO.Directory]::CreateDirectory($OutsidePrds) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $AlphaDir "001-ready.md"), @'
+## What to build
+Ship alpha.
+
+## Acceptance criteria
+- Done.
+'@)
+    [IO.File]::WriteAllText((Join-Path $AlphaBetaDir "001-ready.md"), @'
+## What to build
+Ship alpha-beta.
+
+## Acceptance criteria
+- Done.
+'@)
     [IO.File]::WriteAllText((Join-Path $FeatureDir "001-ready.md"), @'
 ## What to build
 Ship it.
@@ -469,13 +532,65 @@ Old work.
         $PrdsEvents |
             Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" }
     )[0]
-    Assert-Equal "prds/feature/001-ready.md" (
+    Assert-Equal (
+        "prds/alpha-beta/001-ready.md," +
+        "prds/alpha/001-ready.md," +
+        "prds/feature/001-ready.md"
+    ) (
         [string]::Join(",", $PrdsCollected["issues"])
     ) "local-PRD discriminator"
     Assert-Equal "iteration_cap" $PrdsEvents[-1]["outcome"] "PRDs cap outcome"
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_LOG)
     ) "PRDs mode invoked gh"
+
+    $LinkedRootRepo = Join-Path $TempDir "prds-root-link"
+    $LinkedRootBin = Join-Path $TempDir "prds-root-link-bin"
+    New-TestRepo -Root $LinkedRootRepo
+    Write-FakeTools -BinDir $LinkedRootBin
+    $OutsideRoot = Join-Path $TempDir "outside-prds-root"
+    $OutsideFeature = Join-Path $OutsideRoot "feature"
+    [IO.Directory]::CreateDirectory($OutsideFeature) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $OutsideFeature "001-escaped.md"), @'
+## What to build
+Read outside the worktree.
+
+## Acceptance criteria
+- Escaped.
+'@)
+    $LinkType = if ($IsWindows) { "Junction" } else { "SymbolicLink" }
+    New-Item `
+        -ItemType $LinkType `
+        -Path (Join-Path $LinkedRootRepo "prds") `
+        -Target $OutsideRoot | Out-Null
+    $env:FAKE_GH_LOG = Join-Path $TempDir "prds-root-link-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "prds-root-link-list.count"
+    $env:FAKE_GH_LIST_JSON = $EmptyList
+    $env:FAKE_GH_VIEW_DIR = $EmptyViews
+
+    $LinkedRootStdout = Join-Path $TempDir "prds-root-link.stdout"
+    $LinkedRootStderr = Join-Path $TempDir "prds-root-link.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $LinkedRootRepo `
+        -FakeBin $LinkedRootBin `
+        -StdoutPath $LinkedRootStdout `
+        -StderrPath $LinkedRootStderr `
+        -Arguments @("1", "--issue-source", "prds")
+    Assert-Equal 0 $Status "linked-PRD-root Run exit"
+    $LinkedRootEvents = Read-Events -Path $LinkedRootStdout
+    $LinkedRootCollected = @(
+        $LinkedRootEvents |
+            Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" }
+    )[0]
+    Assert-Equal 0 (
+        $LinkedRootCollected["issues"].Count
+    ) "local-PRD collection followed a linked root outside the worktree"
+    Assert-Equal "empty_pool" (
+        $LinkedRootEvents[-1]["outcome"]
+    ) "linked-PRD-root outcome"
+    Assert-Contains (
+        [IO.File]::ReadAllText($LinkedRootStderr)
+    ) "linked prds root is not allowed" "linked local-PRD root warning"
 
     $MissingRepo = Join-Path $TempDir "missing-tracker"
     $MissingBin = Join-Path $TempDir "missing-tracker-bin"
@@ -573,7 +688,13 @@ finally {
         "FAKE_GH_LIST_JSON",
         "FAKE_GH_VIEW_DIR",
         "FAKE_GH_AUTH_STATUS",
-        "GIT_LOOPY_ISSUE_SOURCE"
+        "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_ISSUE_SOURCE",
+        "GIT_LOOPY_MAX_NMT_STRIKES",
+        "GIT_LOOPY_DENY_TOOLS",
+        "GIT_LOOPY_DENY_SKILLS",
+        "GIT_LOOPY_SEND_TIMEOUT_SECONDS"
     )) {
         [Environment]::SetEnvironmentVariable($Name, $null)
     }

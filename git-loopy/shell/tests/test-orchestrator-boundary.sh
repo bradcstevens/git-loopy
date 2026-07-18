@@ -183,6 +183,35 @@ assert_contains "$(<"$FAKE_GH_LOG")" "auth status" "GitHub auth preflight"
 assert_contains "$(<"$FAKE_GH_LOG")" "repo view" "GitHub repo preflight"
 assert_contains "$(<"$FAKE_GH_LOG")" "issue list" "GitHub Pool collection"
 
+export GIT_LOOPY_MODEL="env-model"
+export GIT_LOOPY_REASONING_EFFORT="high"
+export GIT_LOOPY_ISSUE_SOURCE="prds"
+export GIT_LOOPY_MAX_NMT_STRIKES="7"
+export GIT_LOOPY_DENY_TOOLS="env-tool"
+export GIT_LOOPY_DENY_SKILLS="env-skill"
+export GIT_LOOPY_SEND_TIMEOUT_SECONDS="90"
+if ! run_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/env.stdout" "$temp_dir/env.stderr"; then
+  fail "environment-only Run did not exit 0: $(<"$temp_dir/env.stderr")"
+fi
+unset GIT_LOOPY_MODEL
+unset GIT_LOOPY_REASONING_EFFORT
+unset GIT_LOOPY_ISSUE_SOURCE
+unset GIT_LOOPY_MAX_NMT_STRIKES
+unset GIT_LOOPY_DENY_TOOLS
+unset GIT_LOOPY_DENY_SKILLS
+unset GIT_LOOPY_SEND_TIMEOUT_SECONDS
+jq -se '
+  .[0].model == "env-model"
+  and .[0].reasoning_effort == "high"
+  and .[0].issue_source == "prds"
+  and .[0].max_nmt_strikes == 7
+  and .[0].deny_tools == ["env-tool"]
+  and .[0].deny_skills == ["env-skill"]
+  and .[0].send_timeout_seconds == 90
+' "$temp_dir/env.stdout" >/dev/null ||
+  fail "entrypoint discarded environment-only configuration"
+
 repo="$temp_dir/github-cap"
 fake_bin="$temp_dir/github-cap-bin"
 make_repo "$repo"
@@ -260,12 +289,78 @@ jq -se '
 ' "$temp_dir/github-default.stdout" >/dev/null ||
   fail "default non-empty discovery outcome drifted"
 
+repo="$temp_dir/large-github"
+fake_bin="$temp_dir/large-github-bin"
+make_repo "$repo"
+write_fake_tools "$fake_bin"
+cat >"$temp_dir/large-github-list.json" <<'EOF'
+[
+  {
+    "number": 51,
+    "title": "Large eligible issue",
+    "body": "## What to build\nShip it.\n\n## Acceptance criteria\n- Done.",
+    "labels": [{"name": "ready-for-agent"}],
+    "state": "OPEN",
+    "url": "https://example.invalid/issues/51"
+  }
+]
+EOF
+mkdir -p "$temp_dir/large-github-views"
+printf '## What to build\n' >"$temp_dir/large-body.md"
+arg_max="$(getconf ARG_MAX 2>/dev/null || printf '2097152')"
+head -c "$((arg_max + 65536))" </dev/zero |
+  tr '\0' x >>"$temp_dir/large-body.md"
+printf '\n\n## Acceptance criteria\n- Done.\n' >>"$temp_dir/large-body.md"
+jq -n --rawfile body "$temp_dir/large-body.md" '{
+  number: 51,
+  title: "Large eligible issue",
+  body: $body,
+  labels: [{name: "ready-for-agent"}],
+  state: "OPEN",
+  url: "https://example.invalid/issues/51",
+  comments: []
+}' >"$temp_dir/large-github-views/51.json"
+export FAKE_GH_LOG="$temp_dir/large-github-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/large-github-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/large-github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/large-github-views"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/large-github.stdout" \
+  "$temp_dir/large-github.stderr" 1; then
+  fail "large GitHub issue Run failed: $(<"$temp_dir/large-github.stderr")"
+fi
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected")][0].issues == [51])
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/large-github.stdout" >/dev/null ||
+  fail "large GitHub issue was not collected"
+
 repo="$temp_dir/prds"
 fake_bin="$temp_dir/prds-bin"
 make_repo "$repo"
 write_fake_tools "$fake_bin"
-mkdir -p "$repo/prds/feature/done"
+mkdir -p \
+  "$repo/prds/alpha/done" \
+  "$repo/prds/alpha-beta/done" \
+  "$repo/prds/feature/done" \
+  "$repo/prds/large/done"
 mkdir -p "$temp_dir/outside-prds"
+cp "$temp_dir/large-body.md" "$repo/prds/large/001-ready.md"
+cat >"$repo/prds/alpha/001-ready.md" <<'EOF'
+## What to build
+Ship alpha.
+
+## Acceptance criteria
+- Done.
+EOF
+cat >"$repo/prds/alpha-beta/001-ready.md" <<'EOF'
+## What to build
+Ship alpha-beta.
+
+## Acceptance criteria
+- Done.
+EOF
 cat >"$repo/prds/feature/001-ready.md" <<'EOF'
 ## What to build
 Ship it.
@@ -305,12 +400,50 @@ jq -se '
   .[0].issue_source == "prds"
   and (
     [.[] | select(.type == "wrapper.afk_ready.collected")][0].issues
-    == ["prds/feature/001-ready.md"]
+    == [
+      "prds/alpha-beta/001-ready.md",
+      "prds/alpha/001-ready.md",
+      "prds/feature/001-ready.md",
+      "prds/large/001-ready.md"
+    ]
   )
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/prds.stdout" >/dev/null ||
   fail "local-PRD collection or CLI precedence drifted"
 [[ ! -e "$FAKE_GH_LOG" ]] || fail "PRDs mode invoked gh"
+
+repo="$temp_dir/prds-root-link"
+fake_bin="$temp_dir/prds-root-link-bin"
+make_repo "$repo"
+write_fake_tools "$fake_bin"
+mkdir -p "$temp_dir/outside-prds-root/feature"
+cat >"$temp_dir/outside-prds-root/feature/001-escaped.md" <<'EOF'
+## What to build
+Read outside the worktree.
+
+## Acceptance criteria
+- Escaped.
+EOF
+ln -s "$temp_dir/outside-prds-root" "$repo/prds"
+export FAKE_GH_LOG="$temp_dir/prds-root-link-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/prds-root-link-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/prds-root-link.stdout" \
+  "$temp_dir/prds-root-link.stderr" 1 --issue-source prds; then
+  fail "linked-PRD-root Run did not exit 0: $(<"$temp_dir/prds-root-link.stderr")"
+fi
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected")][0].issues == [])
+  and .[-1].outcome == "empty_pool"
+' "$temp_dir/prds-root-link.stdout" >/dev/null ||
+  fail "local-PRD collection followed a linked root outside the worktree"
+assert_contains \
+  "$(<"$temp_dir/prds-root-link.stderr")" \
+  "linked prds root is not allowed" \
+  "linked local-PRD root warning"
 
 repo="$temp_dir/missing-tracker"
 fake_bin="$temp_dir/missing-tracker-bin"

@@ -569,13 +569,15 @@ class TestPrdsCollectAfkReady:
     def test_orders_across_features_lexicographically(
         self, tmp_path: Path
     ) -> None:
-        _write_md(tmp_path / "prds" / "featB" / "001-b.md", _AFK_BODY)
-        _write_md(tmp_path / "prds" / "featA" / "001-a.md", _AFK_BODY)
+        _write_md(tmp_path / "prds" / "alpha" / "001-a.md", _AFK_BODY)
+        _write_md(
+            tmp_path / "prds" / "alpha-beta" / "001-ab.md", _AFK_BODY
+        )
         impl = PrdsIssueSource(tmp_path, _silent_logger())
         items = impl.collect_afk_ready()
         assert [i.ref for i in items] == [
-            "prds/featA/001-a.md",
-            "prds/featB/001-b.md",
+            "prds/alpha-beta/001-ab.md",
+            "prds/alpha/001-a.md",
         ]
 
     def test_multi_feature_multi_file_full_ordering(
@@ -647,6 +649,20 @@ class TestPrdsCollectAfkReady:
         assert [i.ref for i in impl.collect_afk_ready()] == [
             "prds/featA/002-active.md"
         ]
+
+    def test_skips_symlinked_prds_root(self, tmp_path: Path) -> None:
+        target = tmp_path / "outside-prds"
+        _write_md(target / "feature" / "001-escaped.md", _AFK_BODY)
+        linked = tmp_path / "repo" / "prds"
+        linked.parent.mkdir(parents=True)
+        try:
+            linked.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+        impl = PrdsIssueSource(linked.parent, _silent_logger())
+
+        assert impl.collect_afk_ready() == []
 
     def test_rendered_block_format_matches_bash_collector(
         self, tmp_path: Path

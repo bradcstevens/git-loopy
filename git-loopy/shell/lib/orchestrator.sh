@@ -19,11 +19,8 @@ source "$_git_loopy_orchestrator_dir/events.sh"
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()
 GIT_LOOPY_MAX_ITERATIONS=0
-GIT_LOOPY_MODEL=""
-GIT_LOOPY_REASONING_EFFORT=""
-GIT_LOOPY_ISSUE_SOURCE=""
-GIT_LOOPY_MAX_NMT_STRIKES=""
-GIT_LOOPY_SEND_TIMEOUT_SECONDS=""
+# Public config variables remain untouched here because inherited values are
+# inputs to CLI-over-environment precedence resolution.
 GIT_LOOPY_REPO_ROOT=""
 GIT_LOOPY_PROMPT_PATH=""
 GIT_LOOPY_POOL_JSON='[]'
@@ -51,8 +48,10 @@ _git_loopy_config_error() {
 
 _git_loopy_require_option_value() {
   local option="$1"
-  local count="$2"
-  ((count >= 2)) || _git_loopy_config_error "$option requires a value"
+  shift
+  (($# >= 1)) &&
+    [[ "$1" != -* ]] ||
+    _git_loopy_config_error "$option requires a value"
 }
 
 _git_loopy_trim() {
@@ -72,12 +71,28 @@ _git_loopy_array_contains() {
   return 1
 }
 
+_git_loopy_string_array_json() {
+  if (($# == 0)); then
+    printf '[]\n'
+    return
+  fi
+  printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))'
+}
+
+_git_loopy_json_object_array() {
+  if (($# == 0)); then
+    printf '[]\n'
+    return
+  fi
+  printf '%s\n' "$@" | jq -sc '.'
+}
+
 _git_loopy_add_unique_tool() {
   local value
   value="$(_git_loopy_trim "$1")"
   [[ -n "$value" ]] || return
   if ! _git_loopy_array_contains "$value" \
-    "${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"; then
+    ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; then
     GIT_LOOPY_DENY_TOOLS_RESOLVED+=("$value")
   fi
 }
@@ -87,7 +102,7 @@ _git_loopy_add_unique_skill() {
   value="$(_git_loopy_trim "$1")"
   [[ -n "$value" ]] || return
   if ! _git_loopy_array_contains "$value" \
-    "${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"; then
+    ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}; then
     GIT_LOOPY_DENY_SKILLS_RESOLVED+=("$value")
   fi
 }
@@ -101,8 +116,18 @@ git_loopy_resolve_config() {
   local env_skills="${GIT_LOOPY_DENY_SKILLS:-}"
   local env_timeout="${GIT_LOOPY_SEND_TIMEOUT_SECONDS:-}"
 
-  local model="${env_model:-claude-opus-4.8}"
-  local effort="${env_effort:-max}"
+  local model="claude-opus-4.8"
+  local effort=""
+  local model_explicit=0
+  local effort_explicit=0
+  if [[ -n "$(_git_loopy_trim "$env_model")" ]]; then
+    model="$env_model"
+    model_explicit=1
+  fi
+  if [[ -n "$(_git_loopy_trim "$env_effort")" ]]; then
+    effort="$env_effort"
+    effort_explicit=1
+  fi
   local issue_source="${env_source:-github}"
   local max_strikes="${env_strikes:-3}"
   local send_timeout="${env_timeout:-7200}"
@@ -118,25 +143,29 @@ git_loopy_resolve_config() {
         return 64
         ;;
       --model)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         model="$2"
+        model_explicit=1
         shift 2
         ;;
       --model=*)
         model="${1#*=}"
+        model_explicit=1
         shift
         ;;
       --reasoning-effort)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         effort="$2"
+        effort_explicit=1
         shift 2
         ;;
       --reasoning-effort=*)
         effort="${1#*=}"
+        effort_explicit=1
         shift
         ;;
       --issue-source)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         issue_source="$2"
         shift 2
         ;;
@@ -145,7 +174,7 @@ git_loopy_resolve_config() {
         shift
         ;;
       --max-nmt-strikes)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         max_strikes="$2"
         shift 2
         ;;
@@ -154,7 +183,7 @@ git_loopy_resolve_config() {
         shift
         ;;
       --deny-tool)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         cli_tools+=("$2")
         shift 2
         ;;
@@ -163,7 +192,7 @@ git_loopy_resolve_config() {
         shift
         ;;
       --deny-skill)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         cli_skills+=("$2")
         shift 2
         ;;
@@ -172,7 +201,7 @@ git_loopy_resolve_config() {
         shift
         ;;
       --send-timeout-seconds)
-        _git_loopy_require_option_value "$1" "$#" || return 2
+        _git_loopy_require_option_value "$@" || return 2
         send_timeout="$2"
         shift 2
         ;;
@@ -211,6 +240,20 @@ git_loopy_resolve_config() {
   done
 
   model="$(_git_loopy_trim "$model")"
+  local suffix_effort=""
+  if [[ "$model" =~ ^(.+)-(none|minimal|low|medium|high|xhigh|max)$ ]]; then
+    model="${BASH_REMATCH[1]}"
+    suffix_effort="${BASH_REMATCH[2]}"
+  fi
+  if ((effort_explicit == 0)); then
+    if [[ -n "$suffix_effort" ]]; then
+      effort="$suffix_effort"
+    elif ((model_explicit == 0)); then
+      effort="max"
+    else
+      effort=""
+    fi
+  fi
   effort="${effort,,}"
   issue_source="${issue_source,,}"
 
@@ -218,7 +261,12 @@ git_loopy_resolve_config() {
     _git_loopy_config_error "model must not be empty"
     return 2
   }
-  [[ "$effort" =~ ^(none|minimal|low|medium|high|xhigh|max)$ ]] || {
+  if ((effort_explicit != 0)) && [[ -z "$effort" ]]; then
+    _git_loopy_config_error "reasoning effort must not be empty"
+    return 2
+  fi
+  [[ -z "$effort" ||
+    "$effort" =~ ^(none|minimal|low|medium|high|xhigh|max)$ ]] || {
     _git_loopy_config_error "invalid reasoning effort: $effort"
     return 2
   }
@@ -243,20 +291,20 @@ git_loopy_resolve_config() {
   GIT_LOOPY_DENY_TOOLS_RESOLVED=()
   GIT_LOOPY_DENY_SKILLS_RESOLVED=()
   local value
-  for value in "${cli_tools[@]}"; do
+  for value in ${cli_tools[@]+"${cli_tools[@]}"}; do
     _git_loopy_add_unique_tool "$value"
   done
   local -a env_tool_values=()
   IFS=',' read -r -a env_tool_values <<<"$env_tools"
-  for value in "${env_tool_values[@]}"; do
+  for value in ${env_tool_values[@]+"${env_tool_values[@]}"}; do
     _git_loopy_add_unique_tool "$value"
   done
-  for value in "${cli_skills[@]}"; do
+  for value in ${cli_skills[@]+"${cli_skills[@]}"}; do
     _git_loopy_add_unique_skill "$value"
   done
   local -a env_skill_values=()
   IFS=',' read -r -a env_skill_values <<<"$env_skills"
-  for value in "${env_skill_values[@]}"; do
+  for value in ${env_skill_values[@]+"${env_skill_values[@]}"}; do
     _git_loopy_add_unique_skill "$value"
   done
 
@@ -439,7 +487,7 @@ git_loopy_collect_github_pool() {
     return 0
   }
 
-  local pool='[]'
+  local -a pool_items=()
   local candidate
   while IFS= read -r candidate; do
     local body
@@ -476,23 +524,27 @@ git_loopy_collect_github_pool() {
         "$number" >&2
       continue
     }
-    pool="$(
-      jq -cn \
-        --argjson pool "$pool" \
-        --argjson item "$normalized" \
-        '$pool + [$item]'
-    )"
+    pool_items+=("$normalized")
   done < <(jq -c '.[]' <<<"$candidates")
 
-  GIT_LOOPY_POOL_JSON="$pool"
+  GIT_LOOPY_POOL_JSON="$(
+    _git_loopy_json_object_array \
+      ${pool_items[@]+"${pool_items[@]}"}
+  )" || return 1
 }
 
 git_loopy_collect_prds_pool() {
   local repo_root="$1"
-  local pool='[]'
+  local -a pool_items=()
   local prds_dir="$repo_root/prds"
   if [[ ! -d "$prds_dir" ]]; then
-    GIT_LOOPY_POOL_JSON="$pool"
+    GIT_LOOPY_POOL_JSON='[]'
+    return 0
+  fi
+  if [[ -L "$prds_dir" ]]; then
+    printf 'git-loopy: linked prds root is not allowed: %s\n' \
+      "$prds_dir" >&2
+    GIT_LOOPY_POOL_JSON='[]'
     return 0
   fi
 
@@ -522,21 +574,19 @@ git_loopy_collect_prds_pool() {
       item="$(
         jq -cn \
           --arg ref "$ref" \
-          --arg title "$ref" \
-          --arg body "$body" \
-          '{ref: $ref, title: $title, body: $body}'
-      )"
-      pool="$(
-        jq -cn \
-          --argjson pool "$pool" \
-          --argjson item "$item" \
-          '$pool + [$item]'
-      )"
+          --rawfile body "$path" \
+          '{ref: $ref, title: $ref, body: $body}'
+      )" || return 1
+      pool_items+=("$item")
     done
   done
   shopt -u nullglob
 
-  GIT_LOOPY_POOL_JSON="$pool"
+  GIT_LOOPY_POOL_JSON="$(
+    _git_loopy_json_object_array \
+      ${pool_items[@]+"${pool_items[@]}"} |
+      jq -c 'sort_by(.ref)'
+  )" || return 1
 }
 
 git_loopy_collect_pool() {
@@ -555,12 +605,12 @@ git_loopy_run_discovery() {
 
   local deny_tools_json deny_skills_json
   deny_tools_json="$(
-    printf '%s\n' "${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}" |
-      jq -Rsc 'split("\n") | map(select(length > 0))'
+    _git_loopy_string_array_json \
+      ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}
   )" || return 1
   deny_skills_json="$(
-    printf '%s\n' "${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}" |
-      jq -Rsc 'split("\n") | map(select(length > 0))'
+    _git_loopy_string_array_json \
+      ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}
   )" || return 1
   local run_start_payload
   run_start_payload="$(
@@ -582,7 +632,12 @@ git_loopy_run_discovery() {
         max_nmt_strikes: $max_nmt_strikes,
         model: $model,
         prompt_path: $prompt_path,
-        reasoning_effort: $reasoning_effort,
+        reasoning_effort: (
+          if $reasoning_effort == ""
+          then null
+          else $reasoning_effort
+          end
+        ),
         send_timeout_seconds: ($send_timeout | tonumber)
       }'
   )" || return 1

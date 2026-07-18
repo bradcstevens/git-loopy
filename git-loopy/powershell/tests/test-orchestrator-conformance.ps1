@@ -112,13 +112,45 @@ Assert-Equal (
     "cli-skill,env-skill"
 ) ([string]::Join(",", $Resolved.DenySkills)) "skill denylists are unioned and stable"
 
+$Suffixed = Resolve-GitLoopyConfig `
+    -Arguments @() `
+    -Environment ([ordered]@{
+        GIT_LOOPY_MODEL = "claude-opus-4.7-xhigh"
+    })
+Assert-Equal "claude-opus-4.7" $Suffixed.Model "suffixed model base id"
+Assert-Equal "xhigh" $Suffixed.ReasoningEffort "model suffix effort"
+
+$OverriddenSuffix = Resolve-GitLoopyConfig `
+    -Arguments @() `
+    -Environment ([ordered]@{
+        GIT_LOOPY_MODEL = "claude-opus-4.7-xhigh"
+        GIT_LOOPY_REASONING_EFFORT = "medium"
+    })
+Assert-Equal (
+    "claude-opus-4.7"
+) $OverriddenSuffix.Model "overridden suffix base id"
+Assert-Equal (
+    "medium"
+) $OverriddenSuffix.ReasoningEffort "explicit effort overrides model suffix"
+
+$OmittedEffort = Resolve-GitLoopyConfig `
+    -Arguments @() `
+    -Environment ([ordered]@{
+        GIT_LOOPY_MODEL = "claude-sonnet-4.6"
+    })
+Assert-Equal $null (
+    $OmittedEffort.ReasoningEffort
+) "non-default model leaves effort omitted"
+
 $InvalidArgumentSets = @(
     @("not-a-number"),
     @("-1"),
     @("--issue-source", "nowhere"),
     @("--max-nmt-strikes", "0"),
     @("--reasoning-effort", "impossible"),
+    @("--reasoning-effort="),
     @("--send-timeout-seconds", "0"),
+    @("--model", "--help"),
     @("--unknown")
 )
 foreach ($InvalidArguments in $InvalidArgumentSets) {

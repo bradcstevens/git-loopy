@@ -665,7 +665,7 @@ class PrdsIssueSource:
     Discovery rules:
 
     * Walk ``<repo_root>/prds/`` (returns ``[]`` if the directory
-      does not exist).
+      does not exist or resolves outside its expected repository path).
     * Iterate direct subdirectories of ``prds/`` — these are the
       "feature" directories. Skip a top-level directory literally
       named ``done`` (would be unusual but cheap to guard against), and
@@ -720,6 +720,16 @@ class PrdsIssueSource:
         prds_dir = self._repo_root / "prds"
         if not prds_dir.is_dir():
             return []
+        try:
+            resolved_prds_dir = prds_dir.resolve(strict=True)
+            expected_prds_dir = self._repo_root.resolve(strict=True) / "prds"
+        except (OSError, RuntimeError):
+            return []
+        if resolved_prds_dir != expected_prds_dir:
+            self._diag.warning(
+                "prds: linked root is not allowed: %s; skipping", prds_dir
+            )
+            return []
 
         items: list[tuple[str, AfkReadyItem]] = []
         for feature_dir in sorted(
@@ -727,12 +737,24 @@ class PrdsIssueSource:
         ):
             if feature_dir.is_symlink() or not feature_dir.is_dir():
                 continue
+            try:
+                resolved_feature_dir = feature_dir.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if resolved_feature_dir != resolved_prds_dir / feature_dir.name:
+                continue
             if feature_dir.name == "done":
                 # Defensive: a top-level prds/done/ wouldn't be a
                 # feature directory anyway.
                 continue
             for md_path in sorted(feature_dir.iterdir(), key=lambda p: p.name):
                 if md_path.is_symlink() or not md_path.is_file():
+                    continue
+                try:
+                    resolved_md_path = md_path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                if resolved_md_path != resolved_feature_dir / md_path.name:
                     continue
                 if md_path.name == "prd.md":
                     continue

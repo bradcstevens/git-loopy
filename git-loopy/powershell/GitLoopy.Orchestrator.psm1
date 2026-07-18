@@ -68,14 +68,16 @@ function Resolve-GitLoopyConfig {
     )
 
     $Model = Get-GitLoopyEnvironmentValue $Environment "GIT_LOOPY_MODEL"
-    if ([string]::IsNullOrWhiteSpace($Model)) {
+    $ModelExplicit = -not [string]::IsNullOrWhiteSpace($Model)
+    if (-not $ModelExplicit) {
         $Model = "claude-opus-4.8"
     }
     $ReasoningEffort = Get-GitLoopyEnvironmentValue `
         $Environment `
         "GIT_LOOPY_REASONING_EFFORT"
-    if ([string]::IsNullOrWhiteSpace($ReasoningEffort)) {
-        $ReasoningEffort = "max"
+    $EffortExplicit = -not [string]::IsNullOrWhiteSpace($ReasoningEffort)
+    if (-not $EffortExplicit) {
+        $ReasoningEffort = $null
     }
     $IssueSource = Get-GitLoopyEnvironmentValue `
         $Environment `
@@ -140,14 +142,23 @@ function Resolve-GitLoopyConfig {
                     throw (New-GitLoopyParseException "$Option requires a value")
                 }
                 $Value = $Arguments[$Index]
+                if ($Value.StartsWith("-", [StringComparison]::Ordinal)) {
+                    throw (New-GitLoopyParseException "$Option requires a value")
+                }
             }
             if ([string]::IsNullOrWhiteSpace($Value)) {
                 throw (New-GitLoopyParseException "$Option requires a value")
             }
 
             switch -CaseSensitive ($Option) {
-                "--model" { $Model = $Value }
-                "--reasoning-effort" { $ReasoningEffort = $Value }
+                "--model" {
+                    $Model = $Value
+                    $ModelExplicit = $true
+                }
+                "--reasoning-effort" {
+                    $ReasoningEffort = $Value
+                    $EffortExplicit = $true
+                }
                 "--issue-source" { $IssueSource = $Value }
                 "--max-nmt-strikes" { $MaxNmtStrikesText = $Value }
                 "--deny-tool" { $CliTools.Add($Value) }
@@ -186,14 +197,32 @@ function Resolve-GitLoopyConfig {
     if ($Model.Length -eq 0) {
         throw (New-GitLoopyParseException "model must not be empty")
     }
-    $ReasoningEffort = $ReasoningEffort.ToLowerInvariant()
-    if ($ReasoningEffort -cnotin @(
-        "none", "minimal", "low", "medium", "high", "xhigh", "max"
-    )) {
-        throw (
-            New-GitLoopyParseException `
-                "invalid reasoning effort: $ReasoningEffort"
-        )
+    $SuffixEffort = $null
+    if ($Model -cmatch "^(.+)-(none|minimal|low|medium|high|xhigh|max)$") {
+        $Model = $Matches[1]
+        $SuffixEffort = $Matches[2]
+    }
+    if (-not $EffortExplicit) {
+        if ($null -ne $SuffixEffort) {
+            $ReasoningEffort = $SuffixEffort
+        }
+        elseif (-not $ModelExplicit) {
+            $ReasoningEffort = "max"
+        }
+        else {
+            $ReasoningEffort = $null
+        }
+    }
+    if ($null -ne $ReasoningEffort) {
+        $ReasoningEffort = $ReasoningEffort.ToLowerInvariant()
+        if ($ReasoningEffort -cnotin @(
+            "none", "minimal", "low", "medium", "high", "xhigh", "max"
+        )) {
+            throw (
+                New-GitLoopyParseException `
+                    "invalid reasoning effort: $ReasoningEffort"
+            )
+        }
     }
     $IssueSource = $IssueSource.ToLowerInvariant()
     if ($IssueSource -cnotin @("github", "prds")) {
@@ -609,7 +638,17 @@ function Get-GitLoopyPrdsPool {
     if (-not [IO.Directory]::Exists($PrdsDir)) {
         return
     }
+    $PrdsItem = Get-Item -LiteralPath $PrdsDir -Force
+    if ($PrdsItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        [Console]::Error.WriteLine(
+            "git-loopy: linked prds root is not allowed: $PrdsDir"
+        )
+        return
+    }
 
+    $Items = [Collections.Generic.SortedDictionary[string, object]]::new(
+        [StringComparer]::Ordinal
+    )
     [string[]]$FeatureNames = @(
         Get-ChildItem -LiteralPath $PrdsDir -Directory |
             Where-Object {
@@ -648,12 +687,15 @@ function Get-GitLoopyPrdsPool {
                 $RepoRoot,
                 $FilePath
             ).Replace("\", "/")
-            [ordered]@{
+            $Items.Add($Ref, [ordered]@{
                 ref = $Ref
                 title = $Ref
                 body = $Body
-            }
+            })
         }
+    }
+    foreach ($Item in $Items.Values) {
+        $Item
     }
 }
 

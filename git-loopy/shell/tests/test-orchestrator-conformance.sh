@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# Config cases intentionally isolate environment mutations in subshells.
+# shellcheck disable=SC2030,SC2031
 set -euo pipefail
 
 if ((BASH_VERSINFO[0] < 4)); then
@@ -25,6 +27,10 @@ assert_equal() {
   local description="$3"
   [[ "$actual" == "$expected" ]] ||
     fail "$description"$'\n'"expected: $expected"$'\n'"actual:   $actual"
+}
+
+array_count() {
+  printf '%s' "$#"
 }
 
 while IFS= read -r case_json; do
@@ -62,8 +68,16 @@ done < <(jq -c '.cases[]' "$conformance_dir/exit-codes.json")
   assert_equal "github" "$GIT_LOOPY_ISSUE_SOURCE" "default issue source"
   assert_equal "3" "$GIT_LOOPY_MAX_NMT_STRIKES" "default Strike threshold"
   assert_equal "7200" "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "default send timeout"
-  assert_equal "0" "${#GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}" "default tool denylist"
-  assert_equal "0" "${#GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}" "default skill denylist"
+  assert_equal \
+    "0" \
+    "$(array_count \
+      ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"})" \
+    "default tool denylist"
+  assert_equal \
+    "0" \
+    "$(array_count \
+      ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"})" \
+    "default skill denylist"
 )
 
 (
@@ -102,13 +116,47 @@ done < <(jq -c '.cases[]' "$conformance_dir/exit-codes.json")
     "skill denylists are unioned and stable"
 )
 
+(
+  export GIT_LOOPY_MODEL="claude-opus-4.7-xhigh"
+  unset GIT_LOOPY_REASONING_EFFORT
+
+  git_loopy_resolve_config
+  assert_equal "claude-opus-4.7" "$GIT_LOOPY_MODEL" "suffixed model base id"
+  assert_equal "xhigh" "$GIT_LOOPY_REASONING_EFFORT" "model suffix effort"
+)
+
+(
+  export GIT_LOOPY_MODEL="claude-opus-4.7-xhigh"
+  export GIT_LOOPY_REASONING_EFFORT="medium"
+
+  git_loopy_resolve_config
+  assert_equal "claude-opus-4.7" "$GIT_LOOPY_MODEL" "overridden suffix base id"
+  assert_equal \
+    "medium" \
+    "$GIT_LOOPY_REASONING_EFFORT" \
+    "explicit effort overrides model suffix"
+)
+
+(
+  export GIT_LOOPY_MODEL="claude-sonnet-4.6"
+  unset GIT_LOOPY_REASONING_EFFORT
+
+  git_loopy_resolve_config
+  assert_equal \
+    "" \
+    "$GIT_LOOPY_REASONING_EFFORT" \
+    "non-default model leaves effort omitted"
+)
+
 for invalid_args in \
   "not-a-number" \
   "-1" \
   "--issue-source nowhere" \
   "--max-nmt-strikes 0" \
   "--reasoning-effort impossible" \
+  "--reasoning-effort=" \
   "--send-timeout-seconds 0" \
+  "--model --help" \
   "--unknown"; do
   read -r -a args <<<"$invalid_args"
   if (git_loopy_resolve_config "${args[@]}" 2>/dev/null); then
