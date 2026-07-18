@@ -1,15 +1,44 @@
-# GitHub Copilot Ralph Starter Kit
+# git-loopy and Loop Engineering
 
-The kit's domain is the **AFK runner**: an unattended loop that drives the GitHub
-Copilot CLI to implement triaged GitHub Issues one at a time. This glossary fixes
-the vocabulary that the runner, its prompts, and its live interface all share.
+**git-loopy** is the GitHub Copilot SDK framework and brand for orchestrating
+automated Ralph loops over agentic-engineering work. **Loop engineering** is the
+practice of shaping that work into explicit, reviewable units, setting guardrails
+and feedback loops, and supervising autonomous execution. This glossary fixes the
+vocabulary shared by the planning skills, issue tracker, Runner family, and live
+interface.
+
+## Two-phase model
+
+1. **Planning phase (human-led)**: The loop engineer starts with
+   `/grill-with-docs` for repo and domain work or `/grill-me` for general planning,
+   optionally uses `/prototype` when a decision needs runnable evidence and
+   `/research` when it needs primary-source evidence, then runs `/to-spec`,
+   `/to-tickets`, and `/triage`. The result is a set of small, explicit issues
+   labeled `ready-for-agent`.
+2. **Execution phase (autonomous)**: The git-loopy loop collects those triaged
+   issues and, by default, works exactly one Active issue per Iteration. The loop
+   engineer supervises the Run through its guardrails and Dashboard, then judges
+   the completed work.
 
 ## Language
+
+### The practice
+
+**Loop engineering**:
+The practice of designing, operating, and improving autonomous agent loops. It
+connects human-led planning and context engineering to small triaged issues,
+explicit acceptance criteria, feedback loops, guardrails, and human review so
+autonomous execution stays aligned.
+
+**Loop engineer**:
+The human who designs, triages, and supervises the loop. The loop engineer owns
+intent, domain language, issue slicing, acceptance criteria, guardrails, and final
+judgment; git-loopy owns repeatable execution.
 
 ### The run loop
 
 **Run**:
-One invocation of the AFK loop, identified by a `run_id`, spanning many iterations
+One invocation of the git-loopy loop, identified by a `run_id`, spanning many iterations
 until the work is exhausted or the strike limit is reached.
 
 **Iteration**:
@@ -19,8 +48,8 @@ streamed output are measured and attributed.
 _Avoid_: round, pass, tick.
 
 **Pool**:
-The set of AFK-ready issues collected at the start of an iteration and offered to
-the agent together in a single prompt; the agent picks one.
+The set of `ready-for-agent` issues collected at the start of an iteration and
+offered to the agent together in a single prompt; the agent picks one.
 _Avoid_: batch, backlog.
 
 **Strike**:
@@ -129,19 +158,20 @@ _Avoid_: picker mode, interactive model prompt.
 ### Framework and configuration
 
 **git-loopy**:
-The framework and brand — "a GitHub Copilot SDK loop-engineer framework for orchestrating
-automated ralph loops for agentic engineering." It ships a **Runner family**: the Python
-reference runner (the globally-installed `git-loopy` console command; `git loopy` also works as
-a git subcommand) plus the planned **shell**, **PowerShell**, and **Rust** ports, all
-implementing one **Wrapper contract**. Written `git-loopy` as the distribution, console command,
-and on-disk/brand spelling; `git_loopy` as the importable Python package. Supersedes the retired
+The GitHub Copilot SDK loop-engineering framework and brand for orchestrating
+automated Ralph loops for agentic engineering. It ships a **Runner family**: the
+Python reference runner (the globally-installed `git-loopy` console command;
+`git loopy` also works as a git subcommand) plus the planned **shell**,
+**PowerShell**, and **Rust** ports, all implementing one **Wrapper contract**.
+Written `git-loopy` as the distribution, console command, and on-disk/brand
+spelling; `git_loopy` as the importable Python package. Supersedes the retired
 **copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Ralph loop**:
-The *technique* git-loopy orchestrates — the unattended, iterative AFK loop that drives the Copilot
-agent to work triaged issues one at a time. A concept, never a code identifier; "ralph" survives
-only in this sense.
+The *technique* git-loopy orchestrates — an unattended, iterative execution loop
+that drives the Copilot agent to work triaged issues one at a time. A concept,
+never a code identifier; "ralph" survives only in this sense.
 _Avoid_: ralph-afk (the retired brand); "ralph" as a symbol, directory, or env-var.
 
 **Config**:
@@ -250,9 +280,9 @@ waits on a human.
 _Avoid_: merge (as the name for this step), landing.
 
 **Parallel-safe**:
-An **AFK-ready** issue a human has additionally asserted is independent and well-scoped
-enough to be worked in its own **Lane**, concurrently with others. Carried as a triage
-label alongside `ready-for-agent`; the runner never infers it.
+A `ready-for-agent` issue a human has additionally asserted is independent and
+well-scoped enough to be worked in its own **Lane**, concurrently with others.
+Carried as a triage label alongside `ready-for-agent`; the runner never infers it.
 _Avoid_: independent, parallelizable (as the label name).
 
 ## Relationships
