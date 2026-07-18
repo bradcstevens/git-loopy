@@ -278,6 +278,45 @@ def test_static_choices_offer_only_each_models_supported_efforts(
     assert choices["no-reasoning-model"].supported_efforts == ()
 
 
+def test_static_choices_expose_the_full_current_catalog_consistently() -> None:
+    """The offline ``init`` fallback mirrors the whole documented catalog (AC3, #88).
+
+    ``_static_choices()`` is what ``git-loopy init`` offers when the live
+    ``list_models()`` fetch fails, so it must expose the *same* current catalog
+    the live ModelSelectionMode projects: every supported model, in order, each
+    with exactly the reasoning efforts :data:`MODEL_REASONING_EFFORTS` documents.
+    This is the anti-drift pin — adding, renaming, or retiring a catalog entry
+    without the offline fallback tracking it fails here.
+    """
+    from git_loopy.config import (
+        MODEL_REASONING_EFFORTS,
+        REASONING_EFFORT_ORDER,
+        SUPPORTED_MODELS,
+    )
+
+    choices = init_module._static_choices()
+
+    # Same ids, in the catalog's own order — no omissions, extras, or reordering.
+    assert [choice.id for choice in choices] == list(MODEL_REASONING_EFFORTS)
+    assert {choice.id for choice in choices} == SUPPORTED_MODELS
+
+    for choice in choices:
+        expected = tuple(
+            effort
+            for effort in REASONING_EFFORT_ORDER
+            if effort in MODEL_REASONING_EFFORTS[choice.id]
+        )
+        assert choice.supported_efforts == expected, choice.id
+        assert choice.supports_reasoning is bool(expected), choice.id
+        # A reasoning-capable model pre-selects its highest advertised effort; a
+        # reasoning-incapable one (e.g. ``auto``) offers none.
+        assert choice.default_effort == (
+            expected[-1] if expected else None
+        ), choice.id
+        # Offline rows carry no policy block, so every one is selectable.
+        assert choice.selectable is True, choice.id
+
+
 def test_ask_index_rejects_disabled_row() -> None:
     out = _Output()
     labels = ["enabled-a", "disabled-b", "enabled-c"]
