@@ -92,6 +92,8 @@ Walks the open issues through the five-label state machine (`needs-triage`, `nee
 
 This is the autonomous phase. Kick off the runner and walk away.
 
+> git-loopy is designed as a **runner family** ([ADR-0013](adr/0013-multi-language-runner-family.md)): the Python runner below is the reference implementation today. Shell (Linux/macOS) and PowerShell (Windows) ports that implement the same [wrapper contract](wrapper-contract.md) are planned, so you'll be able to run this exact loop without Python. The commands below are for the Python runner.
+
 ```bash
 # Unlimited iterations, default model.
 uv run --project git-loopy/python git-loopy

@@ -1,6 +1,8 @@
 # Retire the bash AFK runner — single Python runner
 
-**Status:** accepted (the retained `afk.sh` launcher is later removed — see
+**Status:** superseded by [ADR-0013](0013-multi-language-runner-family.md) (the runner family
+returns, with a shared-source-of-truth backbone that neutralises the drift and doc-fan-out
+objections below). Historically: accepted (the retained `afk.sh` launcher was later removed — see
 [ADR-0007](0007-single-python-entrypoint-retire-afk-sh.md))
 
 ## Context

@@ -2,7 +2,7 @@
 
 > Everything you need to invoke the AFK runner correctly and understand what it'll do on each iteration.
 
-The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-git-loopypython)). The kit ships a single runner — the Python AFK runner at [`git-loopy/python/`](../git-loopy/python/), built on the GitHub Copilot Python SDK. Launch it with `git-loopy` (see [`git-loopy/python/README.md`](../git-loopy/python/README.md) for install and invocation); there is no separate shell runner.
+The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-git-loopypython)). git-loopy is designed as a **runner family** — several interchangeable runners that each implement one shared [**wrapper contract**](wrapper-contract.md), so you can run the loop in the language you're comfortable with on Linux, macOS, or Windows ([ADR-0013](adr/0013-multi-language-runner-family.md)). Today the **Python runner** at [`git-loopy/python/`](../git-loopy/python/) (built on the GitHub Copilot Python SDK) is the reference implementation and the only shippable member; **shell** (Linux/macOS) and **PowerShell** (Windows) ports — and a future **Rust** port — are planned. Launch the Python runner with `git-loopy` (see [`git-loopy/python/README.md`](../git-loopy/python/README.md) for install and invocation).
 
 ## The runner: `git-loopy/python/`
 

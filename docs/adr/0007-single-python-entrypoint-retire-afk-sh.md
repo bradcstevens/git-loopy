@@ -1,6 +1,8 @@
 # Single Python entrypoint: delete afk.sh, fold model/param into the CLI
 
-**Status:** accepted
+**Status:** superseded by [ADR-0013](0013-multi-language-runner-family.md) (the shell/PowerShell
+ports return as members of a runner family; model/effort selection via `--model` /
+`--reasoning-effort` and the config precedence chain stand)
 **Supersedes:** the `afk.sh` retention in [ADR-0002](0002-retire-bash-runner.md)
 
 ## Context

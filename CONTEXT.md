@@ -129,11 +129,13 @@ _Avoid_: picker mode, interactive model prompt.
 ### Framework and configuration
 
 **git-loopy**:
-The framework and its single CLI command — "a GitHub Copilot SDK loop-engineer framework for
-orchestrating automated ralph loops for agentic engineering." One globally-installed command
-runs, configures, and scaffolds the loop from any repository. Written `git-loopy` as the
-distribution and console command (and `git loopy` works as a git subcommand); `git_loopy` as
-the importable Python package. Supersedes the retired **copiloop** and **ralph-afk** brands.
+The framework and brand — "a GitHub Copilot SDK loop-engineer framework for orchestrating
+automated ralph loops for agentic engineering." It ships a **Runner family**: the Python
+reference runner (the globally-installed `git-loopy` console command; `git loopy` also works as
+a git subcommand) plus the planned **shell**, **PowerShell**, and **Rust** ports, all
+implementing one **Wrapper contract**. Written `git-loopy` as the distribution, console command,
+and on-disk/brand spelling; `git_loopy` as the importable Python package. Supersedes the retired
+**copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Ralph loop**:
@@ -170,6 +172,54 @@ Whether **Config** and assets apply machine-wide (**global**) or only within one
 (**project**). Project overrides global. The git-loopy engine is installed once, globally; scope
 governs *which* settings and assets resolve for a run, not which binary runs.
 _Avoid_: local (ambiguous), workspace.
+
+### The runner family
+
+**Runner family**:
+The set of interchangeable git-loopy runners that each implement the same **Wrapper contract**
+in a different host language — the Python reference runner plus the planned **shell**,
+**PowerShell**, and **Rust** ports. One family, one contract, many languages; an operator picks
+the runner that matches their OS and the language they are comfortable with.
+_Avoid_: variants, flavors, backends.
+
+**Orchestrator**:
+The host-language half of a runner — the loop logic and `gh` / `git` / `copilot` plumbing
+(collection, discrimination, run, auto-close, **Strike** accounting, **Checkpoint**, push,
+**Config**, OTel). Each language port is a distinct Orchestrator; every Orchestrator drives the
+one shared **TUI helper** and emits the one **Event schema**.
+_Avoid_: driver, engine; wrapper (the *contract* is the Wrapper contract — the *code* is the
+Orchestrator).
+
+**TUI helper**:
+The single shared live-interface renderer for the non-Python runners — one Rust/ratatui codebase
+compiled to the standalone `git-loopy-tui` binary that the **shell** and **PowerShell**
+Orchestrators launch and feed over the **Event schema**, and embedded in-process by the **Rust**
+port. The Python runner keeps its own Textual renderer; the TUI helper gives the other ports live
+parity without a hand-rolled TUI per language.
+_Avoid_: "the TUI" (ambiguous with the Python Textual app), frontend, renderer (collides with the
+Python `Renderer`).
+
+**Event schema**:
+The single JSONL event vocabulary every **Orchestrator** emits and the **TUI helper** and the
+replay log both consume — the envelope (`ts`, `run_id`, `iter`, `type`, payload) plus the fixed
+`WRAPPER_*` and SDK-mapped `type` string literals (`git_loopy.events`). The string *literals*,
+not the constant names, are the contract downstream tooling reads.
+_Avoid_: log format, event stream (as the name), telemetry.
+
+**Wrapper contract**:
+The language-neutral behavioural specification every **Orchestrator** must satisfy —
+`ready-for-agent` collection, the `## What to build` + `## Acceptance criteria` discriminator, the
+pool-whitelisted `Closes/Fixes/Resolves #N` backstop, progress/**Strike** accounting,
+**Checkpoint** + push, the exit-code table, and the `GIT_LOOPY_*` env surface. Versioned in
+`docs/wrapper-contract.md`; enforced across the family by the **Conformance suite**.
+_Avoid_: runner contract, "the spec" (informal).
+
+**Conformance suite**:
+The language-neutral fixture set — golden cases for the discriminator, the close-keyword regex,
+progress/strike accounting, and the exit-code table — that every **Orchestrator** runs in CI and
+must pass, keeping the **Runner family** from drifting. The generalized successor to the deleted
+two-runner cross-parity test (ADR-0002).
+_Avoid_: parity test (the retired two-runner name), integration tests.
 
 ### Parallel execution
 
@@ -271,3 +321,8 @@ _Avoid_: independent, parallelizable (as the label name).
 - `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
   to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
   per-issue because every issue boundary is also an **Iteration** boundary.
+- `the runner` / `the bash port` / `the script` were used loosely once a second and third
+  language port arrived — resolved: the whole is the **Runner family**; a single member is a
+  named **Orchestrator** (the Python, shell, PowerShell, or Rust Orchestrator); the shared
+  live-interface binary is the **TUI helper**, distinct from the Python runner's own Textual
+  renderer. "The runner" as a proper name is avoided (ADR-0013).

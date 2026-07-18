@@ -36,8 +36,10 @@
 │   └── caveman/                    # Token-compressed output mode (off by default in the loop).
 └── git-loopy/
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
-    └── python/                     # The AFK runner, on the GitHub Copilot Python SDK. See git-loopy/python/README.md.
+    └── python/                     # Python reference runner (GitHub Copilot Python SDK). See git-loopy/python/README.md.
 ```
+
+> As the [runner family](adr/0013-multi-language-runner-family.md) ports land, `git-loopy/` also gains `shell/`, `powershell/`, `tui/` (the shared TUI helper binary), and `conformance/` (the language-neutral parity suite). Until then, the Python runner is the only shippable member.
 
 ### What you'll add when adopting
 
@@ -153,6 +155,6 @@ If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft 
 
 **Next:**
 - [`docs/workflow.md`](workflow.md) — the seven-phase workflow these skills slot into.
-- [`docs/runners.md`](runners.md) — runner comparison and AFK loop contract.
+- [`docs/runners.md`](runners.md) — the runner family and AFK loop reference; [`docs/wrapper-contract.md`](wrapper-contract.md) — the wrapper contract every runner implements.
 - [`docs/concepts.md`](concepts.md) — the mental models behind the design.
 - Back to [`README.md`](../README.md).

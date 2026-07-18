@@ -4,7 +4,7 @@ A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on the 
 
 **What you get:**
 
-- A **Python AFK runner** on the GitHub Copilot Python SDK — [`git-loopy/python/`](git-loopy/python/).
+- A **Python AFK runner** on the GitHub Copilot Python SDK — [`git-loopy/python/`](git-loopy/python/). The reference implementation of git-loopy's [**runner family**](docs/adr/0013-multi-language-runner-family.md); shell + PowerShell ports for Linux/macOS/Windows are on the roadmap.
 - A **vendored copy of every Copilot CLI skill** the workflow routes to — [`.copilot/skills/`](.copilot/skills).
 
 Stack-agnostic: customize one **Feedback loops** table in `AGENTS.md` and the rest of the kit follows.
@@ -16,7 +16,7 @@ Stack-agnostic: customize one **Feedback loops** table in `AGENTS.md` and the re
 - [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in (`npm install -g @github/copilot`, then run `copilot` once).
 - [`gh`](https://cli.github.com/) and `git` on `PATH`; `gh` signed in (`gh auth login`).
 - A GitHub repository for your project (the loop's default issue source).
-- Python **>= 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip >= 24`) — only needed once you reach the AFK loop.
+- Python **>= 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip >= 24`) — only needed once you reach the AFK loop, and only for the Python reference runner (the planned shell/PowerShell ports will need no Python; see [ADR-0013](docs/adr/0013-multi-language-runner-family.md)).
 
 Detailed prerequisites are in [`docs/skills-setup.md`](docs/skills-setup.md#prerequisites).
 

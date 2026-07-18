@@ -56,3 +56,5 @@ issues/
 
 # Intake feature-request briefs (per-run capture from /intake; not tracked)
 docs/feature-requests/
+
+.reference/
