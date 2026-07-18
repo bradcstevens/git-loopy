@@ -98,15 +98,16 @@ def _ask_index(
     while True:
         answer = _prompt(input_fn, f"{prompt_label} [{default_index + 1}]: ")
         if not answer:
-            return default_index
-        try:
-            picked = int(answer) - 1
-        except ValueError:
-            output_fn(f"  Please enter a number between 1 and {len(labels)}.")
-            continue
-        if not 0 <= picked < len(labels):
-            output_fn(f"  Please enter a number between 1 and {len(labels)}.")
-            continue
+            picked = default_index
+        else:
+            try:
+                picked = int(answer) - 1
+            except ValueError:
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
+            if not 0 <= picked < len(labels):
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
         if selectable is not None and not selectable[picked]:
             output_fn("  That option is unavailable (disabled by policy); pick another.")
             continue

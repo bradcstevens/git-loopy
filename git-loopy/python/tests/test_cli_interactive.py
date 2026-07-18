@@ -242,7 +242,7 @@ def test_main_interactive_select_model_no_effort_selection_is_baked(
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
-    _install_fake_resolve_run_model(monkeypatch, result=("claude-opus-4.5", None))
+    _install_fake_resolve_run_model(monkeypatch, result=("claude-sonnet-4.5", None))
 
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
@@ -250,7 +250,7 @@ def test_main_interactive_select_model_no_effort_selection_is_baked(
     cli_module.main(["--select-model"])
 
     cfg, _driver = captured[0]
-    assert cfg.model == "claude-opus-4.5"
+    assert cfg.model == "claude-sonnet-4.5"
     assert cfg.reasoning_effort is None
 
 

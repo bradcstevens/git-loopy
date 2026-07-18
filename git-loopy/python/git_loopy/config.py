@@ -56,21 +56,31 @@ __all__ = [
 #:
 #: Keep this in lockstep with the Copilot CLI's ``models.list`` output.
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
-    "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
-    "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
-    "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
-    "claude-opus-4.5": frozenset(),
+    "auto": frozenset(),
+    "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
     "claude-sonnet-4.5": frozenset(),
     "claude-haiku-4.5": frozenset(),
-    "gpt-5.5": frozenset({"low", "medium", "high", "xhigh"}),
-    "gpt-5.4": frozenset({"low", "medium", "high", "xhigh"}),
+    "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+    "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
+    "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
-    "gpt-5.4-mini": frozenset({"low", "medium", "high", "xhigh"}),
+    "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5-mini": frozenset({"low", "medium", "high"}),
     "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
     "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
-    "mai-code-1-flash-internal": frozenset({"low", "medium", "high"}),
+    "gpt-5.6-luna": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
+    "gpt-5.6-sol": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
+    "gpt-5.6-terra": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
+    "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
 
 #: The model ids the kit officially supports (the keys of

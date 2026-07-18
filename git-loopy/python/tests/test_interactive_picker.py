@@ -134,6 +134,24 @@ async def test_live_picker_retains_none_and_minimal_efforts() -> None:
     assert (model, effort) == ("reasoning-model", "none")
 
 
+async def test_live_picker_selects_gpt_5_6_sol_with_advertised_efforts() -> None:
+    advertised = ["none", "low", "medium", "high", "xhigh", "max"]
+
+    async def fetch() -> list:
+        return [_model("gpt-5.6-sol", efforts=advertised)]
+
+    async def run_app(choices, *, cursor) -> Selection:
+        assert choices[0].supported_efforts == tuple(advertised)
+        assert choices[0].selectable is True
+        return Selection("gpt-5.6-sol", "max")
+
+    model, effort = await resolve_run_model(
+        _config(), warn=_Warn(), fetch=fetch, run_app=run_app
+    )
+
+    assert (model, effort) == ("gpt-5.6-sol", "max")
+
+
 async def test_cursor_passthrough_prehighlights_env_default() -> None:
     captured: list[int] = []
 
@@ -171,16 +189,16 @@ async def test_cancelled_picker_falls_back_silently() -> None:
 
 async def test_selection_with_no_effort_is_preserved() -> None:
     async def fetch() -> list:
-        return [_model("claude-opus-4.5")]  # reasoning-incapable
+        return [_model("claude-sonnet-4.5")]  # reasoning-incapable
 
     async def run_app(choices, *, cursor) -> Selection:
-        return Selection("claude-opus-4.5", None)
+        return Selection("claude-sonnet-4.5", None)
 
     model, effort = await resolve_run_model(
         _config(), warn=_Warn(), fetch=fetch, run_app=run_app
     )
 
-    assert model == "claude-opus-4.5"
+    assert model == "claude-sonnet-4.5"
     assert effort is None
 
 

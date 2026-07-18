@@ -259,6 +259,13 @@ def test_estimate_cost_unknown_model_returns_none_not_zero() -> None:
     assert result != Decimal("0")
 
 
+def test_gpt_5_6_sol_remains_unpriced_without_verified_list_prices() -> None:
+    pricing = load_pricing()
+
+    assert "gpt-5.6-sol" not in pricing.models
+    assert estimate_cost("gpt-5.6-sol", 1_000, 1_000, pricing) is None
+
+
 # ---------------------------------------------------------------------------
 # context_utilisation
 # ---------------------------------------------------------------------------

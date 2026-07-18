@@ -70,7 +70,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         # Wordy tails that merely look like a suffix must NOT be stripped.
         ("gpt-5.4-mini", None),
         ("gpt-5.3-codex", None),
-        ("mai-code-1-flash-internal", None),
+        ("mai-code-1-flash-picker", None),
         ("", None),
         (None, None),
     ],
@@ -187,6 +187,26 @@ def test_main_accepts_max_effort(
 
     assert exit_code == 0
     assert captured[0].reasoning_effort == "max"
+
+
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh", "max"])
+def test_main_recognises_gpt_5_6_sol_and_every_advertised_effort(
+    effort: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(
+        ["--model", "gpt-5.6-sol", "--reasoning-effort", effort]
+    )
+
+    assert exit_code == 0
+    assert captured[0].model == "gpt-5.6-sol"
+    assert captured[0].reasoning_effort == effort
+    assert "not in the kit's supported model set" not in capsys.readouterr().err
 
 
 def test_main_unknown_model_passes_through_with_warning(

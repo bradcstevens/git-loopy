@@ -896,7 +896,7 @@ def _split_model_suffix(model: str | None) -> tuple[str | None, str | None]:
     Only a trailing segment that exactly matches a known effort
     (:data:`REASONING_EFFORTS`) is treated as a suffix, so ids whose tail
     merely looks wordy — ``gpt-5.4-mini``, ``gpt-5.3-codex``,
-    ``mai-code-1-flash-internal`` — are left intact.
+    ``mai-code-1-flash-picker`` — are left intact.
 
     Returns:
         ``(base_model, effort)`` where ``effort`` is the stripped suffix,

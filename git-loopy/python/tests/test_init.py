@@ -174,7 +174,7 @@ def test_collect_model_effort_from_numbered_list() -> None:
 
 def test_collect_model_effort_skips_effort_when_unsupported() -> None:
     out = _Output()
-    choices = [_choice("claude-opus-4.5", efforts=())]  # no reasoning
+    choices = [_choice("claude-sonnet-4.5", efforts=())]  # no reasoning
     model, effort = init_module._collect_model_and_effort(
         input_fn=_Input("1"),  # only the model prompt is asked
         output_fn=out,
@@ -183,7 +183,7 @@ def test_collect_model_effort_skips_effort_when_unsupported() -> None:
         default_effort="max",
         warn=lambda _m: None,
     )
-    assert (model, effort) == ("claude-opus-4.5", None)
+    assert (model, effort) == ("claude-sonnet-4.5", None)
 
 
 def test_collect_model_effort_retains_live_none_and_minimal() -> None:
@@ -225,6 +225,37 @@ def test_collect_model_effort_falls_back_to_static_on_fetch_failure() -> None:
     assert any("live model list" in w for w in warnings)
 
 
+def test_offline_fallback_selects_gpt_5_6_sol_with_advertised_max_effort() -> None:
+    choices = init_module._static_choices()
+    model_index = next(
+        index for index, choice in enumerate(choices) if choice.id == "gpt-5.6-sol"
+    )
+    sol = choices[model_index]
+    effort_index = sol.supported_efforts.index("max")
+
+    def _offline() -> Sequence[ModelChoice]:
+        raise RuntimeError("offline")
+
+    model, effort = init_module._collect_model_and_effort(
+        input_fn=_Input(str(model_index + 1), str(effort_index + 1)),
+        output_fn=_Output(),
+        fetch_choices=_offline,
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        warn=lambda _message: None,
+    )
+
+    assert sol.supported_efforts == (
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    assert (model, effort) == ("gpt-5.6-sol", "max")
+
+
 def test_static_choices_offer_only_each_models_supported_efforts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,6 +291,22 @@ def test_ask_index_rejects_disabled_row() -> None:
         prompt_label="Choice",
     )
     assert picked == 2
+    assert "disabled by policy" in out.text
+
+
+def test_ask_index_rejects_disabled_default_on_blank() -> None:
+    out = _Output()
+    picked = init_module._ask_index(
+        _Input("", "2"),
+        out,
+        "Pick:",
+        ["disabled-a", "enabled-b"],
+        default_index=0,
+        selectable=[False, True],
+        prompt_label="Choice",
+    )
+
+    assert picked == 1
     assert "disabled by policy" in out.text
 
 
@@ -445,14 +492,14 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
         input_fn=_Input(),
         output_fn=_Output(),
         fetch_choices=lambda: [],
-        default_model="claude-opus-4.5",  # reasoning-incapable
+        default_model="claude-sonnet-4.5",  # reasoning-incapable
         default_effort="max",
         **_packaged(tmp_path),
     )
     assert rc == 0
     cfg = settings.project_config_path(tmp_path)
     # The effort is gated out — a reasoning-incapable model writes model only.
-    assert tomllib.loads(cfg.read_text()) == {"model": "claude-opus-4.5"}
+    assert tomllib.loads(cfg.read_text()) == {"model": "claude-sonnet-4.5"}
 
 
 def test_run_init_project_scope_without_repo_returns_nonzero() -> None:

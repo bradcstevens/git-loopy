@@ -119,24 +119,44 @@ def test_run_config_accepts_explicit_pricing_path() -> None:
     assert cfg.pricing_file == p
 
 
-def test_supported_models_matrix_is_self_consistent() -> None:
-    """``SUPPORTED_MODELS`` mirrors the matrix keys; efforts are valid.
-
-    The capability matrix is the single source of truth for which models
-    the kit supports and which reasoning efforts each accepts. Guard the
-    two invariants the CLI relies on: ``SUPPORTED_MODELS`` is exactly the
-    matrix's key set, and every listed effort is a recognised literal.
-    """
+def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
+    """The static fallback exactly mirrors the current Copilot catalog."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
         SUPPORTED_MODELS,
     )
 
-    assert SUPPORTED_MODELS == frozenset(MODEL_REASONING_EFFORTS)
-    assert "claude-opus-4.8" in SUPPORTED_MODELS
+    expected = {
+        "auto": frozenset(),
+        "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
+        "claude-sonnet-4.5": frozenset(),
+        "claude-haiku-4.5": frozenset(),
+        "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+        "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
+        "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5-mini": frozenset({"low", "medium", "high"}),
+        "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
+        "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
+        "gpt-5.6-luna": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "gpt-5.6-sol": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "gpt-5.6-terra": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
+    }
+
+    assert tuple(MODEL_REASONING_EFFORTS) == tuple(expected)
+    assert MODEL_REASONING_EFFORTS == expected
+    assert SUPPORTED_MODELS == frozenset(expected)
     for model, efforts in MODEL_REASONING_EFFORTS.items():
         assert efforts <= REASONING_EFFORTS, model
-    # The three reasoning-incapable models carry an empty effort set.
-    for model in ("claude-opus-4.5", "claude-sonnet-4.5", "claude-haiku-4.5"):
-        assert MODEL_REASONING_EFFORTS[model] == frozenset(), model
