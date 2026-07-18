@@ -32,10 +32,6 @@ A scaffold for a project that uses this shape end-to-end:
 - **A Python AFK runner** on the GitHub Copilot Python SDK — frozen iteration `Panel`s, per-iteration token + estimated-cost signal, a JSONL replay log, a run-summary JSON, and opt-in OpenTelemetry tracing. See [`docs/runners.md`](runners.md).
 - **Stack-agnostic.** Customize the **Feedback loops** table in `AGENTS.md` once for your project's lint / type-check / test / build commands; both the human-driven skills and the AFK loop read from it.
 
-## Inspiration
-
-Inspired by the [AI Engineer Workshop 2026](https://github.com/mattpocock/ai-engineer-workshop-2026-project) workflow, ported to the GitHub Copilot CLI.
-
 ---
 
 **Next:**

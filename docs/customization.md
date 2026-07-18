@@ -106,7 +106,7 @@ The two layers compose: a human starts a fresh repo, runs `uv run --project git-
 
 ## Skills reference
 
-The kit ships with a curated subset of the upstream skill library, vendored under [`.copilot/skills/`](../.copilot/skills). The full upstream catalog is the [`mattpocock/ai-engineer-workshop-2026-project`](https://github.com/mattpocock/ai-engineer-workshop-2026-project) library; the GitHub Copilot CLI marketplace has more skills beyond that.
+The kit ships with a curated subset of Copilot CLI skills, vendored under [`.copilot/skills/`](../.copilot/skills). The GitHub Copilot CLI marketplace has more skills beyond what's bundled here.
 
 To discover more skills beyond what's vendored:
 

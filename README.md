@@ -1,108 +1,91 @@
 # GitHub Copilot Ralph Starter Kit
 
-A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on top of the **GitHub Copilot CLI**. Drop the templates, skills, and runner scripts into a new repo, fill in `AGENTS.md`, point the loop at a kanban of triaged GitHub Issues, and let an agent implement them autonomously while you do something else.
+A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on the **GitHub Copilot CLI**. Drop it into a new repo, fill in `AGENTS.md`, point the loop at a kanban of triaged GitHub Issues, and let an agent implement them autonomously while you do something else.
 
-> Inspired by the [AI Engineer Workshop 2026](https://github.com/mattpocock/ai-engineer-workshop-2026-project) workflow, ported to the GitHub Copilot CLI.
+**What you get:**
 
-**What you get:** a Python AFK runner on the GitHub Copilot Python SDK ([`git-loopy/python/`](git-loopy/python/)), per-repo configuration templates under [`templates/`](templates/), and a vendored copy of every Copilot CLI skill the workflow routes to under [`.copilot/skills/`](.copilot/skills). Stack-agnostic — customize one **Feedback loops** table and the rest of the kit follows.
+- A **Python AFK runner** on the GitHub Copilot Python SDK — [`git-loopy/python/`](git-loopy/python/).
+- **Per-repo config templates** — [`templates/`](templates/).
+- A **vendored copy of every Copilot CLI skill** the workflow routes to — [`.copilot/skills/`](.copilot/skills).
 
-This README is the **quickstart**. The deeper docs live under [`docs/`](docs/) — see [Where to go next](#where-to-go-next).
-
-> **Skills setup starts with `/setup-agent-skills`.** Once you've cloned this kit into your new project and installed the skills at the user level, the **first** thing to run in Copilot CLI is the [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) skill. It populates the `## Agent skills` block in your `AGENTS.md` and writes the per-repo `docs/agents/{issue-tracker,triage-labels,domain}.md` files that every downstream skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnosing-bugs`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads. Skip this step and those skills will guess at your issue tracker, label vocabulary, and context layout. **Safety net:** if you forget, the bootstrap directive at the top of [`AGENTS.md`](templates/AGENTS.template.md) auto-invokes the skill on your next interactive `copilot` session, and the AFK runner ([`git-loopy/python/`](git-loopy/python/)) refuses to start without it. Full detail in [`docs/customization.md`](docs/customization.md#setup-agent-skills--the-entry-point-skill) and [`docs/customization.md` → Auto-bootstrap behavior](docs/customization.md#auto-bootstrap-behavior).
+Stack-agnostic: customize one **Feedback loops** table in `AGENTS.md` and the rest of the kit follows.
 
 ---
 
 ## Prerequisites
 
-- [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in: `npm install -g @github/copilot` then run `copilot` once to authenticate.
-- [`gh`](https://cli.github.com/) on PATH and signed in (`gh auth login`).
-- `git` on PATH.
+- [GitHub Copilot CLI](https://docs.github.com/copilot/github-copilot-in-the-cli) installed and signed in (`npm install -g @github/copilot`, then run `copilot` once).
+- [`gh`](https://cli.github.com/) and `git` on `PATH`; `gh` signed in (`gh auth login`).
 - A GitHub repository for your project (the loop's default issue source).
-- Python **≥ 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip` ≥ 24) for the AFK runner ([`git-loopy/python/`](git-loopy/python/)). See [`docs/runners.md`](docs/runners.md) for the runner contract and [`git-loopy/python/README.md`](git-loopy/python/README.md) for the Python bootstrap.
+- Python **>= 3.11** and [`uv`](https://docs.astral.sh/uv/) (or `pip >= 24`) — only needed once you reach the AFK loop.
+
+Detailed prerequisites are in [`docs/skills-setup.md`](docs/skills-setup.md#prerequisites).
 
 ---
 
 ## Quick Start
 
-The kit is designed to be **dropped into a new repo as scaffolding**. The steps below take you from `git clone` to running `/grill-me` against a real brief.
+From `git clone` to running the AFK loop. Every step below has a detailed walkthrough in [`docs/skills-setup.md`](docs/skills-setup.md).
 
 ```bash
-# 1. Clone the kit into a new project directory and reset git history.
+# 1. Clone the kit into a new project and reset git history.
 git clone https://github.com/bradcstevens/git-loopy my-project
 cd my-project
-rm -rf .git
-git init && git add -A && git commit -m "Initial commit from git-loopy"
+rm -rf .git && git init && git add -A && git commit -m "Initial commit from starter kit"
 
-# 2. Scaffold AGENTS.md and SPEC.md from the templates in templates/.
-#    (CONTEXT.md is already at the repo root as a stub; /grill-with-docs will
-#    extend it lazily as new terms come up.)
+# 2. Scaffold AGENTS.md and SPEC.md from the templates.
 cp templates/AGENTS.template.md AGENTS.md
 cp templates/SPEC.template.md   SPEC.md
 
-# 3. Install the vendored skills at the user level so /skillname works in any
-#    Copilot CLI session. (This is a plain copy — it does NOT configure the
-#    repo; that's step 4.)
+# 3. Install the vendored skills at the user level (once per machine).
 mkdir -p ~/.copilot/skills
 cp -R .copilot/skills/* ~/.copilot/skills/
 
-# 4. Start Copilot CLI from the project root and run /setup-agent-skills FIRST.
-#    This is the entry point for skill configuration in a new repo. It:
-#      - populates the `## Agent skills` block at the bottom of AGENTS.md, and
-#      - writes docs/agents/{issue-tracker,triage-labels,domain}.md — the per-repo
-#        config files every other skill reads to learn which issue tracker, label
-#        vocabulary, and context layout this project uses.
-#    Skip it and /to-issues, /triage, /to-prd, /diagnosing-bugs, /tdd, and
-#    /improve-codebase-architecture will guess at the wrong defaults.
+# 4. Configure this repo — run /setup-agent-skills FIRST, before any other skill.
+#    It writes docs/agents/{issue-tracker,triage-labels,domain}.md and the
+#    AGENTS.md `## Agent skills` block that every downstream skill reads.
 copilot
 > /setup-agent-skills
 
-# 5. With agent-skill config in place, fill in the rest of AGENTS.md and SPEC.md.
-#    Each template has a "How to use this template" header — grep for `<[A-Z_]`
-#    to find every placeholder that still needs replacing.
-$EDITOR AGENTS.md      # project description, tech stack, feedback loops
-$EDITOR SPEC.md        # problem statement, user stories, implementation decisions
-$EDITOR git-loopy/PROMPT.md  # loop-specific routing rules (usually leave defaults)
-
-# 6. Walk through the human-in-the-loop workflow.
-copilot
-> /intake              # optional Phase 0: capture raw/messy/multiple change
-#                        requests (plus terminal output or screenshots) into a
-#                        grill-ready docs/feature-requests/<timestamp>-<slug>/<slug>.md
-> /grill-me            # greenfield: start here, until 3–4 terms keep recurring
-#                        (optionally point it at the feature-requests file /intake produced)
-# Once vocabulary stabilises, switch to /grill-with-docs to compile it into
-# CONTEXT.md + docs/adr/. See docs/workflow.md for the deciding axis.
-# ...then /to-prd, /to-issues, /triage, then kick off the AFK loop.
+# 5. Fill in the templates (Tech stack + Feedback loops in AGENTS.md are load-bearing).
+grep -n '<[A-Z_]' AGENTS.md SPEC.md   # lists every placeholder left to replace
 ```
 
-You don't need to use every phase. The skills are independent — pick what helps. The full workflow is documented in [`docs/workflow.md`](docs/workflow.md).
+Then walk the skills workflow, inside `copilot`, up to the loop:
 
-### What the two skills setup steps actually do
+```text
+/grill-me          # align on the change (greenfield: start here)
+/grill-with-docs   # once vocabulary stabilises, compile CONTEXT.md + docs/adr/
+/to-prd            # publish the brief as the parent PRD issue
+/to-issues         # slice the PRD into vertical-slice issues
+/triage            # label ready-for-agent work for the loop
+```
 
-These two steps are easy to conflate; they're not the same thing.
+Finally, kick off the autonomous AFK loop and walk away:
 
-| Step | Command | What it changes |
-| --- | --- | --- |
-| **Install skills at user level** | `cp -R .copilot/skills/* ~/.copilot/skills/` | Makes `/intake`, `/grill-me`, `/to-prd`, `/to-issues`, `/triage`, `/diagnosing-bugs`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`, `/find-skills`, `/setup-agent-skills`, etc. discoverable in **any** Copilot CLI session on your machine. Run once per machine (or per kit upgrade). |
-| **Configure skills for this repo** | `/setup-agent-skills` (inside `copilot`) | Edits **this repo's** `AGENTS.md` `## Agent skills` block and writes **this repo's** `docs/agents/*.md`. Tells the other skills which issue tracker (GitHub / GitLab / local markdown / other), which label vocabulary, and which context layout (single vs multi-context) this project uses. Run once per repo. |
+```bash
+uv run --project git-loopy/python git-loopy        # unlimited iterations
+uv run --project git-loopy/python git-loopy 50     # cap at 50 iterations
+```
 
-The first is a one-time machine-level install. The second is a one-time per-project configuration that **must** run before any of the other planning/implementation skills.
+> **Run `/setup-agent-skills` first.** Installing the skills (step 3) only makes the commands _exist_; `/setup-agent-skills` (step 4) makes them _correct for this repo_. Skip it and the planning skills guess at your issue tracker, labels, and context layout — though the AFK runner refuses to start without it and interactive sessions auto-trigger it. Full walkthrough: [`docs/skills-setup.md`](docs/skills-setup.md).
+
+You don't need every phase — the skills are independent, so pick what helps. The end-to-end workflow is documented in [`docs/workflow.md`](docs/workflow.md).
 
 ---
 
 ## Where to go next
 
-The README stops here. Pick whichever doc matches what you need to do:
-
-| Doc | Read when… |
+| Doc | Read when... |
 | --- | --- |
-| [`docs/concepts.md`](docs/concepts.md) | You want to understand **why** the workflow is shaped the way it is — the Smart Zone / Memento Model mental models the rest of the kit is built around. Read this first if you're unfamiliar with AFK-style AI coding loops. |
-| [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea → Intake → Grill → Brief → PRD → Issues → Triage → AFK loop → QA). Includes the optional [`/intake`](.copilot/skills/intake/SKILL.md) capture step, and the [`/grill-me` vs `/grill-with-docs`](docs/workflow.md#grill-me-vs-grill-with-docs--pick-the-right-one) decision tree and the greenfield-project edge case. |
-| [`docs/runners.md`](docs/runners.md) | You're ready to kick off the AFK loop and need the **runner reference** — invocation cookbook, per-iteration flow, exit conditions, commit-message contract, and skill-routing rules. |
-| [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit to your project** — repo structure, what to edit in `AGENTS.md` and `PROMPT.md`, what `/setup-agent-skills` actually writes, re-running it, and the skills reference. |
-| [`git-loopy/python/README.md`](git-loopy/python/README.md) | You want the AFK runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
+| [`docs/skills-setup.md`](docs/skills-setup.md) | You're **adopting the kit** and want the detailed install + `/setup-agent-skills` walkthrough, with verification and troubleshooting. |
+| [`docs/concepts.md`](docs/concepts.md) | You want to understand **why** the workflow is shaped this way — the Smart Zone and Memento Model the kit is built around. |
+| [`docs/workflow.md`](docs/workflow.md) | You're ready to walk the **end-to-end workflow** (Idea -> Intake -> Grill -> Brief -> PRD -> Issues -> Triage -> AFK loop -> QA), including the `/grill-me` vs `/grill-with-docs` decision. |
+| [`docs/runners.md`](docs/runners.md) | You need the **runner reference** — invocation, per-iteration flow, exit conditions, commit-message contract, and skill routing. |
+| [`docs/customization.md`](docs/customization.md) | You need to **tailor the kit** — repo structure, `AGENTS.md`/`PROMPT.md`, re-running `/setup-agent-skills`, and the skills reference. |
+| [`git-loopy/python/README.md`](git-loopy/python/README.md) | You want the runner's **bootstrap, env-var surface, observability artefacts, and OpenTelemetry tracing**. |
 
-A recommended reading order for first-time users: [`docs/concepts.md`](docs/concepts.md) → finish the Quick Start above → [`docs/workflow.md`](docs/workflow.md) → [`docs/runners.md`](docs/runners.md) → [`docs/customization.md`](docs/customization.md) on demand.
+First-time reading order: [`docs/skills-setup.md`](docs/skills-setup.md) -> [`docs/concepts.md`](docs/concepts.md) -> [`docs/workflow.md`](docs/workflow.md) -> [`docs/runners.md`](docs/runners.md) -> [`docs/customization.md`](docs/customization.md) on demand.
 
 ---
 
