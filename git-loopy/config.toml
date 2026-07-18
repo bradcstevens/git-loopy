@@ -2,5 +2,6 @@
 # Precedence: CLI flag > env > project > global > built-in default (ADR-0006).
 # Edit freely, or manage with `git-loopy init` / `git-loopy config`.
 
-model = "gpt-5.6-sol"
+model = "claude-opus-4.8"
 reasoning_effort = "max"
+
