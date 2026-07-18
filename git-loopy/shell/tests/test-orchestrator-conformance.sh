@@ -52,6 +52,67 @@ while IFS= read -r case_json; do
   assert_equal "$expected" "$actual" "exit-code fixture: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/exit-codes.json")
 
+assert_equal \
+  "$(jq -r '.reference_regex' "$conformance_dir/close-references.json")" \
+  "$GIT_LOOPY_CLOSE_KEYWORD_RE" \
+  "close-keyword regex matches the shared reference"
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  messages="$(jq -r '.commit_messages' <<<"$case_json")"
+  pool="$(
+    jq -c '(.issue_pool | map({ref: ., kind: "issue"}))
+      + (.pr_pool | map({ref: ., kind: "pr"}))' <<<"$case_json"
+  )"
+  assert_equal \
+    "$(jq -c '.extracted_refs' <<<"$case_json")" \
+    "$(git_loopy_extract_close_refs "$messages")" \
+    "close-references extract fixture: $case_id"
+  assert_equal \
+    "$(jq -c '.actionable_refs' <<<"$case_json")" \
+    "$(git_loopy_actionable_close_refs "$messages" "$pool")" \
+    "close-references actionable fixture: $case_id"
+done < <(jq -c '.cases[]' "$conformance_dir/close-references.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  max_strikes="$(jq -r '.max_strikes' <<<"$case_json")"
+  strikes=0
+  outcome="running"
+  step_index=0
+  while IFS= read -r step_json; do
+    step_index=$((step_index + 1))
+    read -r commits closures checkpoints pr_advances saw_nmt < <(
+      jq -r '.signals
+        | "\(.commits_in_iter) \(.auto_closures_in_iter) \(.checkpoints_in_iter) \(.pr_advances_in_iter) \(.saw_nmt_sentinel)"' \
+        <<<"$step_json"
+    )
+    progress="false"
+    if git_loopy_did_iteration_make_progress \
+      "$commits" "$closures" "$checkpoints" "$pr_advances" "$saw_nmt"; then
+      progress="true"
+    fi
+    tick="$(
+      git_loopy_strike_tick "$max_strikes" "$strikes" "$outcome" \
+        "$commits" "$closures" "$checkpoints" "$pr_advances" "$saw_nmt"
+    )"
+    strikes="${tick%% *}"
+    outcome="${tick##* }"
+    assert_equal \
+      "$(jq -r '.expected.progress' <<<"$step_json")" \
+      "$progress" \
+      "progress-strikes fixture: $case_id step $step_index (progress)"
+    assert_equal \
+      "$(jq -r '.expected.strikes' <<<"$step_json")" \
+      "$strikes" \
+      "progress-strikes fixture: $case_id step $step_index (strikes)"
+    assert_equal \
+      "$(jq -r '.expected.outcome' <<<"$step_json")" \
+      "$outcome" \
+      "progress-strikes fixture: $case_id step $step_index (outcome)"
+  done < <(jq -c '.steps[]' <<<"$case_json")
+done < <(jq -c '.cases[]' "$conformance_dir/progress-strikes.json")
+
 (
   unset GIT_LOOPY_MODEL
   unset GIT_LOOPY_REASONING_EFFORT

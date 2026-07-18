@@ -347,6 +347,158 @@ function Get-GitLoopyExitCode {
     }
 }
 
+# GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
+# reference_regex and the Python reference so the whole Runner family shares one
+# close-keyword oracle. .NET honours the embedded (?i) and matches \s (including
+# \r and Unicode line separators) the same way Python's re does.
+$script:GitLoopyCloseKeywordPattern =
+    '(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)'
+
+function Get-GitLoopyCloseKeywordPattern {
+    [CmdletBinding()]
+    param()
+    return $script:GitLoopyCloseKeywordPattern
+}
+
+function Get-GitLoopyCloseReferences {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Messages
+    )
+
+    $Refs = [Collections.Generic.List[int]]::new()
+    $Seen = [Collections.Generic.HashSet[int]]::new()
+    if ([string]::IsNullOrEmpty($Messages)) {
+        return , $Refs.ToArray()
+    }
+    # Match line-by-line, splitting on LF only, so a newline is a hard boundary
+    # while \r and Unicode line separators stay inline whitespace — matching the
+    # Python reference `extract_close_refs`.
+    foreach ($Line in $Messages.Split([char]10)) {
+        foreach (
+            $Match in [regex]::Matches($Line, $script:GitLoopyCloseKeywordPattern)
+        ) {
+            [int]$Number = 0
+            if (
+                [int]::TryParse($Match.Groups[2].Value, [ref]$Number) -and
+                $Seen.Add($Number)
+            ) {
+                $Refs.Add($Number)
+            }
+        }
+    }
+    return , $Refs.ToArray()
+}
+
+function Get-GitLoopyActionableCloseReferences {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Messages,
+        [AllowNull()]
+        [object[]]$Pool
+    )
+
+    # First-seen close refs restricted to *issues* in the current Pool. Pull
+    # requests and non-integer refs are excluded, preserving the Wrapper
+    # contract's issues-only closure boundary.
+    $IssueRefs = [Collections.Generic.HashSet[int]]::new()
+    foreach ($Descriptor in @($Pool)) {
+        if ($Descriptor -isnot [Collections.IDictionary]) {
+            continue
+        }
+        if ([string]$Descriptor["kind"] -cne "issue") {
+            continue
+        }
+        $RefValue = $Descriptor["ref"]
+        if ($RefValue -isnot [int] -and $RefValue -isnot [long]) {
+            continue
+        }
+        [void]$IssueRefs.Add([int]$RefValue)
+    }
+    $Actionable = [Collections.Generic.List[int]]::new()
+    foreach ($Ref in (Get-GitLoopyCloseReferences -Messages $Messages)) {
+        if ($IssueRefs.Contains($Ref)) {
+            $Actionable.Add($Ref)
+        }
+    }
+    return , $Actionable.ToArray()
+}
+
+function Test-GitLoopyIterationProgress {
+    [CmdletBinding()]
+    param(
+        [int]$Commits,
+        [int]$AutoClosures,
+        [int]$Checkpoints,
+        [int]$PrAdvances,
+        [bool]$SawNmt
+    )
+
+    # Progress is true only for an agent commit, an auto-closure, or a PR head
+    # advance. Runner Checkpoints and the legacy no-more-tasks sentinel are
+    # informational and never progress.
+    return ($Commits -gt 0) -or ($AutoClosures -gt 0) -or ($PrAdvances -gt 0)
+}
+
+function Step-GitLoopyStrikeState {
+    [CmdletBinding()]
+    param(
+        [int]$MaxStrikes,
+        [int]$Strikes,
+        [string]$Outcome,
+        [int]$Commits,
+        [int]$AutoClosures,
+        [int]$Checkpoints,
+        [int]$PrAdvances,
+        [bool]$SawNmt
+    )
+
+    # Advance the NMT Strike machine by one Iteration. Progress resets strikes;
+    # a no-progress Iteration adds one and, on reaching the threshold, flips the
+    # outcome to `aborted` and freezes there.
+    if ($Outcome -ceq "aborted") {
+        return [pscustomobject]@{ Strikes = $Strikes; Outcome = $Outcome }
+    }
+    $MadeProgress = Test-GitLoopyIterationProgress `
+        -Commits $Commits `
+        -AutoClosures $AutoClosures `
+        -Checkpoints $Checkpoints `
+        -PrAdvances $PrAdvances `
+        -SawNmt $SawNmt
+    if ($MadeProgress) {
+        return [pscustomobject]@{ Strikes = 0; Outcome = $Outcome }
+    }
+    $Strikes += 1
+    if ($Strikes -ge $MaxStrikes) {
+        $Outcome = "aborted"
+    }
+    return [pscustomobject]@{ Strikes = $Strikes; Outcome = $Outcome }
+}
+
+function Test-GitLoopyCheckpointMessage {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Message
+    )
+
+    # Recognize the runner Checkpoint trailer (`GitLoopy-Checkpoint:`), tolerant
+    # of surrounding whitespace and case, so a Checkpoint is excluded from Strike
+    # progress even before this port authors one. Mirrors the Python reference.
+    if ([string]::IsNullOrEmpty($Message)) {
+        return $false
+    }
+    $Prefix = "gitloopy-checkpoint:"
+    foreach ($Line in [regex]::Split($Message, "\r\n|\r|\n")) {
+        if ($Line.Trim().ToLowerInvariant().StartsWith($Prefix)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Resolve-GitLoopyPrompt {
     [CmdletBinding()]
     param(
@@ -942,6 +1094,154 @@ function Invoke-GitLoopyAgentTurn {
     }
 }
 
+function Invoke-GitLoopyCloseOneIssue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [int]$Issue,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    # Re-verify one Pool issue is still OPEN and close it via `gh issue close`,
+    # attributing every new commit that referenced it. Emits one
+    # wrapper.auto_close on success. A gh failure or an already-CLOSED issue
+    # warns/skips without aborting. Returns $true iff the issue was closed.
+    $RefShas = [Collections.Generic.List[string]]::new()
+    foreach ($Commit in @($Commits)) {
+        $Body = [string]$Commit["body"]
+        $Subject = [string]$Commit["subject"]
+        $Message = if ([string]::IsNullOrEmpty($Body)) {
+            $Subject
+        }
+        else {
+            "$Subject`n$Body"
+        }
+        if ((Get-GitLoopyCloseReferences -Messages $Message) -contains $Issue) {
+            $RefShas.Add([string]$Commit["sha"])
+        }
+    }
+    if ($RefShas.Count -eq 0) {
+        return $false
+    }
+
+    $ViewOutput = @(
+        & gh issue view $Issue --json number,state,url 2>$null
+    )
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine(
+            "git-loopy: gh issue view #$Issue during auto-close failed; " +
+            "issue remains open."
+        )
+        return $false
+    }
+    $View = ConvertFrom-GitLoopyExternalJson `
+        -Output $ViewOutput `
+        -Description "gh issue view #$Issue"
+    if (
+        $null -eq $View -or
+        $View -isnot [Collections.IDictionary] -or
+        [string]$View["state"] -cne "OPEN"
+    ) {
+        return $false
+    }
+
+    $ShasText = $RefShas -join " "
+    $Comment = @(
+        "Implemented in $ShasText."
+        ""
+        "Closed by the git-loopy loop because the agent did not run " +
+        "``gh issue close`` itself this iteration (commit messages did " +
+        "reference ``Closes #$Issue``)."
+        ""
+        "If this closure looks wrong, reopen with ``gh issue reopen $Issue`` " +
+        "— the loop will not re-close it without a new commit that " +
+        "references it."
+    ) -join "`n"
+    & gh issue close $Issue --comment $Comment 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine(
+            "git-loopy: gh issue close #$Issue failed; issue remains open."
+        )
+        return $false
+    }
+
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_AUTO_CLOSE"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            issue = $Issue
+            sha = $RefShas[0]
+            shas = [string[]]$RefShas.ToArray()
+        })
+    return $true
+}
+
+function Invoke-GitLoopyAutoClose {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    # Close finished Pool *issues* referenced by closing keywords in this
+    # Iteration's new commits. Only the GitHub source auto-closes (the PRDs agent
+    # owns its own archival). Repeated references collapse to at most one closure
+    # via the first-encounter dedup. Returns the number of issues closed.
+    if ($Config.IssueSource -cne "github") {
+        return 0
+    }
+
+    $Descriptors = @(
+        foreach ($Item in @($Pool)) {
+            if ($Item -is [Collections.IDictionary] -and $Item.Contains("number")) {
+                [ordered]@{ ref = [int]$Item["number"]; kind = "issue" }
+            }
+        }
+    )
+    $Concatenated = @(
+        foreach ($Commit in @($Commits)) {
+            $Body = [string]$Commit["body"]
+            $Subject = [string]$Commit["subject"]
+            if ([string]::IsNullOrEmpty($Body)) { $Subject } else { "$Subject`n$Body" }
+        }
+    ) -join "`n"
+
+    $Closures = 0
+    $Actionable = Get-GitLoopyActionableCloseReferences `
+        -Messages $Concatenated `
+        -Pool $Descriptors
+    foreach ($Issue in $Actionable) {
+        $Closed = Invoke-GitLoopyCloseOneIssue `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Issue $Issue `
+            -Commits $Commits
+        if ($Closed) {
+            $Closures += 1
+        }
+    }
+    return $Closures
+}
+
 function Invoke-GitLoopyDiscovery {
     [CmdletBinding()]
     param(
@@ -971,6 +1271,8 @@ function Invoke-GitLoopyDiscovery {
     [int]$Iteration = 0
     [int]$IterationsRun = 0
     $Outcome = "iteration_cap"
+    [int]$Strikes = 0
+    $StrikeOutcome = "running"
     while ($true) {
         $NextIteration = $Iteration + 1
         if (
@@ -1047,9 +1349,26 @@ function Invoke-GitLoopyDiscovery {
             )
         }
 
-        # Emit one wrapper.commit.recorded per new commit in git's newest-first
-        # order, carrying only the sha/subject/date the contract names.
+        # Split the boundary commits into agent commits and recognized runner
+        # Checkpoints. Only agent commits are recorded as contract commit events
+        # (newest-first) and count toward Strike progress; a Checkpoint is
+        # excluded even before this port authors one.
+        [int]$AgentCommits = 0
+        [int]$CheckpointCommits = 0
         foreach ($Commit in $NewCommits) {
+            $Body = [string]$Commit["body"]
+            $Subject = [string]$Commit["subject"]
+            $Message = if ([string]::IsNullOrEmpty($Body)) {
+                $Subject
+            }
+            else {
+                "$Subject`n$Body"
+            }
+            if (Test-GitLoopyCheckpointMessage -Message $Message) {
+                $CheckpointCommits += 1
+                continue
+            }
+            $AgentCommits += 1
             Write-GitLoopyEvent `
                 -Context $Context `
                 -Type $EventTypes["WRAPPER_COMMIT_RECORDED"] `
@@ -1061,11 +1380,63 @@ function Invoke-GitLoopyDiscovery {
                 })
         }
 
+        # Auto-close finished Pool issues from the new commit messages, then
+        # decide progress and advance the Strike machine. Progress (an agent
+        # commit or a wrapper closure) resets the Strike count; consecutive
+        # no-progress Iterations accumulate Strikes and the threshold ends the
+        # Run as stuck.
+        $AutoClosures = Invoke-GitLoopyAutoClose `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Config $Config `
+            -Iteration $Iteration `
+            -Pool $Pool `
+            -Commits $NewCommits
+
+        $Progress = Test-GitLoopyIterationProgress `
+            -Commits $AgentCommits `
+            -AutoClosures $AutoClosures `
+            -Checkpoints $CheckpointCommits `
+            -PrAdvances 0 `
+            -SawNmt $false
+        $StrikeState = Step-GitLoopyStrikeState `
+            -MaxStrikes $Config.MaxNmtStrikes `
+            -Strikes $Strikes `
+            -Outcome $StrikeOutcome `
+            -Commits $AgentCommits `
+            -AutoClosures $AutoClosures `
+            -Checkpoints $CheckpointCommits `
+            -PrAdvances 0 `
+            -SawNmt $false
+        $Strikes = $StrikeState.Strikes
+        $StrikeOutcome = $StrikeState.Outcome
+        if ($StrikeOutcome -ceq "aborted" -or -not $Progress) {
+            $StrikeEventOutcome = if ($StrikeOutcome -ceq "aborted") {
+                "abort"
+            }
+            else {
+                "warn"
+            }
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_STRIKE"] `
+                -Iteration $Iteration `
+                -Payload ([ordered]@{
+                    max_strikes = $Config.MaxNmtStrikes
+                    outcome = $StrikeEventOutcome
+                    strikes = $Strikes
+                })
+        }
+
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_END"] `
             -Iteration $Iteration
         $IterationsRun = $Iteration
+        if ($StrikeOutcome -ceq "aborted") {
+            $Outcome = "stuck"
+            break
+        }
     }
 
     Write-GitLoopyEvent `
@@ -1078,6 +1449,9 @@ function Invoke-GitLoopyDiscovery {
 
     if ($Outcome -ceq "empty_pool") {
         return Get-GitLoopyExitCode -Reason "empty_pool"
+    }
+    if ($Outcome -ceq "stuck") {
+        return Get-GitLoopyExitCode -Reason "stuck"
     }
     return Get-GitLoopyExitCode -Reason "iteration_cap"
 }
@@ -1136,6 +1510,12 @@ Export-ModuleMember -Function @(
     "Resolve-GitLoopyConfig",
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyExitCode",
+    "Get-GitLoopyCloseKeywordPattern",
+    "Get-GitLoopyCloseReferences",
+    "Get-GitLoopyActionableCloseReferences",
+    "Test-GitLoopyIterationProgress",
+    "Step-GitLoopyStrikeState",
+    "Test-GitLoopyCheckpointMessage",
     "Resolve-GitLoopyPrompt",
     "Invoke-GitLoopyPreflight",
     "Get-GitLoopyGitHubPool",

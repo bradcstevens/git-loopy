@@ -63,6 +63,79 @@ foreach ($Case in $ExitCodes["cases"]) {
     Assert-Equal $Case["exit_code"] $Actual "exit-code fixture: $($Case["id"])"
 }
 
+$CloseReferences = Get-Content `
+    -LiteralPath (Join-Path $ConformanceDir "close-references.json") `
+    -Raw |
+    ConvertFrom-Json -AsHashtable
+Assert-Equal (
+    $CloseReferences["reference_regex"]
+) (Get-GitLoopyCloseKeywordPattern) "close-keyword regex matches the shared reference"
+foreach ($Case in $CloseReferences["cases"]) {
+    $Messages = $Case["commit_messages"]
+    $Pool = @()
+    foreach ($Number in @($Case["issue_pool"])) {
+        $Pool += [ordered]@{ ref = [int]$Number; kind = "issue" }
+    }
+    foreach ($Number in @($Case["pr_pool"])) {
+        $Pool += [ordered]@{ ref = [int]$Number; kind = "pr" }
+    }
+    $Extracted = Get-GitLoopyCloseReferences -Messages $Messages
+    $Actionable = Get-GitLoopyActionableCloseReferences `
+        -Messages $Messages `
+        -Pool $Pool
+    Assert-Equal (
+        [string]::Join(",", @($Case["extracted_refs"]))
+    ) (
+        [string]::Join(",", @($Extracted))
+    ) "close-references extract fixture: $($Case["id"])"
+    Assert-Equal (
+        [string]::Join(",", @($Case["actionable_refs"]))
+    ) (
+        [string]::Join(",", @($Actionable))
+    ) "close-references actionable fixture: $($Case["id"])"
+}
+
+$ProgressStrikes = Get-Content `
+    -LiteralPath (Join-Path $ConformanceDir "progress-strikes.json") `
+    -Raw |
+    ConvertFrom-Json -AsHashtable
+foreach ($Case in $ProgressStrikes["cases"]) {
+    [int]$Strikes = 0
+    $Outcome = "running"
+    $StepIndex = 0
+    foreach ($Step in $Case["steps"]) {
+        $StepIndex += 1
+        $Signals = $Step["signals"]
+        $Expected = $Step["expected"]
+        $Progress = Test-GitLoopyIterationProgress `
+            -Commits $Signals["commits_in_iter"] `
+            -AutoClosures $Signals["auto_closures_in_iter"] `
+            -Checkpoints $Signals["checkpoints_in_iter"] `
+            -PrAdvances $Signals["pr_advances_in_iter"] `
+            -SawNmt ([bool]$Signals["saw_nmt_sentinel"])
+        $State = Step-GitLoopyStrikeState `
+            -MaxStrikes $Case["max_strikes"] `
+            -Strikes $Strikes `
+            -Outcome $Outcome `
+            -Commits $Signals["commits_in_iter"] `
+            -AutoClosures $Signals["auto_closures_in_iter"] `
+            -Checkpoints $Signals["checkpoints_in_iter"] `
+            -PrAdvances $Signals["pr_advances_in_iter"] `
+            -SawNmt ([bool]$Signals["saw_nmt_sentinel"])
+        $Strikes = $State.Strikes
+        $Outcome = $State.Outcome
+        Assert-Equal ([bool]$Expected["progress"]) $Progress (
+            "progress-strikes fixture: $($Case["id"]) step $StepIndex (progress)"
+        )
+        Assert-Equal $Expected["strikes"] $Strikes (
+            "progress-strikes fixture: $($Case["id"]) step $StepIndex (strikes)"
+        )
+        Assert-Equal $Expected["outcome"] $Outcome (
+            "progress-strikes fixture: $($Case["id"]) step $StepIndex (outcome)"
+        )
+    }
+}
+
 $EmptyEnvironment = [ordered]@{}
 $Defaults = Resolve-GitLoopyConfig `
     -Arguments @() `

@@ -147,12 +147,27 @@ printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
 # Emit on stdout to prove the agent stream is routed away from the JSONL
 # Event stream (the Orchestrator sends it to stderr).
 printf 'copilot agent stream marker\n'
-commits="${FAKE_COPILOT_COMMITS:-0}"
-i=0
-while ((i < commits)); do
-  git commit -q --allow-empty -m "agent: work $((i + 1))"
-  i=$((i + 1))
-done
+# A per-call commit plan (opt-in) lets a scenario vary commit messages across
+# Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
+# `-F` so multi-line close-keyword bodies survive. Falling back to the simple
+# empty-commit count keeps every existing turn scenario unchanged.
+current_call="$(<"$FAKE_COPILOT_CALLS")"
+if [[ -n "${FAKE_COPILOT_PLAN_DIR:-}" ]]; then
+  call_dir="$FAKE_COPILOT_PLAN_DIR/$current_call"
+  if [[ -d "$call_dir" ]]; then
+    for msg_file in "$call_dir"/*.msg; do
+      [[ -e "$msg_file" ]] || continue
+      git commit -q --allow-empty -F "$msg_file"
+    done
+  fi
+else
+  commits="${FAKE_COPILOT_COMMITS:-0}"
+  i=0
+  while ((i < commits)); do
+    git commit -q --allow-empty -m "agent: work $((i + 1))"
+    i=$((i + 1))
+  done
+fi
 exit "${FAKE_COPILOT_EXIT:-0}"
 EOF
 
@@ -182,6 +197,16 @@ case "${1-} ${2-}" in
     ;;
   "issue view")
     cat "$FAKE_GH_VIEW_DIR/${3}.json"
+    ;;
+  "issue close")
+    # Record the auto-closure: the issue number (one per line) and the wrap-up
+    # comment, so a scenario can assert which Pool issues the loop closed and
+    # which commit SHAs the comment attributed.
+    printf '%s\n' "$3" >>"$FAKE_GH_CLOSED"
+    if [[ -n "${FAKE_GH_CLOSE_DIR:-}" ]]; then
+      mkdir -p "$FAKE_GH_CLOSE_DIR"
+      printf '%s' "${5-}" >"$FAKE_GH_CLOSE_DIR/${3}.comment"
+    fi
     ;;
   *)
     printf 'unexpected gh invocation: %s\n' "$*" >&2
@@ -839,5 +864,178 @@ set -e
 assert_equal "2" "$status" "malformed invocation exit"
 [[ ! -s "$temp_dir/usage.stdout" ]] || fail "usage error emitted Run events"
 [[ ! -e "$FAKE_GH_LOG" ]] || fail "usage error reached preflight"
+
+# A turn whose commits carry closing keywords auto-closes the referenced *Pool
+# issue* exactly once — repeated references to the same issue collapse to one
+# closure attributing every referencing SHA, and an out-of-Pool reference (a PR
+# or a stranger issue) is never touched.
+repo="$temp_dir/auto-close"
+fake_bin="$temp_dir/auto-close-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/auto-close-list.json"
+export FAKE_GH_LOG="$temp_dir/auto-close-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/auto-close-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/auto-close-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/auto-close-closed.log"
+export FAKE_GH_CLOSE_DIR="$temp_dir/auto-close-comments"
+setup_copilot_env "auto-close"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/auto-close-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+feat: land the eligible work
+
+Closes #41 Fixes #77
+EOF
+cat >"$FAKE_COPILOT_PLAN_DIR/1/2.msg" <<'EOF'
+chore: follow-up tidy
+
+Resolves #41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/auto-close.stdout" \
+  "$temp_dir/auto-close.stderr" 1; then
+  fail "auto-close turn Run did not exit 0: $(<"$temp_dir/auto-close.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED FAKE_GH_CLOSE_DIR
+assert_equal "1" "$(grep -c '^41$' "$temp_dir/auto-close-closed.log")" \
+  "the referenced Pool issue is closed exactly once"
+if grep -q '^77$' "$temp_dir/auto-close-closed.log"; then
+  fail "an out-of-Pool reference was closed"
+fi
+jq -se '
+  ([.[] | select(.type == "wrapper.auto_close")] | length == 1)
+  and ([.[] | select(.type == "wrapper.auto_close")][0]
+    | .issue == 41 and (.shas | length == 2) and .sha == .shas[0])
+  and ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
+    == ["chore: follow-up tidy", "feat: land the eligible work"])
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/auto-close.stdout" >/dev/null ||
+  fail "auto-close did not close the Pool issue once with both SHAs"
+close_shas="$(jq -sr '[.[] | select(.type == "wrapper.auto_close")][0]
+  | .shas | join(" ")' "$temp_dir/auto-close.stdout")"
+close_comment="$(<"$temp_dir/auto-close-comments/41.comment")"
+for sha in $close_shas; do
+  assert_contains "$close_comment" "$sha" "closure comment cites commit $sha"
+done
+assert_contains "$close_comment" "gh issue reopen 41" \
+  "closure comment documents how to reopen"
+
+# Progress resets the Strike counter: a no-progress Iteration records a Strike,
+# the next Iteration's agent commit clears it, and a following no-progress
+# Iteration is Strike 1 again — never 2.
+repo="$temp_dir/strike-reset"
+fake_bin="$temp_dir/strike-reset-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/strike-reset-list.json"
+export FAKE_GH_LOG="$temp_dir/strike-reset-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/strike-reset-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/strike-reset-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/strike-reset-closed.log"
+setup_copilot_env "strike-reset"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/strike-reset-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/2"
+printf 'agent: real work\n' >"$FAKE_COPILOT_PLAN_DIR/2/1.msg"
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/strike-reset.stdout" \
+  "$temp_dir/strike-reset.stderr" 3; then
+  fail "strike-reset Run did not exit 0: $(<"$temp_dir/strike-reset.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.strike")]
+    | length == 2
+    and all(.outcome == "warn" and .strikes == 1))
+  and ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
+    == ["agent: real work"])
+  and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+  and .[-1].iterations_run == 3
+' "$temp_dir/strike-reset.stdout" >/dev/null ||
+  fail "an intervening agent commit did not reset the Strike counter"
+[[ ! -e "$temp_dir/strike-reset-closed.log" ]] ||
+  fail "strike-reset closed an issue with no closing keyword"
+
+# Consecutive no-progress Iterations accumulate Strikes and the threshold ends
+# the Run as stuck (exit 1), even with the iteration cap unlimited.
+repo="$temp_dir/stuck"
+fake_bin="$temp_dir/stuck-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/stuck-list.json"
+export FAKE_GH_LOG="$temp_dir/stuck-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/stuck-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/stuck-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/stuck-closed.log"
+setup_copilot_env "stuck"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/stuck-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/stuck.stdout" "$temp_dir/stuck.stderr" 0
+status=$?
+set -e
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+assert_equal "1" "$status" "a stuck Run exits 1"
+jq -se '
+  ([.[] | select(.type == "wrapper.strike") | {strikes, outcome}]
+    == [
+      {strikes: 1, outcome: "warn"},
+      {strikes: 2, outcome: "warn"},
+      {strikes: 3, outcome: "abort"}
+    ])
+  and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and .[-1].type == "wrapper.run.end"
+  and .[-1].outcome == "stuck"
+  and .[-1].iterations_run == 3
+' "$temp_dir/stuck.stdout" >/dev/null ||
+  fail "consecutive Strikes did not terminate the Run as stuck"
+[[ ! -e "$temp_dir/stuck-closed.log" ]] || fail "stuck Run closed an issue"
+
+# A recognized runner Checkpoint is excluded from the agent-commit tally: it is
+# not recorded as a contract commit and does not count as progress, so its
+# Iteration still records a Strike (Checkpoint exclusion holds even before this
+# port authors Checkpoints).
+repo="$temp_dir/checkpoint-skip"
+fake_bin="$temp_dir/checkpoint-skip-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/checkpoint-skip-list.json"
+export FAKE_GH_LOG="$temp_dir/checkpoint-skip-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/checkpoint-skip-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/checkpoint-skip-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/checkpoint-skip-closed.log"
+setup_copilot_env "checkpoint-skip"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/checkpoint-skip-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+Checkpoint: capture uncommitted work-in-progress
+
+GitLoopy-Checkpoint: 41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/checkpoint-skip.stdout" \
+  "$temp_dir/checkpoint-skip.stderr" 1; then
+  fail "checkpoint-skip Run did not exit 0: \
+$(<"$temp_dir/checkpoint-skip.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")]
+    | length == 1 and all(.strikes == 1 and .outcome == "warn"))
+  and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/checkpoint-skip.stdout" >/dev/null ||
+  fail "a runner Checkpoint was counted toward agent progress"
+[[ ! -e "$temp_dir/checkpoint-skip-closed.log" ]] ||
+  fail "checkpoint-skip closed an issue"
 
 printf 'shell Orchestrator boundary: ok\n'

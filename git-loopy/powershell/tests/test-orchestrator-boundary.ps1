@@ -229,9 +229,23 @@ if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
 # Emit on stdout to prove the agent stream is routed away from the JSONL Event
 # stream (the Orchestrator forwards it to stderr).
 [Console]::Out.WriteLine("copilot agent stream marker")
-$Commits = if ($env:FAKE_COPILOT_COMMITS) { [int]$env:FAKE_COPILOT_COMMITS } else { 0 }
-for ($i = 0; $i -lt $Commits; $i++) {
-    & git commit -q --allow-empty -m "agent: work $($i + 1)"
+# A per-call commit plan (opt-in) lets a scenario vary commit messages across
+# Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
+# `-F` so multi-line close-keyword bodies survive. Falling back to the simple
+# empty-commit count keeps every existing turn scenario unchanged.
+$CurrentCall = $Calls + 1
+if ($env:FAKE_COPILOT_PLAN_DIR) {
+    $CallDir = Join-Path $env:FAKE_COPILOT_PLAN_DIR ([string]$CurrentCall)
+    if ([IO.Directory]::Exists($CallDir)) {
+        foreach ($MsgFile in ([IO.Directory]::GetFiles($CallDir, "*.msg") | Sort-Object)) {
+            & git commit -q --allow-empty -F $MsgFile
+        }
+    }
+} else {
+    $Commits = if ($env:FAKE_COPILOT_COMMITS) { [int]$env:FAKE_COPILOT_COMMITS } else { 0 }
+    for ($i = 0; $i -lt $Commits; $i++) {
+        & git commit -q --allow-empty -m "agent: work $($i + 1)"
+    }
 }
 exit $(if ($env:FAKE_COPILOT_EXIT) { [int]$env:FAKE_COPILOT_EXIT } else { 0 })
 '@
@@ -275,6 +289,23 @@ switch -CaseSensitive ($Command) {
     "issue view" {
         $ViewPath = Join-Path $env:FAKE_GH_VIEW_DIR "$($args[2]).json"
         [Console]::Out.Write([IO.File]::ReadAllText($ViewPath))
+        exit 0
+    }
+    "issue close" {
+        # Record the auto-closure: the issue number (one per line) and the
+        # wrap-up comment, so a scenario can assert which Pool issues the loop
+        # closed and which commit SHAs the comment attributed.
+        [IO.File]::AppendAllText(
+            $env:FAKE_GH_CLOSED,
+            [string]$args[2] + [Environment]::NewLine
+        )
+        if ($env:FAKE_GH_CLOSE_DIR) {
+            [IO.Directory]::CreateDirectory($env:FAKE_GH_CLOSE_DIR) | Out-Null
+            [IO.File]::WriteAllText(
+                (Join-Path $env:FAKE_GH_CLOSE_DIR "$($args[2]).comment"),
+                [string]$args[4]
+            )
+        }
         exit 0
     }
     default {
@@ -1101,6 +1132,241 @@ Read outside the worktree.
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_LOG)
     ) "usage error reached preflight"
+
+    # A turn whose commits carry closing keywords auto-closes the referenced
+    # *Pool issue* exactly once — repeated references to the same issue collapse
+    # to one closure attributing every referencing SHA, and an out-of-Pool
+    # reference (a PR or a stranger issue) is never touched.
+    $AutoRepo = Join-Path $TempDir "auto-close"
+    $AutoBin = Join-Path $TempDir "auto-close-bin"
+    New-RealTestRepo -Root $AutoRepo
+    Write-TurnTools -BinDir $AutoBin
+    $AutoList = Join-Path $TempDir "auto-close-list.json"
+    [IO.File]::Copy($CapList, $AutoList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "auto-close-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "auto-close-list.count"
+    $env:FAKE_GH_LIST_JSON = $AutoList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "auto-close-closed.log"
+    $env:FAKE_GH_CLOSE_DIR = Join-Path $TempDir "auto-close-comments"
+    Set-CopilotEnv -Prefix "auto-close"
+    $AutoPlan = Join-Path $TempDir "auto-close-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $AutoPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $AutoPlan "1/1.msg"),
+        "feat: land the eligible work`n`nCloses #41 Fixes #77`n"
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $AutoPlan "1/2.msg"),
+        "chore: follow-up tidy`n`nResolves #41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $AutoPlan
+    $AutoStdout = Join-Path $TempDir "auto-close.stdout"
+    $AutoStderr = Join-Path $TempDir "auto-close.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $AutoRepo `
+        -FakeBin $AutoBin `
+        -StdoutPath $AutoStdout `
+        -StderrPath $AutoStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "auto-close turn Run exit"
+    $AutoEvents = Read-Events -Path $AutoStdout
+    $ClosedLog = @([IO.File]::ReadAllLines($env:FAKE_GH_CLOSED))
+    Assert-Equal 1 (
+        @($ClosedLog | Where-Object { $_ -ceq "41" }).Count
+    ) "the referenced Pool issue is closed exactly once"
+    Assert-Equal 0 (
+        @($ClosedLog | Where-Object { $_ -ceq "77" }).Count
+    ) "an out-of-Pool reference was not closed"
+    $AutoCloseEvents = @(
+        $AutoEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }
+    )
+    Assert-Equal 1 $AutoCloseEvents.Count "exactly one auto_close event"
+    Assert-Equal 41 $AutoCloseEvents[0]["issue"] "auto_close targets the Pool issue"
+    Assert-Equal 2 (
+        $AutoCloseEvents[0]["shas"].Count
+    ) "auto_close attributes both referencing SHAs"
+    Assert-Equal (
+        [string]$AutoCloseEvents[0]["shas"][0]
+    ) ([string]$AutoCloseEvents[0]["sha"]) "auto_close primary sha is the first attributed sha"
+    Assert-Equal "chore: follow-up tidy,feat: land the eligible work" (
+        [string]::Join(",", @(
+            $AutoEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" } |
+                ForEach-Object { $_["subject"] }
+        ))
+    ) "both agent commits recorded newest-first"
+    Assert-Equal 0 (
+        @($AutoEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }).Count
+    ) "a progress Iteration records no Strike"
+    Assert-Equal "iteration_cap" $AutoEvents[-1]["outcome"] "auto-close Run outcome"
+    $CloseComment = [IO.File]::ReadAllText(
+        (Join-Path $env:FAKE_GH_CLOSE_DIR "41.comment")
+    )
+    foreach ($Sha in @($AutoCloseEvents[0]["shas"])) {
+        Assert-Contains $CloseComment ([string]$Sha) "closure comment cites commit $Sha"
+    }
+    Assert-Contains $CloseComment "gh issue reopen 41" (
+        "closure comment documents how to reopen"
+    )
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSE_DIR", $null)
+
+    # Progress resets the Strike counter: a no-progress Iteration records a
+    # Strike, the next Iteration's agent commit clears it, and a following
+    # no-progress Iteration is Strike 1 again — never 2.
+    $ResetRepo = Join-Path $TempDir "strike-reset"
+    $ResetBin = Join-Path $TempDir "strike-reset-bin"
+    New-RealTestRepo -Root $ResetRepo
+    Write-TurnTools -BinDir $ResetBin
+    $ResetList = Join-Path $TempDir "strike-reset-list.json"
+    [IO.File]::Copy($CapList, $ResetList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "strike-reset-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "strike-reset-list.count"
+    $env:FAKE_GH_LIST_JSON = $ResetList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "strike-reset-closed.log"
+    Set-CopilotEnv -Prefix "strike-reset"
+    $ResetPlan = Join-Path $TempDir "strike-reset-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $ResetPlan "2")) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $ResetPlan "2/1.msg"), "agent: real work`n")
+    $env:FAKE_COPILOT_PLAN_DIR = $ResetPlan
+    $ResetStdout = Join-Path $TempDir "strike-reset.stdout"
+    $ResetStderr = Join-Path $TempDir "strike-reset.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $ResetRepo `
+        -FakeBin $ResetBin `
+        -StdoutPath $ResetStdout `
+        -StderrPath $ResetStderr `
+        -Arguments @("3")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "strike-reset Run exit"
+    $ResetEvents = Read-Events -Path $ResetStdout
+    $ResetStrikes = @(
+        $ResetEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 2 $ResetStrikes.Count "two no-progress Iterations record a Strike each"
+    foreach ($Strike in $ResetStrikes) {
+        Assert-Equal 1 $Strike["strikes"] "each Strike is the first after a reset"
+        Assert-Equal "warn" $Strike["outcome"] "a running Strike warns"
+    }
+    Assert-Equal "agent: real work" (
+        [string]::Join(",", @(
+            $ResetEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" } |
+                ForEach-Object { $_["subject"] }
+        ))
+    ) "the intervening agent commit is recorded"
+    Assert-Equal 0 (
+        @($ResetEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
+    ) "no closing keyword means no auto-close"
+    Assert-Equal "iteration_cap" $ResetEvents[-1]["outcome"] "strike-reset Run outcome"
+    Assert-Equal 3 $ResetEvents[-1]["iterations_run"] "strike-reset ran every Iteration"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
+    ) "strike-reset closed no issue"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # Consecutive no-progress Iterations accumulate Strikes and the threshold
+    # ends the Run as stuck (exit 1), even with the iteration cap unlimited.
+    $StuckRepo = Join-Path $TempDir "stuck"
+    $StuckBin = Join-Path $TempDir "stuck-bin"
+    New-RealTestRepo -Root $StuckRepo
+    Write-TurnTools -BinDir $StuckBin
+    $StuckList = Join-Path $TempDir "stuck-list.json"
+    [IO.File]::Copy($CapList, $StuckList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "stuck-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "stuck-list.count"
+    $env:FAKE_GH_LIST_JSON = $StuckList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "stuck-closed.log"
+    Set-CopilotEnv -Prefix "stuck"
+    $StuckPlan = Join-Path $TempDir "stuck-plan"
+    [IO.Directory]::CreateDirectory($StuckPlan) | Out-Null
+    $env:FAKE_COPILOT_PLAN_DIR = $StuckPlan
+    $StuckStdout = Join-Path $TempDir "stuck.stdout"
+    $StuckStderr = Join-Path $TempDir "stuck.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $StuckRepo `
+        -FakeBin $StuckBin `
+        -StdoutPath $StuckStdout `
+        -StderrPath $StuckStderr `
+        -Arguments @("0")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 1 $Status "a stuck Run exits 1"
+    $StuckEvents = Read-Events -Path $StuckStdout
+    $StuckStrikes = @(
+        $StuckEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 3 $StuckStrikes.Count "each no-progress Iteration records a Strike"
+    Assert-Equal "1,2,3" (
+        [string]::Join(",", @($StuckStrikes | ForEach-Object { $_["strikes"] }))
+    ) "Strikes accumulate to the threshold"
+    Assert-Equal "warn,warn,abort" (
+        [string]::Join(",", @($StuckStrikes | ForEach-Object { $_["outcome"] }))
+    ) "the threshold Strike aborts"
+    Assert-Equal 0 (
+        @($StuckEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "no agent commits in a stuck Run"
+    Assert-Equal "wrapper.run.end" $StuckEvents[-1]["type"] "stuck Run ends with run.end"
+    Assert-Equal "stuck" $StuckEvents[-1]["outcome"] "stuck Run outcome"
+    Assert-Equal 3 $StuckEvents[-1]["iterations_run"] "stuck Run iterations"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
+    ) "stuck Run closed no issue"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # A recognized runner Checkpoint is excluded from the agent-commit tally: it
+    # is not recorded as a contract commit and does not count as progress, so its
+    # Iteration still records a Strike.
+    $CheckRepo = Join-Path $TempDir "checkpoint-skip"
+    $CheckBin = Join-Path $TempDir "checkpoint-skip-bin"
+    New-RealTestRepo -Root $CheckRepo
+    Write-TurnTools -BinDir $CheckBin
+    $CheckList = Join-Path $TempDir "checkpoint-skip-list.json"
+    [IO.File]::Copy($CapList, $CheckList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "checkpoint-skip-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "checkpoint-skip-list.count"
+    $env:FAKE_GH_LIST_JSON = $CheckList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "checkpoint-skip-closed.log"
+    Set-CopilotEnv -Prefix "checkpoint-skip"
+    $CheckPlan = Join-Path $TempDir "checkpoint-skip-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $CheckPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $CheckPlan "1/1.msg"),
+        "Checkpoint: capture uncommitted work-in-progress`n`nGitLoopy-Checkpoint: 41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $CheckPlan
+    $CheckStdout = Join-Path $TempDir "checkpoint-skip.stdout"
+    $CheckStderr = Join-Path $TempDir "checkpoint-skip.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $CheckRepo `
+        -FakeBin $CheckBin `
+        -StdoutPath $CheckStdout `
+        -StderrPath $CheckStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "checkpoint-skip Run exit"
+    $CheckEvents = Read-Events -Path $CheckStdout
+    Assert-Equal 0 (
+        @($CheckEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "a runner Checkpoint is not recorded as an agent commit"
+    $CheckStrikes = @(
+        $CheckEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 1 $CheckStrikes.Count "a Checkpoint-only Iteration makes no progress"
+    Assert-Equal 1 $CheckStrikes[0]["strikes"] "the Checkpoint-only Iteration records Strike 1"
+    Assert-Equal "warn" $CheckStrikes[0]["outcome"] "the Checkpoint Strike warns"
+    Assert-Equal 0 (
+        @($CheckEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
+    ) "a Checkpoint carries no closing keyword"
+    Assert-Equal "iteration_cap" $CheckEvents[-1]["outcome"] "checkpoint-skip Run outcome"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
+    ) "checkpoint-skip closed no issue"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
 }
 finally {
     foreach ($Name in @(
@@ -1110,11 +1376,14 @@ finally {
         "FAKE_GH_VIEW_DIR",
         "FAKE_GH_AUTH_STATUS",
         "FAKE_GH_EMPTY_AFTER",
+        "FAKE_GH_CLOSED",
+        "FAKE_GH_CLOSE_DIR",
         "FAKE_COPILOT_FLAGS",
         "FAKE_COPILOT_PROMPT",
         "FAKE_COPILOT_CALLS",
         "FAKE_COPILOT_COMMITS",
         "FAKE_COPILOT_EXIT",
+        "FAKE_COPILOT_PLAN_DIR",
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_ISSUE_SOURCE",

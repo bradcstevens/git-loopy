@@ -340,6 +340,104 @@ git_loopy_exit_code_for() {
   esac
 }
 
+# GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
+# reference_regex and the Python reference CLOSE_KEYWORD_RE so the whole Runner
+# family shares one close-keyword oracle. jq (Oniguruma) honours the embedded
+# `(?i)` and `\s`/`\d` the same way Python's `re` does.
+GIT_LOOPY_CLOSE_KEYWORD_RE='(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)'
+
+git_loopy_extract_close_refs() {
+  # Extract deduplicated issue numbers referenced via GitHub closing keywords,
+  # in first-encounter order. Matching is line-by-line — split on `\n` only, so
+  # a newline is a hard boundary while `\r` and Unicode line separators stay
+  # inline whitespace, mirroring the Python reference `extract_close_refs`.
+  # Prints a compact JSON array.
+  local messages="$1"
+  jq -cn \
+    --arg messages "$messages" \
+    --arg re "$GIT_LOOPY_CLOSE_KEYWORD_RE" '
+    [ ($messages | split("\n"))[]
+      | [ match($re; "g") | .captures[1].string | tonumber ]
+    ]
+    | add // []
+    | reduce .[] as $n ([]; if any(.[]; . == $n) then . else . + [$n] end)
+  '
+}
+
+git_loopy_actionable_close_refs() {
+  # First-seen close refs restricted to *issues* in the current Pool. Pull
+  # requests and non-integer refs are excluded, preserving the Wrapper
+  # contract's issues-only closure boundary. `$1` is the concatenated commit
+  # messages; `$2` is a JSON array of `{ref, kind}` Pool descriptors. Prints a
+  # compact JSON array in first-encounter order.
+  local messages="$1"
+  local pool_json="$2"
+  local refs
+  refs="$(git_loopy_extract_close_refs "$messages")" || return 1
+  jq -cn \
+    --argjson refs "$refs" \
+    --argjson pool "$pool_json" '
+    ($pool
+      | map(select(.kind == "issue" and (.ref | type) == "number") | .ref)
+    ) as $issues
+    | [ $refs[] | select(. as $n | $issues | any(. == $n)) ]
+  '
+}
+
+git_loopy_did_iteration_make_progress() {
+  # Return success (progress) iff an agent commit landed, an issue was
+  # auto-closed, or a PR head advanced. Runner Checkpoints and the legacy
+  # no-more-tasks sentinel are informational and never progress. Positional
+  # signals mirror the Conformance fixture order.
+  local commits="$1"
+  local auto_closures="$2"
+  local checkpoints="$3"
+  local pr_advances="$4"
+  local saw_nmt="$5"
+  : "$checkpoints" "$saw_nmt"
+  ((commits > 0 || auto_closures > 0 || pr_advances > 0))
+}
+
+git_loopy_strike_tick() {
+  # Advance the NMT Strike state machine by one Iteration and print
+  # "<strikes> <outcome>". Progress resets strikes to zero; a no-progress
+  # Iteration adds one and, on reaching the threshold, flips the outcome to
+  # `aborted` and freezes there. `$1` max strikes, `$2` current strikes, `$3`
+  # current outcome, then the five progress signals.
+  local max="$1"
+  local strikes="$2"
+  local outcome="$3"
+  shift 3
+  if [[ "$outcome" == "aborted" ]]; then
+    printf '%s %s\n' "$strikes" "$outcome"
+    return
+  fi
+  if git_loopy_did_iteration_make_progress "$@"; then
+    printf '0 %s\n' "$outcome"
+    return
+  fi
+  strikes=$((strikes + 1))
+  if ((strikes >= max)); then
+    outcome="aborted"
+  fi
+  printf '%s %s\n' "$strikes" "$outcome"
+}
+
+git_loopy_is_checkpoint_message() {
+  # Return success if `$1` carries the runner Checkpoint trailer
+  # (`GitLoopy-Checkpoint:`), tolerant of surrounding whitespace and case so a
+  # Checkpoint is excluded from Strike progress even before this port authors
+  # one. Mirrors the Python reference `is_checkpoint_message`.
+  local message="$1"
+  local prefix="gitloopy-checkpoint:"
+  local line trimmed
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(_git_loopy_trim "$line")"
+    [[ "${trimmed,,}" == "$prefix"* ]] && return 0
+  done <<<"$message"
+  return 1
+}
+
 git_loopy_resolve_prompt() {
   local repo_root="$1"
   local packaged_prompt="$2"
@@ -726,6 +824,121 @@ git_loopy_run_agent_turn() {
   "${argv[@]}" 1>&2
 }
 
+_GIT_LOOPY_AUTO_CLOSURES=0
+
+git_loopy_close_one_issue() {
+  # Re-verify one Pool issue is still OPEN and close it via `gh issue close`,
+  # attributing every new commit that referenced it. Emits one
+  # `wrapper.auto_close` on success and bumps `_GIT_LOOPY_AUTO_CLOSURES`. A
+  # `gh` failure or an already-CLOSED issue warns/skips without aborting.
+  local iteration="$1"
+  local issue="$2"
+  local commits_json="$3"
+
+  local -a ref_shas=()
+  local count sha msg refs commit_index
+  count="$(jq -r 'length' <<<"$commits_json")" || return 1
+  for ((commit_index = 0; commit_index < count; commit_index++)); do
+    msg="$(
+      jq -r --argjson i "$commit_index" \
+        '.[$i] | if .body == "" then .subject else .subject + "\n" + .body end' \
+        <<<"$commits_json"
+    )" || return 1
+    refs="$(git_loopy_extract_close_refs "$msg")" || return 1
+    if jq -e --argjson issue "$issue" 'any(.[]; . == $issue)' \
+      <<<"$refs" >/dev/null; then
+      sha="$(jq -r --argjson i "$commit_index" '.[$i].sha' <<<"$commits_json")" ||
+        return 1
+      ref_shas+=("$sha")
+    fi
+  done
+  # Defence-in-depth: `actionable` came from the same parser, so this should
+  # always find at least one SHA. Skipping is safer than misattributing.
+  ((${#ref_shas[@]} > 0)) || return 0
+
+  local view state
+  view="$(gh issue view "$issue" --json number,state,url 2>/dev/null)" || {
+    printf 'git-loopy: gh issue view #%s during auto-close failed; issue remains open.\n' \
+      "$issue" >&2
+    return 0
+  }
+  state="$(jq -r '.state // ""' <<<"$view" 2>/dev/null)" || state=""
+  [[ "$state" == "OPEN" ]] || return 0
+
+  local shas_str comment
+  shas_str="${ref_shas[*]}"
+  # The backticks below are literal Markdown in the closure comment, so single
+  # quotes (no expansion) are exactly right.
+  # shellcheck disable=SC2016
+  comment="$(
+    printf 'Implemented in %s.\n\n' "$shas_str"
+    printf 'Closed by the git-loopy loop because the agent did not run '
+    printf '`gh issue close` itself this iteration (commit messages did '
+    printf 'reference `Closes #%s`).\n\n' "$issue"
+    printf 'If this closure looks wrong, reopen with `gh issue reopen %s` — ' \
+      "$issue"
+    printf 'the loop will not re-close it without a new commit that references it.'
+  )"
+  gh issue close "$issue" --comment "$comment" >/dev/null 2>&1 || {
+    printf 'git-loopy: gh issue close #%s failed; issue remains open.\n' \
+      "$issue" >&2
+    return 0
+  }
+
+  local shas_json payload
+  shas_json="$(_git_loopy_string_array_json "${ref_shas[@]}")" || return 1
+  payload="$(
+    jq -cn \
+      --argjson issue "$issue" \
+      --arg sha "${ref_shas[0]}" \
+      --argjson shas "$shas_json" \
+      '{issue: $issue, sha: $sha, shas: $shas}'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_AUTO_CLOSE]}" \
+    "$iteration" \
+    "$payload" || return 1
+  _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
+}
+
+git_loopy_auto_close_pool_issues() {
+  # Close finished Pool *issues* referenced by closing keywords in this
+  # Iteration's new commits. Only the GitHub source auto-closes (the PRDs agent
+  # owns its own `git mv ... done/`). Repeated references collapse to at most
+  # one closure via the first-encounter dedup in `actionable_close_refs`. Sets
+  # `_GIT_LOOPY_AUTO_CLOSURES` to the number of issues closed.
+  local iteration="$1"
+  local commits_json="$2"
+  _GIT_LOOPY_AUTO_CLOSURES=0
+  [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]] || return 0
+
+  local pool_descriptors
+  pool_descriptors="$(
+    jq -c '[.[] | select(has("number")) | {ref: .number, kind: "issue"}]' \
+      <<<"$GIT_LOOPY_POOL_JSON"
+  )" || return 1
+
+  local concatenated
+  concatenated="$(
+    jq -r '
+      [ .[]
+        | if .body == "" then .subject else .subject + "\n" + .body end
+      ] | join("\n")
+    ' <<<"$commits_json"
+  )" || return 1
+
+  local actionable
+  actionable="$(
+    git_loopy_actionable_close_refs "$concatenated" "$pool_descriptors"
+  )" || return 1
+
+  local ref
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    git_loopy_close_one_issue "$iteration" "$ref" "$commits_json" || return 1
+  done < <(jq -r '.[]' <<<"$actionable")
+}
+
 git_loopy_run_discovery() {
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
 
@@ -775,6 +988,8 @@ git_loopy_run_discovery() {
   local iteration=0
   local iterations_run=0
   local outcome="iteration_cap"
+  local strikes=0
+  local strike_outcome="running"
   while true; do
     local next_iteration=$((iteration + 1))
     if ((GIT_LOOPY_MAX_ITERATIONS != 0)) &&
@@ -841,12 +1056,24 @@ git_loopy_run_discovery() {
       git_loopy_commits_between "$GIT_LOOPY_REPO_ROOT" "$pre_sha" "$head_sha"
     )" || commits_json='[]'
 
-    # Emit one wrapper.commit.recorded per new commit in git's log order
-    # (newest first), carrying only the sha/subject/date the contract names.
-    local commit_count
+    # Split the boundary commits into agent commits and recognized runner
+    # Checkpoints. Only agent commits are recorded as contract commit events
+    # (newest-first) and count toward Strike progress; a Checkpoint is excluded
+    # even before this port authors one.
+    local commit_count agent_commits=0 checkpoint_commits=0
     commit_count="$(jq -r 'length' <<<"$commits_json")" || commit_count=0
-    local commit_index
+    local commit_index commit_message
     for ((commit_index = 0; commit_index < commit_count; commit_index++)); do
+      commit_message="$(
+        jq -r --argjson i "$commit_index" \
+          '.[$i] | if .body == "" then .subject else .subject + "\n" + .body end' \
+          <<<"$commits_json"
+      )" || return 1
+      if git_loopy_is_checkpoint_message "$commit_message"; then
+        checkpoint_commits=$((checkpoint_commits + 1))
+        continue
+      fi
+      agent_commits=$((agent_commits + 1))
       local commit_payload
       commit_payload="$(
         jq -c --argjson i "$commit_index" '.[$i] | {date, sha, subject}' \
@@ -858,10 +1085,51 @@ git_loopy_run_discovery() {
         "$commit_payload" || return 1
     done
 
+    # Auto-close finished Pool issues from the new commit messages, then decide
+    # progress and advance the Strike machine. Progress (an agent commit or a
+    # wrapper closure) resets the Strike count; consecutive no-progress
+    # Iterations accumulate Strikes and the threshold ends the Run as stuck.
+    git_loopy_auto_close_pool_issues "$iteration" "$commits_json" || return 1
+    local auto_closures="$_GIT_LOOPY_AUTO_CLOSURES"
+
+    local progress="false"
+    if git_loopy_did_iteration_make_progress \
+      "$agent_commits" "$auto_closures" "$checkpoint_commits" 0 false; then
+      progress="true"
+    fi
+    local tick_result
+    tick_result="$(
+      git_loopy_strike_tick \
+        "$GIT_LOOPY_MAX_NMT_STRIKES" "$strikes" "$strike_outcome" \
+        "$agent_commits" "$auto_closures" "$checkpoint_commits" 0 false
+    )" || return 1
+    strikes="${tick_result%% *}"
+    strike_outcome="${tick_result##* }"
+    if [[ "$strike_outcome" == "aborted" || "$progress" == "false" ]]; then
+      local strike_event_outcome="warn"
+      [[ "$strike_outcome" == "aborted" ]] && strike_event_outcome="abort"
+      local strike_payload
+      strike_payload="$(
+        jq -cn \
+          --argjson strikes "$strikes" \
+          --argjson max_strikes "$GIT_LOOPY_MAX_NMT_STRIKES" \
+          --arg outcome "$strike_event_outcome" \
+          '{strikes: $strikes, max_strikes: $max_strikes, outcome: $outcome}'
+      )" || return 1
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_STRIKE]}" \
+        "$iteration" \
+        "$strike_payload" || return 1
+    fi
+
     git_loopy_emit_event \
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
       "$iteration" || return 1
     iterations_run="$iteration"
+    if [[ "$strike_outcome" == "aborted" ]]; then
+      outcome="stuck"
+      break
+    fi
   done
 
   local run_end_payload
@@ -883,6 +1151,9 @@ git_loopy_run_discovery() {
       ;;
     iteration_cap)
       exit_code="$(git_loopy_exit_code_for "iteration_cap")"
+      ;;
+    stuck)
+      exit_code="$(git_loopy_exit_code_for "stuck")"
       ;;
   esac
   return "$exit_code"
