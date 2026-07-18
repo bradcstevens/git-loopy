@@ -801,6 +801,65 @@ try {
         $NonZeroEvents[-1]["outcome"]
     ) "non-zero agent turn stayed on warn-and-continue"
 
+    # The turn feeds EXACTLY the last five commits (contract §4), newest-first,
+    # and truncates older history. Every other turn scenario runs against a
+    # <=3-commit repo, so this is the only guard on the shared `-n5`
+    # recent-commits bound the Python reference and both native ports agree on.
+    $RecentRepo = Join-Path $TempDir "recent-five"
+    $RecentBin = Join-Path $TempDir "recent-five-bin"
+    New-RealTestRepo -Root $RecentRepo
+    foreach ($n in 1..7) {
+        & git -C $RecentRepo commit -q --allow-empty -m "history commit $n"
+    }
+    Write-TurnTools -BinDir $RecentBin
+    $RecentList = Join-Path $TempDir "recent-five-list.json"
+    [IO.File]::Copy($CapList, $RecentList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "recent-five-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "recent-five-list.count"
+    $env:FAKE_GH_LIST_JSON = $RecentList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    Set-CopilotEnv -Prefix "recent-five"
+    $env:FAKE_COPILOT_COMMITS = "0"
+    $RecentStdout = Join-Path $TempDir "recent-five.stdout"
+    $RecentStderr = Join-Path $TempDir "recent-five.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $RecentRepo `
+        -FakeBin $RecentBin `
+        -StdoutPath $RecentStdout `
+        -StderrPath $RecentStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
+    Assert-Equal 0 $Status "recent-five turn Run exit"
+    $RecentPrompt = [IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)
+    foreach ($n in 3..7) {
+        Assert-Contains $RecentPrompt "history commit $n" (
+            "prompt carries the last-five commit $n"
+        )
+    }
+    foreach ($n in 1..2) {
+        Assert-True (
+            -not $RecentPrompt.Contains(
+                "history commit $n",
+                [StringComparison]::Ordinal
+            )
+        ) "prompt carried commit $n from beyond the last five"
+    }
+    Assert-True (
+        -not $RecentPrompt.Contains("initial commit", [StringComparison]::Ordinal)
+    ) "prompt carried the initial commit from beyond the last five"
+    # Newest-first: commit 7 is rendered before commit 3 in the commits block.
+    $RecentIdx7 = $RecentPrompt.IndexOf(
+        "history commit 7",
+        [StringComparison]::Ordinal
+    )
+    $RecentIdx3 = $RecentPrompt.IndexOf(
+        "history commit 3",
+        [StringComparison]::Ordinal
+    )
+    Assert-True (
+        $RecentIdx7 -ge 0 -and $RecentIdx3 -ge 0 -and $RecentIdx7 -lt $RecentIdx3
+    ) "recent commits are rendered newest-first"
+
     $PrdsRepo = Join-Path $TempDir "prds"
     $PrdsBin = Join-Path $TempDir "prds-bin"
     New-RealTestRepo -Root $PrdsRepo

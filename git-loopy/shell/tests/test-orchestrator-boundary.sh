@@ -556,6 +556,46 @@ jq -se '
 ' "$temp_dir/agent-nonzero.stdout" >/dev/null ||
   fail "non-zero agent turn drifted from warn-and-continue"
 
+# The turn feeds EXACTLY the last five commits (contract §4), newest-first, and
+# truncates older history. Every other turn scenario runs against a <=3-commit
+# repo, so this is the only guard on the shared `-n5` recent-commits bound the
+# Python reference and both native ports must agree on.
+repo="$temp_dir/recent-five"
+fake_bin="$temp_dir/recent-five-bin"
+make_real_repo "$repo"
+for n in 1 2 3 4 5 6 7; do
+  git -C "$repo" commit -q --allow-empty -m "history commit $n"
+done
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/recent-five-list.json"
+export FAKE_GH_LOG="$temp_dir/recent-five-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/recent-five-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/recent-five-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "recent-five"
+export FAKE_COPILOT_COMMITS=0
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/recent-five.stdout" \
+  "$temp_dir/recent-five.stderr" 1; then
+  fail "recent-five turn Run did not exit 0: $(<"$temp_dir/recent-five.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS
+recent_prompt="$(<"$FAKE_COPILOT_PROMPT")"
+for n in 3 4 5 6 7; do
+  assert_contains "$recent_prompt" "history commit $n" \
+    "prompt carries the last-five commit $n"
+done
+for n in 1 2; do
+  [[ "$recent_prompt" != *"history commit $n"* ]] ||
+    fail "prompt carried commit $n from beyond the last five"
+done
+[[ "$recent_prompt" != *"initial commit"* ]] ||
+  fail "prompt carried the initial commit from beyond the last five"
+# Newest-first: commit 7 is rendered before commit 3 in the recent-commits block.
+newest_first_prefix="${recent_prompt%%history commit 3*}"
+assert_contains "$newest_first_prefix" "history commit 7" \
+  "recent commits are rendered newest-first"
+
 repo="$temp_dir/large-github"
 fake_bin="$temp_dir/large-github-bin"
 make_real_repo "$repo"
