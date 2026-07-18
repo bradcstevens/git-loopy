@@ -516,6 +516,39 @@ function ConvertFrom-GitLoopyExternalJson {
     }
 }
 
+# `gh` emits comment timestamps as canonical UTC ISO-8601 strings
+# (YYYY-MM-DDTHH:MM:SSZ). `ConvertFrom-Json` coerces those into [datetime]
+# values, whose default string form is the host's locale ("03/01/2026 ..."),
+# which would drift the assembled prompt away from the shell and Python ports
+# (both keep the raw string). Re-render any coerced value back to the canonical
+# UTC string so every port assembles byte-identical comment context.
+function ConvertTo-GitLoopyCommentTimestamp {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return ""
+    }
+    $Format = "yyyy-MM-ddTHH:mm:ssZ"
+    $Invariant = [Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [datetime]) {
+        $Instant = [datetime]$Value
+        if ($Instant.Kind -eq [DateTimeKind]::Unspecified) {
+            $Instant = [datetime]::SpecifyKind($Instant, [DateTimeKind]::Utc)
+        }
+        return $Instant.ToUniversalTime().ToString($Format, $Invariant)
+    }
+    if ($Value -is [datetimeoffset]) {
+        return ([datetimeoffset]$Value).ToUniversalTime().ToString(
+            $Format, $Invariant
+        )
+    }
+    return [string]$Value
+}
+
 function Get-GitLoopyGitHubPool {
     [CmdletBinding()]
     param()
@@ -609,7 +642,7 @@ function Get-GitLoopyGitHubPool {
                 [ordered]@{
                     author = [string]$Author
                     body = [string]$Comment["body"]
-                    created_at = [string](
+                    created_at = ConvertTo-GitLoopyCommentTimestamp -Value (
                         $Comment["createdAt"] ?? $Comment["created_at"]
                     )
                 }
@@ -713,6 +746,202 @@ function Get-GitLoopyPool {
     return @(Get-GitLoopyPrdsPool -RepoRoot $RepoRoot)
 }
 
+function ConvertFrom-GitLoopyLogOutput {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$Lines
+    )
+
+    $Commits = [Collections.Generic.List[object]]::new()
+    if ($null -eq $Lines -or $Lines.Count -eq 0) {
+        return , $Commits.ToArray()
+    }
+
+    $RecordSeparator = [char]0x1e
+    $UnitSeparator = [char]0x1f
+    $Raw = ($Lines -join "`n")
+    foreach ($Record in ($Raw -split ([regex]::Escape($RecordSeparator)))) {
+        $Trimmed = $Record.TrimStart("`n", "`r")
+        if ([string]::IsNullOrEmpty($Trimmed)) {
+            continue
+        }
+        $Fields = $Trimmed -split ([regex]::Escape($UnitSeparator)), 4
+        while ($Fields.Count -lt 4) {
+            $Fields += ""
+        }
+        $Commits.Add([ordered]@{
+            sha = $Fields[0]
+            subject = $Fields[1]
+            date = $Fields[2]
+            body = $Fields[3].TrimEnd("`n", "`r")
+        })
+    }
+
+    return , $Commits.ToArray()
+}
+
+function Get-GitLoopyHeadSha {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    $Output = @(& git -C $RepoRoot rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $Output.Count -eq 0) {
+        return $null
+    }
+    return [string]$Output[-1]
+}
+
+function Get-GitLoopyCommitsInRange {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory)]
+        [string]$Pre,
+        [Parameter(Mandatory)]
+        [string]$Head
+    )
+
+    if ($Pre -ceq $Head) {
+        return @()
+    }
+    $Lines = @(
+        & git -C $RepoRoot log `
+            --format="%H%x1f%s%x1f%ad%x1f%b%x1e" --date=short "$Pre..$Head" 2>$null
+    )
+    return (ConvertFrom-GitLoopyLogOutput -Lines $Lines)
+}
+
+function Get-GitLoopyRecentCommitsBlock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    $Lines = @(
+        & git -C $RepoRoot log `
+            -n5 --format="%H%x1f%s%x1f%ad%x1f%b%x1e" --date=short 2>$null
+    )
+    $Commits = ConvertFrom-GitLoopyLogOutput -Lines $Lines
+    if ($Commits.Count -eq 0) {
+        return "No commits found"
+    }
+    $Parts = foreach ($Commit in $Commits) {
+        if ([string]::IsNullOrEmpty([string]$Commit.body)) {
+            $Message = [string]$Commit.subject
+        }
+        else {
+            $Message = "$([string]$Commit.subject)`n$([string]$Commit.body)"
+        }
+        "$([string]$Commit.sha)`n$([string]$Commit.date)`n$Message---"
+    }
+    return ($Parts -join "`n")
+}
+
+function Format-GitLoopyPoolBlocks {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool
+    )
+
+    $Blocks = foreach ($Item in $Pool) {
+        if ($Item.Contains("number")) {
+            $Labels = (@($Item["labels"]) -join ", ")
+            $Header = "=== Issue #$($Item["number"]): " +
+                "$([string]$Item["title"]) [labels: $Labels] ==="
+            $Body = [string]$Item["body"]
+            $Recent = @(
+                @($Item["comments"]) |
+                    Sort-Object -Property { [string]$_["created_at"] } -Descending |
+                    Select-Object -First 5
+            )
+            if ($Recent.Count -eq 0) {
+                "$Header`n$Body"
+            }
+            else {
+                $CommentLines = foreach ($Comment in $Recent) {
+                    "[$([string]$Comment["created_at"]) " +
+                        "@$([string]$Comment["author"])] $([string]$Comment["body"])"
+                }
+                "$Header`n$Body`n`n" +
+                    "--- Recent comments (newest first, up to 5) ---`n" +
+                    ($CommentLines -join "`n`n")
+            }
+        }
+        else {
+            "=== $([string]$Item["ref"]) ===`n$([string]$Item["body"])"
+        }
+    }
+    return (@($Blocks) -join "`n`n")
+}
+
+function Build-GitLoopyPrompt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [Parameter(Mandatory)]
+        [string]$PromptPath
+    )
+
+    $CommitsBlock = Get-GitLoopyRecentCommitsBlock -RepoRoot $RepoRoot
+    $IssuesBlock = Format-GitLoopyPoolBlocks -Pool $Pool
+    $PromptText = [IO.File]::ReadAllText($PromptPath)
+    return "Previous commits: $CommitsBlock Issues: $IssuesBlock $PromptText"
+}
+
+function Invoke-GitLoopyAgentTurn {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [string]$Prompt
+    )
+
+    $Argv = [Collections.Generic.List[string]]::new()
+    $Argv.Add("--yolo")
+    $Argv.Add("-p")
+    $Argv.Add($Prompt)
+    $Argv.Add("--model")
+    $Argv.Add([string]$Config.Model)
+    $Argv.Add("--no-color")
+    if (-not [string]::IsNullOrEmpty([string]$Config.ReasoningEffort)) {
+        $Argv.Add("--reasoning-effort")
+        $Argv.Add([string]$Config.ReasoningEffort)
+    }
+    foreach ($Tool in @($Config.DenyTools)) {
+        $Argv.Add("--deny-tool")
+        $Argv.Add([string]$Tool)
+    }
+    foreach ($Skill in @($Config.DenySkills)) {
+        $Argv.Add("--deny-tool")
+        $Argv.Add("skill($([string]$Skill))")
+    }
+
+    # Stream the agent's own output to stderr so stdout stays the JSONL Event
+    # stream; capture Copilot's real exit status, not a pipeline's (contract §4).
+    try {
+        & copilot @Argv |
+            ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+        return $LASTEXITCODE
+    }
+    catch {
+        [Console]::Error.WriteLine(
+            "git-loopy: copilot turn could not launch: $($_.Exception.Message)"
+        )
+        return 126
+    }
+}
+
 function Invoke-GitLoopyDiscovery {
     [CmdletBinding()]
     param(
@@ -776,24 +1005,67 @@ function Invoke-GitLoopyDiscovery {
             -Type $EventTypes["WRAPPER_AFK_READY_COLLECTED"] `
             -Iteration $Iteration `
             -Payload ([ordered]@{ issues = [object[]]$Refs })
+
+        if ($Pool.Count -eq 0) {
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_ITERATION_END"] `
+                -Iteration $Iteration
+            $IterationsRun = $Iteration
+            $Outcome = "empty_pool"
+            break
+        }
+
+        # Assemble the same minimum context as the Python reference (last-5
+        # commits + the AFK-ready Pool blocks + the resolved shared prompt) and
+        # run exactly one streamed Copilot turn. The agent's own output goes to
+        # stderr so stdout stays the JSONL Event stream; the turn's real exit
+        # status is preserved and a non-zero turn warns without failing the Run.
+        $Prompt = Build-GitLoopyPrompt `
+            -RepoRoot $Preflight.RepoRoot `
+            -Pool $Pool `
+            -PromptPath $Preflight.PromptPath
+        $PreSha = Get-GitLoopyHeadSha -RepoRoot $Preflight.RepoRoot
+        $AgentStatus = Invoke-GitLoopyAgentTurn -Config $Config -Prompt $Prompt
+        if ($AgentStatus -ne 0) {
+            [Console]::Error.WriteLine(
+                "git-loopy: copilot turn exited with status $AgentStatus; continuing."
+            )
+        }
+
+        $NewCommits = @()
+        if ($null -ne $PreSha) {
+            $HeadSha = Get-GitLoopyHeadSha -RepoRoot $Preflight.RepoRoot
+            if ($null -eq $HeadSha) {
+                $HeadSha = $PreSha
+            }
+            $NewCommits = @(
+                Get-GitLoopyCommitsInRange `
+                    -RepoRoot $Preflight.RepoRoot `
+                    -Pre $PreSha `
+                    -Head $HeadSha
+            )
+        }
+
+        # Emit one wrapper.commit.recorded per new commit in git's newest-first
+        # order, carrying only the sha/subject/date the contract names.
+        foreach ($Commit in $NewCommits) {
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_COMMIT_RECORDED"] `
+                -Iteration $Iteration `
+                -Payload ([ordered]@{
+                    date = [string]$Commit["date"]
+                    sha = [string]$Commit["sha"]
+                    subject = [string]$Commit["subject"]
+                })
+        }
+
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_END"] `
             -Iteration $Iteration
         $IterationsRun = $Iteration
-
-        if ($Pool.Count -eq 0) {
-            $Outcome = "empty_pool"
-            break
-        }
-
-        # Issue #81 is the discovery tracer bullet. An unlimited invocation
-        # stops after proving a non-empty Pool; bounded invocations can exercise
-        # repeated collection. Issue #82 replaces this seam with the Copilot turn.
-        if ($Config.MaxIterations -eq 0) {
-            $Outcome = "pool_discovered"
-            break
-        }
     }
 
     Write-GitLoopyEvent `

@@ -188,6 +188,135 @@ function New-TestRepo {
     )
 }
 
+# Turn scenarios exercise the real Copilot turn, so they run against a real git
+# repository (real HEAD, commits_between, and recent-commit rendering) with only
+# `gh` and `copilot` faked. `Write-TurnTools` deliberately ships no fake `git`,
+# and the entry point keeps the inherited PATH so the real `git` resolves.
+function Write-TurnTools {
+    param(
+        [Parameter(Mandatory)]
+        [string]$BinDir
+    )
+
+    [IO.Directory]::CreateDirectory($BinDir) | Out-Null
+    Write-FakeCommand -BinDir $BinDir -Name "copilot" -Body @'
+$ErrorActionPreference = "Stop"
+$Prompt = ""
+$Capture = $false
+$Flags = [Collections.Generic.List[string]]::new()
+foreach ($Arg in $args) {
+    if ($Capture) {
+        $Prompt = [string]$Arg
+        $Capture = $false
+        continue
+    }
+    if ([string]$Arg -ceq "-p") {
+        $Capture = $true
+        continue
+    }
+    $Flags.Add([string]$Arg)
+}
+[IO.File]::WriteAllText(
+    $env:FAKE_COPILOT_FLAGS,
+    ($Flags -join "`n") + "`n"
+)
+[IO.File]::WriteAllText($env:FAKE_COPILOT_PROMPT, $Prompt)
+$Calls = 0
+if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
+    $Calls = [int][IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+}
+[IO.File]::WriteAllText($env:FAKE_COPILOT_CALLS, [string]($Calls + 1))
+# Emit on stdout to prove the agent stream is routed away from the JSONL Event
+# stream (the Orchestrator forwards it to stderr).
+[Console]::Out.WriteLine("copilot agent stream marker")
+$Commits = if ($env:FAKE_COPILOT_COMMITS) { [int]$env:FAKE_COPILOT_COMMITS } else { 0 }
+for ($i = 0; $i -lt $Commits; $i++) {
+    & git commit -q --allow-empty -m "agent: work $($i + 1)"
+}
+exit $(if ($env:FAKE_COPILOT_EXIT) { [int]$env:FAKE_COPILOT_EXIT } else { 0 })
+'@
+    Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
+$ErrorActionPreference = "Stop"
+[IO.File]::AppendAllText(
+    $env:FAKE_GH_LOG,
+    ($args -join " ") + [Environment]::NewLine
+)
+$Command = if ($args.Count -ge 2) { "$($args[0]) $($args[1])" } else { "" }
+switch -CaseSensitive ($Command) {
+    "auth status" {
+        exit $(if ($env:FAKE_GH_AUTH_STATUS) {
+            [int]$env:FAKE_GH_AUTH_STATUS
+        } else {
+            0
+        })
+    }
+    "repo view" {
+        [Console]::Out.WriteLine(
+            '{"owner":{"login":"example"},"name":"repo","defaultBranchRef":{"name":"main"}}'
+        )
+        exit 0
+    }
+    "issue list" {
+        $Count = if ([IO.File]::Exists($env:FAKE_GH_LIST_COUNT)) {
+            [int][IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT)
+        } else {
+            0
+        }
+        $Count = $Count + 1
+        [IO.File]::WriteAllText($env:FAKE_GH_LIST_COUNT, [string]$Count)
+        if ($env:FAKE_GH_EMPTY_AFTER -and
+            ($Count -gt [int]$env:FAKE_GH_EMPTY_AFTER)) {
+            [Console]::Out.WriteLine("[]")
+        } else {
+            [Console]::Out.Write([IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON))
+        }
+        exit 0
+    }
+    "issue view" {
+        $ViewPath = Join-Path $env:FAKE_GH_VIEW_DIR "$($args[2]).json"
+        [Console]::Out.Write([IO.File]::ReadAllText($ViewPath))
+        exit 0
+    }
+    default {
+        [Console]::Error.WriteLine(
+            "unexpected gh invocation: " + ($args -join " ")
+        )
+        exit 92
+    }
+}
+'@
+}
+
+function New-RealTestRepo {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    New-TestRepo -Root $Root
+    & git -C $Root init -q
+    & git -C $Root config user.email "tester@example.invalid"
+    & git -C $Root config user.name "Test Runner"
+    & git -C $Root commit -q --allow-empty -m "initial commit"
+}
+
+function Set-CopilotEnv {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Prefix
+    )
+
+    foreach ($Suffix in @("flags", "prompt", "calls")) {
+        $Path = Join-Path $TempDir "$Prefix-copilot.$Suffix"
+        if ([IO.File]::Exists($Path)) {
+            [IO.File]::Delete($Path)
+        }
+    }
+    $env:FAKE_COPILOT_FLAGS = Join-Path $TempDir "$Prefix-copilot.flags"
+    $env:FAKE_COPILOT_PROMPT = Join-Path $TempDir "$Prefix-copilot.prompt"
+    $env:FAKE_COPILOT_CALLS = Join-Path $TempDir "$Prefix-copilot.calls"
+}
+
 function Invoke-Entrypoint {
     param(
         [Parameter(Mandatory)]
@@ -360,8 +489,8 @@ try {
 
     $CapRepo = Join-Path $TempDir "github-cap"
     $CapBin = Join-Path $TempDir "github-cap-bin"
-    New-TestRepo -Root $CapRepo
-    Write-FakeTools -BinDir $CapBin
+    New-RealTestRepo -Root $CapRepo
+    Write-TurnTools -BinDir $CapBin
     $CapList = Join-Path $TempDir "github-list.json"
     [IO.File]::WriteAllText($CapList, @'
 [
@@ -393,13 +522,25 @@ try {
   "labels": [{"name": "ready-for-agent"}],
   "state": "OPEN",
   "url": "https://example.invalid/issues/41",
-  "comments": []
+  "comments": [
+    {
+      "author": "maintainer",
+      "body": "please prioritise",
+      "createdAt": "2026-03-01T00:00:00Z"
+    }
+  ]
 }
 '@)
     $env:FAKE_GH_LOG = Join-Path $TempDir "github-cap-gh.log"
     $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "github-cap-list.count"
     $env:FAKE_GH_LIST_JSON = $CapList
     $env:FAKE_GH_VIEW_DIR = $CapViews
+    Set-CopilotEnv -Prefix "github-cap"
+    $env:FAKE_COPILOT_COMMITS = "0"
+    $env:GIT_LOOPY_MODEL = "env-model"
+    $env:GIT_LOOPY_REASONING_EFFORT = "medium"
+    $env:GIT_LOOPY_DENY_TOOLS = "env-tool"
+    $env:GIT_LOOPY_DENY_SKILLS = "env-skill"
 
     $CapStdout = Join-Path $TempDir "github-cap.stdout"
     $CapStderr = Join-Path $TempDir "github-cap.stderr"
@@ -408,11 +549,28 @@ try {
         -FakeBin $CapBin `
         -StdoutPath $CapStdout `
         -StderrPath $CapStderr `
-        -Arguments @("2")
-    Assert-Equal 0 $Status "bounded discovery Run exit"
+        -Arguments @(
+            "2",
+            "--model", "cli-model",
+            "--deny-tool", "cli-tool",
+            "--deny-skill", "cli-skill"
+        )
+    foreach ($Name in @(
+        "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_DENY_TOOLS",
+        "GIT_LOOPY_DENY_SKILLS",
+        "FAKE_COPILOT_COMMITS"
+    )) {
+        [Environment]::SetEnvironmentVariable($Name, $null)
+    }
+    Assert-Equal 0 $Status "bounded turn Run exit"
     Assert-Equal "2" (
         [IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT)
     ) "Pool is rebuilt each Iteration"
+    Assert-Equal "2" (
+        [IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+    ) "exactly one Copilot turn per non-empty Iteration"
     $CapEvents = Read-Events -Path $CapStdout
     $CollectionEvents = @(
         $CapEvents |
@@ -426,6 +584,12 @@ try {
     }
     Assert-Equal "iteration_cap" $CapEvents[-1]["outcome"] "bounded Run outcome"
     Assert-Equal 2 $CapEvents[-1]["iterations_run"] "bounded Iteration count"
+    Assert-Equal 0 (
+        @(
+            $CapEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }
+        ).Count
+    ) "a turn with no new commits records no commit events"
     Assert-True (
         -not ([IO.File]::ReadAllText($env:FAKE_GH_LOG)).Contains(
             "issue view 42 ",
@@ -433,7 +597,79 @@ try {
         )
     ) "ineligible issue was enriched after the cheap discriminator pass"
 
+    # The Iteration assembled the Python-reference minimum context: last-5
+    # commits, the filtered Pool block (with recent comments), and the prompt.
+    $CapPrompt = [IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)
+    Assert-Contains $CapPrompt "Previous commits: " "prompt carries the commits prefix"
+    Assert-Contains $CapPrompt "initial commit" "prompt carries recent commit subjects"
+    Assert-Contains $CapPrompt (
+        "=== Issue #41: Eligible [labels: ready-for-agent] ==="
+    ) "prompt carries the filtered issue block"
+    Assert-Contains $CapPrompt (
+        "--- Recent comments (newest first, up to 5) ---"
+    ) "prompt carries recent comments"
+    Assert-Contains $CapPrompt (
+        "[2026-03-01T00:00:00Z @maintainer] please prioritise"
+    ) "recent comments keep the raw ISO timestamp (no locale datetime coercion)"
+    Assert-Contains $CapPrompt "please prioritise" "prompt carries comment bodies"
+    Assert-Contains $CapPrompt "# Project prompt" (
+        "prompt carries the resolved shared prompt"
+    )
+
+    # Resolved settings honor CLI-over-environment-over-default precedence.
+    $CapFlags = [IO.File]::ReadAllText($env:FAKE_COPILOT_FLAGS)
+    Assert-Contains $CapFlags "--yolo" "turn passes --yolo"
+    Assert-Contains $CapFlags "--no-color" "turn streams without color"
+    $CapFlagLines = [IO.File]::ReadAllLines($env:FAKE_COPILOT_FLAGS)
+    Assert-True (
+        $CapFlagLines -ccontains "cli-model"
+    ) "CLI --model overrode the environment model"
+    Assert-True (
+        -not ($CapFlagLines -ccontains "env-model")
+    ) "environment model leaked past the CLI override"
+    Assert-True (
+        $CapFlagLines -ccontains "medium"
+    ) "environment reasoning effort was forwarded"
+    Assert-True (
+        $CapFlagLines -ccontains "cli-tool"
+    ) "CLI deny-tool forwarded"
+    Assert-True (
+        $CapFlagLines -ccontains "env-tool"
+    ) "environment deny-tool forwarded"
+    Assert-True (
+        $CapFlagLines -ccontains "skill(cli-skill)"
+    ) "CLI deny-skill mapped onto --deny-tool skill(...)"
+    Assert-True (
+        $CapFlagLines -ccontains "skill(env-skill)"
+    ) "environment deny-skill mapped onto --deny-tool skill(...)"
+
+    # The agent's own output streams to stderr, never onto the Event stream.
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) "copilot agent stream marker" "agent output streams to stderr"
+    Assert-True (
+        -not ([IO.File]::ReadAllText($CapStdout)).Contains(
+            "copilot agent stream marker",
+            [StringComparison]::Ordinal
+        )
+    ) "agent output polluted the JSONL Event stream"
+    $CapReplay = @(
+        Get-ChildItem `
+            -LiteralPath (Join-Path $CapRepo ".git-loopy/logs") `
+            -Filter "*.jsonl" `
+            -File
+    )
+    Assert-Equal 1 $CapReplay.Count "turn Run replay file count"
+    Assert-Equal (
+        [IO.File]::ReadAllText($CapStdout)
+    ) ([IO.File]::ReadAllText($CapReplay[0].FullName)) (
+        "turn Run stream and replay parity"
+    )
+
     [IO.File]::Delete($env:FAKE_GH_LIST_COUNT)
+    Set-CopilotEnv -Prefix "github-default"
+    $env:FAKE_COPILOT_COMMITS = "0"
+    $env:FAKE_GH_EMPTY_AFTER = "1"
     $DefaultStdout = Join-Path $TempDir "github-default.stdout"
     $DefaultStderr = Join-Path $TempDir "github-default.stderr"
     $Status = Invoke-Entrypoint `
@@ -441,22 +677,134 @@ try {
         -FakeBin $CapBin `
         -StdoutPath $DefaultStdout `
         -StderrPath $DefaultStderr
-    Assert-Equal 0 $Status "default discovery Run exit"
-    Assert-Equal "1" (
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_EMPTY_AFTER", $null)
+    Assert-Equal 0 $Status "unlimited turn Run exit"
+    Assert-Equal "2" (
         [IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT)
-    ) "default discovery count"
+    ) "unlimited Run rebuilds the Pool until it empties"
+    Assert-Equal "1" (
+        [IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+    ) "unlimited Run runs one turn before its Pool empties"
     $DefaultEvents = Read-Events -Path $DefaultStdout
-    Assert-Equal "pool_discovered" (
+    $DefaultCollected = @(
+        $DefaultEvents |
+            Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" } |
+            ForEach-Object { [string]::Join(",", $_["issues"]) }
+    )
+    Assert-Equal "41;" ([string]::Join(";", $DefaultCollected)) (
+        "unlimited Run rebuilds then empties the Pool"
+    )
+    Assert-Equal "empty_pool" (
         $DefaultEvents[-1]["outcome"]
-    ) "default non-empty discovery outcome"
-    Assert-Equal 1 (
+    ) "unlimited turn Run terminates on an empty Pool"
+    Assert-Equal 2 (
         $DefaultEvents[-1]["iterations_run"]
-    ) "default discovery Iteration count"
+    ) "unlimited Run Iteration count"
+
+    # A turn that produces new commits records one commit event per commit, in
+    # git's newest-first order, and only closes the Iteration afterwards.
+    $CommitsRepo = Join-Path $TempDir "agent-commits"
+    $CommitsBin = Join-Path $TempDir "agent-commits-bin"
+    New-RealTestRepo -Root $CommitsRepo
+    Write-TurnTools -BinDir $CommitsBin
+    $CommitsList = Join-Path $TempDir "agent-commits-list.json"
+    [IO.File]::Copy($CapList, $CommitsList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-commits-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-commits-list.count"
+    $env:FAKE_GH_LIST_JSON = $CommitsList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    Set-CopilotEnv -Prefix "agent-commits"
+    $env:FAKE_COPILOT_COMMITS = "2"
+    $CommitsStdout = Join-Path $TempDir "agent-commits.stdout"
+    $CommitsStderr = Join-Path $TempDir "agent-commits.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $CommitsRepo `
+        -FakeBin $CommitsBin `
+        -StdoutPath $CommitsStdout `
+        -StderrPath $CommitsStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
+    Assert-Equal 0 $Status "agent-commit turn Run exit"
+    $CommitsEvents = Read-Events -Path $CommitsStdout
+    Assert-Equal (
+        "wrapper.run.start,wrapper.iteration.start," +
+        "wrapper.afk_ready.collected,wrapper.commit.recorded," +
+        "wrapper.commit.recorded,wrapper.iteration.end,wrapper.run.end"
+    ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
+        "commit events precede the Iteration end that closes their Iteration"
+    )
+    $RecordedCommits = @(
+        $CommitsEvents |
+            Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }
+    )
+    Assert-Equal "agent: work 2,agent: work 1" (
+        [string]::Join(",", @($RecordedCommits | ForEach-Object { $_["subject"] }))
+    ) "new commits are recorded newest-first"
+    foreach ($Commit in $RecordedCommits) {
+        Assert-True (
+            $Commit.Contains("sha") -and
+            $Commit.Contains("subject") -and
+            $Commit.Contains("date")
+        ) "commit event carries the contract payload keys"
+        Assert-True (
+            [string]$Commit["sha"] -match '^[0-9a-f]{40}$'
+        ) "commit event carries a full SHA"
+        Assert-True (
+            [string]$Commit["date"] -match '^\d{4}-\d{2}-\d{2}$'
+        ) "commit event carries an ISO date"
+    }
+    Assert-Equal "iteration_cap" (
+        $CommitsEvents[-1]["outcome"]
+    ) "agent-commit Run outcome"
+
+    # A non-zero agent process warns and the Run still finishes cleanly
+    # (warn-and-continue); the turn's real exit status is preserved.
+    $NonZeroRepo = Join-Path $TempDir "agent-nonzero"
+    $NonZeroBin = Join-Path $TempDir "agent-nonzero-bin"
+    New-RealTestRepo -Root $NonZeroRepo
+    Write-TurnTools -BinDir $NonZeroBin
+    $NonZeroList = Join-Path $TempDir "agent-nonzero-list.json"
+    [IO.File]::Copy($CapList, $NonZeroList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-nonzero-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-nonzero-list.count"
+    $env:FAKE_GH_LIST_JSON = $NonZeroList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    Set-CopilotEnv -Prefix "agent-nonzero"
+    $env:FAKE_COPILOT_COMMITS = "0"
+    $env:FAKE_COPILOT_EXIT = "7"
+    $NonZeroStdout = Join-Path $TempDir "agent-nonzero.stdout"
+    $NonZeroStderr = Join-Path $TempDir "agent-nonzero.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $NonZeroRepo `
+        -FakeBin $NonZeroBin `
+        -StdoutPath $NonZeroStdout `
+        -StderrPath $NonZeroStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_EXIT", $null)
+    Assert-Equal 0 $Status "non-zero agent turn must not fail the Run"
+    Assert-Equal "1" (
+        [IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+    ) "the turn ran despite its non-zero exit"
+    Assert-Contains (
+        [IO.File]::ReadAllText($NonZeroStderr)
+    ) "copilot turn exited with status 7" "non-zero agent exit warns to stderr"
+    $NonZeroEvents = Read-Events -Path $NonZeroStdout
+    Assert-Equal 0 (
+        @(
+            $NonZeroEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }
+        ).Count
+    ) "a non-zero turn with no commits records no commit events"
+    Assert-Equal "iteration_cap" (
+        $NonZeroEvents[-1]["outcome"]
+    ) "non-zero agent turn stayed on warn-and-continue"
 
     $PrdsRepo = Join-Path $TempDir "prds"
     $PrdsBin = Join-Path $TempDir "prds-bin"
-    New-TestRepo -Root $PrdsRepo
-    Write-FakeTools -BinDir $PrdsBin
+    New-RealTestRepo -Root $PrdsRepo
+    Write-TurnTools -BinDir $PrdsBin
     $FeatureDir = Join-Path $PrdsRepo "prds/feature"
     $AlphaDir = Join-Path $PrdsRepo "prds/alpha"
     $AlphaBetaDir = Join-Path $PrdsRepo "prds/alpha-beta"
@@ -515,6 +863,7 @@ Old work.
     $env:FAKE_GH_LIST_JSON = $EmptyList
     $env:FAKE_GH_VIEW_DIR = $EmptyViews
     $env:GIT_LOOPY_ISSUE_SOURCE = "github"
+    Set-CopilotEnv -Prefix "prds"
 
     $PrdsStdout = Join-Path $TempDir "prds.stdout"
     $PrdsStderr = Join-Path $TempDir "prds.stderr"
@@ -543,6 +892,19 @@ Old work.
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_LOG)
     ) "PRDs mode invoked gh"
+    # The local-PRD turn assembled the same minimum context: the resolved prompt
+    # plus the PRD block rendered from its worktree-relative reference.
+    Assert-Equal "1" (
+        [IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+    ) "local-PRD Iteration ran exactly one turn"
+    $PrdsPrompt = [IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)
+    Assert-Contains $PrdsPrompt (
+        "=== prds/alpha-beta/001-ready.md ==="
+    ) "prompt carries the local-PRD block"
+    Assert-Contains $PrdsPrompt "Ship alpha-beta." "prompt carries the PRD body"
+    Assert-Contains $PrdsPrompt "# Project prompt" (
+        "prompt carries the resolved shared prompt"
+    )
 
     $LinkedRootRepo = Join-Path $TempDir "prds-root-link"
     $LinkedRootBin = Join-Path $TempDir "prds-root-link-bin"
@@ -688,6 +1050,12 @@ finally {
         "FAKE_GH_LIST_JSON",
         "FAKE_GH_VIEW_DIR",
         "FAKE_GH_AUTH_STATUS",
+        "FAKE_GH_EMPTY_AFTER",
+        "FAKE_COPILOT_FLAGS",
+        "FAKE_COPILOT_PROMPT",
+        "FAKE_COPILOT_CALLS",
+        "FAKE_COPILOT_COMMITS",
+        "FAKE_COPILOT_EXIT",
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_ISSUE_SOURCE",

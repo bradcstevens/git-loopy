@@ -12,6 +12,8 @@ port_dir="$(cd "$script_dir/.." && pwd)"
 entrypoint="$port_dir/git-loopy.sh"
 real_jq="$(command -v jq)"
 real_jq_dir="$(dirname "$real_jq")"
+real_git="$(command -v git)"
+real_git_dir="$(dirname "$real_git")"
 bash_bin="$(command -v bash)"
 
 fail() {
@@ -111,6 +113,121 @@ run_entrypoint() {
       FAKE_REPO_ROOT="$repo" \
       "$bash_bin" "$entrypoint" "$@"
   ) >"$stdout_path" 2>"$stderr_path"
+}
+
+# Turn scenarios drive the real Copilot turn, so they run against a real git
+# repository (real head_sha / commits_between / recent_commits) with only `gh`
+# and `copilot` faked. `write_turn_tools` deliberately ships no fake `git`.
+write_turn_tools() {
+  local bin_dir="$1"
+  mkdir -p "$bin_dir"
+
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: >"$FAKE_COPILOT_FLAGS"
+prompt=""
+capture=0
+for arg in "$@"; do
+  if ((capture)); then
+    prompt="$arg"
+    capture=0
+    continue
+  fi
+  if [[ "$arg" == "-p" ]]; then
+    capture=1
+    continue
+  fi
+  printf '%s\n' "$arg" >>"$FAKE_COPILOT_FLAGS"
+done
+printf '%s' "$prompt" >"$FAKE_COPILOT_PROMPT"
+calls=0
+[[ -f "$FAKE_COPILOT_CALLS" ]] && calls="$(<"$FAKE_COPILOT_CALLS")"
+printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
+# Emit on stdout to prove the agent stream is routed away from the JSONL
+# Event stream (the Orchestrator sends it to stderr).
+printf 'copilot agent stream marker\n'
+commits="${FAKE_COPILOT_COMMITS:-0}"
+i=0
+while ((i < commits)); do
+  git commit -q --allow-empty -m "agent: work $((i + 1))"
+  i=$((i + 1))
+done
+exit "${FAKE_COPILOT_EXIT:-0}"
+EOF
+
+  cat >"$bin_dir/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+case "${1-} ${2-}" in
+  "auth status")
+    exit "${FAKE_GH_AUTH_STATUS:-0}"
+    ;;
+  "repo view")
+    printf '{"owner":{"login":"example"},"name":"repo","defaultBranchRef":{"name":"main"}}\n'
+    ;;
+  "issue list")
+    count=0
+    if [[ -f "$FAKE_GH_LIST_COUNT" ]]; then
+      count="$(<"$FAKE_GH_LIST_COUNT")"
+    fi
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$FAKE_GH_LIST_COUNT"
+    if [[ -n "${FAKE_GH_EMPTY_AFTER:-}" ]] && ((count > FAKE_GH_EMPTY_AFTER)); then
+      printf '[]\n'
+    else
+      cat "$FAKE_GH_LIST_JSON"
+    fi
+    ;;
+  "issue view")
+    cat "$FAKE_GH_VIEW_DIR/${3}.json"
+    ;;
+  *)
+    printf 'unexpected gh invocation: %s\n' "$*" >&2
+    exit 92
+    ;;
+esac
+EOF
+
+  chmod +x "$bin_dir/copilot" "$bin_dir/gh"
+}
+
+make_real_repo() {
+  local root="$1"
+  make_repo "$root"
+  git -C "$root" init -q
+  git -C "$root" config user.email tester@example.invalid
+  git -C "$root" config user.name "Test Runner"
+  git -C "$root" commit -q --allow-empty -m "initial commit"
+}
+
+run_turn_entrypoint() {
+  local repo="$1"
+  local fake_bin="$2"
+  local stdout_path="$3"
+  local stderr_path="$4"
+  shift 4
+
+  (
+    cd "$repo"
+    PATH="$fake_bin:$real_jq_dir:$real_git_dir:/usr/bin:/bin" \
+      HOME="$repo/home" \
+      XDG_CONFIG_HOME="$repo/xdg" \
+      FAKE_REPO_ROOT="$repo" \
+      "$bash_bin" "$entrypoint" "$@"
+  ) >"$stdout_path" 2>"$stderr_path"
+}
+
+setup_copilot_env() {
+  local prefix="$1"
+  rm -f \
+    "$temp_dir/$prefix-copilot.flags" \
+    "$temp_dir/$prefix-copilot.prompt" \
+    "$temp_dir/$prefix-copilot.calls"
+  export FAKE_COPILOT_FLAGS="$temp_dir/$prefix-copilot.flags"
+  export FAKE_COPILOT_PROMPT="$temp_dir/$prefix-copilot.prompt"
+  export FAKE_COPILOT_CALLS="$temp_dir/$prefix-copilot.calls"
 }
 
 if [[ -x /bin/bash ]]; then
@@ -214,8 +331,8 @@ jq -se '
 
 repo="$temp_dir/github-cap"
 fake_bin="$temp_dir/github-cap-bin"
-make_repo "$repo"
-write_fake_tools "$fake_bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
 cat >"$temp_dir/github-list.json" <<'EOF'
 [
   {
@@ -245,20 +362,37 @@ cat >"$temp_dir/github-views/41.json" <<'EOF'
   "labels": [{"name": "ready-for-agent"}],
   "state": "OPEN",
   "url": "https://example.invalid/issues/41",
-  "comments": []
+  "comments": [
+    {
+      "author": "maintainer",
+      "body": "please prioritise",
+      "createdAt": "2026-03-01T00:00:00Z"
+    }
+  ]
 }
 EOF
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "github-cap"
+export FAKE_COPILOT_COMMITS=0
+export GIT_LOOPY_MODEL="env-model"
+export GIT_LOOPY_REASONING_EFFORT="medium"
+export GIT_LOOPY_DENY_TOOLS="env-tool"
+export GIT_LOOPY_DENY_SKILLS="env-skill"
 
-if ! run_entrypoint \
+if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/github-cap.stdout" \
-  "$temp_dir/github-cap.stderr" 2; then
-  fail "bounded discovery Run did not exit 0: $(<"$temp_dir/github-cap.stderr")"
+  "$temp_dir/github-cap.stderr" 2 --model cli-model --deny-tool cli-tool \
+  --deny-skill cli-skill; then
+  fail "bounded turn Run did not exit 0: $(<"$temp_dir/github-cap.stderr")"
 fi
+unset GIT_LOOPY_MODEL GIT_LOOPY_REASONING_EFFORT GIT_LOOPY_DENY_TOOLS \
+  GIT_LOOPY_DENY_SKILLS FAKE_COPILOT_COMMITS
 assert_equal "2" "$(<"$FAKE_GH_LIST_COUNT")" "Pool is rebuilt each Iteration"
+assert_equal "2" "$(<"$FAKE_COPILOT_CALLS")" \
+  "exactly one Copilot turn per non-empty Iteration"
 assert_equal \
   "2" \
   "$(jq -sc '[.[] | select(.type == "wrapper.afk_ready.collected")] | length' \
@@ -269,30 +403,163 @@ jq -se '
   and (.[-1].type == "wrapper.run.end")
   and (.[-1].outcome == "iteration_cap")
   and (.[-1].iterations_run == 2)
+  and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
 ' "$temp_dir/github-cap.stdout" >/dev/null ||
-  fail "bounded discovery events did not carry the filtered Pool"
+  fail "bounded turn events did not carry the filtered Pool"
 if grep -q '^issue view 42 ' "$FAKE_GH_LOG"; then
   fail "ineligible issue was enriched after the cheap discriminator pass"
 fi
 
+# The Iteration assembled the Python-reference minimum context: last-5 commits,
+# the filtered Pool block (with recent comments), and the resolved prompt body.
+cap_prompt="$(<"$FAKE_COPILOT_PROMPT")"
+assert_contains "$cap_prompt" "Previous commits: " "prompt carries the commits prefix"
+assert_contains "$cap_prompt" "initial commit" "prompt carries recent commit subjects"
+assert_contains "$cap_prompt" \
+  "=== Issue #41: Eligible [labels: ready-for-agent] ===" \
+  "prompt carries the filtered issue block"
+assert_contains "$cap_prompt" \
+  "--- Recent comments (newest first, up to 5) ---" \
+  "prompt carries recent comments"
+assert_contains "$cap_prompt" "please prioritise" "prompt carries comment bodies"
+assert_contains "$cap_prompt" "# Project prompt" \
+  "prompt carries the resolved shared prompt"
+
+# Resolved settings honor CLI-over-environment-over-default precedence.
+cap_flags="$(<"$FAKE_COPILOT_FLAGS")"
+assert_contains "$cap_flags" "--yolo" "turn passes --yolo"
+assert_contains "$cap_flags" "--no-color" "turn streams without color"
+grep -Fxq 'cli-model' "$FAKE_COPILOT_FLAGS" ||
+  fail "CLI --model did not override the environment model"
+if grep -Fxq 'env-model' "$FAKE_COPILOT_FLAGS"; then
+  fail "environment model leaked past the CLI override"
+fi
+grep -Fxq 'medium' "$FAKE_COPILOT_FLAGS" ||
+  fail "environment reasoning effort was not forwarded"
+grep -Fxq 'cli-tool' "$FAKE_COPILOT_FLAGS" ||
+  fail "CLI deny-tool not forwarded"
+grep -Fxq 'env-tool' "$FAKE_COPILOT_FLAGS" ||
+  fail "environment deny-tool not forwarded"
+grep -Fxq 'skill(cli-skill)' "$FAKE_COPILOT_FLAGS" ||
+  fail "CLI deny-skill not mapped onto --deny-tool skill(...)"
+grep -Fxq 'skill(env-skill)' "$FAKE_COPILOT_FLAGS" ||
+  fail "environment deny-skill not mapped onto --deny-tool skill(...)"
+
+# The agent's own output streams to stderr, never onto the JSONL Event stream.
+assert_contains "$(<"$temp_dir/github-cap.stderr")" \
+  "copilot agent stream marker" \
+  "agent output streams to stderr"
+[[ "$(<"$temp_dir/github-cap.stdout")" != *"copilot agent stream marker"* ]] ||
+  fail "agent output polluted the JSONL Event stream"
+mapfile -t cap_replay < <(find "$repo/.git-loopy/logs" -type f -name '*.jsonl')
+assert_equal "1" "${#cap_replay[@]}" "turn Run replay file count"
+cmp -s "$temp_dir/github-cap.stdout" "${cap_replay[0]}" ||
+  fail "turn Run stream and replay differ"
+
 rm -f "$FAKE_GH_LIST_COUNT"
-if ! run_entrypoint \
+setup_copilot_env "github-default"
+export FAKE_COPILOT_COMMITS=0
+export FAKE_GH_EMPTY_AFTER=1
+if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/github-default.stdout" \
   "$temp_dir/github-default.stderr"; then
-  fail "default discovery Run did not exit 0: $(<"$temp_dir/github-default.stderr")"
+  fail "unlimited turn Run did not exit 0: $(<"$temp_dir/github-default.stderr")"
 fi
-assert_equal "1" "$(<"$FAKE_GH_LIST_COUNT")" "default discovery count"
+unset FAKE_COPILOT_COMMITS FAKE_GH_EMPTY_AFTER
+assert_equal "2" "$(<"$FAKE_GH_LIST_COUNT")" \
+  "unlimited Run rebuilds the Pool until it empties"
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "unlimited Run runs one turn before its Pool empties"
 jq -se '
-  .[-1].type == "wrapper.run.end"
-  and .[-1].outcome == "pool_discovered"
-  and .[-1].iterations_run == 1
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues] == [[41], []])
+  and .[-1].type == "wrapper.run.end"
+  and .[-1].outcome == "empty_pool"
+  and .[-1].iterations_run == 2
 ' "$temp_dir/github-default.stdout" >/dev/null ||
-  fail "default non-empty discovery outcome drifted"
+  fail "unlimited turn Run did not terminate on an empty Pool"
+
+# A turn that produces new commits records one commit event per commit, in
+# git's newest-first order, and only closes the Iteration afterwards.
+repo="$temp_dir/agent-commits"
+fake_bin="$temp_dir/agent-commits-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/agent-commits-list.json"
+export FAKE_GH_LOG="$temp_dir/agent-commits-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/agent-commits-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/agent-commits-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "agent-commits"
+export FAKE_COPILOT_COMMITS=2
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/agent-commits.stdout" \
+  "$temp_dir/agent-commits.stderr" 1; then
+  fail "agent-commit turn Run did not exit 0: $(<"$temp_dir/agent-commits.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS
+expected_commit_seq="$(
+  jq -cn '[
+    "wrapper.run.start",
+    "wrapper.iteration.start",
+    "wrapper.afk_ready.collected",
+    "wrapper.commit.recorded",
+    "wrapper.commit.recorded",
+    "wrapper.iteration.end",
+    "wrapper.run.end"
+  ]'
+)"
+actual_commit_seq="$(jq -sc '[.[].type]' "$temp_dir/agent-commits.stdout")"
+assert_equal "$expected_commit_seq" "$actual_commit_seq" \
+  "commit events precede the Iteration end that closes their Iteration"
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
+    == ["agent: work 2", "agent: work 1"])
+  and ([.[] | select(.type == "wrapper.commit.recorded")]
+    | all(has("sha") and has("subject") and has("date")))
+  and ([.[] | select(.type == "wrapper.commit.recorded")]
+    | all(.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")))
+  and ([.[] | select(.type == "wrapper.commit.recorded")]
+    | all(.sha | test("^[0-9a-f]{40}$")))
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/agent-commits.stdout" >/dev/null ||
+  fail "new agent commits were not recorded as contract commit events"
+
+# A non-zero agent process warns and the Run still finishes cleanly
+# (warn-and-continue); the real exit status is preserved, not a pipeline's.
+repo="$temp_dir/agent-nonzero"
+fake_bin="$temp_dir/agent-nonzero-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/agent-nonzero-list.json"
+export FAKE_GH_LOG="$temp_dir/agent-nonzero-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/agent-nonzero-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/agent-nonzero-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "agent-nonzero"
+export FAKE_COPILOT_COMMITS=0
+export FAKE_COPILOT_EXIT=7
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/agent-nonzero.stdout" \
+  "$temp_dir/agent-nonzero.stderr" 1; then
+  fail "non-zero agent turn must not fail the Run: \
+$(<"$temp_dir/agent-nonzero.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS FAKE_COPILOT_EXIT
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "the turn ran despite its non-zero exit"
+assert_contains "$(<"$temp_dir/agent-nonzero.stderr")" \
+  "copilot turn exited with status 7" \
+  "non-zero agent exit warns to stderr"
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/agent-nonzero.stdout" >/dev/null ||
+  fail "non-zero agent turn drifted from warn-and-continue"
 
 repo="$temp_dir/large-github"
 fake_bin="$temp_dir/large-github-bin"
-make_repo "$repo"
-write_fake_tools "$fake_bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
 cat >"$temp_dir/large-github-list.json" <<'EOF'
 [
   {
@@ -324,22 +591,32 @@ export FAKE_GH_LOG="$temp_dir/large-github-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/large-github-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/large-github-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/large-github-views"
+setup_copilot_env "large-github"
 
-if ! run_entrypoint \
+if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/large-github.stdout" \
   "$temp_dir/large-github.stderr" 1; then
   fail "large GitHub issue Run failed: $(<"$temp_dir/large-github.stderr")"
 fi
+# The oversized body is collected through jq and files, never through argv, so
+# collection succeeds. The assembled prompt then exceeds the OS argv limit, so
+# the CLI turn cannot exec: it degrades to a warning and the Run still finishes.
 jq -se '
   ([.[] | select(.type == "wrapper.afk_ready.collected")][0].issues == [51])
   and .[-1].outcome == "iteration_cap"
+  and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
 ' "$temp_dir/large-github.stdout" >/dev/null ||
   fail "large GitHub issue was not collected"
+assert_contains "$(<"$temp_dir/large-github.stderr")" \
+  "copilot turn exited with status" \
+  "an oversized prompt degrades the turn without failing the Run"
+[[ ! -f "$temp_dir/large-github-copilot.calls" ]] ||
+  fail "copilot ran despite an oversized argv"
 
 repo="$temp_dir/prds"
 fake_bin="$temp_dir/prds-bin"
-make_repo "$repo"
-write_fake_tools "$fake_bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
 mkdir -p \
   "$repo/prds/alpha/done" \
   "$repo/prds/alpha-beta/done" \
@@ -389,8 +666,9 @@ export FAKE_GH_LIST_COUNT="$temp_dir/prds-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
 export GIT_LOOPY_ISSUE_SOURCE="github"
+setup_copilot_env "prds"
 
-if ! run_entrypoint \
+if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/prds.stdout" "$temp_dir/prds.stderr" \
   1 --issue-source prds; then
   fail "local-PRD discovery did not exit 0: $(<"$temp_dir/prds.stderr")"
@@ -411,6 +689,12 @@ jq -se '
 ' "$temp_dir/prds.stdout" >/dev/null ||
   fail "local-PRD collection or CLI precedence drifted"
 [[ ! -e "$FAKE_GH_LOG" ]] || fail "PRDs mode invoked gh"
+# The oversized `prds/large` body is collected through `$(<path)` / --rawfile,
+# never argv, so the Pool builds; the assembled prompt then exceeds the argv
+# limit and the turn degrades to a warning without failing the Run.
+assert_contains "$(<"$temp_dir/prds.stderr")" \
+  "copilot turn exited with status" \
+  "PRDs turn degrades gracefully on an oversized prompt"
 
 repo="$temp_dir/prds-root-link"
 fake_bin="$temp_dir/prds-root-link-bin"

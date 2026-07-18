@@ -600,6 +600,132 @@ git_loopy_collect_pool() {
   esac
 }
 
+git_loopy_head_sha() {
+  local repo_root="$1"
+  git -C "$repo_root" rev-parse HEAD 2>/dev/null
+}
+
+_git_loopy_log_z_to_json() {
+  # Reads NUL-delimited `git log -z --format=%H%n%s%n%ad%n%b` records on stdin
+  # and prints a compact JSON array of {sha, subject, date, body}, newest first
+  # (git's default log order). Mirrors the Python reference `_parse_log_z`.
+  local -a objs=()
+  local record
+  while IFS= read -r -d '' record || [[ -n "$record" ]]; do
+    record="${record#$'\n'}"
+    [[ -n "$record" ]] || continue
+
+    local sha subject date body rest
+    sha="${record%%$'\n'*}"
+    rest="${record#*$'\n'}"
+    subject="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    date="${rest%%$'\n'*}"
+    if [[ "$rest" == *$'\n'* ]]; then
+      body="${rest#*$'\n'}"
+    else
+      body=""
+    fi
+    while [[ "$body" == *$'\n' ]]; do
+      body="${body%$'\n'}"
+    done
+
+    objs+=("$(
+      jq -cn \
+        --arg sha "$sha" \
+        --arg subject "$subject" \
+        --arg date "$date" \
+        --arg body "$body" \
+        '{sha: $sha, subject: $subject, date: $date, body: $body}'
+    )") || return 1
+  done
+
+  _git_loopy_json_object_array ${objs[@]+"${objs[@]}"}
+}
+
+git_loopy_commits_between() {
+  local repo_root="$1"
+  local pre="$2"
+  local head="$3"
+  if [[ "$pre" == "$head" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  git -C "$repo_root" log \
+    --format=%H%n%s%n%ad%n%b --date=short -z "${pre}..${head}" 2>/dev/null |
+    _git_loopy_log_z_to_json
+}
+
+git_loopy_recent_commits_block() {
+  local repo_root="$1"
+  local commits_json
+  commits_json="$(
+    git -C "$repo_root" log \
+      -n5 --format=%H%n%s%n%ad%n%b --date=short -z 2>/dev/null |
+      _git_loopy_log_z_to_json
+  )" || commits_json='[]'
+
+  jq -r '
+    if length == 0
+    then "No commits found"
+    else
+      [ .[]
+        | .sha + "\n" + .date + "\n"
+          + (if .body == "" then .subject else .subject + "\n" + .body end)
+          + "---"
+      ]
+      | join("\n")
+    end
+  ' <<<"$commits_json"
+}
+
+git_loopy_render_pool_blocks() {
+  jq -r '
+    def render_issue:
+      "=== Issue #\(.number): \(.title) [labels: \((.labels // []) | join(", "))] ==="
+        as $header
+      | (.body // "") as $body
+      | ([(.comments // [])[]] | sort_by(.created_at) | reverse | .[0:5]) as $recent
+      | if ($recent | length) == 0
+        then "\($header)\n\($body)"
+        else "\($header)\n\($body)\n\n--- Recent comments (newest first, up to 5) ---\n"
+          + ([$recent[] | "[\(.created_at) @\(.author)] \(.body)"] | join("\n\n"))
+        end;
+    def render_prds:
+      "=== \(.ref) ===\n\(.body // "")";
+    [ .[] | if has("number") then render_issue else render_prds end ]
+    | join("\n\n")
+  ' <<<"$GIT_LOOPY_POOL_JSON"
+}
+
+git_loopy_build_prompt() {
+  local commits_block issues_block prompt_text
+  commits_block="$(git_loopy_recent_commits_block "$GIT_LOOPY_REPO_ROOT")" || return 1
+  issues_block="$(git_loopy_render_pool_blocks)" || return 1
+  prompt_text="$(<"$GIT_LOOPY_PROMPT_PATH")" || return 1
+  printf 'Previous commits: %s Issues: %s %s' \
+    "$commits_block" "$issues_block" "$prompt_text"
+}
+
+git_loopy_run_agent_turn() {
+  local prompt="$1"
+  local -a argv=(copilot --yolo -p "$prompt" --model "$GIT_LOOPY_MODEL" --no-color)
+  if [[ -n "$GIT_LOOPY_REASONING_EFFORT" ]]; then
+    argv+=(--reasoning-effort "$GIT_LOOPY_REASONING_EFFORT")
+  fi
+  local tool
+  for tool in ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; do
+    argv+=(--deny-tool "$tool")
+  done
+  local skill
+  for skill in ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}; do
+    argv+=(--deny-tool "skill($skill)")
+  done
+  # Stream the agent's own output to stderr so stdout stays the JSONL Event
+  # stream. No pipe, so $? is Copilot's real exit status (contract §4).
+  "${argv[@]}" 1>&2
+}
+
 git_loopy_run_discovery() {
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
 
@@ -678,26 +804,64 @@ git_loopy_run_discovery() {
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_AFK_READY_COLLECTED]}" \
       "$iteration" \
       "$collected_payload" || return 1
-    git_loopy_emit_event \
-      "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
-      "$iteration" || return 1
-    iterations_run="$iteration"
 
     local pool_length
     pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
     if [[ "$pool_length" == "0" ]]; then
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
+        "$iteration" || return 1
+      iterations_run="$iteration"
       outcome="empty_pool"
       break
     fi
 
-    # Issue #81 is the discovery tracer bullet. An unlimited invocation stops
-    # after proving a non-empty Pool; bounded invocations can exercise repeated
-    # collection until the configured cap. Issue #82 replaces this seam with
-    # the Copilot turn.
-    if ((GIT_LOOPY_MAX_ITERATIONS == 0)); then
-      outcome="pool_discovered"
-      break
+    # Assemble the same minimum context as the Python reference (last-5
+    # commits + the AFK-ready Pool blocks + the resolved shared prompt) and
+    # run exactly one streamed Copilot turn. The agent's own output goes to
+    # stderr so stdout stays the JSONL Event stream; the turn's real exit
+    # status is preserved and a non-zero turn warns without failing the Run.
+    local prompt
+    prompt="$(git_loopy_build_prompt)" || return 1
+
+    local pre_sha
+    pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1
+
+    local agent_status=0
+    git_loopy_run_agent_turn "$prompt" || agent_status=$?
+    if ((agent_status != 0)); then
+      printf 'git-loopy: copilot turn exited with status %s; continuing.\n' \
+        "$agent_status" >&2
     fi
+
+    local head_sha
+    head_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || head_sha="$pre_sha"
+    local commits_json
+    commits_json="$(
+      git_loopy_commits_between "$GIT_LOOPY_REPO_ROOT" "$pre_sha" "$head_sha"
+    )" || commits_json='[]'
+
+    # Emit one wrapper.commit.recorded per new commit in git's log order
+    # (newest first), carrying only the sha/subject/date the contract names.
+    local commit_count
+    commit_count="$(jq -r 'length' <<<"$commits_json")" || commit_count=0
+    local commit_index
+    for ((commit_index = 0; commit_index < commit_count; commit_index++)); do
+      local commit_payload
+      commit_payload="$(
+        jq -c --argjson i "$commit_index" '.[$i] | {date, sha, subject}' \
+          <<<"$commits_json"
+      )" || return 1
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_COMMIT_RECORDED]}" \
+        "$iteration" \
+        "$commit_payload" || return 1
+    done
+
+    git_loopy_emit_event \
+      "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
+      "$iteration" || return 1
+    iterations_run="$iteration"
   done
 
   local run_end_payload
@@ -717,7 +881,7 @@ git_loopy_run_discovery() {
     empty_pool)
       exit_code="$(git_loopy_exit_code_for "empty_pool")"
       ;;
-    iteration_cap | pool_discovered)
+    iteration_cap)
       exit_code="$(git_loopy_exit_code_for "iteration_cap")"
       ;;
   esac
