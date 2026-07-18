@@ -240,6 +240,15 @@ if ($env:FAKE_COPILOT_PLAN_DIR) {
         foreach ($MsgFile in ([IO.Directory]::GetFiles($CallDir, "*.msg") | Sort-Object)) {
             & git commit -q --allow-empty -F $MsgFile
         }
+        # An optional per-call `worktree.ps1` hook runs in the repo root so a
+        # scenario can leave the tree dirty/untracked/ignored exactly like a real
+        # agent that forgot to commit — the Checkpoint durability net (ADR-0004)
+        # is what captures it.
+        $WorktreeScript = Join-Path $CallDir "worktree.ps1"
+        if ([IO.File]::Exists($WorktreeScript)) {
+            Push-Location $env:FAKE_REPO_ROOT
+            try { & $WorktreeScript } finally { Pop-Location }
+        }
     }
 } else {
     $Commits = if ($env:FAKE_COPILOT_COMMITS) { [int]$env:FAKE_COPILOT_COMMITS } else { 0 }
@@ -328,7 +337,28 @@ function New-RealTestRepo {
     & git -C $Root init -q
     & git -C $Root config user.email "tester@example.invalid"
     & git -C $Root config user.name "Test Runner"
-    & git -C $Root commit -q --allow-empty -m "initial commit"
+    # A realistic project ignores the runner's own `.git-loopy/` artefacts, so the
+    # replay log never trips the Checkpoint dirty-check. Commit every scaffolding
+    # file too, so a clean-tree scenario starts genuinely clean.
+    [IO.File]::WriteAllText((Join-Path $Root ".gitignore"), ".git-loopy/`n")
+    & git -C $Root add -A
+    & git -C $Root commit -q -m "initial commit"
+}
+
+# Give a real repo a bare upstream so the ADR-0004 auto-push has somewhere to go.
+# `push -u origin HEAD` seeds the remote and sets the branch's upstream tracking
+# ref, so a later bare `git push` from the Orchestrator fast-forwards it.
+function Add-FakeRemote {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+        [Parameter(Mandatory)]
+        [string]$Remote
+    )
+
+    & git init --bare -q $Remote
+    & git -C $Root remote add origin $Remote
+    & git -C $Root push -q -u origin HEAD
 }
 
 function Set-CopilotEnv {
@@ -368,8 +398,12 @@ function Invoke-Entrypoint {
     $OriginalLocation = Get-Location
     try {
         $env:PATH = $FakeBin + [IO.Path]::PathSeparator + $OldPath
-        $env:HOME = Join-Path $Repo "home"
-        $env:XDG_CONFIG_HOME = Join-Path $Repo "xdg"
+        # Keep HOME/XDG outside the worktree: pwsh writes a startup-profile cache
+        # under HOME, which would otherwise show up as untracked work and trip the
+        # ADR-0004 Checkpoint dirty-check. Empty scratch dirs still isolate the
+        # global-prompt lookup exactly as before.
+        $env:HOME = "$Repo-home"
+        $env:XDG_CONFIG_HOME = "$Repo-xdg"
         $env:FAKE_REPO_ROOT = $Repo
         Set-Location $Repo
         & $Pwsh `
@@ -1366,6 +1400,282 @@ Read outside the worktree.
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
     ) "checkpoint-skip closed no issue"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # A dirty worktree the agent left uncommitted is captured in exactly one
+    # runner Checkpoint (ADR-0004): staged with `git add -A`, attributed to the
+    # Active issue, close-keyword-free, surfaced as wrapper.checkpoint.recorded
+    # (never a commit.recorded), and excluded from Strike progress (the Iteration
+    # still strikes). The Checkpoint is a new local commit, so the branch is
+    # auto-pushed to its upstream and the remote receives it.
+    $DirtyRepo = Join-Path $TempDir "checkpoint-dirty"
+    $DirtyBin = Join-Path $TempDir "checkpoint-dirty-bin"
+    $DirtyRemote = Join-Path $TempDir "checkpoint-dirty-remote.git"
+    New-RealTestRepo -Root $DirtyRepo
+    Add-FakeRemote -Root $DirtyRepo -Remote $DirtyRemote
+    Write-TurnTools -BinDir $DirtyBin
+    $DirtyList = Join-Path $TempDir "checkpoint-dirty-list.json"
+    [IO.File]::Copy($CapList, $DirtyList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "checkpoint-dirty-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "checkpoint-dirty-list.count"
+    $env:FAKE_GH_LIST_JSON = $DirtyList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "checkpoint-dirty-closed.log"
+    Set-CopilotEnv -Prefix "checkpoint-dirty"
+    $DirtyPlan = Join-Path $TempDir "checkpoint-dirty-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $DirtyPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $DirtyPlan "1/worktree.ps1"),
+        "Set-Content -Path 'wip.txt' -Value 'work in progress the agent forgot to commit'`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $DirtyPlan
+    $DirtyStdout = Join-Path $TempDir "checkpoint-dirty.stdout"
+    $DirtyStderr = Join-Path $TempDir "checkpoint-dirty.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $DirtyRepo `
+        -FakeBin $DirtyBin `
+        -StdoutPath $DirtyStdout `
+        -StderrPath $DirtyStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "checkpoint-dirty Run exit"
+    $DirtyEvents = Read-Events -Path $DirtyStdout
+    $DirtyCheckpoints = @(
+        $DirtyEvents | Where-Object { $_["type"] -ceq "wrapper.checkpoint.recorded" }
+    )
+    Assert-Equal 1 $DirtyCheckpoints.Count `
+        "a dirty worktree records exactly one Checkpoint"
+    Assert-Equal 41 $DirtyCheckpoints[0]["issue"] `
+        "the Checkpoint is attributed to the Active issue"
+    Assert-True (
+        -not [string]::IsNullOrEmpty([string]$DirtyCheckpoints[0]["sha"])
+    ) "the Checkpoint records its SHA"
+    Assert-Equal 0 (
+        @($DirtyEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "the Checkpoint is not recorded as an agent commit"
+    Assert-Equal 1 (
+        @($DirtyEvents | Where-Object { $_["type"] -ceq "wrapper.push.recorded" }).Count
+    ) "the Checkpoint is auto-pushed"
+    $DirtyStrikes = @(
+        $DirtyEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 1 $DirtyStrikes.Count "a Checkpoint-only Iteration makes no progress"
+    Assert-Equal 1 $DirtyStrikes[0]["strikes"] "the Checkpoint Iteration records Strike 1"
+    Assert-Equal "warn" $DirtyStrikes[0]["outcome"] "the Checkpoint Strike warns"
+    Assert-Equal 0 (
+        @($DirtyEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
+    ) "the Checkpoint closes no issue via keyword"
+    Assert-Equal "iteration_cap" $DirtyEvents[-1]["outcome"] "checkpoint-dirty Run outcome"
+    $DirtySha = [string]$DirtyCheckpoints[0]["sha"]
+    $DirtyMessage = (& git -C $DirtyRepo show -s --format=%B $DirtySha) -join "`n"
+    Assert-Contains $DirtyMessage `
+        "Checkpoint: capture work-in-progress for issue 41" `
+        "the Checkpoint subject is attributed to the Active issue"
+    Assert-Contains $DirtyMessage "GitLoopy-Checkpoint: 41" `
+        "the Checkpoint carries the runner trailer"
+    Assert-True (
+        -not [regex]::IsMatch(
+            $DirtyMessage,
+            '(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)\s+#\d+'
+        )
+    ) "the Checkpoint message matches no closing keyword"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
+    ) "the Checkpoint closed no issue"
+    Assert-Equal "" (
+        (& git -C $DirtyRepo status --porcelain) -join "`n"
+    ) "the worktree is clean after the Checkpoint"
+    Assert-Contains (
+        (& git -C $DirtyRepo show "${DirtySha}:wip.txt") -join "`n"
+    ) "work in progress" "the Checkpoint captured the uncommitted file"
+    $DirtyBranch = ([string](& git -C $DirtyRepo rev-parse --abbrev-ref HEAD)).Trim()
+    Assert-Equal (
+        ([string](& git -C $DirtyRepo rev-parse HEAD)).Trim()
+    ) (
+        ([string](& git --git-dir=$DirtyRemote rev-parse "refs/heads/$DirtyBranch")).Trim()
+    ) "the push landed the Checkpoint on the remote"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # A clean tree with one agent commit makes no Checkpoint but still
+    # auto-pushes: the commit is recorded, no checkpoint event fires,
+    # wrapper.push.recorded lands, and the remote receives the agent commit.
+    $PushRepo = Join-Path $TempDir "agent-commit-push"
+    $PushBin = Join-Path $TempDir "agent-commit-push-bin"
+    $PushRemote = Join-Path $TempDir "agent-commit-push-remote.git"
+    New-RealTestRepo -Root $PushRepo
+    Add-FakeRemote -Root $PushRepo -Remote $PushRemote
+    Write-TurnTools -BinDir $PushBin
+    $PushList = Join-Path $TempDir "agent-commit-push-list.json"
+    [IO.File]::Copy($CapList, $PushList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-commit-push-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-commit-push-list.count"
+    $env:FAKE_GH_LIST_JSON = $PushList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "agent-commit-push-closed.log"
+    Set-CopilotEnv -Prefix "agent-commit-push"
+    $PushPlan = Join-Path $TempDir "agent-commit-push-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $PushPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $PushPlan "1/1.msg"),
+        "feat: real work`n`nRefs #41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $PushPlan
+    $PushStdout = Join-Path $TempDir "agent-commit-push.stdout"
+    $PushStderr = Join-Path $TempDir "agent-commit-push.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $PushRepo `
+        -FakeBin $PushBin `
+        -StdoutPath $PushStdout `
+        -StderrPath $PushStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "agent-commit-push Run exit"
+    $PushEvents = Read-Events -Path $PushStdout
+    Assert-Equal "feat: real work" (
+        [string]::Join(",", @(
+            $PushEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" } |
+                ForEach-Object { $_["subject"] }
+        ))
+    ) "the agent commit is recorded"
+    Assert-Equal 0 (
+        @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.checkpoint.recorded" }).Count
+    ) "a clean tree records no Checkpoint"
+    Assert-Equal 1 (
+        @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.push.recorded" }).Count
+    ) "the agent commit is auto-pushed"
+    Assert-Equal 0 (
+        @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }).Count
+    ) "a progress Iteration records no Strike"
+    Assert-Equal 0 (
+        @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
+    ) "a Refs-only commit closes no issue"
+    Assert-Equal "iteration_cap" $PushEvents[-1]["outcome"] "agent-commit-push Run outcome"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
+    ) "a Refs-only commit closed no issue"
+    $PushBranch = ([string](& git -C $PushRepo rev-parse --abbrev-ref HEAD)).Trim()
+    Assert-Equal (
+        ([string](& git -C $PushRepo rev-parse HEAD)).Trim()
+    ) (
+        ([string](& git --git-dir=$PushRemote rev-parse "refs/heads/$PushBranch")).Trim()
+    ) "the push landed the agent commit on the remote"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # Ignored files are never captured: the agent leaves only a .gitignore-matched
+    # artefact, so the tree is clean under normal ignore rules — no Checkpoint, no
+    # push, and (no progress) a Strike. The ignored file stays on disk,
+    # uncommitted.
+    $IgnoreRepo = Join-Path $TempDir "ignored-clean"
+    $IgnoreBin = Join-Path $TempDir "ignored-clean-bin"
+    New-RealTestRepo -Root $IgnoreRepo
+    [IO.File]::AppendAllText((Join-Path $IgnoreRepo ".gitignore"), "*.ignored`n")
+    & git -C $IgnoreRepo commit -q -am "ignore scratch artefacts"
+    Write-TurnTools -BinDir $IgnoreBin
+    $IgnoreList = Join-Path $TempDir "ignored-clean-list.json"
+    [IO.File]::Copy($CapList, $IgnoreList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "ignored-clean-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "ignored-clean-list.count"
+    $env:FAKE_GH_LIST_JSON = $IgnoreList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "ignored-clean-closed.log"
+    Set-CopilotEnv -Prefix "ignored-clean"
+    $IgnorePlan = Join-Path $TempDir "ignored-clean-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $IgnorePlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $IgnorePlan "1/worktree.ps1"),
+        "Set-Content -Path 'scratch.ignored' -Value 'ignored noise'`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $IgnorePlan
+    $IgnorePreHead = ([string](& git -C $IgnoreRepo rev-parse HEAD)).Trim()
+    $IgnoreStdout = Join-Path $TempDir "ignored-clean.stdout"
+    $IgnoreStderr = Join-Path $TempDir "ignored-clean.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $IgnoreRepo `
+        -FakeBin $IgnoreBin `
+        -StdoutPath $IgnoreStdout `
+        -StderrPath $IgnoreStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "ignored-clean Run exit"
+    $IgnoreEvents = Read-Events -Path $IgnoreStdout
+    Assert-Equal 0 (
+        @($IgnoreEvents | Where-Object { $_["type"] -ceq "wrapper.checkpoint.recorded" }).Count
+    ) "an ignored-only worktree records no Checkpoint"
+    Assert-Equal 0 (
+        @($IgnoreEvents | Where-Object { $_["type"] -ceq "wrapper.push.recorded" }).Count
+    ) "an ignored-only Iteration pushes nothing"
+    Assert-Equal 0 (
+        @($IgnoreEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "an ignored-only Iteration records no commit"
+    $IgnoreStrikes = @(
+        $IgnoreEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 1 $IgnoreStrikes.Count "an ignored-only Iteration makes no progress"
+    Assert-Equal 1 $IgnoreStrikes[0]["strikes"] "the ignored-only Iteration records Strike 1"
+    Assert-Equal "warn" $IgnoreStrikes[0]["outcome"] "the ignored-only Strike warns"
+    Assert-Equal "iteration_cap" $IgnoreEvents[-1]["outcome"] "ignored-clean Run outcome"
+    Assert-Equal $IgnorePreHead (
+        ([string](& git -C $IgnoreRepo rev-parse HEAD)).Trim()
+    ) "no commit was authored for an ignored-only change"
+    Assert-True (
+        [IO.File]::Exists((Join-Path $IgnoreRepo "scratch.ignored"))
+    ) "the ignored artefact stays on disk"
+    Assert-Equal "" (
+        (& git -C $IgnoreRepo ls-files scratch.ignored) -join "`n"
+    ) "the ignored artefact was never committed"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # A local-only repo (no upstream) keeps working: the agent commit is recorded,
+    # the auto-push fails and warns without aborting, no wrapper.push.recorded
+    # lands, and the Run still exits 0.
+    $LocalRepo = Join-Path $TempDir "local-only"
+    $LocalBin = Join-Path $TempDir "local-only-bin"
+    New-RealTestRepo -Root $LocalRepo
+    Write-TurnTools -BinDir $LocalBin
+    $LocalList = Join-Path $TempDir "local-only-list.json"
+    [IO.File]::Copy($CapList, $LocalList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "local-only-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "local-only-list.count"
+    $env:FAKE_GH_LIST_JSON = $LocalList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "local-only-closed.log"
+    Set-CopilotEnv -Prefix "local-only"
+    $LocalPlan = Join-Path $TempDir "local-only-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $LocalPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $LocalPlan "1/1.msg"),
+        "feat: local work`n`nRefs #41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $LocalPlan
+    $LocalStdout = Join-Path $TempDir "local-only.stdout"
+    $LocalStderr = Join-Path $TempDir "local-only.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $LocalRepo `
+        -FakeBin $LocalBin `
+        -StdoutPath $LocalStdout `
+        -StderrPath $LocalStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    Assert-Equal 0 $Status "local-only Run exit"
+    $LocalEvents = Read-Events -Path $LocalStdout
+    Assert-Equal "feat: local work" (
+        [string]::Join(",", @(
+            $LocalEvents |
+                Where-Object { $_["type"] -ceq "wrapper.commit.recorded" } |
+                ForEach-Object { $_["subject"] }
+        ))
+    ) "the local agent commit is recorded"
+    Assert-Equal 0 (
+        @($LocalEvents | Where-Object { $_["type"] -ceq "wrapper.push.recorded" }).Count
+    ) "a failed push records no push event"
+    Assert-Equal 0 (
+        @($LocalEvents | Where-Object { $_["type"] -ceq "wrapper.checkpoint.recorded" }).Count
+    ) "a clean local-only tree records no Checkpoint"
+    Assert-Equal "iteration_cap" $LocalEvents[-1]["outcome"] "local-only Run outcome"
+    Assert-Contains (
+        [IO.File]::ReadAllText($LocalStderr)
+    ) "auto-push failed" "the local-only push failure warned"
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
 }
 finally {

@@ -159,6 +159,13 @@ if [[ -n "${FAKE_COPILOT_PLAN_DIR:-}" ]]; then
       [[ -e "$msg_file" ]] || continue
       git commit -q --allow-empty -F "$msg_file"
     done
+    # An optional per-call `worktree.sh` hook runs in the repo root so a scenario
+    # can leave the tree dirty/untracked/ignored exactly like a real agent that
+    # forgot to commit — the Checkpoint durability net (ADR-0004) is what
+    # captures it.
+    if [[ -f "$call_dir/worktree.sh" ]]; then
+      (cd "$FAKE_REPO_ROOT" && bash "$call_dir/worktree.sh")
+    fi
   fi
 else
   commits="${FAKE_COPILOT_COMMITS:-0}"
@@ -224,7 +231,22 @@ make_real_repo() {
   git -C "$root" init -q
   git -C "$root" config user.email tester@example.invalid
   git -C "$root" config user.name "Test Runner"
-  git -C "$root" commit -q --allow-empty -m "initial commit"
+  # A realistic project ignores the runner's own `.git-loopy/` artefacts, so the
+  # replay log never trips the Checkpoint dirty-check.
+  printf '.git-loopy/\n' >"$root/.gitignore"
+  git -C "$root" add -A
+  git -C "$root" commit -q -m "initial commit"
+}
+
+# Give a real repo a bare upstream so the ADR-0004 auto-push has somewhere to go.
+# `push -u origin HEAD` seeds the remote and sets the branch's upstream tracking
+# ref, so a later bare `git push` from the Orchestrator fast-forwards it.
+add_fake_remote() {
+  local root="$1"
+  local remote="$2"
+  git init --bare -q "$remote"
+  git -C "$root" remote add origin "$remote"
+  git -C "$root" push -q -u origin HEAD
 }
 
 run_turn_entrypoint() {
@@ -1037,5 +1059,202 @@ jq -se '
   fail "a runner Checkpoint was counted toward agent progress"
 [[ ! -e "$temp_dir/checkpoint-skip-closed.log" ]] ||
   fail "checkpoint-skip closed an issue"
+
+# A dirty worktree the agent left uncommitted is captured in exactly one runner
+# Checkpoint (ADR-0004): staged with `git add -A`, attributed to the Active
+# issue, close-keyword-free, surfaced as wrapper.checkpoint.recorded (never a
+# commit.recorded), and excluded from Strike progress (the Iteration still
+# strikes). The Checkpoint is a new local commit, so the branch is auto-pushed
+# to its upstream and the remote receives it.
+repo="$temp_dir/checkpoint-dirty"
+fake_bin="$temp_dir/checkpoint-dirty-bin"
+remote="$temp_dir/checkpoint-dirty-remote.git"
+make_real_repo "$repo"
+add_fake_remote "$repo" "$remote"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/checkpoint-dirty-list.json"
+export FAKE_GH_LOG="$temp_dir/checkpoint-dirty-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/checkpoint-dirty-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/checkpoint-dirty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/checkpoint-dirty-closed.log"
+setup_copilot_env "checkpoint-dirty"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/checkpoint-dirty-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/worktree.sh" <<'EOF'
+printf 'work in progress the agent forgot to commit\n' >wip.txt
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/checkpoint-dirty.stdout" \
+  "$temp_dir/checkpoint-dirty.stderr" 1; then
+  fail "checkpoint-dirty Run did not exit 0: $(<"$temp_dir/checkpoint-dirty.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.checkpoint.recorded")] | length == 1)
+  and ([.[] | select(.type == "wrapper.checkpoint.recorded")][0]
+    | .issue == 41 and (.sha | type == "string") and (.sha | length > 0))
+  and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.push.recorded")] | length == 1)
+  and ([.[] | select(.type == "wrapper.strike")]
+    | length == 1 and all(.strikes == 1 and .outcome == "warn"))
+  and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/checkpoint-dirty.stdout" >/dev/null ||
+  fail "a dirty worktree was not captured in exactly one pushed Checkpoint"
+checkpoint_sha="$(jq -sr '[.[] | select(.type == "wrapper.checkpoint.recorded")][0]
+  | .sha' "$temp_dir/checkpoint-dirty.stdout")"
+checkpoint_msg="$(git -C "$repo" show -s --format=%B "$checkpoint_sha")"
+assert_contains "$checkpoint_msg" \
+  "Checkpoint: capture work-in-progress for issue 41" \
+  "the Checkpoint subject is attributed to the Active issue"
+assert_contains "$checkpoint_msg" "GitLoopy-Checkpoint: 41" \
+  "the Checkpoint carries the runner trailer"
+if printf '%s' "$checkpoint_msg" |
+  grep -iEq '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+'; then
+  fail "the Checkpoint message matched a closing keyword"
+fi
+[[ ! -e "$temp_dir/checkpoint-dirty-closed.log" ]] ||
+  fail "the Checkpoint closed an issue"
+assert_equal "" "$(git -C "$repo" status --porcelain)" \
+  "the worktree is clean after the Checkpoint"
+assert_contains \
+  "$(git -C "$repo" show "$checkpoint_sha":wip.txt)" \
+  "work in progress" "the Checkpoint captured the uncommitted file"
+branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
+assert_equal \
+  "$(git -C "$repo" rev-parse HEAD)" \
+  "$(git --git-dir="$remote" rev-parse "refs/heads/$branch")" \
+  "the push landed the Checkpoint on the remote"
+
+# A clean tree with one agent commit makes no Checkpoint but still auto-pushes:
+# the commit is recorded, no checkpoint event fires, wrapper.push.recorded lands,
+# and the remote receives the agent commit.
+repo="$temp_dir/agent-commit-push"
+fake_bin="$temp_dir/agent-commit-push-bin"
+remote="$temp_dir/agent-commit-push-remote.git"
+make_real_repo "$repo"
+add_fake_remote "$repo" "$remote"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/agent-commit-push-list.json"
+export FAKE_GH_LOG="$temp_dir/agent-commit-push-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/agent-commit-push-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/agent-commit-push-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/agent-commit-push-closed.log"
+setup_copilot_env "agent-commit-push"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/agent-commit-push-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+feat: real work
+
+Refs #41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/agent-commit-push.stdout" \
+  "$temp_dir/agent-commit-push.stderr" 1; then
+  fail "agent-commit-push Run did not exit 0: \
+$(<"$temp_dir/agent-commit-push.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
+    == ["feat: real work"])
+  and ([.[] | select(.type == "wrapper.checkpoint.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.push.recorded")] | length == 1)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/agent-commit-push.stdout" >/dev/null ||
+  fail "a clean agent commit did not push without a Checkpoint"
+[[ ! -e "$temp_dir/agent-commit-push-closed.log" ]] ||
+  fail "a Refs-only commit closed an issue"
+branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
+assert_equal \
+  "$(git -C "$repo" rev-parse HEAD)" \
+  "$(git --git-dir="$remote" rev-parse "refs/heads/$branch")" \
+  "the push landed the agent commit on the remote"
+
+# Ignored files are never captured: the agent leaves only a .gitignore-matched
+# artefact, so the tree is clean under normal ignore rules — no Checkpoint, no
+# push, and (no progress) a Strike. The ignored file stays on disk, uncommitted.
+repo="$temp_dir/ignored-clean"
+fake_bin="$temp_dir/ignored-clean-bin"
+make_real_repo "$repo"
+printf '*.ignored\n' >>"$repo/.gitignore"
+git -C "$repo" commit -q -am "ignore scratch artefacts"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/ignored-clean-list.json"
+export FAKE_GH_LOG="$temp_dir/ignored-clean-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/ignored-clean-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/ignored-clean-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/ignored-clean-closed.log"
+setup_copilot_env "ignored-clean"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/ignored-clean-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/worktree.sh" <<'EOF'
+printf 'ignored noise\n' >scratch.ignored
+EOF
+pre_head="$(git -C "$repo" rev-parse HEAD)"
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/ignored-clean.stdout" \
+  "$temp_dir/ignored-clean.stderr" 1; then
+  fail "ignored-clean Run did not exit 0: $(<"$temp_dir/ignored-clean.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.checkpoint.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.push.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")]
+    | length == 1 and all(.strikes == 1 and .outcome == "warn"))
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/ignored-clean.stdout" >/dev/null ||
+  fail "an ignored-only worktree was not treated as clean"
+assert_equal "$pre_head" "$(git -C "$repo" rev-parse HEAD)" \
+  "no commit was authored for an ignored-only change"
+[[ -f "$repo/scratch.ignored" ]] ||
+  fail "the ignored artefact was removed"
+assert_equal "" "$(git -C "$repo" ls-files scratch.ignored)" \
+  "the ignored artefact was never committed"
+
+# A local-only repo (no upstream) keeps working: the agent commit is recorded,
+# the auto-push fails and warns without aborting, no wrapper.push.recorded lands,
+# and the Run still exits 0.
+repo="$temp_dir/local-only"
+fake_bin="$temp_dir/local-only-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/local-only-list.json"
+export FAKE_GH_LOG="$temp_dir/local-only-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/local-only-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/local-only-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+export FAKE_GH_CLOSED="$temp_dir/local-only-closed.log"
+setup_copilot_env "local-only"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/local-only-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+feat: local work
+
+Refs #41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/local-only.stdout" \
+  "$temp_dir/local-only.stderr" 1; then
+  fail "local-only Run did not exit 0: $(<"$temp_dir/local-only.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
+    == ["feat: local work"])
+  and ([.[] | select(.type == "wrapper.push.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.checkpoint.recorded")] | length == 0)
+  and .[-1].outcome == "iteration_cap"
+' "$temp_dir/local-only.stdout" >/dev/null ||
+  fail "a local-only push failure did not degrade gracefully"
+assert_contains "$(<"$temp_dir/local-only.stderr")" \
+  "auto-push failed" "the local-only push failure warned"
 
 printf 'shell Orchestrator boundary: ok\n'

@@ -477,6 +477,20 @@ function Step-GitLoopyStrikeState {
     return [pscustomobject]@{ Strikes = $Strikes; Outcome = $Outcome }
 }
 
+# Runner Checkpoint message contract (ADR-0004), kept in lockstep with the
+# Python reference `checkpoint_message` / `CHECKPOINT_TRAILER_KEY` and the shell
+# port. The trailer key tags a runner-authored Checkpoint so it is
+# distinguishable from an agent commit and excluded from Strike progress; its
+# value is the active issue ref (or `unattributed`) — deliberately NOT `#N`, so a
+# Checkpoint never opens a GitHub cross-reference. The body is byte-identical to
+# the reference so the whole family authors the same close-keyword-free message.
+$script:GitLoopyCheckpointTrailerKey = "GitLoopy-Checkpoint"
+$script:GitLoopyCheckpointBody = (
+    "Runner-authored Checkpoint (ADR-0004): staged the worktree the agent left",
+    "uncommitted so the next iteration starts on a clean tree and the work can",
+    "reach the remote. Not an agent commit; excluded from Strike progress."
+) -join "`n"
+
 function Test-GitLoopyCheckpointMessage {
     [CmdletBinding()]
     param(
@@ -490,13 +504,42 @@ function Test-GitLoopyCheckpointMessage {
     if ([string]::IsNullOrEmpty($Message)) {
         return $false
     }
-    $Prefix = "gitloopy-checkpoint:"
+    $Prefix = ($script:GitLoopyCheckpointTrailerKey + ":").ToLowerInvariant()
     foreach ($Line in [regex]::Split($Message, "\r\n|\r|\n")) {
         if ($Line.Trim().ToLowerInvariant().StartsWith($Prefix)) {
             return $true
         }
     }
     return $false
+}
+
+function Get-GitLoopyCheckpointMessage {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$ActiveRef
+    )
+
+    # Build a runner Checkpoint commit message (ADR-0004) attributed to
+    # $ActiveRef — an issue number, a PRDs/PR string ref, or empty for an
+    # unattributed Checkpoint. The message is guaranteed close-keyword-free (its
+    # subject/body never match the close-keyword pattern) and carries the
+    # `GitLoopy-Checkpoint:` trailer, mirroring the Python reference and the shell
+    # port byte-for-byte.
+    if ([string]::IsNullOrEmpty($ActiveRef)) {
+        $Subject = "Checkpoint: capture uncommitted work-in-progress"
+        $Attribution = "unattributed"
+    }
+    elseif ($ActiveRef -match '^[0-9]+$') {
+        $Subject = "Checkpoint: capture work-in-progress for issue $ActiveRef"
+        $Attribution = $ActiveRef
+    }
+    else {
+        $Subject = "Checkpoint: capture work-in-progress for $ActiveRef"
+        $Attribution = $ActiveRef
+    }
+    $Trailer = "$($script:GitLoopyCheckpointTrailerKey): $Attribution"
+    return "$Subject`n`n$($script:GitLoopyCheckpointBody)`n`n$Trailer"
 }
 
 function Resolve-GitLoopyPrompt {
@@ -968,6 +1011,83 @@ function Get-GitLoopyCommitsInRange {
     return (ConvertFrom-GitLoopyLogOutput -Lines $Lines)
 }
 
+function Test-GitLoopyWorktreeDirty {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    # Report whether the worktree carries any uncommitted tracked change OR any
+    # untracked, non-ignored file — the ADR-0004 Checkpoint trigger. A single
+    # `git status --porcelain` reports both (modified/staged tracked entries plus
+    # `??` untracked ones) while honouring `.gitignore`, so it is the shell/Python
+    # equivalent of `is_dirty` OR `has_untracked`. A git failure (e.g. not a
+    # repository) reports "not dirty" so the caller skips the Checkpoint rather
+    # than aborting.
+    $Output = @(& git -C $RepoRoot status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return $false
+    }
+    foreach ($Line in $Output) {
+        if (-not [string]::IsNullOrEmpty($Line)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-GitLoopyStageAll {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    # Stage every change (`git add -A`, honouring `.gitignore`); the user's git
+    # config stays the single source of truth (no `--force`, no excludes
+    # override). Returns whether the staging succeeded.
+    & git -C $RepoRoot add -A 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Invoke-GitLoopyCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    # Commit the staged index with $Message and return the new HEAD SHA. A plain
+    # `git commit -m` keeps the user's identity/hooks/signing config
+    # authoritative. An empty index (nothing staged) exits non-zero, which the
+    # caller treats as a skipped Checkpoint rather than an abort ($null return).
+    & git -C $RepoRoot commit -m $Message 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+    return Get-GitLoopyHeadSha -RepoRoot $RepoRoot
+}
+
+function Invoke-GitLoopyPush {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    # Push the current branch to its configured upstream. A bare `git push` (no
+    # ref args, no `--force`) keeps `push.default`, the branch's upstream tracking
+    # ref, and credential helpers authoritative. Returns whether the push
+    # succeeded; a missing upstream, an unreachable/missing remote, an auth
+    # failure, or a non-fast-forward rejection all report failure without
+    # throwing, and the caller treats every failure as non-fatal.
+    & git -C $RepoRoot push 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Get-GitLoopyRecentCommitsBlock {
     [CmdletBinding()]
     param(
@@ -1094,6 +1214,12 @@ function Invoke-GitLoopyAgentTurn {
     }
 }
 
+# The first Pool issue this Iteration actually closed (OPEN -> closed), in
+# encounter order — the equivalent of the Python reference's `completions[0].ref`
+# and the strongest Checkpoint-attribution signal, so `Get-GitLoopyActiveRef`
+# consults it first. $null when nothing closed this Iteration.
+$script:GitLoopyFirstClosedRef = $null
+
 function Invoke-GitLoopyCloseOneIssue {
     [CmdletBinding()]
     param(
@@ -1181,6 +1307,9 @@ function Invoke-GitLoopyCloseOneIssue {
             sha = $RefShas[0]
             shas = [string[]]$RefShas.ToArray()
         })
+    if ($null -eq $script:GitLoopyFirstClosedRef) {
+        $script:GitLoopyFirstClosedRef = $Issue
+    }
     return $true
 }
 
@@ -1205,6 +1334,7 @@ function Invoke-GitLoopyAutoClose {
     # Iteration's new commits. Only the GitHub source auto-closes (the PRDs agent
     # owns its own archival). Repeated references collapse to at most one closure
     # via the first-encounter dedup. Returns the number of issues closed.
+    $script:GitLoopyFirstClosedRef = $null
     if ($Config.IssueSource -cne "github") {
         return 0
     }
@@ -1242,6 +1372,189 @@ function Invoke-GitLoopyAutoClose {
     return $Closures
 }
 
+function Get-GitLoopyActiveRef {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    # Best-effort attribution of the Iteration's Active issue for a Checkpoint,
+    # mirroring the Python reference `_infer_active_ref` and the shell port. In
+    # priority order: the first Pool issue this Iteration actually auto-closed (the
+    # strongest signal of what was worked, `completions[0].ref` in the reference);
+    # then an actionable Pool-issue close-ref named in this Iteration's agent
+    # commits (the agent named the issue it worked, even if the closure did not
+    # fire); then a single-member Pool (the only candidate); else nothing
+    # (unattributed). Returns the ref (an issue number or a PRDs/PR string) or
+    # $null.
+    if ($null -ne $script:GitLoopyFirstClosedRef) {
+        return [string]$script:GitLoopyFirstClosedRef
+    }
+    $Descriptors = @(
+        foreach ($Item in @($Pool)) {
+            if ($Item -is [Collections.IDictionary] -and $Item.Contains("number")) {
+                [ordered]@{ ref = [int]$Item["number"]; kind = "issue" }
+            }
+        }
+    )
+    $Concatenated = @(
+        foreach ($Commit in @($Commits)) {
+            $Body = [string]$Commit["body"]
+            $Subject = [string]$Commit["subject"]
+            if ([string]::IsNullOrEmpty($Body)) { $Subject } else { "$Subject`n$Body" }
+        }
+    ) -join "`n"
+    $Actionable = Get-GitLoopyActionableCloseReferences `
+        -Messages $Concatenated `
+        -Pool $Descriptors
+    if (@($Actionable).Count -gt 0) {
+        return [string]@($Actionable)[0]
+    }
+    if (@($Pool).Count -eq 1) {
+        $Only = @($Pool)[0]
+        if ($Only.Contains("number")) {
+            return [string]$Only["number"]
+        }
+        return [string]$Only["ref"]
+    }
+    return $null
+}
+
+function Invoke-GitLoopyMaybeCheckpoint {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    # ADR-0004 durability net, first half. If the worktree carries any
+    # uncommitted or untracked change, stage it all and capture it in exactly one
+    # close-keyword-free Checkpoint attributed to the Active issue, then emit
+    # `wrapper.checkpoint.recorded` ({issue, sha}). Runs AFTER the agent-commit
+    # accounting and BEFORE the Strike decision, so the Checkpoint is structurally
+    # excluded from both the commit tally (it is never a `wrapper.commit.recorded`)
+    # and Strike progress. Returns the new SHA, or $null when the tree was clean
+    # or the Checkpoint could not be made. Every failure warns and continues, so a
+    # clean tree, a non-repo, and a local-only repo all complete normally.
+    if (-not (Test-GitLoopyWorktreeDirty -RepoRoot $RepoRoot)) {
+        return $null
+    }
+    $ActiveRef = Get-GitLoopyActiveRef -Pool $Pool -Commits $Commits
+    $Message = Get-GitLoopyCheckpointMessage -ActiveRef $ActiveRef
+    if (-not (Invoke-GitLoopyStageAll -RepoRoot $RepoRoot)) {
+        [Console]::Error.WriteLine(
+            "git-loopy: checkpoint staging failed; continuing without it."
+        )
+        return $null
+    }
+    $Sha = Invoke-GitLoopyCommit -RepoRoot $RepoRoot -Message $Message
+    if ($null -eq $Sha) {
+        [Console]::Error.WriteLine(
+            "git-loopy: checkpoint commit failed; continuing without it."
+        )
+        return $null
+    }
+    $IssueValue = if ([string]::IsNullOrEmpty($ActiveRef)) {
+        $null
+    }
+    elseif ($ActiveRef -match '^[0-9]+$') {
+        [int]$ActiveRef
+    }
+    else {
+        $ActiveRef
+    }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_CHECKPOINT_RECORDED"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            issue = $IssueValue
+            sha = $Sha
+        })
+    return $Sha
+}
+
+function Invoke-GitLoopyMaybePush {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [int]$Iteration,
+        [int]$NewCommitCount,
+        [AllowNull()]
+        [string]$CheckpointSha
+    )
+
+    # ADR-0004 durability net, second half. Whenever this Iteration produced any
+    # new local commit — an agent commit and/or the Checkpoint just authored —
+    # push the current branch to its configured upstream and emit
+    # `wrapper.push.recorded` on success. A missing upstream, an
+    # unreachable/missing remote, an auth failure, or a non-fast-forward rejection
+    # warns but never aborts (a local-only repo completes normally) and — like a
+    # failed Checkpoint — emits no event, so replay records only pushes that
+    # actually landed. An Iteration with no new local commit skips the push.
+    if ($NewCommitCount -eq 0 -and [string]::IsNullOrEmpty($CheckpointSha)) {
+        return
+    }
+    if (-not (Invoke-GitLoopyPush -RepoRoot $RepoRoot)) {
+        [Console]::Error.WriteLine(
+            "git-loopy: auto-push failed; continuing (work stays local)."
+        )
+        return
+    }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_PUSH_RECORDED"] `
+        -Iteration $Iteration
+}
+
+function Set-GitLoopyGitignoreEntry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepoRoot
+    )
+
+    # Idempotently keep `.git-loopy/` in the repo's `.gitignore` so the runner's
+    # own replay/summary artefacts never trip the Checkpoint dirty-check or get
+    # swept into a Checkpoint by `git add -A`. Mirrors the Python reference
+    # `ensure_gitignore_entry` and the shell port: a no-op when `.gitignore` is
+    # absent (downstream projects own their conventions — we never create it) or
+    # already carries a `.git-loopy/` / `.git-loopy` line; otherwise appends one
+    # line, adding a leading newline when the file does not already end in one.
+    $Gitignore = Join-Path $RepoRoot ".gitignore"
+    if (-not [IO.File]::Exists($Gitignore)) {
+        return
+    }
+    $Content = [IO.File]::ReadAllText($Gitignore)
+    foreach ($Line in [regex]::Split($Content, "\r\n|\r|\n")) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -ceq ".git-loopy/" -or $Trimmed -ceq ".git-loopy") {
+            return
+        }
+    }
+    if ($Content.Length -gt 0 -and -not $Content.EndsWith("`n")) {
+        [IO.File]::AppendAllText($Gitignore, "`n")
+    }
+    [IO.File]::AppendAllText($Gitignore, ".git-loopy/`n")
+}
+
 function Invoke-GitLoopyDiscovery {
     [CmdletBinding()]
     param(
@@ -1253,6 +1566,7 @@ function Invoke-GitLoopyDiscovery {
 
     $Context = New-GitLoopyEventContext -RepoRoot $Preflight.RepoRoot
     $EventTypes = Get-GitLoopyEventTypes
+    Set-GitLoopyGitignoreEntry -RepoRoot $Preflight.RepoRoot
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_RUN_START"] `
@@ -1393,6 +1707,28 @@ function Invoke-GitLoopyDiscovery {
             -Pool $Pool `
             -Commits $NewCommits
 
+        # Runner Checkpoint + auto-push (ADR-0004). Capture any dirty / untracked
+        # work-in-progress in one close-keyword-free Checkpoint attributed to the
+        # Active issue, then push the branch whenever this Iteration produced any
+        # new local commit (an agent commit and/or the Checkpoint just made). Both
+        # run AFTER the agent-commit accounting and BEFORE the Strike decision, so
+        # the Checkpoint is excluded from the commit tally and Strike progress;
+        # both are non-fatal so a local-only repo still completes.
+        $CheckpointSha = Invoke-GitLoopyMaybeCheckpoint `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -RepoRoot $Preflight.RepoRoot `
+            -Iteration $Iteration `
+            -Pool $Pool `
+            -Commits $NewCommits
+        Invoke-GitLoopyMaybePush `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -RepoRoot $Preflight.RepoRoot `
+            -Iteration $Iteration `
+            -NewCommitCount $NewCommits.Count `
+            -CheckpointSha $CheckpointSha
+
         $Progress = Test-GitLoopyIterationProgress `
             -Commits $AgentCommits `
             -AutoClosures $AutoClosures `
@@ -1516,6 +1852,9 @@ Export-ModuleMember -Function @(
     "Test-GitLoopyIterationProgress",
     "Step-GitLoopyStrikeState",
     "Test-GitLoopyCheckpointMessage",
+    "Get-GitLoopyCheckpointMessage",
+    "Test-GitLoopyWorktreeDirty",
+    "Get-GitLoopyActiveRef",
     "Resolve-GitLoopyPrompt",
     "Invoke-GitLoopyPreflight",
     "Get-GitLoopyGitHubPool",

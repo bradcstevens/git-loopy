@@ -346,6 +346,18 @@ git_loopy_exit_code_for() {
 # `(?i)` and `\s`/`\d` the same way Python's `re` does.
 GIT_LOOPY_CLOSE_KEYWORD_RE='(?i)(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)'
 
+# Runner Checkpoint message contract (ADR-0004), kept in lockstep with the
+# Python reference `checkpoint_message` / `CHECKPOINT_TRAILER_KEY`. The trailer
+# key tags a runner-authored Checkpoint so it is distinguishable from an agent
+# commit and excluded from Strike progress; its value is the active issue ref
+# (or `unattributed`) — deliberately NOT `#N`, so a Checkpoint never opens a
+# GitHub cross-reference. The body is byte-identical to the reference so the
+# whole family authors the same close-keyword-free message.
+GIT_LOOPY_CHECKPOINT_TRAILER_KEY="GitLoopy-Checkpoint"
+_GIT_LOOPY_CHECKPOINT_BODY="Runner-authored Checkpoint (ADR-0004): staged the worktree the agent left
+uncommitted so the next iteration starts on a clean tree and the work can
+reach the remote. Not an agent commit; excluded from Strike progress."
+
 git_loopy_extract_close_refs() {
   # Extract deduplicated issue numbers referenced via GitHub closing keywords,
   # in first-encounter order. Matching is line-by-line — split on `\n` only, so
@@ -429,13 +441,37 @@ git_loopy_is_checkpoint_message() {
   # Checkpoint is excluded from Strike progress even before this port authors
   # one. Mirrors the Python reference `is_checkpoint_message`.
   local message="$1"
-  local prefix="gitloopy-checkpoint:"
+  local prefix="${GIT_LOOPY_CHECKPOINT_TRAILER_KEY,,}:"
   local line trimmed
   while IFS= read -r line || [[ -n "$line" ]]; do
     trimmed="$(_git_loopy_trim "$line")"
     [[ "${trimmed,,}" == "$prefix"* ]] && return 0
   done <<<"$message"
   return 1
+}
+
+git_loopy_checkpoint_message() {
+  # Build a runner Checkpoint commit message (ADR-0004) attributed to the active
+  # ref `$1` — an issue number, a PRDs/PR string ref, or empty for an
+  # unattributed Checkpoint. The message is guaranteed close-keyword-free (its
+  # subject/body never match `GIT_LOOPY_CLOSE_KEYWORD_RE`) and carries the
+  # `GitLoopy-Checkpoint:` trailer, mirroring the Python reference
+  # `checkpoint_message` byte-for-byte.
+  local active_ref="${1-}"
+  local subject attribution
+  if [[ -z "$active_ref" ]]; then
+    subject="Checkpoint: capture uncommitted work-in-progress"
+    attribution="unattributed"
+  elif [[ "$active_ref" =~ ^[0-9]+$ ]]; then
+    subject="Checkpoint: capture work-in-progress for issue $active_ref"
+    attribution="$active_ref"
+  else
+    subject="Checkpoint: capture work-in-progress for $active_ref"
+    attribution="$active_ref"
+  fi
+  printf '%s\n\n%s\n\n%s: %s' \
+    "$subject" "$_GIT_LOOPY_CHECKPOINT_BODY" \
+    "$GIT_LOOPY_CHECKPOINT_TRAILER_KEY" "$attribution"
 }
 
 git_loopy_resolve_prompt() {
@@ -754,6 +790,49 @@ git_loopy_commits_between() {
     _git_loopy_log_z_to_json
 }
 
+git_loopy_worktree_dirty() {
+  # Return success if the worktree carries any uncommitted tracked change OR any
+  # untracked, non-ignored file — the ADR-0004 Checkpoint trigger. A single
+  # `git status --porcelain` reports both (modified/staged tracked entries plus
+  # `??` untracked ones) while honouring `.gitignore`, so it is the shell
+  # equivalent of the Python reference's `is_dirty` OR `has_untracked`. A git
+  # failure (e.g. not a repository) reports "not dirty" so the caller skips the
+  # Checkpoint rather than aborting.
+  local repo_root="$1"
+  local status_output
+  status_output="$(git -C "$repo_root" status --porcelain 2>/dev/null)" ||
+    return 1
+  [[ -n "$status_output" ]]
+}
+
+git_loopy_stage_all() {
+  # Stage every change (`git add -A`, honouring `.gitignore`); the user's git
+  # config stays the single source of truth (no `--force`, no excludes override).
+  local repo_root="$1"
+  git -C "$repo_root" add -A >/dev/null 2>&1
+}
+
+git_loopy_commit() {
+  # Commit the staged index with `$2` and print the new HEAD SHA. A plain
+  # `git commit -m` keeps the user's identity/hooks/signing config authoritative.
+  # An empty index (nothing staged) exits non-zero, which the caller treats as a
+  # skipped Checkpoint rather than an abort.
+  local repo_root="$1"
+  local message="$2"
+  git -C "$repo_root" commit -m "$message" >/dev/null 2>&1 || return 1
+  git_loopy_head_sha "$repo_root"
+}
+
+git_loopy_push() {
+  # Push the current branch to its configured upstream. A bare `git push` (no
+  # ref args, no `--force`) keeps `push.default`, the branch's upstream tracking
+  # ref, and credential helpers authoritative. The exit status is the contract:
+  # 0 pushed; non-zero for no upstream, an unreachable/missing remote, an auth
+  # failure, or a non-fast-forward rejection — all non-fatal to the caller.
+  local repo_root="$1"
+  git -C "$repo_root" push >/dev/null 2>&1
+}
+
 git_loopy_recent_commits_block() {
   local repo_root="$1"
   local commits_json
@@ -825,6 +904,11 @@ git_loopy_run_agent_turn() {
 }
 
 _GIT_LOOPY_AUTO_CLOSURES=0
+# The first Pool issue this Iteration actually closed (OPEN -> closed), in
+# encounter order. It is the strongest Checkpoint-attribution signal — the
+# equivalent of the Python reference's `completions[0].ref` — so `infer_active_ref`
+# consults it first. Empty when nothing closed this Iteration.
+_GIT_LOOPY_FIRST_CLOSED_REF=""
 
 git_loopy_close_one_issue() {
   # Re-verify one Pool issue is still OPEN and close it via `gh issue close`,
@@ -899,6 +983,7 @@ git_loopy_close_one_issue() {
     "$iteration" \
     "$payload" || return 1
   _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
+  [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]] || _GIT_LOOPY_FIRST_CLOSED_REF="$issue"
 }
 
 git_loopy_auto_close_pool_issues() {
@@ -910,6 +995,7 @@ git_loopy_auto_close_pool_issues() {
   local iteration="$1"
   local commits_json="$2"
   _GIT_LOOPY_AUTO_CLOSURES=0
+  _GIT_LOOPY_FIRST_CLOSED_REF=""
   [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]] || return 0
 
   local pool_descriptors
@@ -939,8 +1025,150 @@ git_loopy_auto_close_pool_issues() {
   done < <(jq -r '.[]' <<<"$actionable")
 }
 
+git_loopy_infer_active_ref() {
+  # Best-effort attribution of the Iteration's Active issue for a Checkpoint,
+  # mirroring the Python reference `_infer_active_ref`. In priority order: the
+  # first Pool issue this Iteration actually auto-closed (the strongest signal of
+  # what was worked, `completions[0].ref` in the reference); then an actionable
+  # Pool-issue close-ref named in this Iteration's agent commits (the agent named
+  # the issue it worked, even if the closure did not fire); then a single-member
+  # Pool (the only candidate); else nothing (unattributed). `$1` is the
+  # new-commit JSON; prints the ref (an issue number or a PRDs path) or nothing.
+  local commits_json="$1"
+  if [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]]; then
+    printf '%s' "$_GIT_LOOPY_FIRST_CLOSED_REF"
+    return 0
+  fi
+  local pool_descriptors concatenated actionable first
+  pool_descriptors="$(
+    jq -c '[.[] | select(has("number")) | {ref: .number, kind: "issue"}]' \
+      <<<"$GIT_LOOPY_POOL_JSON"
+  )" || return 1
+  concatenated="$(
+    jq -r '
+      [ .[]
+        | if .body == "" then .subject else .subject + "\n" + .body end
+      ] | join("\n")
+    ' <<<"$commits_json"
+  )" || return 1
+  actionable="$(
+    git_loopy_actionable_close_refs "$concatenated" "$pool_descriptors"
+  )" || return 1
+  first="$(jq -r '.[0] // empty' <<<"$actionable")" || return 1
+  if [[ -n "$first" ]]; then
+    printf '%s' "$first"
+    return 0
+  fi
+
+  local pool_length
+  pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
+  if [[ "$pool_length" == "1" ]]; then
+    jq -r '.[0] | if has("number") then .number else .ref end' \
+      <<<"$GIT_LOOPY_POOL_JSON" || return 1
+    return 0
+  fi
+  printf ''
+}
+
+_GIT_LOOPY_CHECKPOINT_SHA=""
+
+git_loopy_maybe_checkpoint() {
+  # ADR-0004 durability net, first half. If the worktree carries any uncommitted
+  # or untracked change, stage it all and capture it in exactly one
+  # close-keyword-free Checkpoint attributed to the Active issue, then emit
+  # `wrapper.checkpoint.recorded` ({issue, sha}). Runs AFTER the agent-commit
+  # accounting and BEFORE the Strike decision, so the Checkpoint is structurally
+  # excluded from both the commit tally (it is never a `wrapper.commit.recorded`)
+  # and Strike progress. Sets `_GIT_LOOPY_CHECKPOINT_SHA` to the new SHA, or
+  # empty when the tree was clean or the Checkpoint could not be made. Every
+  # failure warns and continues, so a clean tree, a non-repo, and a local-only
+  # repo all complete normally.
+  local iteration="$1"
+  local commits_json="$2"
+  _GIT_LOOPY_CHECKPOINT_SHA=""
+  git_loopy_worktree_dirty "$GIT_LOOPY_REPO_ROOT" || return 0
+
+  local active_ref message sha
+  active_ref="$(git_loopy_infer_active_ref "$commits_json")" || return 1
+  message="$(git_loopy_checkpoint_message "$active_ref")" || return 1
+  if ! git_loopy_stage_all "$GIT_LOOPY_REPO_ROOT"; then
+    printf 'git-loopy: checkpoint staging failed; continuing without it.\n' >&2
+    return 0
+  fi
+  if ! sha="$(git_loopy_commit "$GIT_LOOPY_REPO_ROOT" "$message")"; then
+    printf 'git-loopy: checkpoint commit failed; continuing without it.\n' >&2
+    return 0
+  fi
+
+  local issue_arg payload
+  if [[ -z "$active_ref" ]]; then
+    issue_arg='null'
+  elif [[ "$active_ref" =~ ^[0-9]+$ ]]; then
+    issue_arg="$active_ref"
+  else
+    issue_arg="$(jq -cn --arg ref "$active_ref" '$ref')" || return 1
+  fi
+  payload="$(
+    jq -cn --arg sha "$sha" --argjson issue "$issue_arg" \
+      '{issue: $issue, sha: $sha}'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_CHECKPOINT_RECORDED]}" \
+    "$iteration" \
+    "$payload" || return 1
+  _GIT_LOOPY_CHECKPOINT_SHA="$sha"
+}
+
+git_loopy_maybe_push() {
+  # ADR-0004 durability net, second half. Whenever this Iteration produced any
+  # new local commit — an agent commit and/or the Checkpoint just authored —
+  # push the current branch to its configured upstream and emit
+  # `wrapper.push.recorded` on success. A missing upstream, an
+  # unreachable/missing remote, an auth failure, or a non-fast-forward rejection
+  # warns but never aborts (a local-only repo completes normally) and — like a
+  # failed Checkpoint — emits no event, so replay records only pushes that
+  # actually landed. An Iteration with no new local commit skips the push.
+  # `$2` is this Iteration's total new-commit count; `$3` the Checkpoint SHA.
+  local iteration="$1"
+  local new_commit_count="$2"
+  local checkpoint_sha="$3"
+  if ((new_commit_count == 0)) && [[ -z "$checkpoint_sha" ]]; then
+    return 0
+  fi
+  if ! git_loopy_push "$GIT_LOOPY_REPO_ROOT"; then
+    printf 'git-loopy: auto-push failed; continuing (work stays local).\n' >&2
+    return 0
+  fi
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_PUSH_RECORDED]}" \
+    "$iteration" || return 1
+}
+
+git_loopy_ensure_gitignore_entry() {
+  # Idempotently keep `.git-loopy/` in the repo's `.gitignore` so the runner's
+  # own replay/summary artefacts never trip the Checkpoint dirty-check or get
+  # swept into a Checkpoint by `git add -A`. Mirrors the Python reference
+  # `ensure_gitignore_entry`: a no-op when `.gitignore` is absent (downstream
+  # projects own their conventions — we never create it) or already carries a
+  # `.git-loopy/` / `.git-loopy` line; otherwise appends one line, adding a
+  # leading newline when the file does not already end in one.
+  local repo_root="$1"
+  local gitignore="$repo_root/.gitignore"
+  [[ -f "$gitignore" ]] || return 0
+
+  local line trimmed
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(_git_loopy_trim "$line")"
+    [[ "$trimmed" == ".git-loopy/" || "$trimmed" == ".git-loopy" ]] && return 0
+  done <"$gitignore"
+
+  [[ -s "$gitignore" && -z "$(tail -c1 "$gitignore")" ]] || printf '\n' >>"$gitignore"
+  printf '.git-loopy/\n' >>"$gitignore"
+}
+
 git_loopy_run_discovery() {
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
+  git_loopy_ensure_gitignore_entry "$GIT_LOOPY_REPO_ROOT" || return 1
 
   local deny_tools_json deny_skills_json
   deny_tools_json="$(
@@ -1091,6 +1319,18 @@ git_loopy_run_discovery() {
     # Iterations accumulate Strikes and the threshold ends the Run as stuck.
     git_loopy_auto_close_pool_issues "$iteration" "$commits_json" || return 1
     local auto_closures="$_GIT_LOOPY_AUTO_CLOSURES"
+
+    # Runner Checkpoint + auto-push (ADR-0004). Capture any dirty / untracked
+    # work-in-progress in one close-keyword-free Checkpoint attributed to the
+    # Active issue, then push the branch whenever this Iteration produced any new
+    # local commit (an agent commit and/or the Checkpoint just made). Both run
+    # AFTER the agent-commit accounting and BEFORE the Strike decision, so the
+    # Checkpoint is excluded from the commit tally and Strike progress; both are
+    # non-fatal so a local-only repo still completes.
+    git_loopy_maybe_checkpoint "$iteration" "$commits_json" || return 1
+    local checkpoint_sha="$_GIT_LOOPY_CHECKPOINT_SHA"
+    git_loopy_maybe_push "$iteration" "$commit_count" "$checkpoint_sha" ||
+      return 1
 
     local progress="false"
     if git_loopy_did_iteration_make_progress \
