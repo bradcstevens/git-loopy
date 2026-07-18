@@ -149,6 +149,20 @@ def test_packaged_prompt_carries_runner_contract(marker: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sync guard: the project override and packaged default stay byte-identical
+# ---------------------------------------------------------------------------
+
+
+def test_packaged_prompt_matches_project_prompt_byte_for_byte() -> None:
+    project_prompt = Path(__file__).resolve().parents[2] / "PROMPT.md"
+    packaged_prompt = loop_module._packaged_prompt_path()
+
+    assert project_prompt.read_bytes() == packaged_prompt.read_bytes(), (
+        "project and packaged PROMPT.md copies diverged; update both together"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wheel packaging: PROMPT.md ships as git-loopy/PROMPT.md in the built artifact
 # ---------------------------------------------------------------------------
 
