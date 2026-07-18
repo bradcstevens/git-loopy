@@ -1,12 +1,20 @@
-# Git Loops
+# Loop Engineering with GitHub Copilot
 
-## Intro to Git Loops
+## Intro to Loop Engineering
+
+**Loop Engineering** is when humans design, triage, orchestrate, and supervise agentic driven loops that follow software development fundamentals. They own intent, domain language, issue slicing, acceptance criteria, guardrails, and final judgment. git-loopy owns repeatable execution.
+
+This role matters because the leverage point is moving. The scarce skill is no longer producing every line by hand; it is creating a system in which an agent can make small, verifiable moves without drifting from the goal. A strong loop engineer gives each Iteration enough context to succeed, makes failure visible, and judges the result rather than outsourcing accountability.
+
+The core of most Loop Engineering implements concepts derived from Ralph Loops as the technique to autonomously assist with the ideation and completion of tasks revolving around a project development initiative.
+
+## What is git-loopy?
 
 **git-loopy** is a GitHub Copilot SDK framework for **loop engineering**: turning
 well-shaped issues into bounded, observable, autonomous software delivery. It
 orchestrates a Runner family around one shared Wrapper contract. The Python
 reference runner is available now; shell, PowerShell, and Rust Orchestrators are
-planned.
+under active development.
 
 Models can produce code quickly, but an unstructured prompt-to-code process loses
 intent, overruns useful context, and hides whether the result is actually good.
@@ -26,24 +34,6 @@ flowchart LR
     Engineer --> Skills --> Tracker --> Runner --> Repo --> Engineer
     Runner -. "Dashboard and Summary" .-> Engineer
 ```
-
-The framework implements the Ralph loop technique, but the product, command, and
-on-disk brand are **git-loopy**. Run it as `git-loopy` or the equivalent git
-subcommand, `git loopy`. See the [skills setup](docs/skills-setup.md), the
-[detailed workflow](docs/workflow.md), and the [Runner family
-reference](docs/runners.md) to adopt it.
-
-## Loop engineer
-
-The **loop engineer** is the human who designs, triages, and supervises the loop.
-They own intent, domain language, issue slicing, acceptance criteria, guardrails,
-and final judgment. git-loopy owns repeatable execution.
-
-This role matters because the leverage point is moving. The scarce skill is no
-longer producing every line by hand; it is creating a system in which an agent can
-make small, verifiable moves without drifting from the goal. A strong loop
-engineer gives each Iteration enough context to succeed, makes failure visible,
-and judges the result rather than outsourcing accountability.
 
 ## The skills and their purpose
 
