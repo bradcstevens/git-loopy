@@ -44,16 +44,7 @@ rm -rf .git
 git init && git add -A && git commit -m "Initial commit from starter kit"
 ```
 
-### 1.2 Scaffold `AGENTS.md` and `SPEC.md` from the templates
-
-```bash
-cp templates/AGENTS.template.md AGENTS.md
-cp templates/SPEC.template.md   SPEC.md
-```
-
-`CONTEXT.md` already ships at the repo root as a stub — leave it alone for now; `/grill-with-docs` extends it lazily as real vocabulary appears. Each template carries a "How to use this template" header and `> 📝` placeholders; `grep -n '<[A-Z_]' AGENTS.md SPEC.md` lists everything still to fill in. You'll finish these in [Part 3](#part-3--fill-in-agentsmd-and-specmd), _after_ configuring the skills.
-
-### 1.3 Install the vendored skills at the user level
+### 1.2 Install the vendored skills at the user level
 
 The kit vendors every skill the workflow routes to under [`.copilot/skills/`](../.copilot/skills). Copy them to your user skills directory so `/skillname` resolves in any session on this machine:
 
@@ -64,7 +55,7 @@ cp -R .copilot/skills/* ~/.copilot/skills/
 
 This is a **plain copy**. It does not read your repo, edit any file in it, or configure anything — that is [Part 2](#part-2--configure-this-repo-with-setup-agent-skills). Re-run this copy after pulling a newer version of the kit to pick up skill updates.
 
-### 1.4 Verify the skills are discoverable
+### 1.3 Verify the skills are discoverable
 
 Launch Copilot CLI from the project root and open the slash-command menu:
 
@@ -73,7 +64,7 @@ copilot
 > /
 ```
 
-You should see the skills listed — `grill-me`, `grill-with-docs`, `to-prd`, `to-issues`, `triage`, `setup-agent-skills`, and the rest. If they're missing, the copy in 1.3 didn't land in `~/.copilot/skills/`; re-run it and relaunch `copilot`.
+You should see the skills listed — `grill-me`, `grill-with-docs`, `to-prd`, `to-issues`, `triage`, `setup-agent-skills`, and the rest. If they're missing, the copy in 1.2 didn't land in `~/.copilot/skills/`; re-run it and relaunch `copilot`.
 
 ---
 
@@ -131,15 +122,37 @@ The AFK runner uses this exact file as its preflight check — see [The safety n
 
 ---
 
-## Part 3 — Fill in `AGENTS.md` and `SPEC.md`
+## Part 3 — Make `AGENTS.md` and `SPEC.md` yours
 
-With config in place, finish the two templates you scaffolded in 1.2:
+The kit ships its own `AGENTS.md` and `CONTEXT.md` at the repo root. `/setup-agent-skills` sets up the `## Agent skills` block and the `docs/agents/*` config for you; the rest of `AGENTS.md` is yours to make describe **your** project. There is no template to copy — the load-bearing structure is documented here and in [`docs/customization.md`](customization.md).
 
-- **`AGENTS.md`** — fill in **Tech stack** and, most importantly, the **Feedback loops** table. The loop reads that table to know which lint / type-check / test / build commands to run before committing. Wrong commands here mean the agent guesses and CI catches the difference. The trailing `## Agent skills` block is owned by `/setup-agent-skills` — leave it.
-- **`SPEC.md`** — problem statement, user stories, implementation decisions. This is the brief `/to-prd` consumes.
-- **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave the defaults; only touch it to change skill routing or commit-message conventions.
+### `AGENTS.md`
 
-`grep -n '<[A-Z_]' AGENTS.md SPEC.md` finds every remaining placeholder. Deeper tailoring — repo structure, editing `PROMPT.md`, re-running `/setup-agent-skills`, the skills reference — lives in [`docs/customization.md`](customization.md).
+Two sections are load-bearing:
+
+- **Tech stack** — the technology choices an agent would otherwise have to guess (framework, package manager, test runner, lint/format tools, persistence, auth, infra). Anchor each line to a canonical source so the list never drifts.
+- **Feedback loops** — a `## Feedback loops` table of the exact lint / type-check / test / build commands agents run before committing. **This is the single most important thing to get right:** the AFK runner parses this table, and wrong commands mean the agent guesses and CI catches the difference. The exact table structure is in [`docs/customization.md` → Stack-agnostic defaults](customization.md#stack-agnostic-defaults).
+
+Optionally add the [First-run bootstrap directive](customization.md#first-run-bootstrap-directive) at the top so interactive sessions auto-trigger `/setup-agent-skills`. Leave the trailing `## Agent skills` block alone — `/setup-agent-skills` owns it.
+
+### `SPEC.md`
+
+`SPEC.md` is the brief `/to-prd` consumes — the canonical source for your domain language, scope, and decisions. You usually produce it by grilling (`/grill-me` → `/grill-with-docs`) rather than writing it cold, but its structure is:
+
+| Section | What goes in it |
+| --- | --- |
+| **Problem Statement** | The problem from the user's perspective — actor, goal, why it's hard today, what's at stake. No implementation talk. |
+| **Solution** | The user-facing solution in one paragraph — what the user does in the new world, and the one or two decisions the design forces. |
+| **User Stories** | A long, numbered `As a <ACTOR>, I want <CAPABILITY> so that <BENEFIT>` list — exhaustive coverage of every actor × capability pair. |
+| **Implementation Decisions** | Domain rules, roles, behavioral defaults, the deep modules to build, a logical schema sketch, and hosting/deployment topology. |
+| **Testing Decisions** | Which module deserves exhaustive coverage (usually the deep pure one), what's tested through public interfaces, and what's out of scope. |
+| **Out of Scope** | What the project deliberately isn't doing, one line each — pre-empts scope creep. |
+
+### `git-loopy/PROMPT.md`
+
+Usually leave the defaults; only touch it to change skill routing or commit-message conventions.
+
+Deeper tailoring — repo structure, editing `PROMPT.md`, re-running `/setup-agent-skills`, the skills reference — lives in [`docs/customization.md`](customization.md).
 
 You are now set up. From here, walk the [workflow](workflow.md): `/grill-me` → `/grill-with-docs` → `/to-prd` → `/to-issues` → `/triage` → the AFK loop.
 
@@ -147,14 +160,14 @@ You are now set up. From here, walk the [workflow](workflow.md): `/grill-me` →
 
 ## The safety net: auto-bootstrap
 
-Forgetting `/setup-agent-skills` doesn't lead to silent guessing — the kit ships a **two-layer bootstrap** keyed off whether `docs/agents/issue-tracker.md` exists:
+Forgetting `/setup-agent-skills` doesn't lead to silent guessing — the kit provides a **two-layer bootstrap** keyed off whether `docs/agents/issue-tracker.md` exists (the runner layer is automatic; the interactive layer is one directive you opt into):
 
 | Layer | Where | What it does |
 | --- | --- | --- |
-| **Interactive sessions** | The "First-run bootstrap" directive at the top of [`templates/AGENTS.template.md`](../templates/AGENTS.template.md), loaded into every Copilot CLI invocation | If `docs/agents/issue-tracker.md` is missing, the agent invokes `/setup-agent-skills` as its **first** action — before acting on your request — then returns to what you asked. |
+| **Interactive sessions** | The optional "First-run bootstrap" directive in your `AGENTS.md` ([add it yourself](customization.md#first-run-bootstrap-directive)), loaded into every Copilot CLI invocation | If `docs/agents/issue-tracker.md` is missing, the agent invokes `/setup-agent-skills` as its **first** action — before acting on your request — then returns to what you asked. |
 | **AFK loop runner** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` is missing, the runner exits non-zero **before** the first iteration, with a stderr message pointing you at `/setup-agent-skills`. It refuses to start because the skill is interactive and can't safely run under `copilot --yolo -p`. |
 
-The two compose cleanly: run `uv run --project git-loopy/python git-loopy` on a fresh repo, get a clear error, open `copilot` interactively, watch the `AGENTS.md` directive auto-trigger `/setup-agent-skills`, answer the three questions, then re-run the loop.
+The two compose cleanly: run `uv run --project git-loopy/python git-loopy` on a fresh repo, get a clear error, open `copilot` interactively (if you added the directive it auto-triggers `/setup-agent-skills`; otherwise run it by hand), answer the three questions, then re-run the loop.
 
 ---
 
@@ -170,10 +183,10 @@ If you just cloned this kit, you're on a greenfield project, and the temptation 
 That's the signal you skipped Part 2. Run `/setup-agent-skills` now.
 
 **The AFK loop exits immediately with a preflight error.**
-`docs/agents/issue-tracker.md` doesn't exist yet — `/setup-agent-skills` hasn't run for this repo. Open `copilot` interactively (the `AGENTS.md` directive will auto-trigger it) or run `/setup-agent-skills` by hand, then re-run the loop.
+`docs/agents/issue-tracker.md` doesn't exist yet — `/setup-agent-skills` hasn't run for this repo. Open `copilot` interactively and run `/setup-agent-skills` (if you added the First-run bootstrap directive, it auto-triggers), then re-run the loop.
 
 **`/setup-agent-skills` (or any `/skillname`) isn't recognized.**
-The user-level install in 1.3 didn't land. Re-run `mkdir -p ~/.copilot/skills && cp -R .copilot/skills/* ~/.copilot/skills/` and relaunch `copilot`.
+The user-level install in 1.2 didn't land. Re-run `mkdir -p ~/.copilot/skills && cp -R .copilot/skills/* ~/.copilot/skills/` and relaunch `copilot`.
 
 **I want to switch issue trackers, rename labels, or move to multi-context.**
 `/setup-agent-skills` is idempotent — re-run it. It edits the `## Agent skills` block in place and rewrites `docs/agents/*.md`. If you've hand-edited those files substantially, diff before accepting the rewrite.

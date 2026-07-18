@@ -60,7 +60,7 @@ If both are no, reach for **`/grill-me`**. One-shot exercises where the value is
 
 ## Phase 2 — Brief
 
-Once aligned, capture the result in `SPEC.md` using [`templates/SPEC.template.md`](../templates/SPEC.template.md). The brief is the canonical source for your domain language, scope, and decisions — anchor `AGENTS.md`, the PRD, and slice issues back to it. If `/grill-with-docs` has already produced a `CONTEXT.md`, the **Language** section there is the authoritative glossary the brief should reuse verbatim.
+Once aligned, capture the result in `SPEC.md` — the brief. Its section structure is documented in [`docs/skills-setup.md`](skills-setup.md#part-3--make-agentsmd-and-specmd-yours). The brief is the canonical source for your domain language, scope, and decisions — anchor `AGENTS.md`, the PRD, and slice issues back to it. If `/grill-with-docs` has already produced a `CONTEXT.md`, the **Language** section there is the authoritative glossary the brief should reuse verbatim.
 
 ## Phase 3 — PRD (`/to-prd`)
 

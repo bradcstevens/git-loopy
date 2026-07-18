@@ -15,10 +15,8 @@
 │   ├── concepts.md
 │   ├── workflow.md
 │   ├── runners.md
+│   ├── skills-setup.md
 │   └── customization.md
-├── templates/                      # Per-repo config templates. Copy each to the repo root and fill in.
-│   ├── AGENTS.template.md          # → AGENTS.md. Loaded into every Copilot CLI invocation. /setup-agent-skills populates its trailing block.
-│   └── SPEC.template.md            # → SPEC.md. The brief that /to-prd consumes.
 ├── .copilot/skills/                # Vendored project-local copy of every skill the loop routes to.
 │   ├── setup-agent-skills/         # ⭐ Run FIRST in a new project — scaffolds the per-repo `## Agent skills` block and docs/agents/*.md.
 │   ├── grill-me/                   # Phase 1 alignment interview.
@@ -44,8 +42,8 @@
 ### What you'll add when adopting
 
 ```
-├── AGENTS.md                       # Filled-in copy of templates/AGENTS.template.md.
-├── SPEC.md                         # Filled-in copy of templates/SPEC.template.md.
+├── AGENTS.md                       # Your project's agent guide — Tech stack + Feedback loops table (see below).
+├── SPEC.md                         # Your brief — the input /to-prd consumes.
 ├── docs/
 │   ├── adr/                        # Architecture decision records (created lazily by /grill-with-docs).
 │   └── agents/                     # Per-repo skill config — written by /setup-agent-skills.
@@ -59,10 +57,10 @@
 
 ## The two files you almost always edit
 
-- **`AGENTS.md`** (scaffold from [`templates/AGENTS.template.md`](../templates/AGENTS.template.md)) — fill in **Tech stack** and **Feedback loops**. The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
+- **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
 - **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
-The **template files** ([`templates/AGENTS.template.md`](../templates/AGENTS.template.md), [`templates/SPEC.template.md`](../templates/SPEC.template.md), and the [`CONTEXT.md`](../CONTEXT.md) stub at the repo root) each include a `> 📝` placeholder convention and a `> 🗑️ DELETE IF NOT APPLICABLE` convention. Grep for `<[A-Z_]` to find what's left to replace.
+The [`CONTEXT.md`](../CONTEXT.md) stub at the repo root uses a `> 📝` placeholder convention for the notes `/grill-with-docs` fills in on demand — leave it until real vocabulary appears. For the `AGENTS.md` structure to fill in, see [Stack-agnostic defaults](#stack-agnostic-defaults); for the `SPEC.md` brief, see [`docs/skills-setup.md`](skills-setup.md#part-3--make-agentsmd-and-specmd-yours).
 
 ## `/setup-agent-skills` — the entry-point skill
 
@@ -95,14 +93,22 @@ It edits the existing `## Agent skills` block in place and rewrites `docs/agents
 
 ### Auto-bootstrap behavior
 
-The kit ships with a **two-layer auto-bootstrap** so a forgotten `/setup-agent-skills` doesn't lead to silent agent guessing:
+The kit provides a **two-layer auto-bootstrap** so a forgotten `/setup-agent-skills` doesn't lead to silent agent guessing (the runner layer is automatic; the interactive layer is one directive you opt into):
 
 | Layer | Where | What it does |
 | --- | --- | --- |
-| **Interactive sessions** | Top of `AGENTS.md` (the "First-run bootstrap" directive in [`templates/AGENTS.template.md`](../templates/AGENTS.template.md), loaded into every Copilot CLI invocation) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
+| **Interactive sessions** | The "First-run bootstrap" directive at the top of `AGENTS.md` (loaded into every Copilot CLI invocation — [add it yourself](#first-run-bootstrap-directive) to enable this layer) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
 | **AFK loop runner** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
 
-The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, sees the AGENTS.md directive auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
+The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, and — if the [First-run bootstrap directive](#first-run-bootstrap-directive) is in their `AGENTS.md` — sees it auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
+
+### First-run bootstrap directive
+
+The interactive layer is opt-in: add this directive to the top of your `AGENTS.md` (just below the title) so it loads into every Copilot CLI invocation. The AFK-runner preflight layer above works without it — this only adds the interactive auto-trigger.
+
+```markdown
+> 🤖 **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-agent-skills` — **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous AFK loop runner (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
+```
 
 ## Skills reference
 
@@ -124,7 +130,24 @@ For the breakdown of which skills the AFK loop will and won't invoke, see [`docs
 
 This kit doesn't care whether your project is Python, Node, Rust, Go, or something else. The single point of stack-specific configuration is the **Feedback loops** table in `AGENTS.md` — fill it in once with your project's lint / type-check / test / build commands, and both the human-driven skills and the AFK loop will read from it.
 
-If you're on Azure or Microsoft tech, the [`templates/AGENTS.template.md`](../templates/AGENTS.template.md) **Azure conventions** and **Microsoft tooling** sections are worth keeping (they document the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources). Otherwise delete them.
+Add a `## Feedback loops` section to `AGENTS.md` with a table shaped like this (replace the `<PLACEHOLDER>` commands with your project's real ones; delete rows you don't have):
+
+```markdown
+## Feedback loops
+
+| Loop          | Command                 | When to run                                                             |
+| ------------- | ----------------------- | ----------------------------------------------------------------------- |
+| Lint          | `<PM> lint`             | Any code change                                                         |
+| Type-check    | `<PM> typecheck`        | Any typed change                                                        |
+| Unit tests    | `<PM> test:unit`        | Any code change                                                         |
+| Build         | `<PM> build`            | Anything touching routes, configs, deps                                 |
+| E2E tests     | `<PM> test:e2e`         | Anything user-visible; save reports to `tests/e2e/<YYYY-MM-DD-HHMMSS>/` |
+| Infra what-if | `<IAC_WHAT_IF_COMMAND>` | Any infra change                                                        |
+```
+
+The AFK runner parses this exact table — the `## Feedback loops` heading, then the `Loop` and `Command` columns — and runs the runnable rows before landing work; rows still carrying a `<PLACEHOLDER>` command are skipped until you fill them in. Be specific: vague verbs like "run the tests" force agents to grep your package manifest and guess.
+
+If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft tooling** sections to `AGENTS.md` documenting the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources. Otherwise skip them.
 
 ---
 

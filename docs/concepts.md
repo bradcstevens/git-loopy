@@ -27,7 +27,7 @@ That's it. No handoff documents, no scratchpads, no compaction. If something doe
 
 A scaffold for a project that uses this shape end-to-end:
 
-- **Per-repo configuration templates** under [`templates/`](../templates/) — `AGENTS.md` (loaded into every Copilot CLI invocation) and `SPEC.md` (the brief that `/to-prd` consumes).
+- **Per-repo configuration** — `AGENTS.md` (loaded into every Copilot CLI invocation) and `SPEC.md` (the brief that `/to-prd` consumes), set up during [skills setup](skills-setup.md).
 - **A vendored copy of every Copilot CLI skill the workflow routes to**, under [`.copilot/skills/`](../.copilot/skills) — alignment, planning, implementation, and meta.
 - **A Python AFK runner** on the GitHub Copilot Python SDK — frozen iteration `Panel`s, per-iteration token + estimated-cost signal, a JSONL replay log, a run-summary JSON, and opt-in OpenTelemetry tracing. See [`docs/runners.md`](runners.md).
 - **Stack-agnostic.** Customize the **Feedback loops** table in `AGENTS.md` once for your project's lint / type-check / test / build commands; both the human-driven skills and the AFK loop read from it.

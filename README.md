@@ -5,7 +5,6 @@ A starter kit for running an **AFK (away-from-keyboard) AI coding loop** on the 
 **What you get:**
 
 - A **Python AFK runner** on the GitHub Copilot Python SDK — [`git-loopy/python/`](git-loopy/python/).
-- **Per-repo config templates** — [`templates/`](templates/).
 - A **vendored copy of every Copilot CLI skill** the workflow routes to — [`.copilot/skills/`](.copilot/skills).
 
 Stack-agnostic: customize one **Feedback loops** table in `AGENTS.md` and the rest of the kit follows.
@@ -33,22 +32,19 @@ git clone https://github.com/bradcstevens/git-loopy my-project
 cd my-project
 rm -rf .git && git init && git add -A && git commit -m "Initial commit from starter kit"
 
-# 2. Scaffold AGENTS.md and SPEC.md from the templates.
-cp templates/AGENTS.template.md AGENTS.md
-cp templates/SPEC.template.md   SPEC.md
-
-# 3. Install the vendored skills at the user level (once per machine).
+# 2. Install the vendored skills at the user level (once per machine).
 mkdir -p ~/.copilot/skills
 cp -R .copilot/skills/* ~/.copilot/skills/
 
-# 4. Configure this repo — run /setup-agent-skills FIRST, before any other skill.
+# 3. Configure this repo — run /setup-agent-skills FIRST, before any other skill.
 #    It writes docs/agents/{issue-tracker,triage-labels,domain}.md and the
 #    AGENTS.md `## Agent skills` block that every downstream skill reads.
 copilot
 > /setup-agent-skills
 
-# 5. Fill in the templates (Tech stack + Feedback loops in AGENTS.md are load-bearing).
-grep -n '<[A-Z_]' AGENTS.md SPEC.md   # lists every placeholder left to replace
+# 4. Make AGENTS.md describe YOUR project: fill in the Tech stack and the
+#    load-bearing Feedback loops table, then capture your brief in SPEC.md.
+#    docs/customization.md has the AGENTS.md structure; docs/skills-setup.md the full walkthrough.
 ```
 
 Then walk the skills workflow, inside `copilot`, up to the loop:
@@ -68,7 +64,7 @@ uv run --project git-loopy/python git-loopy        # unlimited iterations
 uv run --project git-loopy/python git-loopy 50     # cap at 50 iterations
 ```
 
-> **Run `/setup-agent-skills` first.** Installing the skills (step 3) only makes the commands _exist_; `/setup-agent-skills` (step 4) makes them _correct for this repo_. Skip it and the planning skills guess at your issue tracker, labels, and context layout — though the AFK runner refuses to start without it and interactive sessions auto-trigger it. Full walkthrough: [`docs/skills-setup.md`](docs/skills-setup.md).
+> **Run `/setup-agent-skills` first.** Installing the skills (step 2) only makes the commands _exist_; `/setup-agent-skills` (step 3) makes them _correct for this repo_ — it writes your issue tracker, labels, and context layout, and sets up the `AGENTS.md` `## Agent skills` block. Skip it and the planning skills guess — though the AFK runner refuses to start without it and interactive sessions auto-trigger it. Full walkthrough: [`docs/skills-setup.md`](docs/skills-setup.md).
 
 You don't need every phase — the skills are independent, so pick what helps. The end-to-end workflow is documented in [`docs/workflow.md`](docs/workflow.md).
 

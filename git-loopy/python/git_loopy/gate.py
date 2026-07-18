@@ -24,7 +24,7 @@ Public surface:
   is the "cannot gate" channel.
 * :class:`FeedbackLoop` — a frozen ``(name, command)`` row parsed from the table.
   :attr:`~FeedbackLoop.runnable` screens out empty and still-``<PLACEHOLDER>`` rows
-  from the ``AGENTS.template.md`` starting point.
+  from a not-yet-filled ``AGENTS.md``.
 * :class:`LoopFailure` — the detail of the first loop that went red
   (``name`` / ``command`` / ``returncode`` / bounded ``output_tail``).
 * :class:`GateResult` — ``passed`` plus the loop names that ``ran`` and, when red,
@@ -39,7 +39,7 @@ Design notes:
 
 * **``AGENTS.md`` is the single source of truth for the commands.** The runner does
   not carry its own hard-coded loop list; it reads the same table the human keeps in
-  sync with CI (``templates/AGENTS.template.md`` "Feedback loops"). Commands are run
+  sync with CI (the ``## Feedback loops`` table in ``AGENTS.md``). Commands are run
   through the shell (``shell=True``) exactly as an operator/agent would type them —
   the operator already owns and trusts their repo's ``AGENTS.md``, the same trust
   model as the agent running those commands inside its own session.
@@ -75,7 +75,7 @@ _SECTION_RE: Final[re.Pattern[str]] = re.compile(
 )
 # Any markdown heading — ends the feedback-loops section.
 _HEADING_RE: Final[re.Pattern[str]] = re.compile(r"^#{1,6}\s")
-# A still-unfilled `AGENTS.template.md` placeholder, e.g. `<PM>` / `<IAC_WHAT_IF_COMMAND>`.
+# A still-unfilled `AGENTS.md` placeholder, e.g. `<PM>` / `<IAC_WHAT_IF_COMMAND>`.
 # Deliberately UPPER_SNAKE-only so a real command containing `<html>` or a `< input`
 # redirect is not mistaken for a placeholder.
 _PLACEHOLDER_RE: Final[re.Pattern[str]] = re.compile(r"<[A-Z][A-Z0-9_]*>")
@@ -113,8 +113,8 @@ class FeedbackLoop:
     def runnable(self) -> bool:
         """Whether this loop has a concrete command the runner can execute.
 
-        Screens out empty commands and rows still carrying an ``AGENTS.template.md``
-        ``<PLACEHOLDER>`` stub (a fresh repo that has not filled the table in yet).
+        Screens out empty commands and rows still carrying a ``<PLACEHOLDER>``
+        stub (a fresh repo that has not filled the table in yet).
         """
         return bool(self.command) and _PLACEHOLDER_RE.search(self.command) is None
 
