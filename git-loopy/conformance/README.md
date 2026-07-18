@@ -19,11 +19,18 @@ data only: do not add host-language expressions, executable hooks, or
 implementation-specific expected-value generation.
 
 The Python reference adapter is
-[`python/tests/test_conformance.py`](../python/tests/test_conformance.py). Run it
-from the repository root:
+[`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
+native Event-schema adapters call their production serialization and replay
+seams from
+[`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
+and
+[`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
+Run them from the repository root:
 
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
+bash git-loopy/shell/tests/test-event-conformance.sh
+pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
 ```
 
 To change the Wrapper contract, update the written contract and its version,
