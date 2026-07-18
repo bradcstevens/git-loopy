@@ -70,6 +70,10 @@ dev = [
     "ruff>=0.1.0",
     "ty>=0.0.2,<0.0.25",
     "httpx>=0.24.0",
+    # Parses the CI workflow(s) in the Runner-family gate guard
+    # (tests/test_runner_family_gate.py). Dev/test-only; the runtime runner
+    # never reads YAML.
+    "pyyaml>=6",
 ]
 
 [project.scripts]

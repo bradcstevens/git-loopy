@@ -1,4 +1,12 @@
-name: Native Orchestrator smoke
+name: Runner family gate
+
+# Anti-drift gate for the whole Runner family (ADR-0013, docs/wrapper-contract.md).
+# Every push and pull request must prove that the Python reference Orchestrator and
+# the shell + PowerShell ports still implement the same Wrapper contract on the
+# operating systems each member claims to support. All jobs use fake external tools
+# and scratch repositories, so the gate needs neither live Copilot nor GitHub
+# credentials. The shape of this file is pinned by
+# git-loopy/python/tests/test_runner_family_gate.py.
 
 on:
   push:
@@ -8,6 +16,30 @@ permissions:
   contents: read
 
 jobs:
+  python:
+    name: python / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Python Conformance adapter
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m pytest -q git-loopy/python/tests/test_conformance.py
+
+      - name: Python test suite
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m pytest -q git-loopy/python/tests
+
   shell:
     name: shell / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
