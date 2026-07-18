@@ -1,6 +1,6 @@
-# git-loopy
+# Git Loops
 
-## Intro to git-loopy
+## Intro to Git Loops
 
 **git-loopy** is a GitHub Copilot SDK framework for **loop engineering**: turning
 well-shaped issues into bounded, observable, autonomous software delivery. It
@@ -32,13 +32,6 @@ on-disk brand are **git-loopy**. Run it as `git-loopy` or the equivalent git
 subcommand, `git loopy`. See the [skills setup](docs/skills-setup.md), the
 [detailed workflow](docs/workflow.md), and the [Runner family
 reference](docs/runners.md) to adopt it.
-
-## Acknowledgments
-
-git-loopy's skill-driven workflow was inspired by [Matt Pocock's work on agent
-skills](https://github.com/mattpocock). Several of his skills form the foundation
-of the shape, slice, implement, and review workflow that this project builds into
-a repeatable loop.
 
 ## Loop engineer
 
@@ -167,4 +160,13 @@ The [workflow guide](docs/workflow.md) expands this path. The
 [concepts guide](docs/concepts.md) explains the context model, the [Wrapper
 contract](docs/wrapper-contract.md) defines every Orchestrator's behavior, and
 the [Python reference runner](git-loopy/python/README.md) documents the currently
-available implementation. Licensed under the [MIT License](LICENSE).
+available implementation.
+
+## Acknowledgments
+
+git-loopy's skill-driven workflow was inspired by [Matt Pocock's work on agent
+skills](https://github.com/mattpocock). Several of his skills form the foundation
+of the shape, slice, implement, and review workflow that this project builds into
+a repeatable loop.
+
+Licensed under the [MIT License](LICENSE).
