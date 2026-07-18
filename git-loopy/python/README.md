@@ -1,26 +1,29 @@
-# `git-loopy` — the autonomous AFK loop runner
+# `git-loopy` Python Reference Orchestrator
 
-`git-loopy/python/` is the AFK loop runner for this kit, built on the
+`git-loopy/python/` is the currently shippable reference Orchestrator in the
+git-loopy Runner family, built on the
 [GitHub Copilot Python SDK](https://github.com/github/copilot-sdk/tree/main/python).
 It loads [`git-loopy/PROMPT.md`](../PROMPT.md) (or the packaged default; see
-[Prompt resolution](#prompt-resolution)) each iteration and enforces the
-**wrapper contract** — a `ready-for-agent` filter, a `## What to build` +
+[Prompt resolution](#prompt-resolution)) each Iteration and enforces the
+**Wrapper contract**: `ready-for-agent` collection, the `## What to build` plus
 `## Acceptance criteria` discriminator, a `Closes/Fixes/Resolves #N`
-auto-close backstop, the `GIT_LOOPY_MODEL` / `GIT_LOOPY_ISSUE_SOURCE` / `GIT_LOOPY_MAX_NMT_STRIKES`
-env-var surface, and a clean-exit-on-empty / abort-on-stuck termination
-model.
+auto-close backstop, the `GIT_LOOPY_*` configuration surface, and the
+clean-on-empty / abort-on-stuck termination model.
 
 The runner gives you a rich terminal UX — frozen iteration `Panel`s,
 per-iteration token + estimated-cost signal, a JSONL replay log under
 `.git-loopy/logs/`, a run-summary JSON under `.git-loopy/runs/`, and opt-in
-OpenTelemetry tracing — after a one-time `uv sync` bootstrap. See the kit
-root [`README.md`](../../README.md#prerequisites) for prerequisites and
+OpenTelemetry tracing — after a one-time `uv sync` bootstrap. See the
+[skills setup prerequisites](../../docs/skills-setup.md#prerequisites) and the
+git-loopy
+root [`README.md`](../../README.md) for positioning, and
 [`docs/runners.md`](../../docs/runners.md) for the full runner reference.
 
-`git-loopy` is the single, canonical entrypoint (ADR-0007). Model and reasoning
-effort are set with the per-run `--model` / `--reasoning-effort` flags (top of
-the precedence chain) or persisted `config.toml` knobs — there is no bash
-launcher and no environment-only launch shim.
+`git-loopy` is the canonical command for the Python member. Shell, PowerShell,
+and Rust Orchestrators are planned around the same contract
+([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model and
+reasoning effort are set with per-Run `--model` / `--reasoning-effort` flags or
+persisted `config.toml` values.
 
 ---
 
@@ -39,9 +42,8 @@ uv sync --project git-loopy/python --extra tui
 
 **Requires:** Python **≥ 3.11** on PATH, and either
 [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip` **≥ 24** as
-a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`)
-are listed in the kit root
-[`README.md`](../../README.md#prerequisites).
+a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are listed in
+[`docs/skills-setup.md`](../../docs/skills-setup.md#prerequisites).
 
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
@@ -168,7 +170,7 @@ GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
 
 # Deny a tool or skill at the SDK permission gate (repeatable, additive
 # with GIT_LOOPY_DENY_TOOLS / GIT_LOOPY_DENY_SKILLS env vars).
-uv run --project git-loopy/python git-loopy --deny-tool bash --deny-skill caveman
+uv run --project git-loopy/python git-loopy --deny-tool bash --deny-skill handoff
 
 # Opt into Parallel mode (ADR-0008): work up to N `parallel-safe` issues
 # concurrently, each in its own git worktree + branch. Bare `--parallel`
@@ -189,7 +191,7 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | Exit                  | Code | When                                                                                                                                                                                                                                                |
 | --------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                                                                                                                                                                              |
+| Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                                                                                                                                                                                        |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
 | Aborted — stuck       | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                                                                                                                                                                             |
 | Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, malformed `GIT_LOOPY_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
@@ -201,7 +203,7 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `GIT_LOOPY_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
-| `GIT_LOOPY_REASONING_EFFORT`                | `max` (kit default model only) | One of `low` / `medium` / `high` / `xhigh` / `max` (the `--reasoning-effort` flag overrides this). Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the kit default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `low` / `medium` / `high` / `xhigh` / `max` (the `--reasoning-effort` flag overrides this). Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
@@ -211,8 +213,8 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 | `GIT_LOOPY_PRICING_FILE`              | packaged `pricing.toml`        | Explicit `pricing.toml` path. A malformed file aborts the run with exit `1` (no silent fallback — operator intent is preserved).                                                                                 |
 | `GIT_LOOPY_OTEL_ENABLED`              | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
-| `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for AFK iterations that frequently run 30+ minutes.                                                                            |
-| `GIT_LOOPY_INTERACTIVE`               | unset (auto-detect from TTY)   | Truthy (`1`, `true`, `yes`, `on`) forces the interactive Textual dashboard; falsy (`0`, ...) forces today's line printer. Unset = auto-detect (interactive only on a TTY). Either way the interactive path additionally requires the `[tui]` extra; if it is missing, an explicit request warns and falls back to the line printer. **Before the loop starts, an interactive run with ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`; the flag wins over the env var) opens a one-time, two-stage startup picker** (model, then reasoning effort): stage 1 lists models live from `list_models()` (id, display name, premium multiplier, context-window limit, reasoning support + default effort) with policy-disabled models greyed-out and non-selectable and the cursor pre-selected on `GIT_LOOPY_MODEL` (or the kit default); stage 2 lists the chosen model's supported efforts and is auto-skipped when it supports none. `Enter` confirms, `Esc` steps back / cancels, `q` / `Ctrl+C` cancels (keeping the env/default). The confirmed model + effort are baked into the run. On any `list_models()` failure (offline / unauthed / error) the picker falls back to the env/default values with a warning and the run still proceeds. The picker is **opt-in**: a default interactive run skips it and goes straight to the loop on the configured model/effort with no prompt. When the picker is requested but no interactive TUI is available (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent — and `--no-interactive` / non-TTY runs always skip it), the run warns and falls back to the configured model. The live interface is **tabless and two-level** (ADR-0003). **Level 1** is the **Dashboard** — the only top-level screen: the header band, the live **Queue**, and a compact **Summary** rollup band (run-level totals: tokens, cost, commits, closures, strikes), stacked. The Queue holds focus; `Up`/`Down` move its cursor. Its columns are **Issue \| Status \| Started \| Active \| Tokens in \| Tokens out \| Cost USD**: **Started** is the 12-hour AM/PM local wall-clock time the issue first became active (blank until it has been active), **Active** is a live `H:MM:SS` duration that sums across every iteration that worked the issue (the run-start time stays in the header), and **Tokens in**, **Tokens out**, and **Cost USD** are that issue's live per-issue consumption — tokens and an estimated cost accrued to the **active** issue (the one named by the working marker) and summed across every iteration that worked it, reconciling with the **Summary** band's run-level totals (an unknown / unpriced model renders the `—` em dash for its cost, the same treatment the Summary uses). All **wall-clock** surfaces — the header run-start, the Queue's **Started**, and the **Log** line stamps — use 12-hour AM/PM local time, while **durations** (the header elapsed, the Queue's **Active**) stay `H:MM:SS`. **Level 2** is the per-issue **Log**: pressing `Enter` on a selected Queue row opens that issue's Log — the **active** issue shows a live, interleaved **Log** (reasoning dimmed + assistant message + key events, a bounded per-issue tail), a **non-active** issue shows its own retained Log tail with a footer noting the full record is in the JSONL replay log — and `Esc` returns to the Dashboard with the Queue cursor preserved. The Log **auto-scrolls** to the latest line (sticky-with-release): while it is at the bottom it stays pinned to the newest line as output streams in; scrolling up **pauses** autoscroll and shows a `↓ new lines below` indicator; returning to the bottom or pressing `End` **re-engages** auto-bottom and clears it. Every Log line is stamped with the 12-hour AM/PM local-system time it was appended (repeats within the same second are collapsed, so only the first line of a second shows the stamp), and each reasoning block opens with a timestamped `✻ Thinking:` marker. The full per-iteration **Summary** table stays the run-end scrollback artefact, not an in-app screen. `d` **Detaches** (tears down the dashboard but lets the run continue, printing the remainder to normal scrollback); `q` / `Ctrl+C` **Stops** the run, writing the run-end summary table to scrollback (a second `Ctrl+C` forces an immediate exit). |
+| `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
+| `GIT_LOOPY_INTERACTIVE`               | unset (auto-detect from TTY)   | Truthy (`1`, `true`, `yes`, `on`) forces the interactive Textual dashboard; falsy (`0`, ...) forces today's line printer. Unset = auto-detect (interactive only on a TTY). Either way the interactive path additionally requires the `[tui]` extra; if it is missing, an explicit request warns and falls back to the line printer. **Before the loop starts, an interactive run with ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`; the flag wins over the env var) opens a one-time, two-stage startup picker** (model, then reasoning effort): stage 1 lists models live from `list_models()` (id, display name, premium multiplier, context-window limit, reasoning support + default effort) with policy-disabled models greyed-out and non-selectable and the cursor pre-selected on `GIT_LOOPY_MODEL` (or the built-in default); stage 2 lists the chosen model's supported efforts and is auto-skipped when it supports none. `Enter` confirms, `Esc` steps back / cancels, `q` / `Ctrl+C` cancels (keeping the env/default). The confirmed model + effort are baked into the run. On any `list_models()` failure (offline / unauthed / error) the picker falls back to the env/default values with a warning and the run still proceeds. The picker is **opt-in**: a default interactive run skips it and goes straight to the loop on the configured model/effort with no prompt. When the picker is requested but no interactive TUI is available (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent — and `--no-interactive` / non-TTY runs always skip it), the run warns and falls back to the configured model. The live interface is **tabless and two-level** (ADR-0003). **Level 1** is the **Dashboard** — the only top-level screen: the header band, the live **Queue**, and a compact **Summary** rollup band (run-level totals: tokens, cost, commits, closures, strikes), stacked. The Queue holds focus; `Up`/`Down` move its cursor. Its columns are **Issue \| Status \| Started \| Active \| Tokens in \| Tokens out \| Cost USD**: **Started** is the 12-hour AM/PM local wall-clock time the issue first became active (blank until it has been active), **Active** is a live `H:MM:SS` duration that sums across every iteration that worked the issue (the run-start time stays in the header), and **Tokens in**, **Tokens out**, and **Cost USD** are that issue's live per-issue consumption — tokens and an estimated cost accrued to the **active** issue (the one named by the working marker) and summed across every iteration that worked it, reconciling with the **Summary** band's run-level totals (an unknown / unpriced model renders the `—` em dash for its cost, the same treatment the Summary uses). All **wall-clock** surfaces — the header run-start, the Queue's **Started**, and the **Log** line stamps — use 12-hour AM/PM local time, while **durations** (the header elapsed, the Queue's **Active**) stay `H:MM:SS`. **Level 2** is the per-issue **Log**: pressing `Enter` on a selected Queue row opens that issue's Log — the **active** issue shows a live, interleaved **Log** (reasoning dimmed + assistant message + key events, a bounded per-issue tail), a **non-active** issue shows its own retained Log tail with a footer noting the full record is in the JSONL replay log — and `Esc` returns to the Dashboard with the Queue cursor preserved. The Log **auto-scrolls** to the latest line (sticky-with-release): while it is at the bottom it stays pinned to the newest line as output streams in; scrolling up **pauses** autoscroll and shows a `↓ new lines below` indicator; returning to the bottom or pressing `End` **re-engages** auto-bottom and clears it. Every Log line is stamped with the 12-hour AM/PM local-system time it was appended (repeats within the same second are collapsed, so only the first line of a second shows the stamp), and each reasoning block opens with a timestamped `✻ Thinking:` marker. The full per-iteration **Summary** table stays the run-end scrollback artefact, not an in-app screen. `d` **Detaches** (tears down the dashboard but lets the run continue, printing the remainder to normal scrollback); `q` / `Ctrl+C` **Stops** the run, writing the run-end summary table to scrollback (a second `Ctrl+C` forces an immediate exit). |
 
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker (see `GIT_LOOPY_INTERACTIVE`). Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. The picker is a TUI action: when requested on a non-interactive run (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent) the run warns and falls back to the configured model. |
 
@@ -394,7 +396,7 @@ single invocation share the same stem, so `ls .git-loopy/logs/` and
 `ls .git-loopy/runs/` line up by-eye.
 
 The run-summary JSON schema is documented at the top of
-[`git-loopy/persist.py`](git-loopy/persist.py).
+[`git_loopy/persist.py`](git_loopy/persist.py).
 
 ---
 
@@ -409,7 +411,7 @@ renderer shows are useful for **cost-shape signal only** (which model
 is heavier than which, how iteration cost trends over a run).
 
 - The packaged pricing table at
-  [`git-loopy/pricing.toml`](git-loopy/pricing.toml) is dated
+  [`git_loopy/pricing.toml`](git_loopy/pricing.toml) is dated
   **2026-05-16**. Pricing drifts; update the file or override via the
   env var below.
 - Override the packaged table at runtime via
@@ -452,9 +454,9 @@ runner pays **zero observability cost**.
 
 ## See also
 
-- Kit root [`README.md`](../../README.md) — overview, prerequisites, and
-  human-driven workflow phases (`/grill-me`, `/to-prd`, `/to-issues`,
-  `/triage`).
+- git-loopy root [`README.md`](../../README.md) — positioning, the loop
+  engineer, the skill catalog, and the complete workflow
+  (`/grill-with-docs`, `/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`).
 - [`docs/runners.md`](../../docs/runners.md) — the full runner reference:
   per-iteration flow, exit conditions, commit-message contract, and skill
   routing.

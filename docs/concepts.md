@@ -1,40 +1,61 @@
-# Concepts
+# Loop Engineering Concepts
 
-> The two mental models the rest of this kit is built around. Internalize these before reaching for any of the runners or skills — every other design choice flows from them.
+> Two mental models explain why git-loopy shapes work into small issues and
+> starts every Iteration from a clean context.
 
-This kit assumes a particular shape of LLM-driven engineering. The shape is not "give the AI everything and let it figure out the rest"; it's "size the work so the AI stays in its competent envelope, and restart from a known-good state every iteration." Those two ideas have names.
+Loop engineering is not "give the model everything and hope." The loop engineer
+keeps each task inside the model's competent envelope, persists intent in
+reviewable artifacts, and uses fresh execution contexts instead of carrying an
+ever-growing conversation.
 
-## The Smart Zone / Dumb Zone
+## The Smart Zone
 
-LLMs degrade as context grows. Attention relationships scale quadratically with tokens. A practical threshold: **~100k tokens is your smart zone ceiling**, regardless of whether the model advertises 200k or 1M. Past that you're in the dumb zone — the model starts making stupid decisions.
+Model quality degrades as context grows. A practical planning budget is about
+**100k tokens per focused session**, even when a model advertises a larger
+window. The exact threshold varies; the operating rule does not: keep work small
+enough that the agent can still reason about the whole slice.
 
-**Implication:** Size every task so it fits inside the smart zone. Never let the AI bite off more than fits.
-
-This is why the workflow ([`docs/workflow.md`](workflow.md)) breaks a brief down into **vertical slice issues** before the AFK loop ever runs, and why each iteration of the loop is one fresh Copilot CLI invocation against one slice — not a long-lived session accreting state.
+That is why the [workflow](workflow.md) uses `/wayfinder` when planning itself is
+too large, `/to-tickets` to create tracer-bullet issues, and one Active issue per
+serial Iteration. A vertical slice should deliver one verifiable behavior
+through every affected layer without requiring the agent to hold the rest of the
+roadmap in memory.
 
 ## The Memento Model
 
-Every iteration starts from zero (system prompt + `AGENTS.md` + the issue). The agent forgets everything between iterations. This is a feature, not a bug — **optimize for it** rather than fighting it with compaction. A cleared context is always a known, clean state. Compacted sediment is unpredictable.
+Every Iteration starts with a fresh Copilot CLI context. The agent recovers from
+the prompt, `AGENTS.md`, the Active issue, domain docs, ADRs, and recent commits;
+it does not inherit an opaque summary of the previous conversation.
 
-The AFK runner ([`git-loopy/python/`](../git-loopy/python/)) invokes a fresh `copilot --yolo -p` per iteration on purpose. The two channels through which state survives between iterations are deliberate and narrow:
+This is a feature. Durable state travels through explicit artifacts:
 
-- **Git commits.** The previous iteration's commits are the durable record of what was done.
-- **Issue tracker state.** Closing an issue (and the wrapper's auto-close backstop) is how "this slice is done" propagates forward.
+- **Repository history.** Commits preserve implementation and changes to domain
+  context.
+- **Issue tracker state.** Specs, tickets, comments, labels, dependencies, and
+  closures preserve intent and progress.
 
-That's it. No handoff documents, no scratchpads, no compaction. If something doesn't survive in commits or issue state, the next iteration won't see it — and that's the right behavior.
+If information matters to a later Iteration, put it in one of those reviewable
+surfaces. Do not rely on scratchpads or compaction sediment that the next
+context cannot verify.
 
-## What this kit gives you
+## What git-loopy provides
 
-A scaffold for a project that uses this shape end-to-end:
-
-- **Per-repo configuration** — `AGENTS.md` (loaded into every Copilot CLI invocation) and `SPEC.md` (the brief that `/to-prd` consumes), set up during [skills setup](skills-setup.md).
-- **A vendored copy of every Copilot CLI skill the workflow routes to**, under [`.copilot/skills/`](../.copilot/skills) — alignment, planning, implementation, and meta.
-- **A Python AFK runner** on the GitHub Copilot Python SDK — frozen iteration `Panel`s, per-iteration token + estimated-cost signal, a JSONL replay log, a run-summary JSON, and opt-in OpenTelemetry tracing. See [`docs/runners.md`](runners.md).
-- **Stack-agnostic.** Customize the **Feedback loops** table in `AGENTS.md` once for your project's lint / type-check / test / build commands; both the human-driven skills and the AFK loop read from it.
+- **A loop-engineering workflow.** Vendored skills under
+  [`.copilot/skills/`](../.copilot/skills) shape intent, gather evidence, record
+  a spec, slice tickets, triage them, and support disciplined execution.
+- **A Runner family.** The Python reference Orchestrator is available now;
+  shell, PowerShell, and Rust members are planned around one
+  [Wrapper contract](wrapper-contract.md).
+- **Guarded Iterations.** The Pool, Active issue, Working marker, Strikes,
+  Checkpoints, push durability, Dashboard, and Summary make autonomous work
+  bounded and observable.
+- **Stack-agnostic feedback.** Repository-specific tests, type checks, lint, and
+  build commands live in `AGENTS.md`, so the loop validates work through the
+  same interfaces as a human contributor.
 
 ---
 
 **Next:**
-- [`docs/workflow.md`](workflow.md) — the seven-phase workflow that operationalizes these models.
-- [`docs/runners.md`](runners.md) — pick a runner and learn the AFK loop's contract.
-- Back to [`README.md`](../README.md) — quickstart and "where to go next".
+- [`docs/workflow.md`](workflow.md) - the complete planning-to-review loop.
+- [`docs/runners.md`](runners.md) - the Runner family and Iteration contract.
+- Back to [`README.md`](../README.md) - the git-loopy front door.

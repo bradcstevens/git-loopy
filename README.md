@@ -33,6 +33,13 @@ subcommand, `git loopy`. See the [skills setup](docs/skills-setup.md), the
 [detailed workflow](docs/workflow.md), and the [Runner family
 reference](docs/runners.md) to adopt it.
 
+## Acknowledgments
+
+git-loopy's skill-driven workflow was inspired by [Matt Pocock's work on agent
+skills](https://github.com/mattpocock). Several of his skills form the foundation
+of the shape, slice, implement, and review workflow that this project builds into
+a repeatable loop.
+
 ## Loop engineer
 
 The **loop engineer** is the human who designs, triages, and supervises the loop.

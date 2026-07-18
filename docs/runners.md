@@ -1,12 +1,30 @@
-# Runner
+# Runner Family
 
-> Everything you need to invoke the AFK runner correctly and understand what it'll do on each iteration.
+> Invoke git-loopy, choose its guardrails, and understand what each Orchestrator
+> must do during an Iteration.
 
-The AFK loop is the autonomous phase ([Phase 6 in the workflow](workflow.md#phase-6--afk-loop-git-loopypython)). git-loopy is designed as a **runner family** — several interchangeable runners that each implement one shared [**wrapper contract**](wrapper-contract.md), so you can run the loop in the language you're comfortable with on Linux, macOS, or Windows ([ADR-0013](adr/0013-multi-language-runner-family.md)). Today the **Python runner** at [`git-loopy/python/`](../git-loopy/python/) (built on the GitHub Copilot Python SDK) is the reference implementation and the only shippable member; **shell** (Linux/macOS) and **PowerShell** (Windows) ports — and a future **Rust** port — are planned. Launch the Python runner with `git-loopy` (see [`git-loopy/python/README.md`](../git-loopy/python/README.md) for install and invocation).
+git-loopy owns the [autonomous execution phase](workflow.md#execution-phase-autonomous)
+of loop engineering. It is designed as a **Runner family**: interchangeable
+Orchestrators that implement one shared
+[**Wrapper contract**](wrapper-contract.md), allowing loop engineers to use a
+host language that fits their operating system and comfort level
+([ADR-0013](adr/0013-multi-language-runner-family.md)).
 
-## The runner: `git-loopy/python/`
+The **Python Orchestrator** at [`git-loopy/python/`](../git-loopy/python/),
+built on the GitHub Copilot Python SDK, is the reference implementation and the
+only shippable member today. Shell, PowerShell, and Rust Orchestrators are
+planned. Launch the Python member with `git-loopy`; its
+[README](../git-loopy/python/README.md) covers installation and invocation.
 
-The runner enforces the **wrapper contract** — `ready-for-agent` filter, `## What to build` + `## Acceptance criteria` discriminator, `Closes/Fixes/Resolves #N` auto-close backstop, env-var surface, and termination model. It also auto-stashes dirty leftovers after an iteration so a partial commit cannot make the next iteration abort or absorb unrelated tracked changes.
+## Python reference Orchestrator
+
+The Python Orchestrator enforces the **Wrapper contract**:
+`ready-for-agent` collection, the `## What to build` plus
+`## Acceptance criteria` discriminator, the `Closes/Fixes/Resolves #N`
+auto-close backstop, Config and environment surfaces, and the termination
+model. At each Iteration boundary it captures leftover work in a
+close-keyword-free Checkpoint, preserving durability without counting
+runner-authored work as agent progress.
 
 | Surface                          | [`git-loopy/python/`](../git-loopy/python/) (Python SDK)                                                                                                                  |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,7 +34,7 @@ The runner enforces the **wrapper contract** — `ready-for-agent` filter, `## W
 | `GIT_LOOPY_ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
 | `GIT_LOOPY_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
-| Exit `0` — clean                 | empty AFK-ready pool **or** iteration cap reached                                                                                              |
+| Exit `0` — clean                 | empty ready-for-agent Pool **or** Iteration cap reached                                                                                         |
 | Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
 | Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
 | Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + live-catalog estimated-cost signal, run-end summary table                              |
@@ -46,7 +64,7 @@ GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
 GIT_LOOPY_ISSUE_SOURCE=prds uv run --project git-loopy/python git-loopy
 
 # Also advance ready-for-agent pull requests (GitHub mode only).
-INCLUDE_PRS=1 uv run --project git-loopy/python git-loopy
+GIT_LOOPY_INCLUDE_PRS=1 uv run --project git-loopy/python git-loopy
 ```
 
 First-run setup: `git-loopy init` is an interactive wizard that writes a
@@ -72,7 +90,7 @@ project-in-a-repo-else-global) matches the `init` wizard. See
 1. **Branch hygiene (PR mode).** When PR support is on, it restores the base branch first — a prior PR iteration may have left HEAD on a PR branch from `gh pr checkout`. A dirty worktree no longer aborts the run: leftover changes are captured by the **Checkpoint** step below (ADR-0004).
 2. **Collect.** Pulls every open issue labeled `ready-for-agent` via `gh issue list`, then filters to those whose body contains both `## What to build` and `## Acceptance criteria` (a `## Parent` section is optional; bare PRDs are skipped). When PR support is on, it also pulls every open PR labeled `ready-for-agent` (discriminated by an `## Agent Brief` in the PR body or a comment) and renders them as `=== PR #N: <title> [labels: ...] (branch: <head-branch>) ===` blocks.
 3. **Run.** Feeds the filtered set, the last five commits, and [`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md) to a fresh `copilot --yolo -p` invocation. Streams the agent's reasoning, tool calls, and tool output to the terminal. Captures Copilot's exit code via `PIPESTATUS` so a crash isn't mistaken for a clean turn.
-4. **Auto-close backstop.** Walks new commits for GitHub closing keywords (`Closes/Fixes/Resolves #N`, case-insensitive) **restricted to issue numbers that were in this iteration's AFK-ready pool**. Any referenced issue that's still open gets closed by the wrapper with a comment pointing at the commit SHA(s). The pool whitelist prevents a stale or mis-numbered `Closes #N` from acting on an unrelated issue — and is restricted to issues, so a PR in the pool is never closed by the backstop.
+4. **Auto-close backstop.** Walks new commits for GitHub closing keywords (`Closes/Fixes/Resolves #N`, case-insensitive) **restricted to issue numbers that were in this Iteration's Pool**. Any referenced issue that is still open gets closed by the wrapper with a comment pointing at the commit SHA(s). The Pool whitelist prevents a stale or mis-numbered `Closes #N` from acting on an unrelated issue and is restricted to issues, so a PR in the Pool is never closed by the backstop.
 5. **Progress accounting.** An iteration "made progress" if it produced commits or wrapper closures. A PR also counts as progress when its head SHA advances (the agent pushed to the PR branch) — detected by re-fetching each pool PR and comparing its live head SHA. The wrapper never merges or closes PRs; advancement is the only signal it records. Otherwise the iteration counts as a strike.
 6. **Checkpoint (durability net).** After accounting, if the working tree has any uncommitted or untracked changes, the runner stages everything (`git add -A`, honouring `.gitignore`) and makes a single **close-keyword-free** Checkpoint commit attributed to the active issue — so no work is ever lost and the next iteration starts from a clean tree. Checkpoints are **excluded from strike progress** (only agent commits and closures reset strikes, so the stuck-agent abort still fires) and from the run-summary commit tally. A Checkpoint failure (e.g. nothing to commit) warns but never aborts.
 7. **Auto-push (durability net, remote half).** Right after the Checkpoint, whenever the iteration produced new commits — agent commits and/or the Checkpoint just authored — the runner pushes the current branch to its configured upstream (`git push`), so the work reaches the remote instead of accumulating locally (ADR-0004). An iteration that produced neither (a clean tree with no agent commit, or a pure PR advance the agent pushed itself) skips the push. Push failures — no upstream, unreachable/missing remote, auth, or a non-fast-forward rejection — **warn but never abort**, so a **local-only repo completes normally**.
@@ -81,7 +99,7 @@ project-in-a-repo-else-global) matches the `init` wizard. See
 
 | Exit                  | Code | When                                                                                   |
 | --------------------- | ---- | -------------------------------------------------------------------------------------- |
-| Clean — queue empty   | `0`  | Start of an iteration finds the AFK-ready pool empty.                                  |
+| Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                            |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
 | **Aborted — stuck**   | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
 | **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, or malformed pricing. |
@@ -101,7 +119,7 @@ The auto-close backstop relies on commit messages following the GitHub closing-k
 
 By default the loop only works **issues**. A repo can opt into also advancing **pull requests** — useful when `/triage` labels an external or in-flight PR `ready-for-agent` with an `## Agent Brief` for the loop to push forward.
 
-- **Enabling.** Set `PRs as a request surface: yes` in [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (written by `/setup-agent-skills`), or override per-run with `INCLUDE_PRS=1`. `INCLUDE_PRS=0` force-disables even if the file says yes. With neither present, PR support is **off**.
+- **Enabling.** Set `PRs as a request surface: yes` in [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (written by `/setup-agent-skills`), or override one Run with `GIT_LOOPY_INCLUDE_PRS=1`. `GIT_LOOPY_INCLUDE_PRS=0` force-disables the surface even if the file says yes. With neither present, PR support is **off**.
 - **Collection.** When on, each iteration also lists open `ready-for-agent` PRs and keeps those carrying an `## Agent Brief` (in the PR body or any comment) — the PR analogue of the issue body discriminator.
 - **Per-iteration PR flow.** The agent runs `gh pr checkout <N>`, implements the brief on the PR branch, commits, and pushes. The wrapper registers progress when the PR's **head SHA advances**; at the start of the next iteration it restores the base branch. The agent is instructed never to merge or close the PR — a human merges in QA.
 - **Safety.** The auto-close backstop is restricted to issue numbers, so a PR can never be `gh issue close`d by a `Closes #N` in a commit. PRs are advanced, never closed, by the wrapper.
@@ -117,12 +135,18 @@ By default the loop only works **issues**. A repo can opt into also advancing **
 
 A few related skills are **human-only** (`disable-model-invocation: true`), so the loop can't invoke them; `PROMPT.md` inlines the part the agent needs instead of calling them — plan stress-testing against the domain docs (was `/grill-with-docs`), going up a layer to map an unfamiliar area (was `/zoom-out`), and the deep-module design vocabulary now covered by `/codebase-design` (was `/improve-codebase-architecture`).
 
-Skills the loop **will not invoke** (out of scope for unattended runs): `/setup-agent-skills` (one-shot setup, `disable-model-invocation: true`), `/triage`, `/to-prd`, `/to-issues` (they create or relabel issues — human-driven), `/handoff` (pointless inside a one-shot iteration), `/caveman` (reviewability beats compression while running unattended).
+The autonomous loop **will not invoke** the human-led planning and session
+skills: `/setup-agent-skills`, `/intake`, `/grill-me`, `/grill-with-docs`,
+`/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, and
+`/handoff`. Those skills shape, approve, or preserve work before execution; the
+Run consumes their durable output. `PROMPT.md` keeps the reusable execution
+discipline while avoiding a second human-driven orchestrator inside an
+Iteration.
 
 ---
 
 **Next:**
-- [`docs/workflow.md`](workflow.md) — where the AFK loop fits in the broader Idea → QA workflow.
+- [`docs/workflow.md`](workflow.md) — where autonomous execution fits in the complete planning-to-review loop.
 - [`docs/customization.md`](customization.md) — adjusting `AGENTS.md` feedback loops and `PROMPT.md` skill routing.
 - [`git-loopy/python/README.md`](../git-loopy/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.
 - Back to [`README.md`](../README.md).

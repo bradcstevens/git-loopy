@@ -1,39 +1,41 @@
 # Customization
 
-> Once the [Quick Start](../README.md#quick-start) is done, this is where you tailor the kit to your project — repo structure, AGENTS.md, PROMPT.md, and the per-repo skill configuration written by `/setup-agent-skills`.
+> Tailor git-loopy to a repository: domain context, agent guidance, feedback
+> loops, Config, prompt overrides, and the per-repo skill configuration written
+> by `/setup-agent-skills`.
 
 ## Repo structure reference
 
-### What ships in the kit
+### What git-loopy provides
 
 ```
 .
-├── CONTEXT.md                      # Domain glossary stub. Referenced by AGENTS.md, PRDs, and slice issues; extended lazily by /grill-with-docs.
+├── AGENTS.md                       # Repository guidance and exact feedback loops.
+├── CONTEXT.md                      # Shared loop-engineering vocabulary.
 ├── LICENSE
-├── README.md                       # Quickstart.
-├── docs/                           # Kit documentation (you're reading docs/customization.md right now).
+├── README.md                       # git-loopy front door and complete workflow overview.
+├── docs/                           # Loop-engineering and Runner family references.
 │   ├── concepts.md
 │   ├── workflow.md
 │   ├── runners.md
 │   ├── skills-setup.md
 │   └── customization.md
-├── .copilot/skills/                # Vendored project-local copy of every skill the loop routes to.
-│   ├── setup-agent-skills/         # ⭐ Run FIRST in a new project — scaffolds the per-repo `## Agent skills` block and docs/agents/*.md.
-│   ├── grill-me/                   # Phase 1 alignment interview.
-│   ├── grill-with-docs/            # Stress-test a plan against CONTEXT.md and docs/adr/.
-│   ├── to-prd/                     # Brief → published PRD issue.
-│   ├── to-issues/                  # PRD → AFK-ready slice issues.
-│   ├── triage/                     # Label state machine (needs-triage / ready-for-agent / …).
-│   ├── diagnose/                   # Disciplined bug repro → fix loop.
-│   ├── prototype/                  # Sketch logic or UI before committing to a slice.
-│   ├── tdd/                        # Red → green → refactor discipline for slice implementation.
-│   ├── improve-codebase-architecture/  # Surface deepening / refactor candidates.
-│   ├── zoom-out/                   # Higher-level map of an unfamiliar area.
-│   ├── find-skills/                # Discover other installed skills on demand.
-│   ├── write-a-skill/              # Author or update a skill.
-│   ├── handoff/                    # Compact a long human-driven session into a continuation doc.
-│   ├── microsoft-foundry/          # Azure AI Foundry helpers (delete if not on Microsoft tech).
-│   └── caveman/                    # Token-compressed output mode (off by default in the loop).
+├── .copilot/skills/                # Vendored, composable planning and execution skills.
+│   ├── setup-agent-skills/         # Configure tracker, labels, and domain docs first.
+│   ├── intake/                     # Capture a messy request without designing it.
+│   ├── grill-me/                   # Resolve a general plan or decision.
+│   ├── grill-with-docs/            # Plan against CONTEXT.md and ADRs.
+│   ├── wayfinder/                  # Map planning work too large for one context.
+│   ├── research/                   # Gather cited primary-source evidence.
+│   ├── prototype/                  # Answer logic or UI questions with runnable evidence.
+│   ├── to-spec/                    # Publish the agreed destination.
+│   ├── to-tickets/                 # Slice the route into dependency-aware tracer bullets.
+│   ├── triage/                     # Open the ready-for-agent execution gate.
+│   ├── implement/                  # Human-driven execution of one selected slice.
+│   ├── tdd/                        # Red-to-green vertical-slice discipline.
+│   ├── diagnosing-bugs/            # Reproduce and diagnose difficult bugs.
+│   ├── codebase-design/            # Design deep modules at clean seams.
+│   └── code-review/                # Review against standards and the originating spec.
 └── git-loopy/
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
     └── python/                     # Python reference runner (GitHub Copilot Python SDK). See git-loopy/python/README.md.
@@ -41,11 +43,11 @@
 
 > As the [runner family](adr/0013-multi-language-runner-family.md) ports land, `git-loopy/` also gains `shell/`, `powershell/`, `tui/` (the shared TUI helper binary), and `conformance/` (the language-neutral parity suite). Until then, the Python runner is the only shippable member.
 
-### What you'll add when adopting
+### What you customize when adopting
 
 ```
 ├── AGENTS.md                       # Your project's agent guide — Tech stack + Feedback loops table (see below).
-├── SPEC.md                         # Your brief — the input /to-prd consumes.
+├── CONTEXT.md                      # Your project's domain glossary.
 ├── docs/
 │   ├── adr/                        # Architecture decision records (created lazily by /grill-with-docs).
 │   └── agents/                     # Per-repo skill config — written by /setup-agent-skills.
@@ -62,14 +64,18 @@
 - **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
 - **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
-The [`CONTEXT.md`](../CONTEXT.md) stub at the repo root uses a `> 📝` placeholder convention for the notes `/grill-with-docs` fills in on demand — leave it until real vocabulary appears. For the `AGENTS.md` structure to fill in, see [Stack-agnostic defaults](#stack-agnostic-defaults); for the `SPEC.md` brief, see [`docs/skills-setup.md`](skills-setup.md#part-3--make-agentsmd-and-specmd-yours).
+Replace the repository's [`CONTEXT.md`](../CONTEXT.md) with the adopting
+project's language as `/grill-with-docs` resolves real terms. For the
+`AGENTS.md` structure, see
+[Stack-agnostic defaults](#stack-agnostic-defaults); for the planning path from
+domain context to spec and tickets, see [`docs/workflow.md`](workflow.md).
 
 ## `/setup-agent-skills` — the entry-point skill
 
 This skill is the first thing to run in Copilot CLI for any new project, **before** any of the other planning or implementation skills. It does two things:
 
 1. **Populates the `## Agent skills` block at the bottom of `AGENTS.md`** with concrete pointers to the per-repo config below.
-2. **Writes `docs/agents/{issue-tracker,triage-labels,domain}.md`** — the per-repo config files that every other skill (`/to-issues`, `/triage`, `/to-prd`, `/diagnosing-bugs`, `/tdd`, `/improve-codebase-architecture`, `/zoom-out`) reads to learn which issue tracker, label vocabulary, and context layout this project uses.
+2. **Writes `docs/agents/{issue-tracker,triage-labels,domain}.md`** — the per-repo config files that `/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`, `/diagnosing-bugs`, `/tdd`, and `/codebase-design` read to learn which issue tracker, label vocabulary, and context layout this project uses.
 
 The skill walks you through three decisions one at a time:
 
@@ -81,7 +87,9 @@ The skill walks you through three decisions one at a time:
 
 ### Skip it and downstream skills will guess
 
-If `/to-issues`, `/triage`, `/to-prd`, `/diagnosing-bugs`, `/tdd`, or `/improve-codebase-architecture` ever feel like they're missing context about your issue tracker, label vocabulary, or domain layout — that's the signal you skipped this step. Run `/setup-agent-skills` now.
+If `/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`, `/diagnosing-bugs`,
+`/tdd`, or `/codebase-design` lacks tracker, label, or domain context, run
+`/setup-agent-skills`.
 
 ### Re-running it
 
@@ -95,26 +103,31 @@ It edits the existing `## Agent skills` block in place and rewrites `docs/agents
 
 ### Auto-bootstrap behavior
 
-The kit provides a **two-layer auto-bootstrap** so a forgotten `/setup-agent-skills` doesn't lead to silent agent guessing (the runner layer is automatic; the interactive layer is one directive you opt into):
+git-loopy provides a **two-layer auto-bootstrap** so a forgotten
+`/setup-agent-skills` does not lead to silent guessing:
 
 | Layer | Where | What it does |
 | --- | --- | --- |
 | **Interactive sessions** | The "First-run bootstrap" directive at the top of `AGENTS.md` (loaded into every Copilot CLI invocation — [add it yourself](#first-run-bootstrap-directive) to enable this layer) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
-| **AFK loop runner** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the runner exits non-zero **before** the first iteration with a stderr message pointing the operator at `/setup-agent-skills`. Refuses to start because the skill is interactive and cannot safely run under `copilot --yolo -p`. |
+| **Autonomous Run** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the Orchestrator exits non-zero **before** the first Iteration with a stderr message pointing the loop engineer at `/setup-agent-skills`. The skill is interactive and cannot safely run inside the autonomous agent session. |
 
 The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, and — if the [First-run bootstrap directive](#first-run-bootstrap-directive) is in their `AGENTS.md` — sees it auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
 
 ### First-run bootstrap directive
 
-The interactive layer is opt-in: add this directive to the top of your `AGENTS.md` (just below the title) so it loads into every Copilot CLI invocation. The AFK-runner preflight layer above works without it — this only adds the interactive auto-trigger.
+The interactive layer is opt-in: add this directive to the top of your
+`AGENTS.md` so it loads into every Copilot CLI invocation. The Orchestrator
+preflight works without it; this directive adds the interactive auto-trigger.
 
 ```markdown
-> 🤖 **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-agent-skills` — **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous AFK loop runner (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
+> **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-agent-skills` - **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous git-loopy Orchestrator (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
 ```
 
 ## Skills reference
 
-The kit ships with a curated subset of Copilot CLI skills, vendored under [`.copilot/skills/`](../.copilot/skills). The GitHub Copilot CLI marketplace has more skills beyond what's bundled here.
+git-loopy vendors its complete workflow catalog under
+[`.copilot/skills/`](../.copilot/skills). The GitHub Copilot CLI marketplace
+contains additional skills for work outside this catalog.
 
 To discover more skills beyond what's vendored:
 
@@ -126,11 +139,15 @@ To discover more skills beyond what's vendored:
 npx skills find <query>
 ```
 
-For the breakdown of which skills the AFK loop will and won't invoke, see [`docs/runners.md` → Skill routing](runners.md#skill-routing).
+For the boundary between human-invoked planning skills and model-invoked
+execution skills, see
+[`docs/runners.md` → Skill routing](runners.md#skill-routing).
 
 ## Stack-agnostic defaults
 
-This kit doesn't care whether your project is Python, Node, Rust, Go, or something else. The single point of stack-specific configuration is the **Feedback loops** table in `AGENTS.md` — fill it in once with your project's lint / type-check / test / build commands, and both the human-driven skills and the AFK loop will read from it.
+git-loopy is stack-agnostic. Put the project's exact lint, type-check, test,
+and build commands in the **Feedback loops** table in `AGENTS.md`; human-driven
+skills and autonomous Iterations use the same repository feedback.
 
 Add a `## Feedback loops` section to `AGENTS.md` with a table shaped like this (replace the `<PLACEHOLDER>` commands with your project's real ones; delete rows you don't have):
 
@@ -147,14 +164,17 @@ Add a `## Feedback loops` section to `AGENTS.md` with a table shaped like this (
 | Infra what-if | `<IAC_WHAT_IF_COMMAND>` | Any infra change                                                        |
 ```
 
-The AFK runner parses this exact table — the `## Feedback loops` heading, then the `Loop` and `Command` columns — and runs the runnable rows before landing work; rows still carrying a `<PLACEHOLDER>` command are skipped until you fill them in. Be specific: vague verbs like "run the tests" force agents to grep your package manifest and guess.
+The loop expects this exact table shape: the `## Feedback loops` heading, then
+the `Loop` and `Command` columns. Fill in every runnable row before delegating
+work. Vague verbs such as "run the tests" force each fresh agent to rediscover
+the command and weaken the feedback loop.
 
 If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft tooling** sections to `AGENTS.md` documenting the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources. Otherwise skip them.
 
 ---
 
 **Next:**
-- [`docs/workflow.md`](workflow.md) — the seven-phase workflow these skills slot into.
-- [`docs/runners.md`](runners.md) — the runner family and AFK loop reference; [`docs/wrapper-contract.md`](wrapper-contract.md) — the wrapper contract every runner implements.
+- [`docs/workflow.md`](workflow.md) — the complete loop-engineering workflow.
+- [`docs/runners.md`](runners.md) — the Runner family reference; [`docs/wrapper-contract.md`](wrapper-contract.md) — the Wrapper contract every Orchestrator implements.
 - [`docs/concepts.md`](concepts.md) — the mental models behind the design.
 - Back to [`README.md`](../README.md).

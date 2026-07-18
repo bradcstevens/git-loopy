@@ -3,7 +3,7 @@
 > The language-neutral behavioural specification that **every** git-loopy **Orchestrator** — the
 > Python reference runner and the shell, PowerShell, and future Rust ports — must satisfy. This
 > is the single source of truth the [**Runner family**](../CONTEXT.md#the-runner-family)
-> implements and the [**Conformance suite**](../git-loopy/conformance/) pins. See
+> implements and the [**planned Conformance suite**](adr/0013-multi-language-runner-family.md#decision) pins. See
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
@@ -195,7 +195,9 @@ where a dot belongs) is a conformance failure.
 
 ## 13. Conformance (phase 1, MUST)
 
-Each Orchestrator MUST pass the language-neutral fixtures in [`git-loopy/conformance/`](../git-loopy/conformance/):
+Each Orchestrator MUST pass the language-neutral fixtures in the
+[planned Conformance suite](adr/0013-multi-language-runner-family.md#decision)
+(`git-loopy/conformance/`):
 
 - **Discriminator** — bodies that do / don't carry both required headings (§3).
 - **Close-keyword regex** — a corpus of matching and non-matching commit messages, the pool
