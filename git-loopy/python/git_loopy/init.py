@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from git_loopy import settings
-from git_loopy.config import MODEL_REASONING_EFFORTS
+from git_loopy.config import MODEL_REASONING_EFFORTS, REASONING_EFFORT_ORDER
 from git_loopy.interactive.models import (
     ModelChoice,
     default_cursor_index,
@@ -51,12 +51,8 @@ __all__ = ["run_init", "InitCancelled"]
 #: Tokens that cancel the wizard at any prompt (case-insensitive).
 _CANCEL_TOKENS = frozenset({"q", "quit"})
 
-#: A stable low->high ordering for rendering / defaulting reasoning efforts
-#: (``REASONING_EFFORTS`` is an unordered ``frozenset``).
-_EFFORT_ORDER: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
-
-#: Sentinel so ``default_effort=None`` (a valid "no effort" choice) is
-#: distinguishable from "caller did not pass one".
+#: Sentinel so ``default_effort=None`` (leave effort unset) is distinguishable
+#: from "caller did not pass one". Explicit no reasoning is the string ``"none"``.
 _UNSET: object = object()
 
 
@@ -192,7 +188,7 @@ def _static_choices() -> list[ModelChoice]:
     """
     choices: list[ModelChoice] = []
     for model_id, efforts in MODEL_REASONING_EFFORTS.items():
-        supported = tuple(e for e in _EFFORT_ORDER if e in efforts)
+        supported = tuple(e for e in REASONING_EFFORT_ORDER if e in efforts)
         default = supported[-1] if supported else None
         choices.append(
             ModelChoice(

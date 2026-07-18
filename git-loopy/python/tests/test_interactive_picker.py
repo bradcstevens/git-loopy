@@ -116,6 +116,24 @@ async def test_success_returns_the_picker_selection() -> None:
     assert [c.id for c in choices] == ["a", "gpt-5.4"]
 
 
+async def test_live_picker_retains_none_and_minimal_efforts() -> None:
+    captured_efforts: list[tuple[str, ...]] = []
+
+    async def fetch() -> list:
+        return [_model("reasoning-model", efforts=["none", "minimal"])]
+
+    async def run_app(choices, *, cursor) -> Selection:
+        captured_efforts.append(choices[0].supported_efforts)
+        return Selection("reasoning-model", "none")
+
+    model, effort = await resolve_run_model(
+        _config(), warn=_Warn(), fetch=fetch, run_app=run_app
+    )
+
+    assert captured_efforts == [("none", "minimal")]
+    assert (model, effort) == ("reasoning-model", "none")
+
+
 async def test_cursor_passthrough_prehighlights_env_default() -> None:
     captured: list[int] = []
 

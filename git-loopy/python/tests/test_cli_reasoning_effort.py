@@ -61,6 +61,8 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         ("claude-opus-4.7-high", "high"),
         ("claude-opus-4.7-medium", "medium"),
         ("claude-opus-4.7-low", "low"),
+        ("future-model-minimal", "minimal"),
+        ("future-model-none", "none"),
         ("claude-opus-4.8-max", "max"),
         ("claude-sonnet-4.6", None),
         ("gpt-5.4", None),
@@ -248,8 +250,15 @@ def test_main_env_override_wins_over_model_suffix(
     assert captured[0].reasoning_effort == "high"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("XHigh", "xhigh"), ("MiNiMaL", "minimal"), ("NONE", "none")],
+)
 def test_main_env_override_is_case_insensitive(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    raw: str,
+    expected: str,
 ) -> None:
     """``REASONING_EFFORT`` is normalised to lower-case before forwarding.
 
@@ -258,14 +267,14 @@ def test_main_env_override_is_case_insensitive(
     The SDK's ``ReasoningEffort`` literal is lowercase-only, so we
     canonicalise before constructing the :class:`RunConfig`.
     """
-    monkeypatch.setenv("GIT_LOOPY_REASONING_EFFORT", "XHigh")
+    monkeypatch.setenv("GIT_LOOPY_REASONING_EFFORT", raw)
     captured: list[RunConfig] = []
     _install_fake_runner(monkeypatch, captured, tmp_path)
 
     exit_code = cli_module.main([])
 
     assert exit_code == 0
-    assert captured[0].reasoning_effort == "xhigh"
+    assert captured[0].reasoning_effort == expected
 
 
 def test_main_rejects_invalid_reasoning_effort_env(
@@ -325,20 +334,32 @@ def test_reasoning_effort_flag_parses() -> None:
     assert args.reasoning_effort == "high"
 
 
-def test_reasoning_effort_flag_is_case_insensitive() -> None:
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("XHigh", "xhigh"), ("MiNiMaL", "minimal"), ("NONE", "none")],
+)
+def test_reasoning_effort_flag_is_case_insensitive(
+    raw: str, expected: str
+) -> None:
     """``--reasoning-effort`` is normalised to lower-case at parse time.
 
     Mirrors the leniency the env path already applies
     (``GIT_LOOPY_REASONING_EFFORT=XHigh`` → ``xhigh``).
     """
-    args = cli_module.build_parser().parse_args(["--reasoning-effort", "XHigh"])
-    assert args.reasoning_effort == "xhigh"
+    args = cli_module.build_parser().parse_args(["--reasoning-effort", raw])
+    assert args.reasoning_effort == expected
 
 
 def test_reasoning_effort_flag_rejects_invalid_choice() -> None:
     """An unrecognised effort is rejected eagerly by argparse (exit 2)."""
     with pytest.raises(SystemExit):
         cli_module.build_parser().parse_args(["--reasoning-effort", "ultra"])
+
+
+def test_help_documents_current_reasoning_effort_vocabulary() -> None:
+    help_text = cli_module.build_parser().format_help()
+
+    assert "none|minimal|low|medium|high|xhigh|max" in help_text
 
 
 def test_main_model_flag_overrides_env_and_default(

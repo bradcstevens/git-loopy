@@ -122,11 +122,16 @@ def test_unconfigured_policy_is_selectable() -> None:
 
 
 def test_supported_efforts_filtered_to_sendable_set_preserving_order() -> None:
-    # "minimal" is not in the kit's sendable REASONING_EFFORTS -> dropped.
     ch = to_model_choices(
-        [_model("m", efforts=["minimal", "low", "high", "max"], default_effort="high")]
+        [
+            _model(
+                "m",
+                efforts=["minimal", "low", "future", "high", "max"],
+                default_effort="high",
+            )
+        ]
     )[0]
-    assert ch.supported_efforts == ("low", "high", "max")
+    assert ch.supported_efforts == ("minimal", "low", "high", "max")
     assert all(e in REASONING_EFFORTS for e in ch.supported_efforts)
     assert ch.supports_reasoning is True
 
@@ -138,10 +143,13 @@ def test_no_efforts_means_empty_and_unsupported() -> None:
     assert ch.default_effort is None
 
 
-def test_all_efforts_out_of_set_collapses_to_empty() -> None:
-    ch = to_model_choices([_model("m", efforts=["minimal", "none"])])[0]
-    assert ch.supported_efforts == ()
-    assert ch.supports_reasoning is False
+def test_none_and_minimal_only_model_still_supports_reasoning() -> None:
+    ch = to_model_choices(
+        [_model("m", efforts=["none", "minimal"], default_effort="none")]
+    )[0]
+    assert ch.supported_efforts == ("none", "minimal")
+    assert ch.default_effort == "none"
+    assert ch.supports_reasoning is True
 
 
 def test_default_effort_kept_when_in_set_else_first() -> None:

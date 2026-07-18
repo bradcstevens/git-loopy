@@ -161,6 +161,10 @@ uv run --project git-loopy/python git-loopy 50
 # the chain (flag > env > project config > global config > built-in default).
 uv run --project git-loopy/python git-loopy --model gpt-5.4 --reasoning-effort high
 
+# Explicitly request no reasoning. This is different from omitting the effort,
+# which lets the backend choose when no configured/default effort applies.
+uv run --project git-loopy/python git-loopy --model gpt-5.4 --reasoning-effort none
+
 # Opt into the live model + reasoning-effort picker (ModelSelectionMode) at
 # startup — off by default (equivalently set GIT_LOOPY_MODEL_SELECT=1).
 uv run --project git-loopy/python git-loopy --select-model
@@ -203,7 +207,7 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `GIT_LOOPY_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
-| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `low` / `medium` / `high` / `xhigh` / `max` (the `--reasoning-effort` flag overrides this). Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A reasoning-incapable model (`claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
@@ -350,6 +354,11 @@ that gates `GIT_LOOPY_REASONING_EFFORT` per model. A model not in this table is
 **warned** about once and passed through unchanged (the CLI is the final
 authority). A model with an empty effort set is sent **no** reasoning
 effort — the CLI hard-rejects `session.create` otherwise.
+
+The accepted effort vocabulary is `none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`. ModelSelectionMode and `init` offer only the subset the
+selected model advertises. The string `none` is an explicit request for no
+reasoning; an omitted effort remains unset so the backend can choose.
 
 | Model id                    | Reasoning efforts                 |
 | --------------------------- | --------------------------------- |

@@ -44,12 +44,13 @@ Env vars:
   effort as separate axes. A trailing ``-<effort>`` segment is still
   accepted for convenience and is peeled off into ``reasoning_effort``.
 * ``GIT_LOOPY_REASONING_EFFORT`` — Optional reasoning-effort override
-  (``low`` / ``medium`` / ``high`` / ``xhigh`` / ``max``). When unset,
-  the runner derives it from a ``GIT_LOOPY_MODEL`` suffix (e.g.
-  ``claude-opus-4.7-xhigh`` → ``xhigh``), or — on a pure default
-  invocation — from the kit default, then gates it against the model's
-  supported set (a model that supports no reasoning effort is sent
-  ``None``).
+  (``none`` / ``minimal`` / ``low`` / ``medium`` / ``high`` / ``xhigh`` /
+  ``max``). Explicit ``none`` requests no reasoning; an omitted value lets
+  the backend choose unless the kit default applies. When unset, the runner
+  derives it from a ``GIT_LOOPY_MODEL`` suffix (e.g.
+  ``claude-opus-4.7-xhigh`` → ``xhigh``), or — on a pure default invocation
+  — from the kit default, then gates it against the model's supported set (a
+  model that supports no reasoning-effort configuration is sent ``None``).
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
@@ -78,6 +79,7 @@ from git_loopy import settings
 from git_loopy.config import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
     MODEL_REASONING_EFFORTS,
+    REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
     RunConfig,
@@ -207,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  GIT_LOOPY_MODEL              Copilot model id override "
             "(bare base id, e.g. claude-opus-4.8).\n"
             "  GIT_LOOPY_REASONING_EFFORT   Reasoning-effort override "
-            "(low|medium|high|xhigh|max).\n"
+            f"({'|'.join(REASONING_EFFORT_ORDER)}).\n"
             "                              When unset, derived from a "
             "GIT_LOOPY_MODEL suffix\n"
             "                              (e.g. "
@@ -268,13 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="reasoning_effort",
         default=None,
         type=str.lower,
-        choices=sorted(REASONING_EFFORTS),
+        choices=REASONING_EFFORT_ORDER,
         metavar="EFFORT",
         help=(
             "Per-run reasoning-effort override (%s; case-insensitive). Wins "
             "over GIT_LOOPY_REASONING_EFFORT, config, and the default. Still "
             "gated per model: a model that supports no reasoning effort drops "
-            "it." % "|".join(sorted(REASONING_EFFORTS))
+            "it." % "|".join(REASONING_EFFORT_ORDER)
         ),
     )
     parser.add_argument(
@@ -974,7 +976,7 @@ def _resolve_model_and_effort(
         if candidate not in REASONING_EFFORTS:
             raise SystemExit(
                 f"git-loopy: error: GIT_LOOPY_REASONING_EFFORT must be one of "
-                f"{sorted(REASONING_EFFORTS)}, got {effort_env!r}"
+                f"{list(REASONING_EFFORT_ORDER)}, got {effort_env!r}"
             )
         effort, effort_explicit = candidate, True
     elif suffix_effort is not None:

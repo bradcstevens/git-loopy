@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from git_loopy import settings
-from git_loopy.config import REASONING_EFFORTS
+from git_loopy.config import REASONING_EFFORT_ORDER, REASONING_EFFORTS
 
 if TYPE_CHECKING:
     from git_loopy.cli import ResolvedConfig
@@ -87,7 +87,7 @@ def _coerce_effort(raw: str) -> str:
     if value not in REASONING_EFFORTS:
         raise ConfigCommandError(
             f"reasoning_effort must be one of "
-            f"{', '.join(sorted(REASONING_EFFORTS))} (got {raw!r})"
+            f"{', '.join(REASONING_EFFORT_ORDER)} (got {raw!r})"
         )
     return value
 

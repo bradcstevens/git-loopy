@@ -57,6 +57,11 @@ uv run --project git-loopy/python git-loopy 50
 # Pick a different model.
 GIT_LOOPY_MODEL=gpt-5.4 uv run --project git-loopy/python git-loopy
 
+# Explicitly request no reasoning (omitting the effort lets the backend choose
+# when no configured/default effort applies).
+GIT_LOOPY_MODEL=gpt-5.4 GIT_LOOPY_REASONING_EFFORT=none \
+  uv run --project git-loopy/python git-loopy
+
 # Tolerate more no-progress iterations before aborting (default: 3).
 GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
 

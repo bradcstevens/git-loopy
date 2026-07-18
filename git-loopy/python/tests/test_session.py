@@ -553,10 +553,12 @@ async def test_iteration_session_passes_model_through(
     assert fake_client.create_calls[0]["model"] == "gpt-5.4"
 
 
+@pytest.mark.parametrize("effort", ["none", "minimal", "xhigh"])
 async def test_iteration_session_passes_reasoning_effort_through(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
     renderer_pair: tuple[Renderer, io.StringIO],
+    effort: str,
 ) -> None:
     """``reasoning_effort`` is forwarded verbatim to ``create_session``.
 
@@ -575,12 +577,12 @@ async def test_iteration_session_passes_reasoning_effort_through(
             sinks=SinkFanout([renderer]),
             run_id=_FIXED_RUN_ID,
             iter_num=1,
-            model="claude-opus-4.7-xhigh",
-            reasoning_effort="xhigh",
+            model="claude-opus-4.7",
+            reasoning_effort=effort,
         ):
             pass
 
-    assert fake_client.create_calls[0]["reasoning_effort"] == "xhigh"
+    assert fake_client.create_calls[0]["reasoning_effort"] == effort
 
 
 async def test_iteration_session_passes_working_directory_through(

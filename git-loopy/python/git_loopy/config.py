@@ -36,6 +36,7 @@ from typing import Literal
 
 __all__ = [
     "RunConfig",
+    "REASONING_EFFORT_ORDER",
     "REASONING_EFFORTS",
     "MODEL_REASONING_EFFORTS",
     "SUPPORTED_MODELS",
@@ -79,21 +80,26 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 SUPPORTED_MODELS: frozenset[str] = frozenset(MODEL_REASONING_EFFORTS)
 
 #: Reasoning-effort values the kit accepts for the ``reasoning_effort``
-#: knob, used by :mod:`git_loopy.cli`'s suffix-derivation helper and
-#: ``__post_init__`` validation as one shared source of truth for basic
-#: (syntactic) validation — e.g. rejecting ``"ultra"``.
+#: knob, in stable low-to-high display order. Used by :mod:`git_loopy.cli`
+#: help and :mod:`git_loopy.init` so operator-facing choices stay aligned.
 #:
-#: This is a **superset** of the SDK's ``copilot.session.ReasoningEffort``
-#: ``Literal`` (currently ``low``/``medium``/``high``/``xhigh``): the live
-#: Copilot CLI/backend also accepts ``max`` for several models (verified
-#: against ``session.create``), but the SDK's type stub has not caught up.
-#: ``reasoning_effort`` is forwarded to the SDK as a plain ``str``, so the
-#: value reaches the CLI verbatim regardless of the stub. The per-model
-#: subset each model actually accepts lives in
-#: :data:`MODEL_REASONING_EFFORTS`; this flat union is the syntactic gate.
-REASONING_EFFORTS: frozenset[str] = frozenset(
-    {"low", "medium", "high", "xhigh", "max"}
+#: The live Copilot CLI vocabulary includes ``none`` and ``minimal`` as well
+#: as the existing levels. ``reasoning_effort`` is forwarded to the SDK as a
+#: plain ``str`` so values accepted by the CLI remain usable when an SDK type
+#: stub lags. The per-model subset each model actually accepts lives in
+#: :data:`MODEL_REASONING_EFFORTS`.
+REASONING_EFFORT_ORDER: tuple[str, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
 )
+#: Membership form of :data:`REASONING_EFFORT_ORDER`, used as the shared
+#: syntactic gate (for example, to reject ``"ultra"``).
+REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 
 #: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for
 #: an hour or more, so the SDK's own 60s default is far too aggressive. Lives
@@ -111,15 +117,17 @@ class RunConfig:
         model: Optional Copilot model id override. ``None`` lets the SDK
             pick its default (which respects ``~/.copilot`` config).
         reasoning_effort: Optional reasoning-effort override forwarded to
-            ``copilot.CopilotClient.create_session``. One of ``"low"`` /
-            ``"medium"`` / ``"high"`` / ``"xhigh"`` / ``"max"`` or ``None``
-            (let the SDK / service pick). Model id and reasoning effort
-            are **separate axes**: the value here is sent verbatim while
-            :attr:`model` carries a bare base id. Not every model accepts
-            every effort — some accept none at all — so :mod:`git_loopy.cli`
+            ``copilot.CopilotClient.create_session``. One of ``"none"`` /
+            ``"minimal"`` / ``"low"`` / ``"medium"`` / ``"high"`` /
+            ``"xhigh"`` / ``"max"``, or ``None``. The string ``"none"``
+            explicitly requests no reasoning; ``None`` lets the backend pick.
+            Model id and reasoning effort are **separate axes**: the value here
+            is sent verbatim while :attr:`model` carries a bare base id. Not
+            every model accepts every effort — some accept no configuration at
+            all — so :mod:`git_loopy.cli`
             gates this against :data:`MODEL_REASONING_EFFORTS` before
-            composing the config. ``REASONING_EFFORT`` env overrides the
-            value derived from a ``MODEL`` suffix or the kit default.
+            composing the config. ``GIT_LOOPY_REASONING_EFFORT`` overrides the
+            value derived from a ``GIT_LOOPY_MODEL`` suffix or the kit default.
         issue_source: ``"github"`` (default) for the GitHub-issue-backed
             collector or ``"prds"`` for the legacy local-markdown layout.
             This slice (#10) only implements ``"github"``; ``"prds"``
@@ -213,6 +221,6 @@ class RunConfig:
         ):
             raise ValueError(
                 f"reasoning_effort must be one of "
-                f"{sorted(REASONING_EFFORTS)} or None, got "
+                f"{list(REASONING_EFFORT_ORDER)} or None, got "
                 f"{self.reasoning_effort!r}"
             )

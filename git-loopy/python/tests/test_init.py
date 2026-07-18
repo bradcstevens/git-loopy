@@ -186,6 +186,25 @@ def test_collect_model_effort_skips_effort_when_unsupported() -> None:
     assert (model, effort) == ("claude-opus-4.5", None)
 
 
+def test_collect_model_effort_retains_live_none_and_minimal() -> None:
+    model, effort = init_module._collect_model_and_effort(
+        input_fn=_Input("1", "2"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [
+            _choice(
+                "reasoning-model",
+                efforts=("none", "minimal"),
+                default="minimal",
+            )
+        ],
+        default_model="reasoning-model",
+        default_effort=None,
+        warn=lambda _message: None,
+    )
+
+    assert (model, effort) == ("reasoning-model", "minimal")
+
+
 def test_collect_model_effort_falls_back_to_static_on_fetch_failure() -> None:
     warnings: list[str] = []
 
@@ -204,6 +223,28 @@ def test_collect_model_effort_falls_back_to_static_on_fetch_failure() -> None:
     # A real model id from the static matrix was offered + chosen.
     assert model in init_module.MODEL_REASONING_EFFORTS
     assert any("live model list" in w for w in warnings)
+
+
+def test_static_choices_offer_only_each_models_supported_efforts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        init_module,
+        "MODEL_REASONING_EFFORTS",
+        {
+            "reasoning-model": frozenset({"none", "minimal", "high"}),
+            "no-reasoning-model": frozenset(),
+        },
+    )
+
+    choices = {choice.id: choice for choice in init_module._static_choices()}
+
+    assert choices["reasoning-model"].supported_efforts == (
+        "none",
+        "minimal",
+        "high",
+    )
+    assert choices["no-reasoning-model"].supported_efforts == ()
 
 
 def test_ask_index_rejects_disabled_row() -> None:

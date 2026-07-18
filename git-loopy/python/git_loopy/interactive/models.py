@@ -50,9 +50,9 @@ POLICY_DISABLED = "disabled"
 class Selection:
     """The picker's outcome: the chosen model id + (optional) reasoning effort.
 
-    ``effort`` is ``None`` when the chosen model supports no reasoning effort
-    (stage 2 is auto-skipped) — the run then sends no effort, mirroring the
-    config's capability gate.
+    ``effort`` is ``None`` when the chosen model supports no configurable
+    reasoning effort (stage 2 is auto-skipped). It is the string ``"none"``
+    when the operator explicitly chooses no reasoning.
     """
 
     model: str

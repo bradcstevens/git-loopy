@@ -94,6 +94,8 @@ def test_coerce_int_and_float_validate_bounds() -> None:
 
 def test_coerce_enum_keys_validate_choices() -> None:
     assert configcmd.coerce_value("reasoning_effort", "HIGH") == "high"
+    assert configcmd.coerce_value("reasoning_effort", "MiNiMaL") == "minimal"
+    assert configcmd.coerce_value("reasoning_effort", "NONE") == "none"
     assert configcmd.coerce_value("issue_source", "prds") == "prds"
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("reasoning_effort", "ultra")

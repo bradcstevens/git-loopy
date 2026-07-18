@@ -103,7 +103,9 @@ def test_run_config_validation_rejects_invalid_values(field: str, value: object)
         RunConfig(**kwargs)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize(
+    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
 def test_run_config_accepts_valid_reasoning_effort(effort: str) -> None:
     """The documented reasoning-effort literals construct without raising."""
     cfg = RunConfig(reasoning_effort=effort)

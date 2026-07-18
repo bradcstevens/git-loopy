@@ -398,6 +398,27 @@ def test_invalid_config_effort_aborts() -> None:
         _resolve(project={"reasoning_effort": "turbo"})
 
 
+@pytest.mark.parametrize(
+    ("project", "global_", "expected"),
+    [
+        ({"reasoning_effort": "NONE"}, {}, "none"),
+        ({}, {"reasoning_effort": "MiNiMaL"}, "minimal"),
+    ],
+)
+def test_project_and_global_config_accept_current_efforts_case_insensitively(
+    project: dict[str, object],
+    global_: dict[str, object],
+    expected: str,
+) -> None:
+    run = _resolve(
+        project=project,
+        global_=global_,
+        warn=lambda _message: None,
+    ).run
+
+    assert run.reasoning_effort == expected
+
+
 def test_model_flag_overrides_env_and_config() -> None:
     # The real ``--model`` flag (#54) sits at the top of the chain: it wins
     # over env + project + global config.
