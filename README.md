@@ -13,8 +13,8 @@ The core of most Loop Engineering implements concepts derived from Ralph Loops a
 **git-loopy** is a GitHub Copilot SDK framework for **loop engineering**: turning
 well-shaped issues into bounded, observable, autonomous software delivery. It
 orchestrates a Runner family around one shared Wrapper contract. The Python
-reference runner is available now; shell, PowerShell, and Rust Orchestrators are
-under active development.
+reference runner and the shell and PowerShell ports are shippable phase-1 members
+today, spanning Linux, macOS, and Windows; a Rust Orchestrator is planned.
 
 Models can produce code quickly, but an unstructured prompt-to-code process loses
 intent, overruns useful context, and hides whether the result is actually good.
@@ -149,8 +149,9 @@ flowchart TD
 The [workflow guide](docs/workflow.md) expands this path. The
 [concepts guide](docs/concepts.md) explains the context model, the [Wrapper
 contract](docs/wrapper-contract.md) defines every Orchestrator's behavior, and
-the [Python reference runner](git-loopy/python/README.md) documents the currently
-available implementation.
+[`docs/runners.md`](docs/runners.md) documents the Runner family — the
+[Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and
+[PowerShell](git-loopy/powershell/README.md) Orchestrators available today.
 
 ## Acknowledgments
 

@@ -11,10 +11,55 @@ host language that fits their operating system and comfort level
 ([ADR-0013](adr/0013-multi-language-runner-family.md)).
 
 The **Python Orchestrator** at [`git-loopy/python/`](../git-loopy/python/),
-built on the GitHub Copilot Python SDK, is the reference implementation and the
-only shippable member today. Shell, PowerShell, and Rust Orchestrators are
-planned. Launch the Python member with `git-loopy`; its
-[README](../git-loopy/python/README.md) covers installation and invocation.
+built on the GitHub Copilot Python SDK, is the **reference implementation**.
+Alongside it, the **shell** (Bash) and **PowerShell** ports are now **shippable
+phase-1 members** — each runs the complete autonomous loop with plain streamed
+output. A **Rust** Orchestrator is still planned.
+
+| Orchestrator            | Language                     | Platforms              | Quickstart                                                        |
+| ----------------------- | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
+| **Python** (reference)  | Python ≥ 3.11 + Copilot SDK  | Linux, macOS, Windows  | [`git-loopy/python/README.md`](../git-loopy/python/README.md)     |
+| **shell**               | Bash 4+ (needs `jq`)         | Linux, macOS           | [`git-loopy/shell/README.md`](../git-loopy/shell/README.md)       |
+| **PowerShell**          | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
+
+Pick the member that matches your OS and the language you're comfortable with;
+all implement the same [Wrapper contract](wrapper-contract.md) and are held in
+lockstep by the [Conformance suite](../git-loopy/conformance/README.md) in CI
+([ADR-0013](adr/0013-multi-language-runner-family.md)). Each port's quickstart is
+self-contained (prerequisites, install, skills onboarding, a runnable example,
+the phase-1 environment surface, replay artifacts, and exit codes); the shared
+contract, the per-Iteration flow, and skill routing live once in `docs/` and are
+linked, not copied.
+
+## Phase 1 today, richer experience later
+
+Every phase-1 member runs the full loop contract — collection, the
+discriminator, the auto-close backstop, progress/Strike accounting, the
+Checkpoint, push, the exit-code table, and the phase-1
+[environment surface](wrapper-contract.md#11-environment-variable-surface-must-honour-the-phase-1-core)
+— and emits the shared **Event schema** as JSONL. The richer experience is
+delivered in later phases, sequenced value-first
+([ADR-0013](adr/0013-multi-language-runner-family.md#decision)):
+
+- **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
+  binary renders the Event schema for the shell and PowerShell ports (the Python
+  member already has its Textual Dashboard), plus prebuilt binaries and
+  **package-manager distribution** (Homebrew, `winget`/`scoop`). Until it lands,
+  the native ports stream plain text and run in place from the clone — an
+  optional `install.sh` / `install.ps1` only adds a `git-loopy` launcher to your
+  `PATH` (no Python, no TUI helper, no package manager).
+- **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
+  wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
+  cost estimation reach the native ports (the Python member has these today; the
+  shell and PowerShell ports honour CLI flag > env var > built-in default).
+- **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
+  Orchestrators (the Python member offers it today via its `otel` extra).
+- **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Waves** /
+  **Integration** across the family.
+
+The rest of this page documents the Python reference member in depth; its
+per-Iteration flow, exit conditions, and skill routing below are the shared
+behaviour every port implements.
 
 ## Python reference Orchestrator
 
@@ -154,4 +199,6 @@ Iteration.
 - [`docs/workflow.md`](workflow.md) — where autonomous execution fits in the complete planning-to-review loop.
 - [`docs/customization.md`](customization.md) — adjusting `AGENTS.md` feedback loops and `PROMPT.md` skill routing.
 - [`git-loopy/python/README.md`](../git-loopy/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.
+- [`git-loopy/shell/README.md`](../git-loopy/shell/README.md) — the Bash port quickstart (Linux/macOS; needs `jq`).
+- [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) — the PowerShell port quickstart (Windows/Linux/macOS; no `jq`).
 - Back to [`README.md`](../README.md).
