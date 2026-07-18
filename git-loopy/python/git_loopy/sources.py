@@ -668,12 +668,15 @@ class PrdsIssueSource:
       does not exist).
     * Iterate direct subdirectories of ``prds/`` — these are the
       "feature" directories. Skip a top-level directory literally
-      named ``done`` (would be unusual but cheap to guard against).
+      named ``done`` (would be unusual but cheap to guard against), and
+      skip symlinked directories so discovery cannot leave the expected
+      tree.
     * Within each feature directory, list immediate files (not
       sub-directories — so any ``done/`` subdirectory is naturally
       ignored) whose name matches the regex ``^\\d+-.*\\.md$``.
       This excludes ``prd.md`` (no digit prefix), ``notes.md`` (no
-      digit prefix), and arbitrary non-numbered markdown files.
+      digit prefix), arbitrary non-numbered markdown files, and symlinked
+      files.
     * Sort the combined results by their repo-relative POSIX path so
       cross-feature order is stable and within-feature order is the
       same lexicographic order POSIX ``sort`` would give.
@@ -722,30 +725,20 @@ class PrdsIssueSource:
         for feature_dir in sorted(
             prds_dir.iterdir(), key=lambda p: p.name
         ):
-            if not feature_dir.is_dir():
+            if feature_dir.is_symlink() or not feature_dir.is_dir():
                 continue
             if feature_dir.name == "done":
                 # Defensive: a top-level prds/done/ wouldn't be a
                 # feature directory anyway.
                 continue
             for md_path in sorted(feature_dir.iterdir(), key=lambda p: p.name):
-                if not md_path.is_file():
+                if md_path.is_symlink() or not md_path.is_file():
                     continue
                 if md_path.name == "prd.md":
                     continue
                 if not _RE_PRDS_NAME.match(md_path.name):
                     continue
-                try:
-                    rel_path = md_path.relative_to(self._repo_root).as_posix()
-                except ValueError:
-                    # Symlink chicanery (md_path resolves outside
-                    # repo_root). Skip rather than potentially escape
-                    # the worktree.
-                    self._diag.warning(
-                        "prds: %s does not resolve under repo_root; skipping",
-                        md_path,
-                    )
-                    continue
+                rel_path = md_path.relative_to(self._repo_root).as_posix()
                 try:
                     body = md_path.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError) as exc:

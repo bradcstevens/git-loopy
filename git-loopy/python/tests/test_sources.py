@@ -614,6 +614,40 @@ class TestPrdsCollectAfkReady:
         items = impl.collect_afk_ready()
         assert [i.ref for i in items] == ["prds/featA/001-a.md"]
 
+    def test_skips_symlinked_feature_directories(self, tmp_path: Path) -> None:
+        target = tmp_path / "outside-feature"
+        _write_md(target / "001-escaped.md", _AFK_BODY)
+        linked = tmp_path / "prds" / "escaped"
+        linked.parent.mkdir(parents=True)
+        try:
+            linked.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks are unavailable: {exc}")
+        _write_md(tmp_path / "prds" / "featA" / "002-active.md", _AFK_BODY)
+
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+
+        assert [i.ref for i in impl.collect_afk_ready()] == [
+            "prds/featA/002-active.md"
+        ]
+
+    def test_skips_symlinked_issue_files(self, tmp_path: Path) -> None:
+        target = tmp_path / "outside-issue.md"
+        _write_md(target, _AFK_BODY)
+        linked = tmp_path / "prds" / "featA" / "001-escaped.md"
+        linked.parent.mkdir(parents=True)
+        try:
+            linked.symlink_to(target)
+        except OSError as exc:
+            pytest.skip(f"file symlinks are unavailable: {exc}")
+        _write_md(tmp_path / "prds" / "featA" / "002-active.md", _AFK_BODY)
+
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+
+        assert [i.ref for i in impl.collect_afk_ready()] == [
+            "prds/featA/002-active.md"
+        ]
+
     def test_rendered_block_format_matches_bash_collector(
         self, tmp_path: Path
     ) -> None:
