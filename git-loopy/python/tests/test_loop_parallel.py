@@ -162,11 +162,16 @@ class _ParallelFakeClient:
         on_event: Callable[[SessionEvent], None] | None = None,
         on_user_input_request: Any = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         working_directory: str | None = None,
         **_extra: Any,
     ) -> _ParallelFakeSession:
         self.create_calls.append(
-            {"working_directory": working_directory, "model": model}
+            {
+                "working_directory": working_directory,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            }
         )
         session = _ParallelFakeSession(
             on_event=on_event,
@@ -366,6 +371,205 @@ def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
     assert [e["issue"] for e in auto_closes] == [42, 43]
     # Both integrated Lane branches deleted (breadcrumbs are for failures only).
     assert sorted(fake_git.branch_deletes) == sorted(branches)
+
+
+def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
+    tmp_path, monkeypatch
+) -> None:
+    """Each Lane resolves its own (model, effort) at Active-issue pickup (#148).
+
+    A two-Lane Wave where issue 42 carries ``task-type:docs`` — routed to
+    ``gpt-5-mini @ medium`` by the run config's ``[routing]`` map — and issue 43
+    is unlabelled (so it keeps the global default ``claude-opus-4.8 @ max``).
+    Asserts, at the session-creation seam, that each Lane opens its session on
+    ITS OWN resolved pair: Lanes resolve independently and never contend over a
+    shared model choice.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "task-type:docs"],
+            ),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("gpt-5-mini")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    fake_gate = FakeGateRunner()
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: fake_gate)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # Map each Lane's work-session create_session call by its worktree.
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    # The routed Lane (task-type:docs) opened on the routed (model, effort)...
+    assert by_dir["issue-42"]["model"] == "gpt-5-mini"
+    assert by_dir["issue-42"]["reasoning_effort"] == "medium"
+    # ...while the unlabelled Lane opened on the global default.
+    assert by_dir["issue-43"]["model"] == "claude-opus-4.8"
+    assert by_dir["issue-43"]["reasoning_effort"] == "max"
+
+
+def test_parallel_auto_resolution_session_reuses_lane_routed_model(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane's auto-resolution session reuses that Lane's routed pair (#148).
+
+    Issue 42 (``task-type:docs`` -> ``gpt-5-mini @ medium``) goes red on its
+    initial landing, so Integration reverts and runs a bounded auto-resolution
+    agent for it; that attempt is green and lands. Asserts the auto-resolution
+    session opened in 42's dedicated integration worktree used the SAME resolved
+    ``(model, effort)`` the Lane resolved once at pickup — not the global
+    default — so a Lane resolves its route exactly once.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "task-type:docs"],
+            ),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("gpt-5-mini")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    # 42 is red on its initial landing, green on its first auto-resolution
+    # attempt; 43 (default) is green on its first landing.
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: FakeGateRunner(outcomes=[False, True], default=True),
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # The auto-resolution agent ran in 42's dedicated integration worktree on
+    # the Lane's routed pair (never the global default).
+    resolution_calls = [
+        c
+        for c in fake_client.create_calls
+        if c["working_directory"] and "/integrate/" in c["working_directory"]
+    ]
+    assert resolution_calls, "expected an auto-resolution session for the Lane"
+    for c in resolution_calls:
+        assert c["working_directory"].endswith("/issue-42")
+        assert c["model"] == "gpt-5-mini"
+        assert c["reasoning_effort"] == "medium"
+
+    # Both issues still landed and closed.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
+
+
+def test_parallel_lane_routing_warning_surfaces_per_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """An unknown task-type key warns per-issue on the diagnostics channel (#148).
+
+    Issue 42 carries ``task-type:mystery`` — a key with no ``[routing]`` entry —
+    while routing is active, so :func:`resolve_iteration_model` falls the Lane
+    back to the global default AND warns. Asserts the advisory surfaces on the
+    existing per-issue diagnostics channel, scoped to that Lane's issue, and
+    that the Lane still opened on the gated global default.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "task-type:mystery"],
+            ),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # The routing advisory is attributed to Lane #42 on the diagnostics log.
+    diag = _diag_log(tmp_path)
+    assert "lane #42 routing:" in diag
+    assert "task-type:mystery" in diag
+    # ...and the unknown-key Lane fell back to the gated global default.
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-4.8"
+    assert by_dir["issue-42"]["reasoning_effort"] == "max"
 
 
 def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> None:

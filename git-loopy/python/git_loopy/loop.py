@@ -123,7 +123,7 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import settings as settings_module
 from git_loopy import worktree as worktree_module
-from git_loopy.config import RunConfig
+from git_loopy.config import RunConfig, resolve_iteration_model
 from git_loopy.emit import EventEmitter
 from git_loopy.persist import (
     IterationCounters,
@@ -1105,6 +1105,13 @@ class _Lane:
     the worktree path, the root-bound child :class:`~git_loopy.git.GitClient`
     addressing that worktree, and the pre-session head SHA captured at creation
     for per-Lane commit accounting.
+
+    The ``(model, reasoning_effort)`` the Lane runs on is resolved **once** at
+    Lane creation (:func:`~git_loopy.config.resolve_iteration_model`, #147) from
+    the Active issue's ``task-type:`` labels, and reused for BOTH this Lane's
+    work session and its Integration / auto-resolution session (#148) — so a
+    Lane resolves its route exactly once. An unlabelled Lane (or an unknown /
+    conflicting label) carries the gated global default.
     """
 
     item: AfkReadyItem
@@ -1112,6 +1119,8 @@ class _Lane:
     path: Path
     git: git_module.GitClient
     pre_sha: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
 
 
 def _lane_sort_key(lane: _Lane) -> tuple[int, int, str]:
@@ -1392,6 +1401,19 @@ class _ParallelLoop:
                 )
                 continue
             lane = _Lane(item=item, branch=branch, path=path, git=wt_git)
+            # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
+            # the structural per-Lane seam per-issue routing hangs off (#148).
+            # An unknown / conflicting label warns on the existing per-issue
+            # diagnostics channel (scoped to this Lane's ref); an unlabelled
+            # Lane (or routing-off) yields the gated global default. The pair is
+            # reused for this Lane's work AND auto-resolution sessions.
+            lane.model, lane.reasoning_effort = resolve_iteration_model(
+                self._config,
+                item.labels,
+                warn=lambda message, _ref=ref: self._diag.warning(
+                    "lane #%s routing: %s", _ref, message
+                ),
+            )
             try:
                 lane.pre_sha = wt_git.head_sha()
             except git_module.GitError as exc:
@@ -1514,8 +1536,8 @@ class _ParallelLoop:
                 sinks=self._sinks,
                 run_id=self._run_id,
                 iter_num=iter_num,
-                model=self._config.model,
-                reasoning_effort=self._config.reasoning_effort,
+                model=lane.model,
+                reasoning_effort=lane.reasoning_effort,
                 working_directory=str(lane.git.root),
                 issue_ref=lane.item.ref,
             ) as sdk_session:
@@ -1883,9 +1905,11 @@ class _ParallelLoop:
 
         A fresh :class:`IterationSession` pinned to the dedicated integration
         worktree, tasked to merge the Lane branch, resolve conflicts, make the
-        feedback loops pass, and commit. Bulletproof like
-        :meth:`_run_lane_session` — a timeout or error is logged and swallowed so
-        the attempt just reads as still-red and the bound advances.
+        feedback loops pass, and commit. Runs on the SAME ``(model, effort)``
+        the Lane resolved once at pickup (#148), so a Lane's route is bound once
+        and reused for its work and its recovery sessions alike. Bulletproof
+        like :meth:`_run_lane_session` — a timeout or error is logged and
+        swallowed so the attempt just reads as still-red and the bound advances.
         """
         prompt = self._resolution_prompt(lane, attempt)
         send_timeout = self._config.send_timeout_seconds
@@ -1897,8 +1921,8 @@ class _ParallelLoop:
                 sinks=self._sinks,
                 run_id=self._run_id,
                 iter_num=iter_num,
-                model=self._config.model,
-                reasoning_effort=self._config.reasoning_effort,
+                model=lane.model,
+                reasoning_effort=lane.reasoning_effort,
                 working_directory=str(int_git.root),
             ) as sdk_session:
                 try:
