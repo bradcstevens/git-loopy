@@ -44,6 +44,7 @@ __all__ = [
     "SUPPORTED_MODELS",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
+    "RECOMMENDED_ROUTING",
     "EffortGateWarning",
     "GatedEffort",
     "gate_reasoning_effort",
@@ -124,6 +125,48 @@ REASONING_EFFORT_ORDER: tuple[str, ...] = (
 #: Membership form of :data:`REASONING_EFFORT_ORDER`, used as the shared
 #: syntactic gate (for example, to reject ``"ultra"``).
 REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
+
+#: The kit's opinionated, recommended ``task-type`` -> ``(model, effort)`` core
+#: (decision #110) — the "batteries-included" routing mapping the guided-setup
+#: surfaces seed and render (``git-loopy init``'s opt-in routing step and
+#: ``git-loopy config routing use-recommended`` / its guided walk). It is the
+#: *recommended* core, **not** a closed set: the ``task-type:`` taxonomy stays
+#: open and operator-extensible — any key with a ``[routing]`` entry routes, this
+#: is just the shipped starting point.
+#:
+#: Keyed by the bare task-type key (the part *after* :data:`TASK_TYPE_LABEL_PREFIX`,
+#: matching :attr:`RunConfig.routing` and the ``[routing]`` config table), in the
+#: strictly-descending effort **ladder order** the guided walk presents. A 6-type
+#: core over a 3-model ladder:
+#:
+#: ==================  =================  ========
+#: task-type key       Model              Effort
+#: ==================  =================  ========
+#: ``planning``        ``claude-opus-4.8``  ``max``
+#: ``review``          ``claude-sonnet-5``  ``xhigh``
+#: ``implementation``  ``claude-sonnet-5``  ``high``
+#: ``test``            ``claude-sonnet-5``  ``medium``
+#: ``docs``            ``gpt-5-mini``       ``medium``
+#: ``chore``           ``gpt-5-mini``       ``low``
+#: ==================  =================  ========
+#:
+#: The **global default stays** ``claude-opus-4.8 @ max`` (today's built-in) —
+#: deliberately no behaviour change: ``planning`` equals the default and is kept
+#: as an explicit intent marker, so seeding the core changes nothing for an
+#: unlabelled issue. ``gpt-5-mini`` (which accepts reasoning effort) carries the
+#: cheap tier so ``docs`` and ``chore`` differ by effort. Every pair is valid
+#: against :data:`MODEL_REASONING_EFFORTS` (it survives :func:`gate_reasoning_effort`
+#: unchanged) — pinned by ``tests/test_config.py``.
+RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        "planning": ("claude-opus-4.8", "max"),
+        "review": ("claude-sonnet-5", "xhigh"),
+        "implementation": ("claude-sonnet-5", "high"),
+        "test": ("claude-sonnet-5", "medium"),
+        "docs": ("gpt-5-mini", "medium"),
+        "chore": ("gpt-5-mini", "low"),
+    }
+)
 
 #: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for
 #: an hour or more, so the SDK's own 60s default is far too aggressive. Lives

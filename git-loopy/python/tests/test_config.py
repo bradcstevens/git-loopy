@@ -197,3 +197,82 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
     assert SUPPORTED_MODELS == frozenset(expected)
     for model, efforts in MODEL_REASONING_EFFORTS.items():
         assert efforts <= REASONING_EFFORTS, model
+
+
+def test_recommended_routing_is_the_locked_six_type_core() -> None:
+    """The recommended core is the locked 6-type mapping in ladder order (#154).
+
+    Keyed by the bare ``task-type`` key (matching :attr:`RunConfig.routing` and
+    the ``[routing]`` config table), in the strictly-descending effort ladder
+    order the guided-setup surfaces present.
+    """
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    assert dict(RECOMMENDED_ROUTING) == {
+        "planning": ("claude-opus-4.8", "max"),
+        "review": ("claude-sonnet-5", "xhigh"),
+        "implementation": ("claude-sonnet-5", "high"),
+        "test": ("claude-sonnet-5", "medium"),
+        "docs": ("gpt-5-mini", "medium"),
+        "chore": ("gpt-5-mini", "low"),
+    }
+    # Ladder order is load-bearing: the guided walk presents the core in this
+    # sequence, so a plain set/dict-equality check is not enough.
+    assert tuple(RECOMMENDED_ROUTING) == (
+        "planning",
+        "review",
+        "implementation",
+        "test",
+        "docs",
+        "chore",
+    )
+
+
+def test_recommended_routing_is_a_read_only_mapping() -> None:
+    """The shared recommended core rejects mutation (one canonical constant)."""
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    with pytest.raises(TypeError):
+        RECOMMENDED_ROUTING["planning"] = ("gpt-5-mini", "low")  # type: ignore[index]
+
+
+def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
+    """Every recommended pair survives the shared effort gate unchanged (#154).
+
+    "Valid against the roster's per-model accepted-effort sets" means the pair
+    passes :func:`gate_reasoning_effort` without being rewritten or warned — the
+    same gate a routed pair flows through at Active-issue pickup.
+    """
+    from git_loopy.config import (
+        MODEL_REASONING_EFFORTS,
+        RECOMMENDED_ROUTING,
+        gate_reasoning_effort,
+    )
+
+    for key, (model, effort) in RECOMMENDED_ROUTING.items():
+        assert model in MODEL_REASONING_EFFORTS, key
+        assert effort in MODEL_REASONING_EFFORTS[model], key
+        gated = gate_reasoning_effort(model, effort)
+        assert (gated.model, gated.effort) == (model, effort), key
+        assert gated.warning is None, key
+
+
+def test_recommended_routing_preserves_the_shipped_global_default() -> None:
+    """The shipped global default stays ``claude-opus-4.8 @ max`` (#154, #110).
+
+    The recommended core is deliberately behaviour-preserving for an unlabelled
+    issue: the global default is unchanged, and ``planning`` equals it (an
+    explicit intent marker for the default), so seeding the core changes nothing
+    for issues that carry no ``task-type:`` label.
+    """
+    from git_loopy import cli
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    assert (cli._DEFAULT_MODEL, cli._DEFAULT_REASONING_EFFORT) == (
+        "claude-opus-4.8",
+        "max",
+    )
+    assert RECOMMENDED_ROUTING["planning"] == (
+        cli._DEFAULT_MODEL,
+        cli._DEFAULT_REASONING_EFFORT,
+    )
