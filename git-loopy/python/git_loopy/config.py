@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Callable, Iterable, Literal, Mapping
 
 __all__ = [
     "RunConfig",
@@ -43,10 +43,19 @@ __all__ = [
     "MODEL_REASONING_EFFORTS",
     "SUPPORTED_MODELS",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
+    "TASK_TYPE_LABEL_PREFIX",
     "EffortGateWarning",
     "GatedEffort",
     "gate_reasoning_effort",
+    "resolve_iteration_model",
 ]
+
+#: The triage-label prefix the runner reads to route an Active issue. The key
+#: *after* the prefix (e.g. ``task-type:docs`` -> ``docs``) indexes
+#: :attr:`RunConfig.routing`. The runner **reads** this label and **never**
+#: infers the task type from issue content (mirroring ``parallel-safe`` /
+#: ``independent``); the ``[routing]`` table is the source of truth for valid keys.
+TASK_TYPE_LABEL_PREFIX = "task-type:"
 
 #: Per-model reasoning-effort capability matrix for the models the kit
 #: officially supports. Maps each Copilot model id to the set of
@@ -334,3 +343,120 @@ class RunConfig:
         # caller's dict, no post-construction mutation) and stays safe to reuse
         # across every Iteration. Built once by the resolver (issue #146).
         object.__setattr__(self, "routing", MappingProxyType(dict(self.routing)))
+
+
+def _ignore_routing_warning(_message: str) -> None:
+    """Default no-op ``warn`` sink so :func:`resolve_iteration_model` stays pure."""
+
+
+def _gate_pair(
+    pair: tuple[str | None, str | None],
+) -> tuple[str | None, str | None]:
+    """Pass a ``(model, effort)`` source pair through the shared effort gate.
+
+    A ``None`` model means "let the SDK pick its default"; it has nothing to gate,
+    so the effort passes through untouched. A concrete model id is gated against
+    :data:`MODEL_REASONING_EFFORTS` via :func:`gate_reasoning_effort`.
+    """
+    model, effort = pair
+    if model is None:
+        return None, effort
+    gated = gate_reasoning_effort(model, effort)
+    return gated.model, gated.effort
+
+
+def resolve_iteration_model(
+    run_config: RunConfig,
+    issue_labels: Iterable[str],
+    *,
+    warn: Callable[[str], None] = _ignore_routing_warning,
+) -> tuple[str | None, str | None]:
+    """Resolve the gated ``(model, effort)`` pair an Iteration runs on (issue #147).
+
+    The single load-bearing seam per-issue routing hangs off. A call site invokes
+    it at **Active-issue pickup**: it filters the issue's ``task-type:<key>`` labels
+    (:data:`TASK_TYPE_LABEL_PREFIX` — the runner *reads* the label, it never infers
+    the type), selects a source pair per the locked table below, passes that pair
+    through the shared effort gate (:func:`gate_reasoning_effort`, #145), and returns
+    it. The ``[routing]`` table on :attr:`run_config.routing <RunConfig.routing>` is
+    the source of truth for valid keys; the global default is the run config's
+    top-level ``(model, effort)``.
+
+    Source-pair selection (decision #109):
+
+    ======================================  ===============  =========================
+    ``task-type:`` labels on the issue      Source pair      Warn?
+    ======================================  ===============  =========================
+    none                                    global default   no (silent — normal path)
+    one known key                           that entry       no
+    one unknown key                         global default   yes — unknown key
+    >=2 keys, differing resolved values     global default   yes — conflict (labels)
+    >=2 keys, all resolving to same value   that pair         no
+    ======================================  ===============  =========================
+
+    **Suppression / back-compat.** When :attr:`run_config.routing <RunConfig.routing>`
+    is empty — no ``[routing]`` block, or an explicit ``--model`` /
+    ``--reasoning-effort`` override suppressing routing run-wide — every issue resolves
+    to the single gated global/explicit pair, with **no** label inspection and no
+    warning (so a labelled issue never raises a spurious "unknown key").
+
+    **No I/O.** This function is pure and exhaustively unit-testable; warnings surface
+    through the injected ``warn`` callback (default no-op), which a call site wires to
+    its per-issue warning channel.
+
+    Args:
+        run_config: The frozen run configuration carrying the routing map and the
+            global-default ``(model, reasoning_effort)``.
+        issue_labels: The Active issue's labels (only ``task-type:`` ones matter).
+        warn: Sink for the non-fatal unknown-key / conflict advisories.
+
+    Returns:
+        The gated ``(model, effort)`` pair the Iteration should run on. ``model`` is
+        ``None`` only when the global default itself defers model choice to the SDK.
+    """
+    default: tuple[str | None, str | None] = (
+        run_config.model,
+        run_config.reasoning_effort,
+    )
+    routing = run_config.routing
+
+    # Suppression / back-compat: routing off run-wide -> gated global default, and
+    # we never inspect labels, so a labelled issue raises no spurious warning.
+    if not routing:
+        return _gate_pair(default)
+
+    keys: list[str] = []
+    for label in issue_labels:
+        if label.startswith(TASK_TYPE_LABEL_PREFIX):
+            key = label[len(TASK_TYPE_LABEL_PREFIX) :]
+            if key not in keys:
+                keys.append(key)
+
+    source: tuple[str | None, str | None]
+    if not keys:
+        source = default
+    elif len(keys) == 1:
+        key = keys[0]
+        if key in routing:
+            source = routing[key]
+        else:
+            warn(
+                f"issue task-type label "
+                f"{TASK_TYPE_LABEL_PREFIX + key!r} has no [routing] entry; "
+                f"using the global default (model, effort)."
+            )
+            source = default
+    else:
+        resolved = [routing.get(key, default) for key in keys]
+        if all(pair == resolved[0] for pair in resolved[1:]):
+            source = resolved[0]
+        else:
+            labels = sorted(TASK_TYPE_LABEL_PREFIX + key for key in keys)
+            warn(
+                f"issue carries conflicting task-type labels {labels}; their "
+                f"[routing] entries resolve to different (model, effort) pairs — "
+                f"using the global default."
+            )
+            source = default
+
+    return _gate_pair(source)
