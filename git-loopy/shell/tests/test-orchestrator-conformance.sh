@@ -262,4 +262,49 @@ if git_loopy_resolve_prompt "$repo" "$packaged_prompt" >/dev/null; then
   fail "prompt resolution succeeded with every scope absent"
 fi
 
+# --- Send-timeout watchdog (Wrapper contract §4 real-exit-status + §6) ----------
+# `git_loopy_run_bounded_turn` bounds one agent turn by the resolved send timeout
+# with a built-in watchdog (no `timeout(1)` dependency). A turn that overruns the
+# bound is terminated at ~the bound and reported as a failed turn (exit 124) —
+# landing no agent commit, so §6 counts the Iteration no-progress; a turn that
+# finishes within the bound returns its own real exit status, and its stdout is
+# always folded to stderr so the JSONL Event stream stays clean.
+
+bounded_start=$SECONDS
+set +e
+git_loopy_run_bounded_turn 1 sleep 30 2>"$temp_dir/bounded-overrun.stderr"
+bounded_status=$?
+set -e
+bounded_elapsed=$((SECONDS - bounded_start))
+assert_equal "124" "$bounded_status" \
+  "an overrunning turn is reported with the timeout exit code"
+((bounded_elapsed < 15)) ||
+  fail "an overrunning turn was not bounded (took ${bounded_elapsed}s, bound 1s)"
+[[ "$(<"$temp_dir/bounded-overrun.stderr")" == *"exceeded the 1s send timeout"* ]] ||
+  fail "an overrunning turn did not warn that the bound fired"
+
+# A turn that ignores SIGTERM is still force-terminated (SIGTERM -> SIGKILL
+# escalation), so a wedged agent can never hang the Iteration.
+bounded_start=$SECONDS
+set +e
+git_loopy_run_bounded_turn 1 bash -c 'trap "" TERM; sleep 10' 2>/dev/null
+bounded_stubborn_status=$?
+set -e
+bounded_stubborn_elapsed=$((SECONDS - bounded_start))
+assert_equal "124" "$bounded_stubborn_status" \
+  "a SIGTERM-ignoring turn is still reported as a timed-out turn"
+((bounded_stubborn_elapsed < 20)) ||
+  fail "a SIGTERM-ignoring turn was not force-terminated (took ${bounded_stubborn_elapsed}s)"
+
+set +e
+git_loopy_run_bounded_turn 30 bash -c 'exit 7' 2>/dev/null
+bounded_within_status=$?
+set -e
+assert_equal "7" "$bounded_within_status" \
+  "a within-bound turn preserves its real exit status (contract §4)"
+
+bounded_stdout="$(git_loopy_run_bounded_turn 30 bash -c 'printf agent-marker' 2>/dev/null)"
+assert_equal "" "$bounded_stdout" \
+  "the turn's own stdout is folded to stderr, never onto the Event stream"
+
 printf 'shell Orchestrator conformance: ok\n'

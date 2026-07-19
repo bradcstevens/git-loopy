@@ -1257,4 +1257,61 @@ jq -se '
 assert_contains "$(<"$temp_dir/local-only.stderr")" \
   "auto-push failed" "the local-only push failure warned"
 
+# A pathologically slow agent turn is bounded by the resolved send timeout: the
+# Orchestrator's built-in watchdog terminates it at ~the bound rather than
+# letting a hung agent hang the Iteration forever (issue #112). The terminated
+# turn lands no agent commit, so the Iteration is a failed, no-progress turn
+# (contract §4/§6) that still completes cleanly at the cap.
+repo="$temp_dir/send-timeout"
+fake_bin="$temp_dir/send-timeout-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+# Overwrite the shared fake `copilot` with one that sleeps far past the bound and
+# dies promptly on SIGTERM (taking its sleep child with it) so nothing lingers.
+cat >"$fake_bin/copilot" <<'EOF'
+#!/usr/bin/env bash
+sleep_child=""
+trap 'if [[ -n "$sleep_child" ]]; then kill "$sleep_child" 2>/dev/null || true; fi; exit 143' TERM
+printf 'slow copilot: turn started\n' >&2
+sleep "${FAKE_COPILOT_SLEEP:-60}" &
+sleep_child=$!
+wait "$sleep_child"
+# Only reached if the turn was never bounded (the pre-fix bug): make it loud.
+printf 'slow copilot: turn finished unbounded\n' >&2
+EOF
+chmod +x "$fake_bin/copilot"
+cp "$temp_dir/github-list.json" "$temp_dir/send-timeout-list.json"
+export FAKE_GH_LOG="$temp_dir/send-timeout-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/send-timeout-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/send-timeout-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "send-timeout"
+export GIT_LOOPY_SEND_TIMEOUT_SECONDS=1
+export FAKE_COPILOT_SLEEP=60
+send_timeout_start=$SECONDS
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/send-timeout.stdout" \
+  "$temp_dir/send-timeout.stderr" 1; then
+  fail "a bounded slow turn must not fail the Run: $(<"$temp_dir/send-timeout.stderr")"
+fi
+send_timeout_elapsed=$((SECONDS - send_timeout_start))
+unset GIT_LOOPY_SEND_TIMEOUT_SECONDS FAKE_COPILOT_SLEEP
+((send_timeout_elapsed < 30)) ||
+  fail "the slow turn was not bounded (Run took ${send_timeout_elapsed}s, bound 1s)"
+send_timeout_stderr="$(<"$temp_dir/send-timeout.stderr")"
+assert_contains "$send_timeout_stderr" \
+  "copilot turn exceeded the 1s send timeout" \
+  "the bounded turn warns that the send timeout fired"
+[[ "$send_timeout_stderr" != *"turn finished unbounded"* ]] ||
+  fail "the slow turn ran to completion instead of being terminated at the bound"
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 1)
+  and ([.[] | select(.type == "wrapper.strike") | .outcome] == ["warn"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "iteration_cap")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/send-timeout.stdout" >/dev/null ||
+  fail "a bounded slow turn was not accounted as a failed, no-progress Iteration"
+
 printf 'shell Orchestrator boundary: ok\n'

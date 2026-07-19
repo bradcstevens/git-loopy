@@ -884,6 +884,82 @@ git_loopy_build_prompt() {
     "$commits_block" "$issues_block" "$prompt_text"
 }
 
+git_loopy_run_bounded_turn() {
+  # Run one already-assembled agent turn ("$@") with its own stdout folded to
+  # stderr — so stdout stays the JSONL Event stream (contract §4) — bounded by a
+  # wall-clock send timeout. The bound is enforced by a built-in background
+  # watchdog rather than timeout(1)/gtimeout, so the shell port needs no extra
+  # dependency and runs unchanged on Linux, macOS, and WSL. Returns the turn's
+  # real exit status; a turn that overruns the bound is terminated and reported
+  # as exit 124 (GNU timeout's convention) — a failed, non-progress turn that
+  # lands no agent commit, so §6 Strike accounting counts it accordingly.
+  local timeout_seconds="$1"
+  shift
+
+  # Whole-second poll budget: the integer part (forced to base 10 so a
+  # zero-padded value like "08" is never mis-parsed as octal) plus one second
+  # only when the fractional part carries a non-zero digit. Rounding up never
+  # bounds a turn shorter than configured; whole-second polling keeps this
+  # Bash 4-compatible (no `wait -n`) and free of float arithmetic.
+  local int_part="${timeout_seconds%%.*}"
+  local frac_part=""
+  [[ "$timeout_seconds" == *.* ]] && frac_part="${timeout_seconds#*.}"
+  [[ "$int_part" =~ ^[0-9]+$ ]] || int_part=0
+  local budget=$((10#$int_part))
+  [[ "$frac_part" == *[1-9]* ]] && budget=$((budget + 1))
+  ((budget > 0)) || budget=1
+
+  local flag_dir
+  flag_dir="$(mktemp -d)" || return 1
+  local timed_out_flag="$flag_dir/timed_out"
+
+  "$@" 1>&2 &
+  local turn_pid=$!
+
+  # Watchdog: poll the turn's liveness once a second until the budget is spent.
+  # If the turn is still running then, mark the timeout and escalate SIGTERM ->
+  # SIGKILL so even an agent that ignores SIGTERM is reclaimed and the parent's
+  # `wait` below can never hang the Iteration. The parent only signals this
+  # watchdog after its `wait` returns (the turn is already gone by then), so the
+  # escalation always runs to completion.
+  local grace_seconds=5
+  (
+    remaining="$budget"
+    while ((remaining > 0)) && kill -0 "$turn_pid" 2>/dev/null; do
+      sleep 1
+      remaining=$((remaining - 1))
+    done
+    if kill -0 "$turn_pid" 2>/dev/null; then
+      : >"$timed_out_flag"
+      kill -TERM "$turn_pid" 2>/dev/null || true
+      grace="$grace_seconds"
+      while ((grace > 0)) && kill -0 "$turn_pid" 2>/dev/null; do
+        sleep 1
+        grace=$((grace - 1))
+      done
+      kill -KILL "$turn_pid" 2>/dev/null || true
+    fi
+  ) &
+  local watchdog_pid=$!
+
+  local status=0
+  wait "$turn_pid" 2>/dev/null || status=$?
+
+  # The turn is gone (on its own, or via the watchdog's SIGTERM/SIGKILL). Retire
+  # the watchdog so it never lingers into the next turn, then reap it.
+  kill -TERM "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  local result="$status"
+  if [[ -e "$timed_out_flag" ]]; then
+    printf 'git-loopy: copilot turn exceeded the %ss send timeout; terminated.\n' \
+      "$timeout_seconds" >&2
+    result=124
+  fi
+  rm -rf "$flag_dir"
+  return "$result"
+}
+
 git_loopy_run_agent_turn() {
   local prompt="$1"
   local -a argv=(copilot --yolo -p "$prompt" --model "$GIT_LOOPY_MODEL" --no-color)
@@ -899,8 +975,10 @@ git_loopy_run_agent_turn() {
     argv+=(--deny-tool "skill($skill)")
   done
   # Stream the agent's own output to stderr so stdout stays the JSONL Event
-  # stream. No pipe, so $? is Copilot's real exit status (contract §4).
-  "${argv[@]}" 1>&2
+  # stream, and bound the turn by the resolved send timeout. The helper preserves
+  # Copilot's real exit status (contract §4), or terminates and fails a turn that
+  # overruns the bound so a hung agent never hangs the Iteration.
+  git_loopy_run_bounded_turn "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "${argv[@]}"
 }
 
 _GIT_LOOPY_AUTO_CLOSURES=0
