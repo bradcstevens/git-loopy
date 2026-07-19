@@ -113,6 +113,40 @@ while IFS= read -r case_json; do
   done < <(jq -c '.steps[]' <<<"$case_json")
 done < <(jq -c '.cases[]' "$conformance_dir/progress-strikes.json")
 
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  active_ref="$(jq -r 'if .active_ref == null then "" else (.active_ref | tostring) end' <<<"$case_json")"
+  message="$(git_loopy_checkpoint_message "$active_ref")"
+  assert_equal \
+    "$(jq -r '.expected_message' <<<"$case_json")" \
+    "$message" \
+    "checkpoint-messages author fixture: $case_id"
+  assert_equal \
+    "[]" \
+    "$(git_loopy_extract_close_refs "$message")" \
+    "checkpoint-messages author fixture: $case_id (no close refs)"
+  is_checkpoint="false"
+  if git_loopy_is_checkpoint_message "$message"; then
+    is_checkpoint="true"
+  fi
+  assert_equal "true" "$is_checkpoint" \
+    "checkpoint-messages author fixture: $case_id (is checkpoint)"
+  [[ "$message" != *"#"* ]] ||
+    fail "checkpoint-messages author fixture: $case_id contains '#'"
+done < <(jq -c '.author_cases[]' "$conformance_dir/checkpoint-messages.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  message="$(jq -r '.message' <<<"$case_json")"
+  expected="$(jq -r '.is_checkpoint' <<<"$case_json")"
+  actual="false"
+  if git_loopy_is_checkpoint_message "$message"; then
+    actual="true"
+  fi
+  assert_equal "$expected" "$actual" \
+    "checkpoint-messages detection fixture: $case_id"
+done < <(jq -c '.detection_cases[]' "$conformance_dir/checkpoint-messages.json")
+
 (
   unset GIT_LOOPY_MODEL
   unset GIT_LOOPY_REASONING_EFFORT
