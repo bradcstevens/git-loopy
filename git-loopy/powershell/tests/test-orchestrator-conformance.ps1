@@ -136,6 +136,44 @@ foreach ($Case in $ProgressStrikes["cases"]) {
     }
 }
 
+$CheckpointMessages = Get-Content `
+    -LiteralPath (Join-Path $ConformanceDir "checkpoint-messages.json") `
+    -Raw |
+    ConvertFrom-Json -AsHashtable
+foreach ($Case in $CheckpointMessages["author_cases"]) {
+    # Translate the JSON active_ref to the seam's string argument: null -> ""
+    # (unattributed), an int -> its digits (issue-number attribution), and a
+    # digit-bearing string ref passes through verbatim. Mirrors the shell
+    # adapter's `if .active_ref == null then "" else (.active_ref | tostring)`.
+    $ActiveRefValue = $Case["active_ref"]
+    $ActiveRef = if ($null -eq $ActiveRefValue) {
+        ""
+    }
+    else {
+        [string]$ActiveRefValue
+    }
+    $Message = Get-GitLoopyCheckpointMessage -ActiveRef $ActiveRef
+    $CloseRefs = Get-GitLoopyCloseReferences -Messages $Message
+    Assert-Equal (
+        $Case["expected_message"]
+    ) $Message "checkpoint-messages author fixture: $($Case["id"])"
+    Assert-Equal 0 (
+        @($CloseRefs).Count
+    ) "checkpoint-messages author fixture: $($Case["id"]) (no close refs)"
+    Assert-True (
+        Test-GitLoopyCheckpointMessage -Message $Message
+    ) "checkpoint-messages author fixture: $($Case["id"]) (is checkpoint)"
+    Assert-True (
+        -not $Message.Contains("#")
+    ) "checkpoint-messages author fixture: $($Case["id"]) contains '#'"
+}
+foreach ($Case in $CheckpointMessages["detection_cases"]) {
+    $Actual = Test-GitLoopyCheckpointMessage -Message $Case["message"]
+    Assert-Equal (
+        [bool]$Case["is_checkpoint"]
+    ) $Actual "checkpoint-messages detection fixture: $($Case["id"])"
+}
+
 $EmptyEnvironment = [ordered]@{}
 $Defaults = Resolve-GitLoopyConfig `
     -Arguments @() `
