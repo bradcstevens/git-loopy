@@ -10,6 +10,12 @@ import pytest
 
 from git_loopy import events as events_module
 from git_loopy import wrapper as wrapper_module
+from git_loopy.config import (
+    MODEL_REASONING_EFFORTS,
+    RunConfig,
+    gate_reasoning_effort,
+    resolve_iteration_model,
+)
 from git_loopy.sources import is_afk_ready
 from git_loopy.wrapper import (
     CLOSE_KEYWORD_RE,
@@ -139,3 +145,57 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 )
 def test_event_serialization_fixture(case: dict[str, Any]) -> None:
     assert events_module.to_jsonl_line(case["event"]) == case["jsonl"]
+
+
+_MODEL_ROSTER = _load_fixture("model-roster.json")
+
+
+def test_model_roster_fixture_matches_python_constant() -> None:
+    """The canonical roster fixture is the source of truth; the Python copy can't drift.
+
+    Arrays are order-insensitive sets of accepted efforts, so compare as frozensets
+    (§14 phase-3 pin). The fixture's keys are the supported-model set.
+    """
+    roster = {
+        model: frozenset(efforts) for model, efforts in _MODEL_ROSTER["roster"].items()
+    }
+    assert roster == MODEL_REASONING_EFFORTS
+
+
+_EFFORT_GATE = _load_fixture("effort-gate.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EFFORT_GATE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_effort_gate_fixture(case: dict[str, Any]) -> None:
+    gated = gate_reasoning_effort(case["model"], case["effort"])
+    assert gated.model == case["expected_model"]
+    assert gated.effort == case["expected_effort"]
+    assert (gated.warning is not None) is case["warns"]
+
+
+_ROUTING_RESOLUTION = _load_fixture("routing-resolution.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ROUTING_RESOLUTION["cases"],
+    ids=lambda case: case["id"],
+)
+def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
+    routing = {
+        key: (entry["model"], entry["effort"]) for key, entry in case["routing"].items()
+    }
+    config = RunConfig(
+        model=case["default"]["model"],
+        reasoning_effort=case["default"]["effort"],
+        routing=routing,
+    )
+    warnings: list[str] = []
+    result = resolve_iteration_model(config, case["labels"], warn=warnings.append)
+
+    assert result == (case["expected"]["model"], case["expected"]["effort"])
+    assert bool(warnings) is case["warns"]

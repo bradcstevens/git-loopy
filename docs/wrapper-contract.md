@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.0 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.1 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -210,7 +210,50 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
 
-## 14. Changing this contract
+## 14. Per-issue model routing (phase 3, MUST)
+
+Wherever an Orchestrator binds an Iteration to a **single Active issue at pickup** — the
+Parallel-mode **Lane** (one issue per Lane) is the only such structural pickup seam — it MUST
+resolve the model and reasoning effort **from that issue's labels**, not from the frozen
+run-wide default:
+
+- **Read, never infer.** Read the routing key off the issue's `task-type:<key>` labels; the
+  `task-type:` prefix is the contract. The Orchestrator MUST NOT infer the type from the title,
+  body, or any other heuristic, and MUST ignore non-`task-type:` labels.
+- **Resolve to one pair.** Resolve the label(s) to a single `(model, effort)` via the shared
+  `[routing]` config, honouring the family precedence spine (§11): `[routing]` is a
+  **config-file-only** tier that replaces the *single global default* with a per-issue-type
+  default — never a flag/env tier — and any explicit `--model` / `--reasoning-effort` (flag or
+  env) suppresses routing run-wide. Selection is fixed: no `task-type:` label, an unknown key,
+  or ≥2 keys resolving to different pairs fall back to the global default (the unknown-key and
+  conflict cases warn); one known key, or ≥2 keys resolving to the same pair, use that pair.
+- **Gate and fall back.** Pass the resolved effort through the shared effort gate against the
+  model roster and apply the fallback (an effort the model does not accept drops to "let the
+  backend pick"; an unknown model passes through). Routed **and** default pairs are gated
+  identically.
+- **Pass to the single invocation.** Feed the gated `(model, effort)` to that Iteration's one
+  `--model` agent invocation (§4), reusing the same pair for the Lane's integration /
+  auto-resolution session, so the Lane runs entirely on the resolved pair.
+- **Resolve once.** Resolve **once** per issue at pickup; the Orchestrator MUST NOT switch model
+  or effort mid-session.
+
+The **serial (single-Lane) loop** hands the whole AFK-ready Pool to one Iteration and the agent
+picks the Active issue mid-session, so there is no runner-side single-issue pickup to route on:
+the serial loop keeps resolving to the global default (`claude-opus-4.8 @ max`) — zero-regression.
+Serial per-issue routing is out of scope.
+
+This decision is pinned by three language-neutral fixtures in the
+[Conformance suite](../git-loopy/conformance/README.md):
+[`model-roster.json`](../git-loopy/conformance/model-roster.json) (the canonical
+`model → accepted efforts` sets — its keys are the supported-model set),
+[`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (labels + config →
+resolved `(model, effort)` and whether it warns), and
+[`effort-gate.json`](../git-loopy/conformance/effort-gate.json) (model + requested effort → gated
+result and whether it warns). The Python reference adapter drives all three against the production
+`resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
+constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
+
+## 15. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).

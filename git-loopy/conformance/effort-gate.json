@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.1",
+  "cases": [
+    {
+      "id": "unknown-model-passes-through-and-warns",
+      "model": "totally-made-up-model-9",
+      "effort": "high",
+      "expected_model": "totally-made-up-model-9",
+      "expected_effort": "high",
+      "warns": true
+    },
+    {
+      "id": "unknown-model-with-null-effort-still-warns",
+      "model": "totally-made-up-model-9",
+      "effort": null,
+      "expected_model": "totally-made-up-model-9",
+      "expected_effort": null,
+      "warns": true
+    },
+    {
+      "id": "reasoning-incapable-model-with-effort-drops-to-null-and-warns",
+      "model": "claude-sonnet-4.5",
+      "effort": "high",
+      "expected_model": "claude-sonnet-4.5",
+      "expected_effort": null,
+      "warns": true
+    },
+    {
+      "id": "reasoning-incapable-model-without-effort-is-silent",
+      "model": "claude-sonnet-4.5",
+      "effort": null,
+      "expected_model": "claude-sonnet-4.5",
+      "expected_effort": null,
+      "warns": false
+    },
+    {
+      "id": "known-model-accepted-effort-passes-through",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "expected_model": "claude-sonnet-5",
+      "expected_effort": "high",
+      "warns": false
+    },
+    {
+      "id": "known-model-unaccepted-effort-drops-to-null-and-warns",
+      "model": "gpt-5-mini",
+      "effort": "xhigh",
+      "expected_model": "gpt-5-mini",
+      "expected_effort": null,
+      "warns": true
+    },
+    {
+      "id": "known-model-effort-already-null-is-silent",
+      "model": "claude-opus-4.8",
+      "effort": null,
+      "expected_model": "claude-opus-4.8",
+      "expected_effort": null,
+      "warns": false
+    }
+  ]
+}

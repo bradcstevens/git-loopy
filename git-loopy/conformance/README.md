@@ -13,6 +13,9 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Event type literals and stable envelope-first JSON serialization |
+| `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
+| `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
+| `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 
 Every file carries `schema_version` and `contract_version`. Fixture content is
 data only: do not add host-language expressions, executable hooks, or
@@ -30,6 +33,14 @@ from
 [`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
+
+The Python reference adapter additionally pins the phase-3 per-issue routing
+decisions (Wrapper contract §14): it drives `routing-resolution.json` and
+`effort-gate.json` through the production `resolve_iteration_model` and
+`gate_reasoning_effort` seams and asserts its in-language model roster equals
+`model-roster.json`. Native ports do not implement routing yet, so these three
+fixtures are Python-adapter-only.
+
 Run them from the repository root:
 
 ```bash

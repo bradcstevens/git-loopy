@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.1",
+  "cases": [
+    {
+      "id": "no-task-type-label-uses-global-default",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["ready-for-agent", "parallel-safe"],
+      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "warns": false
+    },
+    {
+      "id": "one-known-task-type-key-uses-that-routing-entry",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {
+        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        "planning": {"model": "claude-opus-4.8", "effort": "max"}
+      },
+      "labels": ["task-type:docs", "ready-for-agent"],
+      "expected": {"model": "gpt-5-mini", "effort": "medium"},
+      "warns": false
+    },
+    {
+      "id": "one-unknown-task-type-key-falls-back-to-default-and-warns",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:frobnicate"],
+      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "warns": true
+    },
+    {
+      "id": "conflicting-keys-fall-back-to-default-and-warn",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {
+        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        "implementation": {"model": "claude-sonnet-5", "effort": "high"}
+      },
+      "labels": ["task-type:docs", "task-type:implementation"],
+      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "warns": true
+    },
+    {
+      "id": "keys-resolving-to-same-pair-use-it-silently",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {
+        "implementation": {"model": "claude-sonnet-5", "effort": "high"},
+        "test": {"model": "claude-sonnet-5", "effort": "high"}
+      },
+      "labels": ["task-type:implementation", "task-type:test"],
+      "expected": {"model": "claude-sonnet-5", "effort": "high"},
+      "warns": false
+    },
+    {
+      "id": "empty-routing-map-suppresses-routing-silently",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {},
+      "labels": ["task-type:docs", "task-type:frobnicate"],
+      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "warns": false
+    },
+    {
+      "id": "routed-pair-is-gated-effort-dropped-to-null-silently",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "xhigh"}},
+      "labels": ["task-type:docs"],
+      "expected": {"model": "gpt-5-mini", "effort": null},
+      "warns": false
+    },
+    {
+      "id": "global-default-is-gated-when-no-label-matches",
+      "default": {"model": "gpt-5-mini", "effort": "max"},
+      "routing": {"docs": {"model": "claude-sonnet-5", "effort": "high"}},
+      "labels": ["ready-for-agent"],
+      "expected": {"model": "gpt-5-mini", "effort": null},
+      "warns": false
+    }
+  ]
+}
