@@ -82,7 +82,9 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
+    EffortGateWarning,
     RunConfig,
+    gate_reasoning_effort,
 )
 
 __all__ = [
@@ -944,12 +946,13 @@ def _resolve_model_and_effort(
     2. **Effort precedence:** ``GIT_LOOPY_REASONING_EFFORT`` env (validated) >
        ``GIT_LOOPY_MODEL`` suffix > the kit default (only on a *pure* default
        invocation, i.e. ``GIT_LOOPY_MODEL`` unset) > ``None`` (let the backend pick).
-    3. **Per-model capability gate** (:data:`MODEL_REASONING_EFFORTS`):
-       a model that supports no reasoning effort is forced to ``None``
-       (the CLI hard-rejects ``session.create`` otherwise); an effort
-       outside a *known* model's documented set is passed through with a
-       warning (the CLI is the final authority); an *unknown* model is
-       passed through with a warning.
+    3. **Per-model capability gate** — the shared effort gate
+       (:func:`git_loopy.config.gate_reasoning_effort`, #145): a model that
+       supports no reasoning effort is forced to ``None`` (the CLI hard-rejects
+       ``session.create`` otherwise); an effort outside a *known* model's
+       documented set is **dropped to ``None`` with a warning** (previously it
+       was passed through, risking a mid-run ``session.create`` failure); an
+       *unknown* model is passed through with a warning.
 
     Args:
         model_env: Raw ``GIT_LOOPY_MODEL`` env value (``None`` if unset).
@@ -986,31 +989,33 @@ def _resolve_model_and_effort(
     else:
         effort, effort_explicit = None, False
 
-    # 2) per-model capability gate.
-    allowed = MODEL_REASONING_EFFORTS.get(base_model)
-    if allowed is None:
+    # 2) per-model capability gate — the single shared effort gate (#145) that
+    #    the init seed and the per-issue routing seam also use, so routed and
+    #    default pairs gate identically. The gate owns the *policy*; this call
+    #    site owns the *presentation* and its suppression rule.
+    gated = gate_reasoning_effort(base_model, effort)
+    warning = gated.warning
+    if warning is EffortGateWarning.UNKNOWN_MODEL:
         warn(
             f"model {base_model!r} is not in the kit's supported model set "
             f"({sorted(SUPPORTED_MODELS)}); passing it through to the "
             f"Copilot CLI unchanged."
         )
-        return base_model, effort
-    if not allowed:
-        # Model accepts no reasoning effort at all — must send None or the
-        # CLI rejects session.create.
-        if effort is not None and effort_explicit:
+    elif warning is EffortGateWarning.INCAPABLE_MODEL:
+        # Only nag when the operator *explicitly* asked for an effort; a
+        # defaulted effort drops to None silently for a reasoning-incapable model.
+        if effort_explicit:
             warn(
                 f"model {base_model!r} does not support reasoning-effort "
                 f"configuration; ignoring requested effort {effort!r}."
             )
-        return base_model, None
-    if effort is not None and effort not in allowed:
+    elif warning is EffortGateWarning.DROPPED_EFFORT:
         warn(
             f"model {base_model!r} documents reasoning efforts "
-            f"{sorted(allowed)}; passing {effort!r} through anyway "
-            f"(the Copilot CLI is the final authority)."
+            f"{sorted(MODEL_REASONING_EFFORTS[base_model])}; dropping requested "
+            f"effort {effort!r} (the live CLI would reject session.create for it)."
         )
-    return base_model, effort
+    return gated.model, gated.effort
 
 
 @dataclasses.dataclass(frozen=True)

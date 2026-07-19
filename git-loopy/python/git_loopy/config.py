@@ -31,6 +31,7 @@ Design notes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -41,6 +42,9 @@ __all__ = [
     "MODEL_REASONING_EFFORTS",
     "SUPPORTED_MODELS",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
+    "EffortGateWarning",
+    "GatedEffort",
+    "gate_reasoning_effort",
 ]
 
 #: Per-model reasoning-effort capability matrix for the models the kit
@@ -117,6 +121,84 @@ REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 #: :class:`RunConfig` knob (issue #51): the loop reads
 #: :attr:`RunConfig.send_timeout_seconds` rather than the env directly.
 DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
+
+
+class EffortGateWarning(Enum):
+    """Why :func:`gate_reasoning_effort` would warn — the caller owns surfacing it.
+
+    A *signal*, not a rendered message: the gate stays presentation-free and pure
+    so every caller (the run-wide resolver, the ``init`` seed, the per-issue
+    routing seam #147) can phrase the warning in its own voice and apply its own
+    suppression (e.g. the resolver only nags about a reasoning-incapable model
+    when the operator asked for the effort *explicitly*).
+    """
+
+    #: The model id is not in the kit's roster; the pair is passed through
+    #: unchanged (the Copilot CLI is the final authority on model validity).
+    UNKNOWN_MODEL = "unknown_model"
+    #: The model accepts no reasoning-effort configuration at all, but an effort
+    #: was requested; it was dropped to ``None``.
+    INCAPABLE_MODEL = "incapable_model"
+    #: A known model was asked for an effort it does not accept; it was dropped
+    #: to ``None`` (rather than passed through to a doomed ``session.create``).
+    DROPPED_EFFORT = "dropped_effort"
+
+
+@dataclass(frozen=True)
+class GatedEffort:
+    """The result of gating a ``(model, effort)`` pair against the roster.
+
+    Attributes:
+        model: The model id, returned verbatim — the gate never rewrites it.
+        effort: The gated reasoning effort: the input effort when accepted (or
+            when the model is unknown), otherwise ``None``.
+        warning: The :class:`EffortGateWarning` signal, or ``None`` when the pair
+            gated cleanly.
+    """
+
+    model: str
+    effort: str | None
+    warning: EffortGateWarning | None = None
+
+
+def gate_reasoning_effort(model: str, effort: str | None) -> GatedEffort:
+    """Gate a ``(model, effort)`` pair against the roster (:data:`MODEL_REASONING_EFFORTS`).
+
+    The single shared effort gate (issue #145). Pure — no I/O — and exhaustively
+    table-testable. Implements the locked policy:
+
+    * **Unknown model** (not in the roster): pass the pair through unchanged and
+      signal :attr:`~EffortGateWarning.UNKNOWN_MODEL`. Checked *first*, so an
+      unknown model still signals even when ``effort`` is already ``None`` (the
+      model itself is the concern) — matching the run-wide resolver's behaviour.
+    * **Reasoning-incapable model** (empty effort set): force ``effort`` to
+      ``None`` (the live CLI hard-rejects ``session.create`` otherwise) and signal
+      :attr:`~EffortGateWarning.INCAPABLE_MODEL` *only* when an effort was set.
+    * **Known model, effort accepted** (or ``effort`` already ``None``): keep the
+      pair, no warning.
+    * **Known model, effort not accepted**: drop ``effort`` to ``None`` and signal
+      :attr:`~EffortGateWarning.DROPPED_EFFORT`.
+
+    Args:
+        model: The (base) model id.
+        effort: The requested reasoning effort, or ``None``.
+
+    Returns:
+        A :class:`GatedEffort` carrying the gated pair and the warning signal.
+    """
+    allowed = MODEL_REASONING_EFFORTS.get(model)
+    if allowed is None:
+        return GatedEffort(
+            model=model, effort=effort, warning=EffortGateWarning.UNKNOWN_MODEL
+        )
+    if not allowed:
+        warning = EffortGateWarning.INCAPABLE_MODEL if effort is not None else None
+        return GatedEffort(model=model, effort=None, warning=warning)
+    if effort is None or effort in allowed:
+        return GatedEffort(model=model, effort=effort, warning=None)
+    return GatedEffort(
+        model=model, effort=None, warning=EffortGateWarning.DROPPED_EFFORT
+    )
 
 
 @dataclass(frozen=True)

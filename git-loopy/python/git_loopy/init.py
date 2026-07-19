@@ -36,7 +36,11 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from git_loopy import settings
-from git_loopy.config import MODEL_REASONING_EFFORTS, REASONING_EFFORT_ORDER
+from git_loopy.config import (
+    MODEL_REASONING_EFFORTS,
+    REASONING_EFFORT_ORDER,
+    gate_reasoning_effort,
+)
 from git_loopy.interactive.models import (
     ModelChoice,
     default_cursor_index,
@@ -235,19 +239,17 @@ def _model_label(choice: ModelChoice) -> str:
 
 
 def _gate_default_effort(model: str, effort: str | None) -> str | None:
-    """Gate a default effort against a *known* model's supported set.
+    """Gate a seeded default effort through the shared effort gate (#145).
 
-    Mirrors the resolver's capability gate: a reasoning-incapable model (empty
-    set in :data:`MODEL_REASONING_EFFORTS`) drops the effort to ``None``; an
-    unknown model keeps the effort as-is (the CLI is the final authority); a
-    known model keeps the effort only if it is actually supported.
+    Delegates to :func:`git_loopy.config.gate_reasoning_effort` — the single
+    policy the run-wide resolver (:func:`git_loopy.cli._resolve_model_and_effort`)
+    also uses — so the ``init`` seed and a live run gate a ``(model, effort)``
+    pair *identically* (a reasoning-incapable or effort-rejecting model drops the
+    effort to ``None``; an unknown model keeps it as-is, the CLI being the final
+    authority). The seed only needs the gated effort and deliberately does **not**
+    surface the gate's warning signal — seeding a sensible default should not nag.
     """
-    if model not in MODEL_REASONING_EFFORTS:
-        return effort
-    supported = MODEL_REASONING_EFFORTS[model]
-    if not supported:
-        return None
-    return effort if effort in supported else None
+    return gate_reasoning_effort(model, effort).effort
 
 
 def _collect_model_and_effort(

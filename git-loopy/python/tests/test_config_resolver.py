@@ -393,6 +393,21 @@ def test_capability_gate_forces_none_for_incapable_model(capsys) -> None:
     assert run.reasoning_effort is None
 
 
+def test_capability_gate_drops_unsupported_effort_for_known_model() -> None:
+    # Locked (#145): a *known* model asked for an effort it does not document
+    # now drops the effort to None (was pass-through), so both this run-wide
+    # resolver and the init seed gate identically through the one shared gate.
+    # gpt-5-mini documents {low, medium, high} but not ``max``.
+    messages: list[str] = []
+    run = _resolve(
+        project={"model": "gpt-5-mini", "reasoning_effort": "max"},
+        warn=messages.append,
+    ).run
+    assert run.model == "gpt-5-mini"
+    assert run.reasoning_effort is None
+    assert any("gpt-5-mini" in m for m in messages)
+
+
 def test_invalid_config_effort_aborts() -> None:
     with pytest.raises(SystemExit):
         _resolve(project={"reasoning_effort": "turbo"})
@@ -401,8 +416,11 @@ def test_invalid_config_effort_aborts() -> None:
 @pytest.mark.parametrize(
     ("project", "global_", "expected"),
     [
-        ({"reasoning_effort": "NONE"}, {}, "none"),
-        ({}, {"reasoning_effort": "MiNiMaL"}, "minimal"),
+        # Efforts the default model (claude-opus-4.8) accepts, so this pins the
+        # case-insensitive *normalisation* of a config-file effort rather than
+        # the #145 capability gate (which would drop an unsupported effort).
+        ({"reasoning_effort": "XHigh"}, {}, "xhigh"),
+        ({}, {"reasoning_effort": "MeDiUm"}, "medium"),
     ],
 )
 def test_project_and_global_config_accept_current_efforts_case_insensitively(

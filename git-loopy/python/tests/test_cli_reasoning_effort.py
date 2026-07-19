@@ -272,7 +272,7 @@ def test_main_env_override_wins_over_model_suffix(
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("XHigh", "xhigh"), ("MiNiMaL", "minimal"), ("NONE", "none")],
+    [("XHigh", "xhigh"), ("MeDiUm", "medium"), ("MAX", "max")],
 )
 def test_main_env_override_is_case_insensitive(
     monkeypatch: pytest.MonkeyPatch,
@@ -286,6 +286,12 @@ def test_main_env_override_is_case_insensitive(
     (``GIT_LOOPY_OTEL_ENABLED`` accepts ``"1"`` / ``"true"`` / ``"yes"``).
     The SDK's ``ReasoningEffort`` literal is lowercase-only, so we
     canonicalise before constructing the :class:`RunConfig`.
+
+    The efforts here are all accepted by the default model
+    (``claude-opus-4.8``) so the shared effort gate (#145) is a no-op and the
+    assertion isolates env-var *normalisation*. The lowercasing of the
+    ``none`` / ``minimal`` vocabulary (which no current model accepts, so the
+    gate would drop it) is pinned by ``test_reasoning_effort_flag_is_case_insensitive``.
     """
     monkeypatch.setenv("GIT_LOOPY_REASONING_EFFORT", raw)
     captured: list[RunConfig] = []
@@ -467,6 +473,34 @@ def test_main_model_flag_capability_gate_forces_none(
     assert exit_code == 0
     assert captured[0].model == "claude-haiku-4.5"
     assert captured[0].reasoning_effort is None
+
+
+def test_main_drops_unsupported_effort_for_known_model_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A known model asked for an effort it does not accept drops to ``None``.
+
+    #145: the run-wide resolver now shares one effort gate with the ``init``
+    seed, which *drops* an unsupported effort to ``None`` (it used to pass it
+    through with a warning, risking a mid-run ``session.create`` rejection).
+    ``gpt-5-mini`` accepts ``{low, medium, high}``; ``xhigh`` is dropped, and a
+    stderr warning names the offending model + effort.
+    """
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    exit_code = cli_module.main(
+        ["--model", "gpt-5-mini", "--reasoning-effort", "xhigh"]
+    )
+
+    assert exit_code == 0
+    assert captured[0].model == "gpt-5-mini"
+    assert captured[0].reasoning_effort is None
+    err = capsys.readouterr().err
+    assert "gpt-5-mini" in err
+    assert "xhigh" in err
 
 
 def test_main_flags_win_over_env_for_both_axes(
