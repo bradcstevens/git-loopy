@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "author_cases": [
+    {
+      "id": "unattributed-when-active-ref-is-null",
+      "active_ref": null,
+      "expected_message": "Checkpoint: capture uncommitted work-in-progress\n\nRunner-authored Checkpoint (ADR-0004): staged the worktree the agent left\nuncommitted so the next iteration starts on a clean tree and the work can\nreach the remote. Not an agent commit; excluded from Strike progress.\n\nGitLoopy-Checkpoint: unattributed"
+    },
+    {
+      "id": "int-ref-attributes-to-issue-number",
+      "active_ref": 42,
+      "expected_message": "Checkpoint: capture work-in-progress for issue 42\n\nRunner-authored Checkpoint (ADR-0004): staged the worktree the agent left\nuncommitted so the next iteration starts on a clean tree and the work can\nreach the remote. Not an agent commit; excluded from Strike progress.\n\nGitLoopy-Checkpoint: 42"
+    },
+    {
+      "id": "digit-bearing-string-ref-stays-close-keyword-free",
+      "active_ref": "prds/featA/001-ready.md",
+      "expected_message": "Checkpoint: capture work-in-progress for prds/featA/001-ready.md\n\nRunner-authored Checkpoint (ADR-0004): staged the worktree the agent left\nuncommitted so the next iteration starts on a clean tree and the work can\nreach the remote. Not an agent commit; excluded from Strike progress.\n\nGitLoopy-Checkpoint: prds/featA/001-ready.md"
+    }
+  ],
+  "detection_cases": [
+    {
+      "id": "agent-commit-with-close-keyword-is-not-a-checkpoint",
+      "message": "feat(x): real work\n\nCloses #5",
+      "is_checkpoint": false
+    },
+    {
+      "id": "trailer-detected-despite-surrounding-whitespace",
+      "message": "sub\n\n   GitLoopy-Checkpoint: 7  ",
+      "is_checkpoint": true
+    },
+    {
+      "id": "checkpoint-word-in-subject-does-not-trigger-detection",
+      "message": "Checkpoint the work\n\nfeat: stuff",
+      "is_checkpoint": false
+    }
+  ]
+}

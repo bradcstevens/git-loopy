@@ -80,6 +80,33 @@ def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
         assert state.strikes == expected["strikes"]
 
 
+_CHECKPOINT_MESSAGES = _load_fixture("checkpoint-messages.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _CHECKPOINT_MESSAGES["author_cases"],
+    ids=lambda case: case["id"],
+)
+def test_checkpoint_message_author_fixture(case: dict[str, Any]) -> None:
+    message = wrapper_module.checkpoint_message(case["active_ref"])
+    assert message == case["expected_message"]
+    assert extract_close_refs(message) == []
+    assert wrapper_module.is_checkpoint_message(message) is True
+    assert "#" not in message
+
+
+@pytest.mark.parametrize(
+    "case",
+    _CHECKPOINT_MESSAGES["detection_cases"],
+    ids=lambda case: case["id"],
+)
+def test_checkpoint_message_detection_fixture(case: dict[str, Any]) -> None:
+    assert (
+        wrapper_module.is_checkpoint_message(case["message"]) is case["is_checkpoint"]
+    )
+
+
 _EXIT_CODES = _load_fixture("exit-codes.json")
 
 
