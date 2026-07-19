@@ -16,6 +16,12 @@ the denylist and byte-identical to canonical, (b) never contains a denied skill,
 (c) ships in the built wheel for every catalog skill, and (d) the sync is
 idempotent. A drift failure names the sync command so a forgotten regeneration is
 self-correcting.
+
+Because the catalog is vendored from Matt Pocock's MIT-licensed skills
+(``mattpocock/skills``), redistributing it in the wheel means the upstream
+copyright + permission notice must travel *inside* the package too (#124). The
+final guards below assert ``git_loopy/THIRD_PARTY_LICENSES.txt`` carries the
+verbatim upstream MIT notice and actually ships in the built wheel.
 """
 
 from __future__ import annotations
@@ -25,12 +31,50 @@ import importlib.util
 import shutil
 import subprocess
 import zipfile
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
 
 import git_loopy
 from git_loopy import init as init_module
+
+# ---------------------------------------------------------------------------
+# The upstream MIT notice, reproduced verbatim from ``mattpocock/skills`` (the
+# source of the vendored workflow skill catalog). Kept here as the guard's pin
+# so a truncated, altered, or empty THIRD_PARTY_LICENSES.txt fails the guard.
+# ---------------------------------------------------------------------------
+
+_THIRD_PARTY_LICENSES_FILENAME = "THIRD_PARTY_LICENSES.txt"
+
+_UPSTREAM_MIT_NOTICE = """\
+MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE."""
+
+
+def _packaged_third_party_licenses_path() -> Path:
+    """The third-party licence notice shipped inside the wheel as package data."""
+    return Path(str(files("git_loopy") / _THIRD_PARTY_LICENSES_FILENAME))
+
 
 # ---------------------------------------------------------------------------
 # Import the committed sync script so the guard shares its single source of
@@ -210,15 +254,73 @@ def test_sync_prunes_denied_and_stale_skills(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Wheel packaging: every catalog skill ships as git_loopy/skills/... in the wheel
+# Third-party licence notice: the vendored catalog is MIT-licensed upstream work
 # ---------------------------------------------------------------------------
 
 
-def test_every_catalog_skill_is_packaged_into_the_built_wheel(tmp_path: Path) -> None:
-    """Hatchling packages every vendored catalog skill (verified in-artifact)."""
-    canonical = _canonical_skills_dir()
-    if canonical is None:  # pragma: no cover - installed wheel
-        pytest.skip("not a source checkout; cannot enumerate the catalog")
+def test_third_party_licenses_notice_carries_the_verbatim_upstream_mit_notice() -> None:
+    """The packaged notice reproduces the upstream MIT notice verbatim (#124)."""
+    notice = _packaged_third_party_licenses_path()
+    assert notice.is_file(), (
+        f"{_THIRD_PARTY_LICENSES_FILENAME} is missing from the git_loopy package"
+    )
+    text = notice.read_text(encoding="utf-8")
+    assert _UPSTREAM_MIT_NOTICE in text, (
+        "THIRD_PARTY_LICENSES.txt does not carry the verbatim upstream MIT notice"
+    )
+    # The attribution names the upstream repository it was vendored from.
+    assert "mattpocock/skills" in text
+
+
+def _bundled_license_files() -> list[Path]:
+    """Every LICENSE/NOTICE/COPYING file bundled inside the vendored catalog."""
+    prefixes = ("license", "licence", "notice", "copying")
+    return [
+        path
+        for path in _packaged_skills_path().rglob("*")
+        if path.is_file() and path.name.lower().startswith(prefixes)
+    ]
+
+
+def _skills_bundling_their_own_license() -> set[str]:
+    """Vendored skills that ship their own LICENSE/NOTICE/COPYING file."""
+    root = _packaged_skills_path()
+    return {path.relative_to(root).parts[0] for path in _bundled_license_files()}
+
+
+def test_bundled_component_licenses_are_acknowledged() -> None:
+    """A skill shipping its own license (e.g. skill-creator's Apache-2.0) is named.
+
+    The aggregate MIT notice does not cover a component under a different license,
+    so any vendored skill that carries its own LICENSE/NOTICE must be acknowledged
+    by name in THIRD_PARTY_LICENSES.txt. This catches a newly vendored,
+    differently-licensed skill drifting in unaccounted for (#124).
+    """
+    text = _packaged_third_party_licenses_path().read_text(encoding="utf-8")
+    bundling = _skills_bundling_their_own_license()
+    # skill-creator (Apache-2.0, (c) Anthropic PBC) ships its own LICENSE.txt.
+    assert "skill-creator" in bundling, (
+        "expected skill-creator to bundle its own LICENSE.txt in the catalog"
+    )
+    unacknowledged = sorted(name for name in bundling if name not in text)
+    assert not unacknowledged, (
+        "vendored skills ship their own LICENSE/NOTICE but are not acknowledged in "
+        f"{_THIRD_PARTY_LICENSES_FILENAME}: {unacknowledged}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Wheel packaging: every catalog skill + the MIT notice ships inside the wheel
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the wheel once for this module and hand back the artifact path.
+
+    The wheel build is the slowest thing in this module, so a single build is
+    shared by every guard that inspects the packaged artifact.
+    """
     uv = shutil.which("uv")
     if uv is None:  # pragma: no cover - uv is the repo toolchain
         pytest.skip("uv not available to build the wheel")
@@ -226,7 +328,7 @@ def test_every_catalog_skill_is_packaged_into_the_built_wheel(tmp_path: Path) ->
     package_dir = Path(git_loopy.__file__).resolve().parent.parent
     if not (package_dir / "pyproject.toml").is_file():  # pragma: no cover
         pytest.skip("git-loopy is not a source checkout; cannot build the wheel")
-    out = tmp_path / "dist"
+    out = tmp_path_factory.mktemp("dist")
     result = subprocess.run(
         [uv, "build", "--wheel", "--out-dir", str(out)],
         cwd=str(package_dir),
@@ -241,7 +343,17 @@ def test_every_catalog_skill_is_packaged_into_the_built_wheel(tmp_path: Path) ->
     )
     wheels = list(out.glob("*.whl"))
     assert wheels, f"no wheel produced in {out}"
-    with zipfile.ZipFile(wheels[0]) as zf:
+    return wheels[0]
+
+
+def test_every_catalog_skill_is_packaged_into_the_built_wheel(
+    built_wheel: Path,
+) -> None:
+    """Hatchling packages every vendored catalog skill (verified in-artifact)."""
+    canonical = _canonical_skills_dir()
+    if canonical is None:  # pragma: no cover - installed wheel
+        pytest.skip("not a source checkout; cannot enumerate the catalog")
+    with zipfile.ZipFile(built_wheel) as zf:
         names = set(zf.namelist())
     missing = [
         f"git_loopy/skills/{name}/SKILL.md"
@@ -254,3 +366,40 @@ def test_every_catalog_skill_is_packaged_into_the_built_wheel(tmp_path: Path) ->
         assert f"git_loopy/skills/{denied}/SKILL.md" not in names, (
             f"denied skill {denied!r} was packaged into the wheel"
         )
+
+
+def test_third_party_licenses_notice_is_packaged_into_the_built_wheel(
+    built_wheel: Path,
+) -> None:
+    """The MIT attribution notice actually ships inside the built wheel (#124)."""
+    arcname = f"git_loopy/{_THIRD_PARTY_LICENSES_FILENAME}"
+    with zipfile.ZipFile(built_wheel) as zf:
+        assert arcname in set(zf.namelist()), (
+            f"{arcname} is missing from the built wheel"
+        )
+        packaged = zf.read(arcname)
+    # The packaged copy is byte-identical to the committed source notice ...
+    assert packaged == _packaged_third_party_licenses_path().read_bytes()
+    # ... and carries the verbatim upstream MIT notice + its attribution.
+    text = packaged.decode("utf-8")
+    assert _UPSTREAM_MIT_NOTICE in text
+    assert "mattpocock/skills" in text
+
+
+def test_bundled_component_licenses_ship_in_the_built_wheel(built_wheel: Path) -> None:
+    """The component-license files the notice references actually ship (#124).
+
+    THIRD_PARTY_LICENSES.txt references each differently-licensed component's own
+    license (e.g. ``git_loopy/skills/skill-creator/LICENSE.txt`` for Apache-2.0),
+    so those files must travel in the wheel or the reference dangles.
+    """
+    root = _packaged_skills_path()
+    expected = {
+        f"git_loopy/skills/{path.relative_to(root).as_posix()}"
+        for path in _bundled_license_files()
+    }
+    assert expected, "expected at least skill-creator's LICENSE.txt in the catalog"
+    with zipfile.ZipFile(built_wheel) as zf:
+        names = set(zf.namelist())
+    missing = sorted(arc for arc in expected if arc not in names)
+    assert not missing, f"bundled component licenses missing from the wheel: {missing}"
