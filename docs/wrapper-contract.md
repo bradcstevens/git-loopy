@@ -66,8 +66,12 @@ Each Iteration MUST feed a single `copilot --yolo -p` invocation with, at minimu
 - the last **five** commits, and
 - the resolved **`PROMPT.md`**.
 
-`PROMPT.md` resolution follows project → global → packaged precedence (the project copy at
-`./git-loopy/PROMPT.md` wins). The Orchestrator MUST capture the agent process's real exit status
+`PROMPT.md` resolution follows project → global → packaged precedence (the project copy wins).
+Within the **project** scope the Orchestrator MUST probe the lowercase `git-loopy/prompt.md` first
+and then the uppercase `git-loopy/PROMPT.md` (first hit wins): the kit ships the uppercase variant,
+and probing the lowercase name first keeps the override resolvable on case-sensitive filesystems
+(typical on Linux) while case-insensitive ones (APFS/HFS+ on macOS, NTFS on Windows) accept either
+casing. The Orchestrator MUST capture the agent process's real exit status
 (not the exit status of a pipe it is teed through) so an agent crash is never mistaken for a clean
 turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
 phase 2).
