@@ -11,6 +11,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `discriminator.json` | Required issue headings and optional parent metadata |
 | `close-references.json` | Reference regex, line boundaries, deduplication, Pool whitelist, and issues-only closure |
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
+| `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Event type literals and stable envelope-first JSON serialization |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
@@ -23,8 +24,8 @@ implementation-specific expected-value generation.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
-native discovery adapters call their production discriminator and exit-code
-seams from
+native discovery adapters call their production discriminator, Checkpoint-message,
+and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
 and
 [`powershell/tests/test-orchestrator-conformance.ps1`](../powershell/tests/test-orchestrator-conformance.ps1).

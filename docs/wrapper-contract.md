@@ -203,6 +203,8 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
   whitelist, issues-only, and first-encounter dedup (§5).
 - **Progress / Strike accounting** — scenarios mapping (agent commits, closures, checkpoints,
   PR advances) → progressed? / strike? (§6).
+- **Checkpoint message** — the runner-authored subject/body/trailer per Active issue, its
+  close-keyword freedom, and its detectability (§7).
 - **Exit-code table** — the input → exit-code matrix of §10.
 - **Event schema** — exact type literals and envelope-first, sorted-payload JSON serialization
   (§12).
