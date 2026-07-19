@@ -58,3 +58,5 @@ issues/
 docs/feature-requests/
 
 .reference/
+
+.copilot/skills/azure-mcaps-resource-deployment/
