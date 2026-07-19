@@ -542,10 +542,16 @@ def run_init(
         _scaffold_prompt(targets.prompt_path, prompt_source)
         output_fn(f"Wrote {targets.prompt_path}")
         if skills_source.is_dir():
-            _scaffold_skills(
+            added, kept = _scaffold_skills(
                 targets.skills_dir, skills_source, overwrite=overwrite_skills
             )
-            output_fn(f"Scaffolded skills into {targets.skills_dir}")
+            summary = (
+                f"Scaffolded the workflow skill catalog "
+                f"({added + kept} skills) into {targets.skills_dir}"
+            )
+            if not overwrite_skills:
+                summary += f" ({added} added, {kept} kept)"
+            output_fn(summary)
         else:  # pragma: no cover - the wheel always ships skills
             warn(f"packaged skills not found at {skills_source}; skipped.")
 

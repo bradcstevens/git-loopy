@@ -842,3 +842,108 @@ def test_run_init_cancel_at_merge_prompt_writes_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
     assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"
     assert not (target / "b").exists()
+
+
+# ---------------------------------------------------------------------------
+# run_init — success summary: computed count + added/kept split (issue #126)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_summary_names_catalog_and_reports_computed_count(
+    tmp_path: Path,
+) -> None:
+    """The summary names the catalog and reports a count computed from what shipped."""
+    pkg = _pkg_with_skills(tmp_path, {"alpha": "A\n", "beta": "B\n", "gamma": "C\n"})
+    out = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "y"),  # model, effort, scaffold=yes (fresh: no merge)
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+    assert rc == 0
+    assert "workflow skill catalog" in out.text
+    # Count is computed from the 3-skill fake catalog, so it is 3 (never a hardcoded 26).
+    assert "3 skills" in out.text
+    # A fresh scaffold overwrote nothing, so there is no added/kept split.
+    assert "added" not in out.text
+    assert "kept" not in out.text
+
+
+def test_run_init_summary_reports_added_kept_on_declined_overwrite(
+    tmp_path: Path,
+) -> None:
+    """Declining the refresh reports how many skills were added versus kept."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n", "c": "PKG-C\n"})
+    _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
+    out = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "y", "n"),  # scaffold=yes, refresh=no
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+    assert rc == 0
+    assert "workflow skill catalog" in out.text
+    assert "3 skills" in out.text  # computed total (1 kept + 2 added)
+    assert "2 added" in out.text
+    assert "1 kept" in out.text
+
+
+def test_run_init_summary_yes_overwrite_reports_count_without_split(
+    tmp_path: Path,
+) -> None:
+    """--yes overwrites, so its summary reports the count with no added/kept split."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
+    _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})  # pre-existing skill
+    out = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        **pkg,
+    )
+    assert rc == 0
+    assert "workflow skill catalog" in out.text
+    assert "2 skills" in out.text
+    # Overwrite (not a declined refresh) => no added/kept split, even with a pre-existing skill.
+    assert "added" not in out.text
+    assert "kept" not in out.text
+
+
+def test_run_init_summary_reports_a_count_not_a_skill_roster(tmp_path: Path) -> None:
+    """Runtime output stays a count — it never enumerates skills (or the excluded three)."""
+    pkg = _pkg_with_skills(tmp_path, {"alpha-skill": "A\n", "beta-skill": "B\n"})
+    out = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "y"),
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+    assert rc == 0
+    assert "2 skills" in out.text
+    # A count, never a roster: the individual scaffolded skill names are not listed.
+    assert "alpha-skill" not in out.text
+    assert "beta-skill" not in out.text
+    # The three excluded integrations are never named in init's runtime output.
+    for excluded in ("microsoft-docs", "microsoft-foundry", "playwright-cli"):
+        assert excluded not in out.text
