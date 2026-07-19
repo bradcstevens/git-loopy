@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Sequence, TypedDict
+from typing import Mapping, Sequence, TypedDict
 
 import pytest
 
@@ -99,6 +99,14 @@ def _packaged(tmp_path: Path) -> _Packaged:
         "packaged skill\n", encoding="utf-8"
     )
     return {"packaged_prompt": prompt, "packaged_skills": skills}
+
+
+def _skill_tree(root: Path, skills: Mapping[str, str]) -> Path:
+    """Build a skills tree ``{skill_name: SKILL.md content}`` and return its root."""
+    for name, content in skills.items():
+        (root / name).mkdir(parents=True, exist_ok=True)
+        (root / name / "SKILL.md").write_text(content, encoding="utf-8")
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -633,3 +641,204 @@ def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
     )
     assert rc != 0
     assert any("git repository" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Skill-catalog merge helpers (issue #125)
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_skills_overwrite_false_keeps_existing_adds_missing(
+    tmp_path: Path,
+) -> None:
+    """No-overwrite refresh keeps pre-existing skills byte-for-byte and adds the rest."""
+    source = _skill_tree(
+        tmp_path / "src", {"a": "PKG-A\n", "b": "PKG-B\n", "c": "PKG-C\n"}
+    )
+    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n"})
+
+    added, kept = init_module._scaffold_skills(target, source, overwrite=False)
+
+    assert (added, kept) == (2, 1)
+    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"  # kept untouched
+    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # added
+    assert (target / "c" / "SKILL.md").read_text() == "PKG-C\n"  # added
+
+
+def test_scaffold_skills_overwrite_true_refreshes_all(tmp_path: Path) -> None:
+    """Overwrite refreshes every catalog skill from the packaged version (kept == 0)."""
+    source = _skill_tree(tmp_path / "src", {"a": "PKG-A\n", "b": "PKG-B\n"})
+    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n"})
+
+    added, kept = init_module._scaffold_skills(target, source, overwrite=True)
+
+    assert (added, kept) == (2, 0)
+    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
+    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"
+
+
+def test_scaffold_skills_never_touches_non_git_loopy_skills(tmp_path: Path) -> None:
+    """A refresh only iterates the packaged catalog; local-only skills stay untouched."""
+    source = _skill_tree(tmp_path / "src", {"a": "PKG-A\n"})
+    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n", "mine": "MINE\n"})
+
+    init_module._scaffold_skills(target, source, overwrite=True)
+
+    # A skill git-loopy does not ship is never visited by the refresh.
+    assert (target / "mine" / "SKILL.md").read_text() == "MINE\n"
+
+
+def test_existing_catalog_skills_detects_present_packaged_skills(
+    tmp_path: Path,
+) -> None:
+    """Detection reports only packaged catalog items present in the target dir."""
+    source = _skill_tree(tmp_path / "src", {"a": "x", "b": "x", "c": "x"})
+    target = _skill_tree(tmp_path / "dst", {"a": "x", "not-shipped": "x"})
+
+    found = init_module._existing_catalog_skills(target, source)
+
+    assert found == ["a"]  # "b"/"c" not present; "not-shipped" is not a catalog skill
+
+
+def test_existing_catalog_skills_empty_when_target_absent(tmp_path: Path) -> None:
+    """A never-scaffolded scope reports no pre-existing catalog skills."""
+    source = _skill_tree(tmp_path / "src", {"a": "x"})
+    assert init_module._existing_catalog_skills(tmp_path / "nope", source) == []
+
+
+# ---------------------------------------------------------------------------
+# run_init — confirm-then-overwrite merge on catalog re-run (issue #125)
+# ---------------------------------------------------------------------------
+
+
+def _pkg_with_skills(tmp_path: Path, skills: Mapping[str, str]) -> _Packaged:
+    """A fake packaged prompt + a catalog of the given skills to scaffold from."""
+    source = _skill_tree(tmp_path / "pkg" / "skills", skills)
+    prompt = tmp_path / "pkg" / "PROMPT.md"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("PACKAGED PROMPT\n", encoding="utf-8")
+    return {"packaged_prompt": prompt, "packaged_skills": source}
+
+
+def _project_skills_dir(tmp_path: Path) -> Path:
+    return tmp_path / ".copilot" / "skills"
+
+
+def test_run_init_existing_skills_refresh_on_yes(tmp_path: Path) -> None:
+    """Re-run + Yes refreshes every catalog skill and adds the missing ones."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
+    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
+    inp = _Input("1", "4", "y", "y")  # model, effort, scaffold=yes, refresh=yes
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+
+    assert rc == 0
+    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
+    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # added
+    assert any("refresh" in p.lower() for p in inp.prompts)
+
+
+def test_run_init_existing_skills_keep_on_no(tmp_path: Path) -> None:
+    """Re-run + No keeps existing skills byte-for-byte and adds only the missing ones."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
+    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
+    inp = _Input("1", "4", "y", "n")  # scaffold=yes, refresh=no
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+
+    assert rc == 0
+    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"  # kept untouched
+    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # only missing added
+
+
+def test_run_init_yes_overwrites_existing_skills_without_prompt(tmp_path: Path) -> None:
+    """--yes refreshes pre-existing catalog skills non-interactively (no merge prompt)."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n"})
+    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
+    inp = _Input()  # must never be prompted under --yes
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        **pkg,
+    )
+
+    assert rc == 0
+    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
+    assert inp.prompts == []  # no prompt of any kind was shown
+
+
+def test_run_init_refresh_leaves_non_git_loopy_skills_untouched(tmp_path: Path) -> None:
+    """A Yes refresh never touches a skill git-loopy does not ship."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n"})
+    target = _skill_tree(
+        _project_skills_dir(tmp_path), {"a": "LOCAL-A\n", "mine": "MINE\n"}
+    )
+    inp = _Input("1", "4", "y", "y")  # scaffold=yes, refresh=yes
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+
+    assert rc == 0
+    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
+    assert (target / "mine" / "SKILL.md").read_text() == "MINE\n"  # left untouched
+
+
+def test_run_init_cancel_at_merge_prompt_writes_nothing(tmp_path: Path) -> None:
+    """Cancelling at the up-front merge prompt writes nothing (collect-then-commit)."""
+    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
+    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
+    out = _Output()
+    inp = _Input("1", "4", "y", "q")  # cancel at the merge prompt
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **pkg,
+    )
+
+    assert rc != 0
+    assert "cancelled" in out.text.lower()
+    # Nothing written: no config, no PROMPT.md, existing skill unchanged, no new skill.
+    assert not settings.project_config_path(tmp_path).exists()
+    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
+    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"
+    assert not (target / "b").exists()

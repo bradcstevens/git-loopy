@@ -14,9 +14,11 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   ``~/.config``, ``~/.copilot``, or a live backend (prior art:
   ``tests/test_cli_interactive.py``).
 * **Collect-then-commit.** Every decision (scope, model, effort, whether to
-  scaffold assets) is gathered *first*; nothing is written until all prompts
-  succeed. So **cancelling writes nothing, runs nothing, and exits non-zero**
-  (``q`` / ``quit`` / EOF / Ctrl-C at any prompt).
+  scaffold assets, and — on a re-run — whether to refresh pre-existing catalog
+  skills) is gathered *first*; the target skills dir is resolved during collect
+  so existing catalog skills are detected before anything is written. Nothing is
+  written until all prompts succeed, so **cancelling writes nothing, runs
+  nothing, and exits non-zero** (``q`` / ``quit`` / EOF / Ctrl-C at any prompt).
 * **SDK-free until it fetches.** The model list is the only thing that touches
   the SDK, and only on the interactive path; ``git-loopy init --yes`` uses the
   built-in default model / effort and never imports the SDK. The model rows reuse
@@ -325,19 +327,81 @@ def _scaffold_prompt(prompt_path: Path, source: Path) -> None:
     shutil.copyfile(source, prompt_path)
 
 
-def _scaffold_skills(skills_dir: Path, source: Path) -> None:
-    """Copy git-loopy's packaged workflow skill catalog into the scope's ``.copilot/skills``."""
+def _scaffold_skills(
+    skills_dir: Path, source: Path, *, overwrite: bool
+) -> tuple[int, int]:
+    """Copy git-loopy's packaged workflow skill catalog into the scope's ``.copilot/skills``.
+
+    Returns ``(added, kept)``. With ``overwrite`` every catalog item is refreshed from the
+    packaged version (``added`` counts the whole catalog, ``kept`` is ``0``); without it a
+    pre-existing catalog item is left byte-for-byte untouched (``kept``) and only the missing
+    ones are written (``added``). Either way, only the packaged catalog is iterated, so a
+    skill git-loopy does not ship is never visited and stays untouched.
+    """
     skills_dir.mkdir(parents=True, exist_ok=True)
+    added = kept = 0
     for child in sorted(source.iterdir()):
+        target = skills_dir / child.name
+        if target.exists() and not overwrite:
+            kept += 1
+            continue
         if child.is_dir():
-            shutil.copytree(child, skills_dir / child.name, dirs_exist_ok=True)
+            shutil.copytree(child, target, dirs_exist_ok=True)
         else:
-            shutil.copyfile(child, skills_dir / child.name)
+            shutil.copyfile(child, target)
+        added += 1
+    return added, kept
+
+
+def _existing_catalog_skills(skills_dir: Path, source: Path) -> list[str]:
+    """Names of packaged catalog items already present in the target skills dir.
+
+    Read-only detection used during the *collect* phase so a re-run can ask about
+    refreshing before anything is written. A name git-loopy does not ship (present
+    in the target but absent from ``source``) is never reported — only the catalog's
+    own items count — so non-git-loopy skills stay out of the merge decision.
+    """
+    if not source.is_dir() or not skills_dir.is_dir():
+        return []
+    return [
+        child.name
+        for child in sorted(source.iterdir())
+        if (skills_dir / child.name).exists()
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
+
+
+def _collect_skill_overwrite(
+    input_fn: Callable[[str], str],
+    *,
+    scaffold: bool,
+    skills_dir: Path,
+    skills_source: Path,
+) -> bool:
+    """Ask once, up front, whether to refresh pre-existing catalog skills.
+
+    Returns the overwrite decision (default **Yes**). Only asks when the operator
+    opted into scaffolding *and* the target scope already holds catalog skills;
+    otherwise there is nothing to merge and it returns ``True`` (a fresh scaffold
+    overwrites nothing). Resolving the target skills dir happens in the *collect*
+    phase, so this detection runs before anything is written. ``q`` / EOF cancels.
+    """
+    if not scaffold:
+        return True
+    existing = _existing_catalog_skills(skills_dir, skills_source)
+    if not existing:
+        return True
+    return _ask_yes_no(
+        input_fn,
+        f"{len(existing)} workflow skill catalog skill(s) already exist in "
+        f"{skills_dir}; refresh them with the packaged versions? "
+        "(No keeps your existing skills and adds only the missing ones)",
+        default=True,
+    )
 
 
 def _resolve_scope(
@@ -425,11 +489,17 @@ def run_init(
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
 
+    # Resolve the write targets + packaged sources up front so the collect phase can
+    # detect pre-existing catalog skills BEFORE anything is written (collect-then-commit).
+    targets = _resolve_targets(resolved_scope, repo_root, env)
+    skills_source = packaged_skills or _packaged_skills_path()
+
     try:
         if assume_yes:
             model = default_model
             effort = _gate_default_effort(default_model, default_effort)  # type: ignore[arg-type]
             scaffold = True
+            overwrite_skills = True
         else:
             model, effort = _collect_model_and_effort(
                 input_fn=input_fn,
@@ -450,12 +520,17 @@ def run_init(
                 f"workflow skill catalog into {destination}?",
                 default=True,
             )
+            overwrite_skills = _collect_skill_overwrite(
+                input_fn,
+                scaffold=scaffold,
+                skills_dir=targets.skills_dir,
+                skills_source=skills_source,
+            )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
 
     # Commit phase — every decision is in hand, so nothing above wrote anything.
-    targets = _resolve_targets(resolved_scope, repo_root, env)
     values: dict[str, object] = {"model": model}
     if effort is not None:
         values["reasoning_effort"] = effort
@@ -464,11 +539,12 @@ def run_init(
 
     if scaffold:
         prompt_source = packaged_prompt or _packaged_prompt_path()
-        skills_source = packaged_skills or _packaged_skills_path()
         _scaffold_prompt(targets.prompt_path, prompt_source)
         output_fn(f"Wrote {targets.prompt_path}")
         if skills_source.is_dir():
-            _scaffold_skills(targets.skills_dir, skills_source)
+            _scaffold_skills(
+                targets.skills_dir, skills_source, overwrite=overwrite_skills
+            )
             output_fn(f"Scaffolded skills into {targets.skills_dir}")
         else:  # pragma: no cover - the wheel always ships skills
             warn(f"packaged skills not found at {skills_source}; skipped.")
