@@ -308,4 +308,66 @@ finally {
     }
 }
 
+# --- Send-timeout watchdog (Wrapper contract §4 real-exit-status + §6) ---------
+# `Invoke-GitLoopyBoundedTurn` bounds one agent turn by the resolved send timeout
+# using pwsh built-ins only (an inner pwsh under a child Process, no jq/timeout(1)
+# dependency). A turn that overruns the bound is force-terminated at ~the bound
+# and reported as a failed turn (exit 124) — landing no agent commit, so §6 counts
+# the Iteration no-progress; a turn that finishes within the bound returns its own
+# real exit status. The turn command is the running pwsh so the assertions hold
+# identically on Linux, macOS, and Windows.
+$PwshExe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+
+# Capture the helper's own stderr (the timeout warning) without disturbing the
+# child process's inherited fd 2. [Console]::SetError only reroutes in-process
+# [Console]::Error writes, which is exactly where the warning is emitted.
+function Invoke-CapturedBoundedTurn {
+    param(
+        [double]$TimeoutSeconds,
+        [string]$Command,
+        [string[]]$Argv
+    )
+
+    $OriginalError = [Console]::Error
+    $Capture = [IO.StringWriter]::new()
+    [Console]::SetError($Capture)
+    try {
+        $Code = Invoke-GitLoopyBoundedTurn `
+            -TimeoutSeconds $TimeoutSeconds `
+            -Command $Command `
+            -Argv $Argv
+    }
+    finally {
+        [Console]::SetError($OriginalError)
+    }
+    return [pscustomobject]@{ Code = $Code; Stderr = $Capture.ToString() }
+}
+
+$OverrunWatch = [Diagnostics.Stopwatch]::StartNew()
+$Overrun = Invoke-CapturedBoundedTurn `
+    -TimeoutSeconds 1 `
+    -Command $PwshExe `
+    -Argv @("-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 30")
+$OverrunWatch.Stop()
+Assert-Equal 124 $Overrun.Code (
+    "an overrunning turn is reported with the timeout exit code"
+)
+Assert-True (
+    $OverrunWatch.Elapsed.TotalSeconds -lt 20
+) "an overrunning turn was not bounded (took $($OverrunWatch.Elapsed.TotalSeconds)s, bound 1s)"
+Assert-True (
+    $Overrun.Stderr.Contains(
+        "exceeded the 1s send timeout",
+        [StringComparison]::Ordinal
+    )
+) "an overrunning turn did not warn that the bound fired"
+
+$WithinBound = Invoke-CapturedBoundedTurn `
+    -TimeoutSeconds 30 `
+    -Command $PwshExe `
+    -Argv @("-NoLogo", "-NoProfile", "-Command", "exit 7")
+Assert-Equal 7 $WithinBound.Code (
+    "a within-bound turn preserves its real exit status (contract §4)"
+)
+
 Write-Output "PowerShell Orchestrator conformance: ok"

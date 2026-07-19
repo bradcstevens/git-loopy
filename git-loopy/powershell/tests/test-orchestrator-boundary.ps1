@@ -1677,6 +1677,76 @@ Read outside the worktree.
         [IO.File]::ReadAllText($LocalStderr)
     ) "auto-push failed" "the local-only push failure warned"
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # A pathologically slow agent turn is bounded by the resolved send timeout:
+    # the Orchestrator's inner-pwsh watchdog force-terminates it at ~the bound
+    # rather than letting a hung agent hang the Iteration forever (issue #113).
+    # The terminated turn lands no agent commit, so the Iteration is a failed,
+    # no-progress turn (contract §4/§6) that still completes cleanly at the cap.
+    $SendTimeoutRepo = Join-Path $TempDir "send-timeout"
+    $SendTimeoutBin = Join-Path $TempDir "send-timeout-bin"
+    New-RealTestRepo -Root $SendTimeoutRepo
+    Write-TurnTools -BinDir $SendTimeoutBin
+    # Overwrite the shared fake `copilot` with one that sleeps far past the bound.
+    # Process.Kill($true) is unconditionally forceful (SIGKILL on Unix /
+    # TerminateProcess on Windows), so — unlike the shell port — the fake needs no
+    # SIGTERM trap; the "finished unbounded" line only prints if it was never
+    # bounded (the pre-fix bug), making that regression loud.
+    Write-FakeCommand -BinDir $SendTimeoutBin -Name "copilot" -Body @'
+$ErrorActionPreference = "Stop"
+[Console]::Out.WriteLine("copilot agent stream marker")
+$Sleep = if ($env:FAKE_COPILOT_SLEEP) { [int]$env:FAKE_COPILOT_SLEEP } else { 60 }
+Start-Sleep -Seconds $Sleep
+[Console]::Error.WriteLine("slow copilot: turn finished unbounded")
+'@
+    $SendTimeoutList = Join-Path $TempDir "send-timeout-list.json"
+    [IO.File]::Copy($CapList, $SendTimeoutList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "send-timeout-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "send-timeout-list.count"
+    $env:FAKE_GH_LIST_JSON = $SendTimeoutList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "send-timeout-closed.log"
+    $env:GIT_LOOPY_SEND_TIMEOUT_SECONDS = "1"
+    $env:FAKE_COPILOT_SLEEP = "60"
+    $SendTimeoutStdout = Join-Path $TempDir "send-timeout.stdout"
+    $SendTimeoutStderr = Join-Path $TempDir "send-timeout.stderr"
+    $SendTimeoutWatch = [Diagnostics.Stopwatch]::StartNew()
+    $Status = Invoke-Entrypoint `
+        -Repo $SendTimeoutRepo `
+        -FakeBin $SendTimeoutBin `
+        -StdoutPath $SendTimeoutStdout `
+        -StderrPath $SendTimeoutStderr `
+        -Arguments @("1")
+    $SendTimeoutWatch.Stop()
+    [Environment]::SetEnvironmentVariable("GIT_LOOPY_SEND_TIMEOUT_SECONDS", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_SLEEP", $null)
+    Assert-Equal 0 $Status "a bounded slow turn must not fail the Run"
+    Assert-True (
+        $SendTimeoutWatch.Elapsed.TotalSeconds -lt 30
+    ) "the slow turn was not bounded (Run took $($SendTimeoutWatch.Elapsed.TotalSeconds)s, bound 1s)"
+    $SendTimeoutStderrText = [IO.File]::ReadAllText($SendTimeoutStderr)
+    Assert-Contains $SendTimeoutStderrText `
+        "copilot turn exceeded the 1s send timeout" `
+        "the bounded turn warns that the send timeout fired"
+    Assert-True (
+        -not $SendTimeoutStderrText.Contains(
+            "turn finished unbounded",
+            [StringComparison]::Ordinal
+        )
+    ) "the slow turn ran to completion instead of being terminated at the bound"
+    $SendTimeoutEvents = Read-Events -Path $SendTimeoutStdout
+    Assert-Equal 0 (
+        @($SendTimeoutEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "a terminated turn lands no agent commit"
+    $SendTimeoutStrikes = @(
+        $SendTimeoutEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 1 $SendTimeoutStrikes.Count "a bounded slow turn makes no progress"
+    Assert-Equal "warn" $SendTimeoutStrikes[0]["outcome"] "the no-progress Strike warns"
+    Assert-Equal "wrapper.run.end" $SendTimeoutEvents[-1]["type"] "send-timeout Run ends with run.end"
+    Assert-Equal "iteration_cap" $SendTimeoutEvents[-1]["outcome"] "send-timeout Run outcome"
+    Assert-Equal 1 $SendTimeoutEvents[-1]["iterations_run"] "send-timeout ran one Iteration"
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
 }
 finally {
     foreach ($Name in @(
@@ -1694,6 +1764,7 @@ finally {
         "FAKE_COPILOT_COMMITS",
         "FAKE_COPILOT_EXIT",
         "FAKE_COPILOT_PLAN_DIR",
+        "FAKE_COPILOT_SLEEP",
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_ISSUE_SOURCE",

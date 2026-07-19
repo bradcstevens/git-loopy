@@ -1170,6 +1170,106 @@ function Build-GitLoopyPrompt {
     return "Previous commits: $CommitsBlock Issues: $IssuesBlock $PromptText"
 }
 
+function Invoke-GitLoopyBoundedTurn {
+    # Run one already-assembled agent turn ("& $Command @Argv") with its own
+    # stdout folded to stderr — so stdout stays the JSONL Event stream
+    # (contract §4) — bounded by a wall-clock send timeout. The turn runs inside
+    # an inner pwsh launched as a child Process: the inner `& $Command` keeps
+    # PowerShell's cross-platform command resolution (a `.cmd` shim on Windows, a
+    # shebang script on Unix — neither of which a raw Process could launch by
+    # name), while the outer Process gives a bounded WaitForExit and a
+    # tree-killing Kill so a hung agent can never hang the Iteration. Returns the
+    # turn's real exit status; a turn that overruns the bound is force-terminated
+    # (Process.Kill sends SIGKILL on Unix / TerminateProcess on Windows, so even
+    # a signal-trapping agent is reclaimed) and reported as exit 124 (GNU
+    # timeout's convention) — a failed, no-progress turn that lands no agent
+    # commit, so §6 Strike accounting counts it accordingly. Uses only pwsh
+    # built-ins (no jq, no timeout(1), no new dependency).
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [double]$TimeoutSeconds,
+        [Parameter(Mandatory)]
+        [string]$Command,
+        [AllowEmptyCollection()]
+        [string[]]$Argv = @()
+    )
+
+    # Embed $Command/$Argv as single-quoted PowerShell literals (every `'`
+    # doubled) so arbitrary prompt content — newlines, quotes, `$(...)`, unicode —
+    # travels to the inner pwsh verbatim with no shell quoting and no injection.
+    $CommandLiteral = "'" + ($Command -replace "'", "''") + "'"
+    $ArgvLiterals = foreach ($Value in $Argv) {
+        "'" + ($Value -replace "'", "''") + "'"
+    }
+    $ArgvArray = if ($ArgvLiterals) {
+        "@(" + ($ArgvLiterals -join ",") + ")"
+    } else {
+        "@()"
+    }
+
+    # The inner pwsh folds the agent's own stdout to stderr, preserves the turn's
+    # real exit status ($PSNativeCommandUseErrorActionPreference = $false keeps a
+    # non-zero copilot exit a captured status, not a thrown error), and reports a
+    # launch failure as 126 — matching the prior in-process invocation exactly.
+    $InnerScript = @"
+`$ErrorActionPreference = 'Stop'
+`$PSNativeCommandUseErrorActionPreference = `$false
+`$Argv = $ArgvArray
+try {
+    & $CommandLiteral @Argv | ForEach-Object { [Console]::Error.WriteLine([string]`$_) }
+}
+catch {
+    [Console]::Error.WriteLine("git-loopy: copilot turn could not launch: `$(`$_.Exception.Message)")
+    exit 126
+}
+exit `$LASTEXITCODE
+"@
+    $Encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($InnerScript)
+    )
+
+    # Launch the current pwsh (resolved without [Environment]::ProcessPath, which
+    # is .NET 6+/pwsh 7.2+, to keep the port's pwsh 7.0 floor) with the encoded
+    # turn. UseShellExecute = $false lets the inner pwsh inherit our stdout (the
+    # Event stream, which it never writes to) and stderr (where it folds output).
+    $PwshPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = $PwshPath
+    foreach ($Flag in @("-NoLogo", "-NoProfile", "-EncodedCommand", $Encoded)) {
+        $StartInfo.ArgumentList.Add($Flag)
+    }
+    $StartInfo.UseShellExecute = $false
+
+    $Process = [Diagnostics.Process]::new()
+    $Process.StartInfo = $StartInfo
+    try {
+        $null = $Process.Start()
+    }
+    catch {
+        [Console]::Error.WriteLine(
+            "git-loopy: copilot turn could not launch: $($_.Exception.Message)"
+        )
+        return 126
+    }
+
+    $TimeoutMs = [int][Math]::Ceiling($TimeoutSeconds * 1000)
+    if ($Process.WaitForExit($TimeoutMs)) {
+        # Drain any pending async output before reading the exit status.
+        $Process.WaitForExit()
+        return $Process.ExitCode
+    }
+
+    # The turn overran its bound: reclaim the whole tree (inner pwsh + copilot)
+    # and report the timeout exit code so the Iteration proceeds as no-progress.
+    [Console]::Error.WriteLine(
+        "git-loopy: copilot turn exceeded the ${TimeoutSeconds}s send timeout; terminated."
+    )
+    $Process.Kill($true)
+    $Process.WaitForExit()
+    return 124
+}
+
 function Invoke-GitLoopyAgentTurn {
     [CmdletBinding()]
     param(
@@ -1200,18 +1300,13 @@ function Invoke-GitLoopyAgentTurn {
     }
 
     # Stream the agent's own output to stderr so stdout stays the JSONL Event
-    # stream; capture Copilot's real exit status, not a pipeline's (contract §4).
-    try {
-        & copilot @Argv |
-            ForEach-Object { [Console]::Error.WriteLine([string]$_) }
-        return $LASTEXITCODE
-    }
-    catch {
-        [Console]::Error.WriteLine(
-            "git-loopy: copilot turn could not launch: $($_.Exception.Message)"
-        )
-        return 126
-    }
+    # stream, and bound the turn by the resolved send timeout. The helper
+    # preserves Copilot's real exit status (contract §4), or terminates and fails
+    # a turn that overruns the bound so a hung agent never hangs the Iteration.
+    return Invoke-GitLoopyBoundedTurn `
+        -TimeoutSeconds ([double]$Config.SendTimeoutSeconds) `
+        -Command "copilot" `
+        -Argv @($Argv)
 }
 
 # The first Pool issue this Iteration actually closed (OPEN -> closed), in
@@ -1861,6 +1956,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyPrdsPool",
     "Get-GitLoopyPool",
     "Invoke-GitLoopyDiscovery",
+    "Invoke-GitLoopyBoundedTurn",
     "Get-GitLoopyUsage",
     "Invoke-GitLoopyMain"
 )
