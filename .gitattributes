@@ -1,0 +1,6 @@
+# The wheel-vendored workflow skill catalog under git_loopy/skills/ is generated
+# wholesale from the canonical .copilot/skills/ by
+# git-loopy/python/scripts/sync_skills.py (see tests/test_packaged_skills.py).
+# Mark it linguist-generated so the 26-tree fan-out collapses in PR diffs and is
+# excluded from language stats; edit the canonical copy and re-run the sync.
+git-loopy/python/git_loopy/skills/** linguist-generated=true
