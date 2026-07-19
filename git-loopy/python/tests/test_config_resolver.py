@@ -536,3 +536,96 @@ def test_main_reports_malformed_config_and_exits_one(
     err = capsys.readouterr().err
     assert "not valid TOML" in err
     assert "git-loopy: error:" in err
+
+
+# ---------------------------------------------------------------------------
+# [routing] -> RunConfig.routing (issue #146). Merge project-over-global per
+# task-type key; suppress on an explicit --model / --reasoning-effort (flag or
+# env); non-fatal off-roster advisory; back-compat empty map.
+# ---------------------------------------------------------------------------
+
+
+_ROUTING_GLOBAL = {
+    "routing": {"planning": {"model": "claude-opus-4.8", "effort": "max"}}
+}
+
+
+def test_resolve_no_routing_yields_empty_map() -> None:
+    """Back-compat: a config with no [routing] resolves to an empty routing map."""
+    assert dict(_resolve().run.routing) == {}
+
+
+def test_resolve_global_routing_populates_map() -> None:
+    run = _resolve(global_=_ROUTING_GLOBAL).run
+    assert dict(run.routing) == {"planning": ("claude-opus-4.8", "max")}
+
+
+def test_resolve_routing_merges_project_over_global_per_task_type() -> None:
+    global_ = {
+        "routing": {
+            "planning": {"model": "claude-opus-4.8", "effort": "max"},
+            "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        }
+    }
+    project = {
+        "routing": {
+            "docs": {"model": "gpt-5-mini", "effort": "low"},  # override whole pair
+            "test": {"model": "claude-sonnet-5", "effort": "medium"},  # project-only
+        }
+    }
+    run = _resolve(project=project, global_=global_).run
+    assert dict(run.routing) == {
+        "planning": ("claude-opus-4.8", "max"),  # global-only survives
+        "docs": ("gpt-5-mini", "low"),  # project overrides the whole pair
+        "test": ("claude-sonnet-5", "medium"),  # project-only added
+    }
+
+
+@pytest.mark.parametrize(
+    "argv", [["--model", "gpt-5-mini"], ["--reasoning-effort", "low"]]
+)
+def test_resolve_explicit_flag_suppresses_routing(argv: list[str]) -> None:
+    run = _resolve(argv, global_=_ROUTING_GLOBAL).run
+    assert dict(run.routing) == {}
+
+
+@pytest.mark.parametrize(
+    "env",
+    [{"GIT_LOOPY_MODEL": "gpt-5-mini"}, {"GIT_LOOPY_REASONING_EFFORT": "low"}],
+)
+def test_resolve_explicit_env_suppresses_routing(env: dict[str, str]) -> None:
+    run = _resolve(env=env, global_=_ROUTING_GLOBAL).run
+    assert dict(run.routing) == {}
+
+
+def test_resolve_config_file_model_does_not_suppress_routing() -> None:
+    """A `model` key in a config *file* is the same tier as routing, not an override."""
+    run = _resolve(global_={"model": "gpt-5-mini", **_ROUTING_GLOBAL}).run
+    assert dict(run.routing) == {"planning": ("claude-opus-4.8", "max")}
+
+
+def test_resolve_off_roster_routing_model_warns_but_resolves() -> None:
+    warnings: list[str] = []
+    run = _resolve(
+        global_={"routing": {"planning": {"model": "made-up-model", "effort": "max"}}},
+        warn=warnings.append,
+    ).run
+    assert dict(run.routing) == {"planning": ("made-up-model", "max")}
+    assert any("made-up-model" in w for w in warnings)
+
+
+def test_resolve_suppressed_routing_skips_off_roster_advisory() -> None:
+    warnings: list[str] = []
+    _resolve(
+        ["--model", "gpt-5-mini"],
+        global_={"routing": {"planning": {"model": "made-up-model", "effort": "max"}}},
+        warn=warnings.append,
+    )
+    assert not any("made-up-model" in w for w in warnings)
+
+
+def test_resolve_malformed_routing_raises_loudly() -> None:
+    from git_loopy import settings
+
+    with pytest.raises(settings.SettingsError):
+        _resolve(global_={"routing": {"planning": {"model": "claude-opus-4.8"}}})

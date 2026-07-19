@@ -33,7 +33,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 __all__ = [
     "RunConfig",
@@ -262,6 +263,17 @@ class RunConfig:
             (``GIT_LOOPY_SEND_TIMEOUT_SECONDS`` env > project Config > global
             Config > :data:`DEFAULT_SEND_TIMEOUT_SECONDS`) rather than read from
             the env inside the loop. Must be > 0.
+        routing: Per-issue-type model routing (issue #146), a frozen map of
+            ``task-type key -> (model, effort)`` built **once** by the config
+            resolver from the ``[routing]`` config table (project overriding
+            global per key). Empty when there is no ``[routing]`` block, or when
+            an explicit ``--model`` / ``--reasoning-effort`` override (flag or
+            env) suppresses routing run-wide — in which case every issue keeps
+            resolving to the single global default, byte-for-byte as before.
+            Stored as a read-only :class:`~types.MappingProxyType` so the frozen
+            dataclass stays genuinely immutable across Iterations. The per-issue
+            resolver (#147) reads this map and gates each pair; nothing consumes
+            it in this slice.
     """
 
     model: str | None = None
@@ -278,6 +290,7 @@ class RunConfig:
     pricing_file: Path | None = None
     parallel: int = 1
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
+    routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):
@@ -316,3 +329,8 @@ class RunConfig:
                 f"{list(REASONING_EFFORT_ORDER)} or None, got "
                 f"{self.reasoning_effort!r}"
             )
+        # Normalize `routing` to a read-only view over a *private* copy so the
+        # frozen dataclass is genuinely immutable (no aliasing back to the
+        # caller's dict, no post-construction mutation) and stays safe to reuse
+        # across every Iteration. Built once by the resolver (issue #146).
+        object.__setattr__(self, "routing", MappingProxyType(dict(self.routing)))

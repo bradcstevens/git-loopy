@@ -218,6 +218,74 @@ def test_table_str_list_rejects_non_list_and_non_str_items() -> None:
 
 
 # ---------------------------------------------------------------------------
+# [routing] typed reader (issue #146): type -> (model, effort). Absent -> {};
+# malformed entries raise SettingsError naming the scope + offending key.
+# ---------------------------------------------------------------------------
+
+
+def test_table_routing_absent_returns_empty() -> None:
+    assert settings.table_routing({}, scope="project") == {}
+
+
+def test_table_routing_reads_well_formed_entries() -> None:
+    table = {
+        "routing": {
+            "planning": {"model": "claude-opus-4.8", "effort": "max"},
+            "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        }
+    }
+    assert settings.table_routing(table, scope="global") == {
+        "planning": ("claude-opus-4.8", "max"),
+        "docs": ("gpt-5-mini", "medium"),
+    }
+
+
+def test_table_routing_rejects_non_table_routing_value() -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_routing({"routing": "nope"}, scope="project")
+    assert "project" in str(excinfo.value)
+    assert "routing" in str(excinfo.value)
+
+
+def test_table_routing_rejects_non_table_entry() -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_routing(
+            {"routing": {"planning": "claude-opus-4.8"}}, scope="global"
+        )
+    msg = str(excinfo.value)
+    assert "global" in msg and "planning" in msg
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"model": "claude-opus-4.8"},  # missing effort
+        {"effort": "max"},  # missing model
+        {"model": "claude-opus-4.8", "effort": "max", "extra": "x"},  # extra key
+    ],
+)
+def test_table_routing_rejects_missing_or_extra_keys(entry: dict) -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_routing({"routing": {"planning": entry}}, scope="project")
+    msg = str(excinfo.value)
+    assert "project" in msg and "planning" in msg
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"model": 123, "effort": "max"},
+        {"model": "claude-opus-4.8", "effort": 5},
+    ],
+)
+def test_table_routing_rejects_non_string_values(entry: dict) -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_routing({"routing": {"docs": entry}}, scope="global")
+    msg = str(excinfo.value)
+    assert "global" in msg and "docs" in msg
+
+
+# ---------------------------------------------------------------------------
 # TOML writer (the config I/O module owns write next to read)
 # ---------------------------------------------------------------------------
 
@@ -262,6 +330,94 @@ def test_dump_config_toml_rejects_unsupported_value_type() -> None:
         settings.dump_config_toml({"nested": {"a": 1}})
     with pytest.raises(settings.SettingsError):
         settings.dump_config_toml({"listed": [1, 2]})
+
+
+# ---------------------------------------------------------------------------
+# TOML writer — the one bounded table-valued extension (issue #146): a
+# top-level dict-valued key (e.g. `[routing]`) emits as a `[section]` block of
+# inline `{ ... }` tables. Scalars/lists first, then sections, so a bare
+# `key = value` line is never captured into a section.
+# ---------------------------------------------------------------------------
+
+
+def test_dump_config_toml_emits_routing_section_of_inline_tables() -> None:
+    import tomllib
+
+    values = {
+        "model": "claude-opus-4.8",
+        "reasoning_effort": "max",
+        "routing": {
+            "planning": {"model": "claude-opus-4.8", "effort": "max"},
+            "implementation": {"model": "claude-sonnet-5", "effort": "high"},
+            "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        },
+    }
+    text = settings.dump_config_toml(values)
+    assert "[routing]" in text
+    # One inline table per line — one value-literal per member, no array-of-tables.
+    assert 'planning = { model = "claude-opus-4.8", effort = "max" }' in text
+    assert tomllib.loads(text) == values
+
+
+def test_dump_config_toml_places_table_sections_after_scalar_keys() -> None:
+    # A top-level scalar must be emitted before any `[section]` header, else TOML
+    # parses it as a member of that section.
+    text = settings.dump_config_toml(
+        {
+            "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+            "model": "gpt-5-mini",
+        }
+    )
+    lines = text.splitlines()
+    section_idx = lines.index("[routing]")
+    model_idx = next(i for i, line in enumerate(lines) if line.startswith("model ="))
+    assert model_idx < section_idx
+
+
+def test_dump_config_toml_empty_routing_section_round_trips() -> None:
+    import tomllib
+
+    text = settings.dump_config_toml({"routing": {}})
+    assert tomllib.loads(text) == {"routing": {}}
+
+
+def test_routing_round_trips_writer_reader_writer() -> None:
+    # The AC's end-to-end loop: a `[routing]` map survives writer -> reader ->
+    # writer byte-for-byte. `table_routing` reads the emitted section into the
+    # semantic `{key: (model, effort)}` map, and re-emitting that map reproduces
+    # the original text exactly.
+    import tomllib
+
+    routing = {
+        "planning": {"model": "claude-opus-4.8", "effort": "max"},
+        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+    }
+    first = settings.dump_config_toml({"routing": routing})
+    parsed = settings.table_routing(tomllib.loads(first), scope="project")
+    assert parsed == {
+        "planning": ("claude-opus-4.8", "max"),
+        "docs": ("gpt-5-mini", "medium"),
+    }
+    rebuilt = {
+        key: {"model": model, "effort": effort}
+        for key, (model, effort) in parsed.items()
+    }
+    assert settings.dump_config_toml({"routing": rebuilt}) == first
+
+
+def test_dump_config_toml_rejects_non_inline_table_routing_entry() -> None:
+    # A section entry MUST itself be an inline table; a scalar value is rejected
+    # (this is why the pre-existing `{"nested": {"a": 1}}` case still raises).
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"routing": {"planning": "claude-opus-4.8"}})
+
+
+def test_dump_config_toml_rejects_nesting_inside_inline_table() -> None:
+    # No multi-level nesting: an inline-table member must be a scalar.
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"routing": {"planning": {"model": {"x": 1}}}})
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"routing": {"planning": {"model": ["a"]}}})
 
 
 def test_write_config_creates_scope_dir_and_round_trips(tmp_path: Path) -> None:

@@ -283,3 +283,41 @@ def test_bare_run_with_global_config_skips_wizard(
     cfg, _driver = captured[0]
     assert cfg.model == "gpt-5.4"
 
+
+def test_bare_run_malformed_routing_prints_clean_error_not_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A valid-TOML-but-malformed ``[routing]`` block fails at load with a clean
+    stderr message + non-zero exit, not a traceback (issue #146).
+
+    The ``[routing]`` reader is designed to fail *loudly and early* rather than
+    surfacing deep in the loop; the resolve-time :class:`settings.SettingsError`
+    it raises must reach the same clean ``git-loopy: error: ...`` + ``return 1``
+    handler as a malformed load, exactly as the entry point's comment promises.
+    """
+    _clear_run_env(monkeypatch)
+    xdg = tmp_path / "xdg"  # empty global scope (no global config.toml)
+    xdg.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=False))
+    cfg_dir = tmp_path / "git-loopy"
+    cfg_dir.mkdir(parents=True)
+    # Valid TOML, but the routing entry is missing the required `effort` key.
+    (cfg_dir / "config.toml").write_text(
+        '[routing]\nplanning = { model = "claude-opus-4.8" }\n'
+    )
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    rc = cli_module.main([])
+
+    assert rc == 1
+    assert captured == []  # the error short-circuits before the loop
+    err = capsys.readouterr().err
+    assert "git-loopy: error:" in err
+    assert "routing.planning" in err
+    assert "Traceback" not in err
+

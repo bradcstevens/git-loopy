@@ -879,6 +879,70 @@ def _resolve_denylist(
     return frozenset(result)
 
 
+def _explicit_model_or_effort_override(
+    args: argparse.Namespace, env: Mapping[str, str]
+) -> bool:
+    """Whether an explicit run-wide model/effort override is present.
+
+    Routing is a **config-file-only** tier (issue #146 / decision #109): any
+    explicit ``--model`` / ``--reasoning-effort`` flag, or a non-blank
+    ``GIT_LOOPY_MODEL`` / ``GIT_LOOPY_REASONING_EFFORT`` env value, means the
+    operator asked for one model for the whole run, so per-issue routing is
+    suppressed run-wide. A ``model`` / ``reasoning_effort`` key in a config
+    *file* is the **same tier** as ``[routing]`` and does **not** suppress it.
+    """
+    if getattr(args, "model", None) is not None:
+        return True
+    if getattr(args, "reasoning_effort", None) is not None:
+        return True
+    for var in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
+        raw = env.get(var)
+        if raw is not None and raw.strip():
+            return True
+    return False
+
+
+def _resolve_routing(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+    *,
+    warn: Callable[[str], None],
+) -> dict[str, tuple[str, str]]:
+    """Resolve the effective per-issue routing map (issue #146).
+
+    Merges the two ``[routing]`` tables **project-over-global per task-type
+    key** — a project entry replaces the whole ``{model, effort}`` pair for that
+    key, global-only keys survive, project-only keys are added. Returns ``{}``
+    (routing off, run-wide) when an explicit model/effort override is present
+    (:func:`_explicit_model_or_effort_override`). A well-formed entry naming a
+    model outside the kit roster raises only a **non-fatal** load-time advisory
+    (typo-catch), never an abort; malformed *shapes* still raise loudly from
+    :func:`settings.table_routing`, naming the offending scope + key.
+
+    Nothing consumes the map in this slice — the per-issue resolver (#147)
+    reads :attr:`RunConfig.routing` and gates each pair.
+    """
+    if _explicit_model_or_effort_override(args, env):
+        return {}
+    merged: dict[str, tuple[str, str]] = {
+        **settings.table_routing(global_, scope="global"),
+        **settings.table_routing(project, scope="project"),
+    }
+    off_roster = sorted(
+        {model for model, _effort in merged.values() if model not in SUPPORTED_MODELS}
+    )
+    if off_roster:
+        warn(
+            f"[routing] references model(s) not in the kit's supported set "
+            f"({sorted(SUPPORTED_MODELS)}): {off_roster}; leaving them as authored "
+            f"(the Copilot CLI is the final authority on model validity) — check "
+            f"for a typo."
+        )
+    return merged
+
+
 def _warn(message: str) -> None:
     """Emit a non-fatal warning to stderr with the kit's prefix."""
     print(f"git-loopy: warning: {message}", file=sys.stderr)
@@ -1051,10 +1115,15 @@ def resolve_config(
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``deny_tools``, ``deny_skills``, ``otel_enabled``,
-    ``interactive`` and ``send_timeout_seconds``. The per-run-only knobs
-    (``max_iterations``, ``verbosity``, ``render_reasoning``, ``parallel``, and
-    the ``pricing_file`` override) are NEVER read from a config file — they
-    resolve from flags / env only.
+    ``interactive``, ``send_timeout_seconds`` and the ``[routing]`` table. The
+    per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
+    ``parallel``, and the ``pricing_file`` override) are NEVER read from a config
+    file — they resolve from flags / env only.
+
+    ``[routing]`` is a **config-file-only** tier: it merges project-over-global
+    per task-type key, and any explicit ``--model`` / ``--reasoning-effort``
+    (flag or env) suppresses it to an empty map run-wide
+    (:func:`_resolve_routing`).
 
     The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
     per-model capability gate) sits at the *bottom* of the chain, fed the raw
@@ -1088,6 +1157,8 @@ def resolve_config(
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
+    routing = _resolve_routing(args, env, project, global_, warn=warn)
+
     run = RunConfig(
         model=model,
         reasoning_effort=reasoning_effort,
@@ -1103,6 +1174,7 @@ def resolve_config(
         pricing_file=_resolve_pricing_file(env),
         parallel=_resolve_parallel(args, env),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
+        routing=routing,
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(run=run, interactive=interactive)
@@ -1237,12 +1309,12 @@ def main(argv: list[str] | None = None) -> int:
     # malformed config.toml surfaces a clean stderr message, not a traceback.
     try:
         tables = settings.load_configs(repo_root, os.environ)
+        resolved = resolve_config(
+            args, os.environ, project=tables.project, global_=tables.global_
+        )
     except settings.SettingsError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
-    resolved = resolve_config(
-        args, os.environ, project=tables.project, global_=tables.global_
-    )
 
     # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
     # scope, an interactive TTY auto-runs the `init` wizard first, then continues
@@ -1265,10 +1337,14 @@ def main(argv: list[str] | None = None) -> int:
         if init_rc != 0:
             return init_rc
         # Re-read + re-resolve so the loop consumes the Config the wizard wrote.
-        tables = settings.load_configs(repo_root, os.environ)
-        resolved = resolve_config(
-            args, os.environ, project=tables.project, global_=tables.global_
-        )
+        try:
+            tables = settings.load_configs(repo_root, os.environ)
+            resolved = resolve_config(
+                args, os.environ, project=tables.project, global_=tables.global_
+            )
+        except settings.SettingsError as exc:
+            print(f"git-loopy: error: {exc}", file=sys.stderr)
+            return 1
 
     config = resolved.run
 

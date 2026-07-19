@@ -33,7 +33,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 __all__ = [
     "SettingsError",
@@ -53,6 +53,7 @@ __all__ = [
     "table_int",
     "table_float",
     "table_str_list",
+    "table_routing",
 ]
 
 #: The persisted-Config filename in both scopes.
@@ -200,6 +201,10 @@ def _format_value(key: str, value: object) -> str:
     because ``bool`` is an ``int`` subclass. Anything else raises
     :exc:`SettingsError` (rather than silently mangling a value the writer
     doesn't understand — e.g. a nested table or a non-string list item).
+
+    A top-level ``dict`` value is *not* handled here: :func:`dump_config_toml`
+    emits it as a ``[section]`` of inline tables (issue #146) before ever
+    reaching this scalar/list formatter.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -224,23 +229,83 @@ def _format_value(key: str, value: object) -> str:
     )
 
 
+def _format_scalar(key: str, value: object) -> str:
+    """Render one scalar (``str`` / ``bool`` / ``int`` / ``float``) TOML literal.
+
+    Used for the members of an inline table, where only scalars are allowed —
+    no arrays, no further nesting (issue #146). ``bool`` is checked before
+    ``int`` (``bool`` is an ``int`` subclass). Anything else raises
+    :exc:`SettingsError`.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return f'"{_escape_str(value)}"'
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    raise SettingsError(
+        f"cannot serialize {key!r}: inline-table values must be scalars "
+        f"(str / bool / int / float), got {type(value).__name__} ({value!r})"
+    )
+
+
+def _format_inline_table(section: str, entry_key: str, entry: object) -> str:
+    """Render one ``[section]`` entry as a single-line TOML inline table.
+
+    Every entry under a generated ``[section]`` header must itself be an inline
+    ``{ k = v, ... }`` table of scalars — the one bounded table shape the
+    persisted Config writes (issue #146: ``[routing]`` maps a task-type key to a
+    ``{ model, effort }`` pair). A non-table entry, or a non-scalar member,
+    raises :exc:`SettingsError`: no array-of-tables, no multi-level nesting.
+    """
+    if not isinstance(entry, dict):
+        raise SettingsError(
+            f"cannot serialize [{section}] entry {entry_key!r}: expected an inline "
+            f"table {{ ... }}, got {type(entry).__name__} ({entry!r})"
+        )
+    members = ", ".join(
+        f"{member_key} = {_format_scalar(f'{entry_key}.{member_key}', member_value)}"
+        for member_key, member_value in entry.items()
+    )
+    return f"{{ {members} }}" if members else "{}"
+
+
 def dump_config_toml(
     values: Mapping[str, object],
     *,
     header: Sequence[str] = (),
 ) -> str:
-    """Serialize a flat Config table to TOML text.
+    """Serialize a Config table to TOML text.
 
-    Only the persisted-Config value shapes (``str`` / ``bool`` / ``int`` /
-    ``float`` / ``list[str]``) are supported; the round-trip through
-    :mod:`tomllib` is asserted in ``tests/test_settings.py``. ``header`` lines
-    are emitted as ``#``-prefixed comments above the body.
+    Scalar / list values (``str`` / ``bool`` / ``int`` / ``float`` /
+    ``list[str]``) are emitted as flat ``key = value`` lines. A top-level
+    ``dict`` value is emitted as a ``[section]`` block of inline ``{ ... }``
+    tables (issue #146) — the one bounded table extension. Sections are emitted
+    **after** all flat keys so a bare ``key = value`` line is never captured into
+    a section, and the round-trip through :mod:`tomllib` is asserted in
+    ``tests/test_settings.py``. ``header`` lines are emitted as ``#``-prefixed
+    comments above the body.
     """
     lines = [f"# {line}" for line in header]
     if header:
         lines.append("")
+    scalars: list[tuple[str, object]] = []
+    sections: list[tuple[str, Mapping[str, object]]] = []
     for key, value in values.items():
+        if isinstance(value, dict):
+            sections.append((key, cast("Mapping[str, object]", value)))
+        else:
+            scalars.append((key, value))
+    for key, value in scalars:
         lines.append(f"{key} = {_format_value(key, value)}")
+    for key, table in sections:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(f"[{key}]")
+        for entry_key, entry in table.items():
+            lines.append(f"{entry_key} = {_format_inline_table(key, entry_key, entry)}")
     return "\n".join(lines) + "\n"
 
 
@@ -338,4 +403,52 @@ def table_str_list(table: Mapping[str, object], key: str, *, scope: str) -> list
         if not isinstance(item, str):
             raise _type_error(scope, key, "a list of strings", value)
         result.append(item)
+    return result
+
+
+#: The two keys every ``[routing]`` entry must carry (both required, no
+#: partial-entry inheritance — decision #108).
+_ROUTING_ENTRY_KEYS = frozenset({"model", "effort"})
+
+
+def table_routing(
+    table: Mapping[str, object], *, scope: str
+) -> dict[str, tuple[str, str]]:
+    """Read the ``[routing]`` table: ``task-type key -> (model, effort)``.
+
+    Returns ``{}`` when the scope has no ``[routing]`` block (the common,
+    back-compatible case). Each entry must be an inline ``{ model, effort }``
+    table with **both** keys present, no extras, and both values strings
+    (decision #108); anything else raises :exc:`SettingsError` **loudly and
+    early**, naming the offending scope + task-type key so a hand-edited
+    ``config.toml`` fails at load rather than surfacing deep in the loop.
+
+    The gate (:func:`git_loopy.config.gate_reasoning_effort`) that may drop an
+    effort the model doesn't accept runs later, per issue, at resolution
+    (#147) — this reader returns the authored pair verbatim.
+    """
+    if "routing" not in table:
+        return {}
+    raw = table["routing"]
+    if not isinstance(raw, dict):
+        raise _type_error(scope, "routing", "a table of inline tables", raw)
+    result: dict[str, tuple[str, str]] = {}
+    for key, entry in cast("Mapping[str, object]", raw).items():
+        label = f"routing.{key}"
+        if not isinstance(entry, dict):
+            raise _type_error(scope, label, "an inline table { model, effort }", entry)
+        entry_map = cast("Mapping[str, object]", entry)
+        present = set(entry_map)
+        if present != _ROUTING_ENTRY_KEYS:
+            raise SettingsError(
+                f"{scope} config: {label!r} must be an inline table with exactly "
+                f"keys {{'model', 'effort'}}, got {sorted(present)}"
+            )
+        model = entry_map["model"]
+        effort = entry_map["effort"]
+        if not isinstance(model, str):
+            raise _type_error(scope, f"{label}.model", "a string", model)
+        if not isinstance(effort, str):
+            raise _type_error(scope, f"{label}.effort", "a string", effort)
+        result[key] = (model, effort)
     return result

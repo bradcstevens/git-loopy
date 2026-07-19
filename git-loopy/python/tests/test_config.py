@@ -119,6 +119,43 @@ def test_run_config_accepts_explicit_pricing_path() -> None:
     assert cfg.pricing_file == p
 
 
+# ---------------------------------------------------------------------------
+# routing: the frozen per-issue-type map (issue #146). Built once by the
+# resolver; RunConfig only stores it as an immutable, read-only mapping.
+# ---------------------------------------------------------------------------
+
+
+def test_run_config_routing_defaults_empty() -> None:
+    """A default :class:`RunConfig` carries an empty routing map (back-compat)."""
+    assert dict(RunConfig().routing) == {}
+
+
+def test_run_config_routing_preserves_entries() -> None:
+    cfg = RunConfig(
+        routing={
+            "planning": ("claude-opus-4.8", "max"),
+            "docs": ("gpt-5-mini", "medium"),
+        }
+    )
+    assert cfg.routing["planning"] == ("claude-opus-4.8", "max")
+    assert cfg.routing["docs"] == ("gpt-5-mini", "medium")
+
+
+def test_run_config_routing_is_read_only_mapping() -> None:
+    """The stored routing map rejects mutation (a genuine frozen map)."""
+    cfg = RunConfig(routing={"planning": ("claude-opus-4.8", "max")})
+    with pytest.raises(TypeError):
+        cfg.routing["docs"] = ("gpt-5-mini", "low")  # type: ignore[index]
+
+
+def test_run_config_routing_copies_input_not_aliased() -> None:
+    """Mutating the source dict after construction never leaks into the config."""
+    src = {"planning": ("claude-opus-4.8", "max")}
+    cfg = RunConfig(routing=src)
+    src["planning"] = ("changed", "low")
+    assert cfg.routing["planning"] == ("claude-opus-4.8", "max")
+
+
 def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
     """The static fallback exactly mirrors the current Copilot catalog."""
     from git_loopy.config import (
