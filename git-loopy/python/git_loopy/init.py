@@ -1,7 +1,7 @@
 """``git_loopy.init`` — the first-run setup wizard (issue #53, ADR-0006/0007).
 
 ``git-loopy init`` writes persisted **Config** (and, default-yes, an editable
-``PROMPT.md`` override plus git-loopy's agent skills) into a chosen **scope**
+``PROMPT.md`` override plus git-loopy's workflow skill catalog) into a chosen **scope**
 (global or project), then exits — it never starts the loop. This is the explicit
 scaffold entry point; the auto-run-on-first-run behaviour is a separate slice
 (#55), and the ``config`` subcommand group is #56.
@@ -315,7 +315,7 @@ def _packaged_prompt_path() -> Path:
 
 
 def _packaged_skills_path() -> Path:
-    """git-loopy's agent skills shipped inside the wheel (scaffolded by ``init``)."""
+    """git-loopy's workflow skill catalog shipped inside the wheel (scaffolded by ``init``)."""
     return Path(str(files("git_loopy") / "skills"))
 
 
@@ -326,7 +326,7 @@ def _scaffold_prompt(prompt_path: Path, source: Path) -> None:
 
 
 def _scaffold_skills(skills_dir: Path, source: Path) -> None:
-    """Copy git-loopy's packaged agent skills into the scope's ``.copilot/skills``."""
+    """Copy git-loopy's packaged workflow skill catalog into the scope's ``.copilot/skills``."""
     skills_dir.mkdir(parents=True, exist_ok=True)
     for child in sorted(source.iterdir()):
         if child.is_dir():
@@ -439,10 +439,15 @@ def run_init(
                 default_effort=default_effort,  # type: ignore[arg-type]
                 warn=warn,
             )
+            destination = (
+                "the global scope (the shared, machine-wide skills location)"
+                if resolved_scope == "global"
+                else f"the {resolved_scope} scope"
+            )
             scaffold = _ask_yes_no(
                 input_fn,
                 "Also scaffold an editable PROMPT.md override and git-loopy's "
-                f"agent skills into the {resolved_scope} scope?",
+                f"workflow skill catalog into {destination}?",
                 default=True,
             )
     except InitCancelled:

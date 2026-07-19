@@ -25,12 +25,17 @@ from git_loopy.interactive.models import ModelChoice
 
 
 class _Input:
-    """A scripted ``input_fn``: returns queued answers, EOF (Ctrl-D) when drained."""
+    """A scripted ``input_fn``: returns queued answers, EOF (Ctrl-D) when drained.
+
+    Records every prompt it is shown (``prompts``) so tests can assert on wording.
+    """
 
     def __init__(self, *answers: str) -> None:
         self._answers = list(answers)
+        self.prompts: list[str] = []
 
-    def __call__(self, _prompt: str) -> str:
+    def __call__(self, prompt: str) -> str:
+        self.prompts.append(prompt)
         if not self._answers:
             raise EOFError
         return self._answers.pop(0)
@@ -469,6 +474,79 @@ def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
     assert settings.global_prompt_path(env).exists()
     # Global skills live under ~/.copilot/skills, NOT the XDG config dir.
     assert (Path(env["HOME"]) / ".copilot" / "skills" / "setup-agent-skills").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# run_init — scaffold-prompt wording (issue #123)
+# ---------------------------------------------------------------------------
+
+
+def _scaffold_prompt(inp: _Input) -> str:
+    """The single combined scaffold confirmation the wizard showed the operator."""
+    return next(p for p in inp.prompts if "scaffold" in p.lower())
+
+
+def test_scaffold_prompt_names_the_workflow_skill_catalog(tmp_path: Path) -> None:
+    """The combined default-yes prompt names the catalog, not a vague "agent skills"."""
+    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+    assert rc == 0
+    prompt = _scaffold_prompt(inp)
+    assert "workflow skill catalog" in prompt
+    assert "agent skills" not in prompt
+    # Still one combined confirmation, covering the editable PROMPT.md override.
+    assert "PROMPT.md" in prompt
+
+
+def test_scaffold_prompt_global_scope_flags_machine_wide_location(
+    tmp_path: Path,
+) -> None:
+    """Global scope warns the operator it writes the shared, machine-wide location."""
+    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    rc = init_module.run_init(
+        scope="global",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+    assert rc == 0
+    prompt = _scaffold_prompt(inp)
+    assert "workflow skill catalog" in prompt
+    assert "shared, machine-wide" in prompt
+
+
+def test_scaffold_prompt_project_scope_omits_machine_wide_flag(
+    tmp_path: Path,
+) -> None:
+    """The machine-wide caveat is scope-specific — project scope stays unqualified."""
+    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+    assert rc == 0
+    prompt = _scaffold_prompt(inp)
+    assert "machine-wide" not in prompt
+    assert "project scope" in prompt
 
 
 def test_run_init_config_round_trips_through_settings_loader(tmp_path: Path) -> None:
