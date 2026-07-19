@@ -1064,6 +1064,31 @@ git_loopy_close_one_issue() {
   [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]] || _GIT_LOOPY_FIRST_CLOSED_REF="$issue"
 }
 
+git_loopy_pool_actionable_close_refs() {
+  # Assemble the actionable Pool-*issue* close-refs named in this Iteration's new
+  # commits: the `{ref, kind: "issue"}` Pool descriptors crossed with the closing
+  # keywords in the concatenated commit subjects/bodies. Shared by the auto-close
+  # backstop (§5) and the Checkpoint active-ref inference (§7) so both derive the
+  # identical first-encounter-ordered close-ref set from one assembly (the two
+  # paths must never disagree about which Pool issues this Iteration referenced).
+  # `$1` is the new-commit JSON array; prints the compact JSON array returned by
+  # `git_loopy_actionable_close_refs`.
+  local commits_json="$1"
+  local pool_descriptors concatenated
+  pool_descriptors="$(
+    jq -c '[.[] | select(has("number")) | {ref: .number, kind: "issue"}]' \
+      <<<"$GIT_LOOPY_POOL_JSON"
+  )" || return 1
+  concatenated="$(
+    jq -r '
+      [ .[]
+        | if .body == "" then .subject else .subject + "\n" + .body end
+      ] | join("\n")
+    ' <<<"$commits_json"
+  )" || return 1
+  git_loopy_actionable_close_refs "$concatenated" "$pool_descriptors"
+}
+
 git_loopy_auto_close_pool_issues() {
   # Close finished Pool *issues* referenced by closing keywords in this
   # Iteration's new commits. Only the GitHub source auto-closes (the PRDs agent
@@ -1076,25 +1101,8 @@ git_loopy_auto_close_pool_issues() {
   _GIT_LOOPY_FIRST_CLOSED_REF=""
   [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]] || return 0
 
-  local pool_descriptors
-  pool_descriptors="$(
-    jq -c '[.[] | select(has("number")) | {ref: .number, kind: "issue"}]' \
-      <<<"$GIT_LOOPY_POOL_JSON"
-  )" || return 1
-
-  local concatenated
-  concatenated="$(
-    jq -r '
-      [ .[]
-        | if .body == "" then .subject else .subject + "\n" + .body end
-      ] | join("\n")
-    ' <<<"$commits_json"
-  )" || return 1
-
   local actionable
-  actionable="$(
-    git_loopy_actionable_close_refs "$concatenated" "$pool_descriptors"
-  )" || return 1
+  actionable="$(git_loopy_pool_actionable_close_refs "$commits_json")" || return 1
 
   local ref
   while IFS= read -r ref; do
@@ -1117,21 +1125,8 @@ git_loopy_infer_active_ref() {
     printf '%s' "$_GIT_LOOPY_FIRST_CLOSED_REF"
     return 0
   fi
-  local pool_descriptors concatenated actionable first
-  pool_descriptors="$(
-    jq -c '[.[] | select(has("number")) | {ref: .number, kind: "issue"}]' \
-      <<<"$GIT_LOOPY_POOL_JSON"
-  )" || return 1
-  concatenated="$(
-    jq -r '
-      [ .[]
-        | if .body == "" then .subject else .subject + "\n" + .body end
-      ] | join("\n")
-    ' <<<"$commits_json"
-  )" || return 1
-  actionable="$(
-    git_loopy_actionable_close_refs "$concatenated" "$pool_descriptors"
-  )" || return 1
+  local actionable first
+  actionable="$(git_loopy_pool_actionable_close_refs "$commits_json")" || return 1
   first="$(jq -r '.[0] // empty' <<<"$actionable")" || return 1
   if [[ -n "$first" ]]; then
     printf '%s' "$first"

@@ -1408,6 +1408,41 @@ function Invoke-GitLoopyCloseOneIssue {
     return $true
 }
 
+function Get-GitLoopyPoolActionableCloseReferences {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    # Assemble the actionable Pool-*issue* close-refs named in this Iteration's new
+    # commits: the { ref, kind = "issue" } Pool descriptors crossed with the closing
+    # keywords in the concatenated commit subjects/bodies. Shared by the auto-close
+    # backstop (§5) and the Checkpoint active-ref inference (§7) so both derive the
+    # identical first-encounter-ordered close-ref set from one assembly (the two
+    # paths must never disagree about which Pool issues this Iteration referenced).
+    $Descriptors = @(
+        foreach ($Item in @($Pool)) {
+            if ($Item -is [Collections.IDictionary] -and $Item.Contains("number")) {
+                [ordered]@{ ref = [int]$Item["number"]; kind = "issue" }
+            }
+        }
+    )
+    $Concatenated = @(
+        foreach ($Commit in @($Commits)) {
+            $Body = [string]$Commit["body"]
+            $Subject = [string]$Commit["subject"]
+            if ([string]::IsNullOrEmpty($Body)) { $Subject } else { "$Subject`n$Body" }
+        }
+    ) -join "`n"
+    $Actionable = Get-GitLoopyActionableCloseReferences `
+        -Messages $Concatenated `
+        -Pool $Descriptors
+    return , $Actionable
+}
+
 function Invoke-GitLoopyAutoClose {
     [CmdletBinding()]
     param(
@@ -1434,25 +1469,8 @@ function Invoke-GitLoopyAutoClose {
         return 0
     }
 
-    $Descriptors = @(
-        foreach ($Item in @($Pool)) {
-            if ($Item -is [Collections.IDictionary] -and $Item.Contains("number")) {
-                [ordered]@{ ref = [int]$Item["number"]; kind = "issue" }
-            }
-        }
-    )
-    $Concatenated = @(
-        foreach ($Commit in @($Commits)) {
-            $Body = [string]$Commit["body"]
-            $Subject = [string]$Commit["subject"]
-            if ([string]::IsNullOrEmpty($Body)) { $Subject } else { "$Subject`n$Body" }
-        }
-    ) -join "`n"
-
     $Closures = 0
-    $Actionable = Get-GitLoopyActionableCloseReferences `
-        -Messages $Concatenated `
-        -Pool $Descriptors
+    $Actionable = Get-GitLoopyPoolActionableCloseReferences -Pool $Pool -Commits $Commits
     foreach ($Issue in $Actionable) {
         $Closed = Invoke-GitLoopyCloseOneIssue `
             -Context $Context `
@@ -1488,23 +1506,7 @@ function Get-GitLoopyActiveRef {
     if ($null -ne $script:GitLoopyFirstClosedRef) {
         return [string]$script:GitLoopyFirstClosedRef
     }
-    $Descriptors = @(
-        foreach ($Item in @($Pool)) {
-            if ($Item -is [Collections.IDictionary] -and $Item.Contains("number")) {
-                [ordered]@{ ref = [int]$Item["number"]; kind = "issue" }
-            }
-        }
-    )
-    $Concatenated = @(
-        foreach ($Commit in @($Commits)) {
-            $Body = [string]$Commit["body"]
-            $Subject = [string]$Commit["subject"]
-            if ([string]::IsNullOrEmpty($Body)) { $Subject } else { "$Subject`n$Body" }
-        }
-    ) -join "`n"
-    $Actionable = Get-GitLoopyActionableCloseReferences `
-        -Messages $Concatenated `
-        -Pool $Descriptors
+    $Actionable = Get-GitLoopyPoolActionableCloseReferences -Pool $Pool -Commits $Commits
     if (@($Actionable).Count -gt 0) {
         return [string]@($Actionable)[0]
     }
@@ -1944,6 +1946,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",
     "Get-GitLoopyActionableCloseReferences",
+    "Get-GitLoopyPoolActionableCloseReferences",
     "Test-GitLoopyIterationProgress",
     "Step-GitLoopyStrikeState",
     "Test-GitLoopyCheckpointMessage",

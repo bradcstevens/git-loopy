@@ -95,6 +95,32 @@ foreach ($Case in $CloseReferences["cases"]) {
     ) "close-references actionable fixture: $($Case["id"])"
 }
 
+# The auto-close backstop (§5) and the Checkpoint active-ref inference (§7) share
+# one Pool-close-ref assembly (#114): { ref, kind = "issue" } descriptors from the
+# Pool crossed with the closing keywords in this Iteration's commits.
+$PacCommits = @(
+    [ordered]@{ sha = "a1"; subject = "feat: thing"; body = "Closes #41" },
+    [ordered]@{ sha = "b2"; subject = "chore: noise"; body = "" }
+)
+$PacActionable = Get-GitLoopyPoolActionableCloseReferences `
+    -Pool @([ordered]@{ number = 41 }, [ordered]@{ number = 77 }) `
+    -Commits $PacCommits
+Assert-Equal "41" (
+    [string]::Join(",", @($PacActionable))
+) "pool-actionable-close-refs: in-Pool close-ref is actionable"
+$PacOutOfPool = Get-GitLoopyPoolActionableCloseReferences `
+    -Pool @([ordered]@{ number = 41 }) `
+    -Commits @([ordered]@{ sha = "c3"; subject = "fix: other"; body = "Fixes #999" })
+Assert-Equal 0 (
+    @($PacOutOfPool).Count
+) "pool-actionable-close-refs: out-of-Pool ref excluded"
+$PacEmptyPool = Get-GitLoopyPoolActionableCloseReferences `
+    -Pool @() `
+    -Commits $PacCommits
+Assert-Equal 0 (
+    @($PacEmptyPool).Count
+) "pool-actionable-close-refs: empty Pool yields nothing"
+
 $ProgressStrikes = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "progress-strikes.json") `
     -Raw |

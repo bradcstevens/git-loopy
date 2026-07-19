@@ -74,6 +74,33 @@ while IFS= read -r case_json; do
     "close-references actionable fixture: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/close-references.json")
 
+# The auto-close backstop (§5) and the Checkpoint active-ref inference (§7) share
+# one Pool-close-ref assembly (#114): descriptors from GIT_LOOPY_POOL_JSON crossed
+# with the closing keywords in this Iteration's commit JSON. Isolate the global
+# mutation in a subshell so no other case sees the fake Pool.
+(
+  git_loopy_pac_commits='[
+    {"sha":"a1","subject":"feat: thing","body":"Closes #41"},
+    {"sha":"b2","subject":"chore: noise","body":""}
+  ]'
+  GIT_LOOPY_POOL_JSON='[{"number":41},{"number":77}]'
+  assert_equal \
+    "[41]" \
+    "$(git_loopy_pool_actionable_close_refs "$git_loopy_pac_commits")" \
+    "pool-actionable-close-refs: in-Pool close-ref is actionable"
+  GIT_LOOPY_POOL_JSON='[{"number":41}]'
+  assert_equal \
+    "[]" \
+    "$(git_loopy_pool_actionable_close_refs \
+      '[{"sha":"c3","subject":"fix: other","body":"Fixes #999"}]')" \
+    "pool-actionable-close-refs: out-of-Pool ref excluded"
+  GIT_LOOPY_POOL_JSON='[]'
+  assert_equal \
+    "[]" \
+    "$(git_loopy_pool_actionable_close_refs "$git_loopy_pac_commits")" \
+    "pool-actionable-close-refs: empty Pool yields nothing"
+)
+
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   max_strikes="$(jq -r '.max_strikes' <<<"$case_json")"
