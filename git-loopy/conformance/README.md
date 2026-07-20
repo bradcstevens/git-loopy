@@ -14,6 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Event type literals and stable envelope-first JSON serialization |
+| `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
@@ -21,6 +22,11 @@ Orchestrator's production decision seams rather than reproduce their logic.
 Every file carries `schema_version` and `contract_version`. Fixture content is
 data only: do not add host-language expressions, executable hooks, or
 implementation-specific expected-value generation.
+
+A skill is **consulted** once per Iteration when either an explicit `skill`
+tool call names it or any tool-call argument references
+`.copilot/skills/<name>/SKILL.md`. Consulted names are deduplicated and sorted;
+catalog globs that do not identify a concrete `<name>` do not count.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The

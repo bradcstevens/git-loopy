@@ -60,6 +60,7 @@ The :class:`RunSummaryWriter` emits a single JSON document on close::
           "est_cost_usd": "0.0234",                        # str (Decimal-as-string) | null
           "tool_count": 6,                                 # int
           "skill_count": 1,                                # int
+          "skills_consulted": ["tdd"],                      # sorted distinct skill names
           "commits": 1,                                    # int (commits made during iter)
           "auto_closures": 1,                              # int (wrapper auto-closes)
           "strikes": 0                                     # int (NMT strike count AFTER iter)
@@ -252,6 +253,7 @@ class IterationCounters:
     est_cost_usd: Decimal | None = None
     tool_count: int = 0
     skill_count: int = 0
+    skills_consulted: tuple[str, ...] = ()
     commits: int = 0
     auto_closures: int = 0
     strikes: int = 0
@@ -376,6 +378,7 @@ class RunSummaryWriter(AbstractContextManager["RunSummaryWriter"]):
                     ),
                     "tool_count": c.tool_count,
                     "skill_count": c.skill_count,
+                    "skills_consulted": list(c.skills_consulted),
                     "commits": c.commits,
                     "auto_closures": c.auto_closures,
                     "strikes": c.strikes,

@@ -16,7 +16,9 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.pricing import Pricing
 from git_loopy.sources import is_afk_ready
+from git_loopy.ui import RunSummary
 from git_loopy.wrapper import (
     CLOSE_KEYWORD_RE,
     NMTStrikeStateMachine,
@@ -145,6 +147,25 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 )
 def test_event_serialization_fixture(case: dict[str, Any]) -> None:
     assert events_module.to_jsonl_line(case["event"]) == case["jsonl"]
+
+
+_SKILL_CONSULTATION = _load_fixture("skill-consultation.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_CONSULTATION["cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
+    summary = RunSummary(pricing=Pricing(models={}))
+    snap = summary.on_iteration_start(iter_num=1)
+    for tool_call in case["tool_calls"]:
+        summary.record_tool_call(**tool_call)
+
+    assert snap.skill_count == case["expected_skill_calls"]
+    assert sorted(snap.skills_consulted) == case["expected_consulted"]
+    assert case["expected_render"] in summary.build_iteration_panel(snap).renderable.plain
 
 
 _MODEL_ROSTER = _load_fixture("model-roster.json")

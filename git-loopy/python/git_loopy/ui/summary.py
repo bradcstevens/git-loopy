@@ -53,7 +53,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Iterator, Optional
 
 from rich.box import ROUNDED, SIMPLE
 from rich.panel import Panel
@@ -73,6 +73,44 @@ __all__ = ["IterationSnapshot", "RunSummary", "RunTotals"]
 # context utilisation reaches half the model's window we start drawing
 # attention to the cost / context line.
 _CONTEXT_HIGH_WATERMARK: float = 0.5
+_SKILL_PATH_PREFIX = ".copilot/skills/"
+_SKILL_PATH_SUFFIX = "/SKILL.md"
+
+
+def _argument_strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _argument_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _argument_strings(item)
+
+
+def _consulted_skills(tool_name: str, arguments: Any) -> set[str]:
+    names: set[str] = set()
+    if tool_name == "skill" and isinstance(arguments, dict):
+        skill = arguments.get("skill")
+        if isinstance(skill, str) and skill:
+            names.add(skill)
+    for value in _argument_strings(arguments):
+        normalized = value.replace("\\", "/")
+        search_from = 0
+        while (start := normalized.find(_SKILL_PATH_PREFIX, search_from)) >= 0:
+            name_start = start + len(_SKILL_PATH_PREFIX)
+            name_end = normalized.find(_SKILL_PATH_SUFFIX, name_start)
+            if name_end < 0:
+                break
+            name = normalized[name_start:name_end]
+            if (
+                name
+                and name[0].isalnum()
+                and all(char.isalnum() or char in "._-" for char in name)
+            ):
+                names.add(name)
+            search_from = name_end + len(_SKILL_PATH_SUFFIX)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +140,7 @@ class IterationSnapshot:
     usage: UsageTally = field(default_factory=UsageTally)
     tool_count: int = 0
     skill_count: int = 0
+    skills_consulted: set[str] = field(default_factory=set)
     commits: int = 0
     auto_closures: int = 0
     strikes: int = 0
@@ -176,6 +215,7 @@ class IterationSnapshot:
             "est_cost_usd": self.cost_usd(pricing),
             "tool_count": self.tool_count,
             "skill_count": self.skill_count,
+            "skills_consulted": tuple(sorted(self.skills_consulted)),
             "commits": self.commits,
             "auto_closures": self.auto_closures,
             "strikes": self.strikes,
@@ -274,13 +314,14 @@ class RunSummary:
         # UsageTally.add; the sink keeps its own int(x or 0) input sanitization.
         snap.usage.add(model, int(tokens_in or 0), int(tokens_out or 0))
 
-    def record_tool_call(self, *, tool_name: str) -> None:
+    def record_tool_call(self, *, tool_name: str, arguments: Any = None) -> None:
         snap = self.current
         if snap is None:
             return
         snap.tool_count += 1
         if tool_name == "skill":
             snap.skill_count += 1
+        snap.skills_consulted.update(_consulted_skills(tool_name, arguments))
 
     def record_commit(self) -> None:
         snap = self.current
@@ -388,6 +429,9 @@ class RunSummary:
         body.append(str(snap.tool_count))
         body.append("    Skill calls: ", style=STYLES["meta"])
         body.append(str(snap.skill_count))
+        body.append("\n")
+        body.append("Skills consulted: ", style=STYLES["meta"])
+        body.append(", ".join(sorted(snap.skills_consulted)) or "—")
         body.append("\n")
 
         # Commits / auto-closures / strikes

@@ -400,7 +400,7 @@ class Renderer:
     def _on_tool_call(self, event: dict[str, Any]) -> None:
         tool_name = event.get("tool_name", "")
         arguments = event.get("arguments")
-        self.summary.record_tool_call(tool_name=str(tool_name))
+        self.summary.record_tool_call(tool_name=str(tool_name), arguments=arguments)
 
         if tool_name == "skill":
             # Magenta highlight; pull the skill name out of arguments.

@@ -5,6 +5,9 @@ CLI, Claude Code, etc.) working in this repository.
 
 ## Agent skills
 
+Agent skills are located in `.copilot/skills`
+The skill "TDD" is located in `.copilot/skills/tdd`
+
 ### Issue tracker
 
 Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.

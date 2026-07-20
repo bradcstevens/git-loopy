@@ -830,6 +830,36 @@ def test_skill_count_accumulates_for_skill_calls() -> None:
     assert summary.current is not None
     assert summary.current.tool_count == 2
     assert summary.current.skill_count == 2
+    assert summary.current.skills_consulted == {"diagnose", "tdd"}
+
+
+def test_skill_reads_in_replay_tool_arguments_are_deduped() -> None:
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 169})
+    for tool_name, arguments in [
+        ("view", {"path": "/repo/.copilot/skills/tdd/SKILL.md"}),
+        (
+            "rg",
+            {
+                "paths": ["/repo/.copilot/skills/domain-modeling/SKILL.md"],
+                "pattern": "name:",
+            },
+        ),
+        (
+            "bash",
+            {"command": "sed -n '1,80p' /repo/.copilot/skills/tdd/SKILL.md"},
+        ),
+    ]:
+        renderer.render(
+            {
+                "type": TOOL_CALL,
+                "tool_name": tool_name,
+                "arguments": arguments,
+            }
+        )
+
+    assert summary.current is not None
+    assert summary.current.skills_consulted == {"domain-modeling", "tdd"}
 
 
 def test_strike_accounting_cumulative_value_wins() -> None:
@@ -971,6 +1001,7 @@ def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
         ),
         tool_count=3,
         skill_count=1,
+        skills_consulted={"tdd"},
         commits=1,
         auto_closures=1,
         strikes=0,
@@ -984,6 +1015,7 @@ def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
     assert kwargs["context_used"] == 1200
     assert kwargs["tool_count"] == 3
     assert kwargs["skill_count"] == 1
+    assert kwargs["skills_consulted"] == ("tdd",)
     assert kwargs["commits"] == 1
     assert kwargs["auto_closures"] == 1
     assert kwargs["strikes"] == 0

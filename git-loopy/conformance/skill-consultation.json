@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.1",
+  "definition": "A skill is consulted when its name is supplied to an explicit skill tool call or a tool-call argument references .copilot/skills/<name>/SKILL.md. Names are deduplicated and sorted per Iteration.",
+  "cases": [
+    {
+      "id": "replay-derived-skill-reads",
+      "tool_calls": [
+        {
+          "tool_name": "view",
+          "arguments": {
+            "path": "/repo/.copilot/skills/tdd/SKILL.md"
+          }
+        },
+        {
+          "tool_name": "view",
+          "arguments": {
+            "path": "/repo/.copilot/skills/domain-modeling/SKILL.md"
+          }
+        },
+        {
+          "tool_name": "bash",
+          "arguments": {
+            "command": "sed -n '1,80p' /repo/.copilot/skills/tdd/SKILL.md"
+          }
+        }
+      ],
+      "expected_skill_calls": 0,
+      "expected_consulted": [
+        "domain-modeling",
+        "tdd"
+      ],
+      "expected_render": "Skills consulted: domain-modeling, tdd"
+    },
+    {
+      "id": "explicit-skill-call-is-consultation",
+      "tool_calls": [
+        {
+          "tool_name": "skill",
+          "arguments": {
+            "skill": "prototype"
+          }
+        }
+      ],
+      "expected_skill_calls": 1,
+      "expected_consulted": [
+        "prototype"
+      ],
+      "expected_render": "Skills consulted: prototype"
+    },
+    {
+      "id": "empty-consultation",
+      "tool_calls": [
+        {
+          "tool_name": "glob",
+          "arguments": {
+            "pattern": ".copilot/skills/*/SKILL.md"
+          }
+        },
+        {
+          "tool_name": "view",
+          "arguments": {
+            "path": "/repo/docs/SKILL.md"
+          }
+        }
+      ],
+      "expected_skill_calls": 0,
+      "expected_consulted": [],
+      "expected_render": "Skills consulted: —"
+    }
+  ]
+}
