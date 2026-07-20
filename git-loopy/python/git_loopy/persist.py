@@ -65,12 +65,21 @@ The :class:`RunSummaryWriter` emits a single JSON document on close::
           "auto_closures": 1,                              # int (wrapper auto-closes)
           "strikes": 0                                     # int (NMT strike count AFTER iter)
         }
-      ]
+      ],
+      "skill_adoption": {
+        "iterations_with_skill": 1,                         # explicit call and/or consultation
+        "total_iterations": 1,
+        "skills": ["tdd"]                                   # sorted distinct names across run
+      }
     }
 
 ``est_cost_usd`` is :data:`None` (JSON ``null``) when the iteration's
 model has no pricing entry — *never zero*, so downstream consumers can
 distinguish "unknown" from "free".
+
+``skill_adoption`` is measurement only: an iteration counts when either
+``skill_count`` is non-zero or ``skills_consulted`` is non-empty. It does not
+participate in progress or Strike accounting.
 
 Design notes:
 
@@ -362,6 +371,18 @@ class RunSummaryWriter(AbstractContextManager["RunSummaryWriter"]):
     def flush(self) -> None:
         """Materialise the accumulated counters to a single JSON file."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        iterations_with_skill = sum(
+            1
+            for counters in self._iterations
+            if counters.skill_count > 0 or counters.skills_consulted
+        )
+        skills_seen = sorted(
+            {
+                skill
+                for counters in self._iterations
+                for skill in counters.skills_consulted
+            }
+        )
         payload: dict[str, Any] = {
             "run_id": self._run_id,
             "started_at": _format_rfc3339_ms(self._started_at),
@@ -385,6 +406,11 @@ class RunSummaryWriter(AbstractContextManager["RunSummaryWriter"]):
                 }
                 for c in self._iterations
             ],
+            "skill_adoption": {
+                "iterations_with_skill": iterations_with_skill,
+                "total_iterations": len(self._iterations),
+                "skills": skills_seen,
+            },
         }
         text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         self._path.write_text(text, encoding="utf-8")

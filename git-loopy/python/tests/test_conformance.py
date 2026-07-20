@@ -168,6 +168,25 @@ def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
     assert case["expected_render"] in summary.build_iteration_panel(snap).renderable.plain
 
 
+def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
+    summary = RunSummary(pricing=Pricing(models={}))
+    for iter_num, case in enumerate(_SKILL_CONSULTATION["cases"], start=1):
+        summary.on_iteration_start(iter_num=iter_num)
+        for tool_call in case["tool_calls"]:
+            summary.record_tool_call(**tool_call)
+        summary.on_iteration_end()
+
+    totals = summary.totals()
+    assert totals.iterations_with_skill == 2
+    assert totals.skills_seen == ("domain-modeling", "prototype", "tdd")
+
+    table = summary.build_run_table()
+    assert table.columns[-1].header == "Skill adoption"
+    assert table.columns[-1].footer == (
+        "2/3 • domain-modeling, prototype, tdd"
+    )
+
+
 _MODEL_ROSTER = _load_fixture("model-roster.json")
 
 

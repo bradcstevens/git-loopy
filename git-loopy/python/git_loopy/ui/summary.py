@@ -243,6 +243,8 @@ class RunTotals:
     commits: int
     auto_closures: int
     final_strikes: int
+    iterations_with_skill: int
+    skills_seen: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +375,20 @@ class RunSummary:
         else:
             cost_usd = None
         final_strikes = self.completed[-1].strikes if self.completed else 0
+        iterations_with_skill = sum(
+            1
+            for snap in self.completed
+            if snap.skill_count > 0 or snap.skills_consulted
+        )
+        skills_seen = tuple(
+            sorted(
+                {
+                    skill
+                    for snap in self.completed
+                    for skill in snap.skills_consulted
+                }
+            )
+        )
         return RunTotals(
             iterations=len(self.completed),
             tokens_in=tokens_in,
@@ -381,6 +397,8 @@ class RunSummary:
             commits=commits,
             auto_closures=auto_closures,
             final_strikes=final_strikes,
+            iterations_with_skill=iterations_with_skill,
+            skills_seen=skills_seen,
         )
 
     # -- frozen UI artefacts -----------------------------------------------
@@ -498,12 +516,21 @@ class RunSummary:
             justify="right",
             footer=str(totals.final_strikes),
         )
+        table.add_column(
+            "Skill adoption",
+            justify="left",
+            footer=(
+                f"{totals.iterations_with_skill}/{totals.iterations} • "
+                f"{', '.join(totals.skills_seen) or '—'}"
+            ),
+        )
 
         for snap in self.completed:
             cost = snap.cost_usd(self.pricing)
             cost_str = f"${cost:.4f}" if cost is not None else "—"
             issue_str = f"#{snap.issue_num}" if snap.issue_num is not None else "—"
             model_str = snap.model if snap.model is not None else "—"
+            skills_str = ", ".join(sorted(snap.skills_consulted)) or "—"
             table.add_row(
                 str(snap.iter_num),
                 issue_str,
@@ -515,6 +542,7 @@ class RunSummary:
                 str(snap.commits),
                 str(snap.auto_closures),
                 str(snap.strikes),
+                skills_str,
             )
         return table
 

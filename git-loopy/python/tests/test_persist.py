@@ -463,6 +463,21 @@ def test_run_summary_preserves_row_order_per_iteration(tmp_path: Path) -> None:
     assert [row["commits"] for row in payload["iterations"]] == [2, 0, 1]
 
 
+def test_run_summary_json_includes_skill_adoption_totals(tmp_path: Path) -> None:
+    path = tmp_path / "run.json"
+    with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS) as w:
+        w.record(IterationCounters(iter=1, skill_count=1))
+        w.record(IterationCounters(iter=2, skills_consulted=("tdd",)))
+        w.record(IterationCounters(iter=3))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["skill_adoption"] == {
+        "iterations_with_skill": 2,
+        "total_iterations": 3,
+        "skills": ["tdd"],
+    }
+
+
 def test_run_summary_writes_empty_iterations_for_zero_iter_runs(
     tmp_path: Path,
 ) -> None:
