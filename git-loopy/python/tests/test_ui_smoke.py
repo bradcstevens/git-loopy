@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -1109,6 +1110,25 @@ def test_run_end_table_renders_one_row_per_iteration_plus_totals() -> None:
     )
     # Totals row exists (we mark it with the literal 'total' or 'sum' label).
     assert "total" in out.lower() or "totals" in out.lower()
+
+
+def test_replay_log_fixture_renders_run_skill_adoption() -> None:
+    """The run-end footer aggregates skill use from completed Iterations."""
+    renderer, summary, buf = _make_renderer()
+    fixture = Path(__file__).parent / "fixtures" / "skill-adoption.jsonl"
+
+    for line in fixture.read_text(encoding="utf-8").splitlines():
+        renderer.render(json.loads(line))
+
+    totals = summary.totals()
+    assert totals.iterations == 3
+    assert totals.iterations_with_skill == 2
+    assert totals.skills_seen == ("codebase-design", "tdd")
+
+    out = buf.getvalue()
+    assert "Skill adoption" in out, out
+    assert "2/3 iterations" in out, out
+    assert "Skills: codebase-design, tdd" in out, out
 
 
 def test_run_end_table_handles_zero_iterations() -> None:

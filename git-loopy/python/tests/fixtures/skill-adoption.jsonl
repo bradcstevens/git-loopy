@@ -1,0 +1,12 @@
+{"ts":"2026-07-20T00:00:00.000Z","run_id":"01KXYZ00000000000000000000","iter":0,"type":"wrapper.run.start"}
+{"ts":"2026-07-20T00:00:01.000Z","run_id":"01KXYZ00000000000000000000","iter":1,"type":"wrapper.iteration.start","issue":170}
+{"ts":"2026-07-20T00:00:02.000Z","run_id":"01KXYZ00000000000000000000","iter":1,"type":"tool.call","tool_call_id":"tool-1","tool_name":"skill","arguments":{"skill":"tdd"}}
+{"ts":"2026-07-20T00:00:03.000Z","run_id":"01KXYZ00000000000000000000","iter":1,"type":"wrapper.iteration.end"}
+{"ts":"2026-07-20T00:00:04.000Z","run_id":"01KXYZ00000000000000000000","iter":2,"type":"wrapper.iteration.start","issue":171}
+{"ts":"2026-07-20T00:00:05.000Z","run_id":"01KXYZ00000000000000000000","iter":2,"type":"tool.call","tool_call_id":"tool-2","tool_name":"view","arguments":{"path":"/repo/.copilot/skills/codebase-design/SKILL.md"}}
+{"ts":"2026-07-20T00:00:06.000Z","run_id":"01KXYZ00000000000000000000","iter":2,"type":"tool.call","tool_call_id":"tool-3","tool_name":"bash","arguments":{"command":"sed -n '1,80p' /repo/.copilot/skills/tdd/SKILL.md"}}
+{"ts":"2026-07-20T00:00:07.000Z","run_id":"01KXYZ00000000000000000000","iter":2,"type":"wrapper.iteration.end"}
+{"ts":"2026-07-20T00:00:08.000Z","run_id":"01KXYZ00000000000000000000","iter":3,"type":"wrapper.iteration.start","issue":172}
+{"ts":"2026-07-20T00:00:09.000Z","run_id":"01KXYZ00000000000000000000","iter":3,"type":"tool.call","tool_call_id":"tool-4","tool_name":"edit","arguments":{"path":"/repo/src/app.py"}}
+{"ts":"2026-07-20T00:00:10.000Z","run_id":"01KXYZ00000000000000000000","iter":3,"type":"wrapper.iteration.end"}
+{"ts":"2026-07-20T00:00:11.000Z","run_id":"01KXYZ00000000000000000000","iter":3,"type":"wrapper.run.end","outcome":"empty_pool"}

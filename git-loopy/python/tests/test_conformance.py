@@ -181,9 +181,9 @@ def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
     assert totals.skills_seen == ("domain-modeling", "prototype", "tdd")
 
     table = summary.build_run_table()
-    assert table.columns[-1].header == "Skill adoption"
-    assert table.columns[-1].footer == (
-        "2/3 • domain-modeling, prototype, tdd"
+    assert table.caption == (
+        "Skill adoption: 2/3 iterations • "
+        "Skills: domain-modeling, prototype, tdd"
     )
 
 
