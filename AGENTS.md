@@ -5,8 +5,7 @@ CLI, Claude Code, etc.) working in this repository.
 
 ## Agent skills
 
-Agent skills are located in `.copilot/skills`
-The skill "TDD" is located in `.copilot/skills/tdd`
+Agent skills are located in `.copilot/skills/*/SKILL.md`
 
 ### Issue tracker
 
