@@ -18,7 +18,7 @@ Before exploring code or proposing changes, read `docs/agents/domain.md` for the
 
 # TASK SELECTION
 
-Pick exactly one task. Prioritise in this order — and at each priority, use the skill noted in parentheses if applicable:
+Pick exactly one task. Prioritise in this order. When the selected task type names a skill, invoke that mapped skill before implementing rather than treating it as optional guidance. Development infrastructure intentionally has no mapped skill and may proceed without invoking one.
 
 1. **Critical bugfixes** — use `/diagnosing-bugs` to build a feedback loop, reproduce, hypothesise, instrument, and only then fix. Never patch a hard bug without a reproducing signal.
 2. **Development infrastructure** (tests, types, dev scripts, CI) — no specific skill; just get the loop healthy. This unblocks every later task, so it outranks features.

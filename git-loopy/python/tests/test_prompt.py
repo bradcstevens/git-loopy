@@ -148,6 +148,16 @@ def test_packaged_prompt_carries_runner_contract(marker: str) -> None:
     )
 
 
+def test_packaged_prompt_nudges_mapped_skills_but_exempts_infrastructure() -> None:
+    prompt = _packaged_prompt_text()
+
+    assert "invoke that mapped skill before implementing" in prompt
+    assert (
+        "Development infrastructure intentionally has no mapped skill and may proceed "
+        "without invoking one."
+    ) in prompt
+
+
 # ---------------------------------------------------------------------------
 # Sync guard: the project override and packaged default stay byte-identical
 # ---------------------------------------------------------------------------
