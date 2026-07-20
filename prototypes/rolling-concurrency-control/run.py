@@ -383,6 +383,18 @@ def report(scenario: model.Scenario, cap: int = 6) -> str:
             model.metrics(state, f"Adaptive H={high_water}")
         )
 
+    integration_floor_metrics = []
+    for floor in (1, 2):
+        state = model.run_to_completion(
+            scenario,
+            model.Config.adaptive(
+                cap, 2, integration_pressure_floor=floor
+            ),
+        )
+        integration_floor_metrics.append(
+            model.metrics(state, f"Integration floor {floor}")
+        )
+
     return "\n\n".join(
         [
             (
@@ -393,6 +405,8 @@ def report(scenario: model.Scenario, cap: int = 6) -> str:
             ),
             "POLICY COMPARISON\n" + comparison,
             "INTEGRATION HIGH-WATER SWEEP\n" + _table(high_water_metrics),
+            "INTEGRATION-ONLY CONTRACTION FLOOR\n"
+            + _table(integration_floor_metrics),
             "AUTO-RESOLUTION BUDGET EDGE CASE\n" + _autores_budget_report(),
             "ISOLATED SIGNAL PROBES\n" + _trigger_probes(scenario, cap),
             "ADAPTIVE REACTION LOG\n" + _reaction_table(adaptive),

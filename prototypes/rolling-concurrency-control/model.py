@@ -42,6 +42,7 @@ class Config:
     controller_window: int = 6
     controller_cooldown: int = 5
     recovery_healthy_ticks: int = 10
+    integration_pressure_floor: int = 2
     credit_target_per_tick: float = 4.2
     host_capacity: float = 5.0
 
@@ -518,28 +519,34 @@ def _control(state: State) -> None:
     if (
         not cooldown
         and not prior_contraction_still_draining
-        and state.effective_cap > 1
     ):
-        if rate_pressure:
+        if rate_pressure and state.effective_cap > 0:
             _record_reaction(
-                state, max(1, state.effective_cap - 2), "repeated 429 pressure"
+                state, max(0, state.effective_cap - 2), "repeated 429 pressure"
             )
             return
-        if integration_pressure and state.effective_cap > 2:
+        if (
+            integration_pressure
+            and state.effective_cap > c.integration_pressure_floor
+        ):
             _record_reaction(
                 state,
                 state.effective_cap - 1,
                 "Integration high-water sustained with parked Lane",
             )
             return
-        if host_pressure:
+        if host_pressure and state.effective_cap > 0:
             _record_reaction(
-                state, state.effective_cap - 1, "sustained host/setup overload"
+                state,
+                max(0, state.effective_cap - 1),
+                "sustained host/setup overload",
             )
             return
-        if credit_pressure:
+        if credit_pressure and state.effective_cap > 0:
             _record_reaction(
-                state, state.effective_cap - 1, "AI-credit burn above target"
+                state,
+                max(0, state.effective_cap - 1),
+                "AI-credit burn above target",
             )
             return
 

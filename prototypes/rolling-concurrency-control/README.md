@@ -86,6 +86,12 @@ between 2 and 4. It retained throughput while cutting simulated credit burn
 increasing wait, staleness, auto-resolution, credit burn, and serial-drain
 latency. `H=2` is the provisional knee.
 
+With `H=2`, allowing Integration pressure alone to contract from 2→1 changed
+makespan 271→279 while leaving credits, wait, staleness, and conflicts
+unchanged. A floor of 2 therefore preserves the better feed rate; the separate
+429/credit/host rules may still contract to 0 when continuing Lane attempts is
+itself the pressure source.
+
 ### Auto-resolution budget edge case
 
 With the selected `H=2`, a long-running conflicting candidate, one FIFO-admitted
@@ -113,6 +119,7 @@ Pending HITL confirmation:
 | At least 3 observed 429s in 6 ticks | Cap −2 after cooldown |
 | Credit burn above 110% target for 6 ticks | Cap −1 |
 | Host/setup load above 102% capacity for 6 ticks | Cap −1 |
+| Repeated external pressure at cap 1 | Cap 1→0; active work continues and Integration drains |
 | A prior contraction is still draining | Do not contract again |
 | 10 healthy ticks after a 5-tick cooldown | Cap +1, never above user Lane cap |
 | Any external pressure signal unavailable | Freeze at `min(user Lane cap, 3)` with hard `H=2` backpressure |
