@@ -485,7 +485,7 @@ def test_run_init_cancel_at_scaffold_writes_nothing(tmp_path: Path) -> None:
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "5", "q"),  # model, effort, then cancel at scaffold
+        input_fn=_Input("1", "5", "n", "q"),  # decline routing, cancel at scaffold
         output_fn=_Output(),
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **_packaged(tmp_path),
@@ -499,6 +499,132 @@ def test_run_init_cancel_at_scaffold_writes_nothing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_run_init_declines_routing_without_writing_routing_table(
+    tmp_path: Path,
+) -> None:
+    inp = _Input(
+        "1",  # model
+        "4",  # effort
+        "",  # routing: default No
+        "n",  # scaffold
+    )
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert config == {
+        "model": "claude-opus-4.8",
+        "reasoning_effort": "max",
+    }
+    assert any("task-type routing" in prompt for prompt in inp.prompts)
+
+
+def test_run_init_accepts_all_recommended_routes_in_selected_scope(
+    tmp_path: Path,
+) -> None:
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(
+            "1",  # global model
+            "",  # global effort (default max)
+            "y",  # configure routing
+            "",  # accept all recommended routes
+            "n",  # scaffold
+        ),
+        output_fn=_Output(),
+        fetch_choices=_routing_choices,
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert config["routing"] == {
+        "planning": {"model": "claude-opus-4.8", "effort": "max"},
+        "review": {"model": "claude-sonnet-5", "effort": "xhigh"},
+        "implementation": {"model": "claude-sonnet-5", "effort": "high"},
+        "test": {"model": "claude-sonnet-5", "effort": "medium"},
+        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        "chore": {"model": "gpt-5-mini", "effort": "low"},
+    }
+    assert config["model"] == "claude-opus-4.8"
+    assert config["reasoning_effort"] == "max"
+
+
+def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
+    tmp_path: Path,
+) -> None:
+    rc = init_module.run_init(
+        scope="global",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(
+            "1",  # global model
+            "",  # global effort (default max)
+            "y",  # configure routing
+            "n",  # walk the recommendations
+            "",  # planning: keep
+            "3",  # review: skip
+            "2",  # implementation: override
+            "2",  # override model: claude-sonnet-5
+            "3",  # override effort: high
+            "3",  # test: skip
+            "",  # docs: keep
+            "3",  # chore: skip
+            "n",  # scaffold
+        ),
+        output_fn=_Output(),
+        fetch_choices=_routing_choices,
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    config_path = settings.global_config_path(_env(tmp_path))
+    config = tomllib.loads(config_path.read_text())
+    assert config["routing"] == {
+        "planning": {"model": "claude-opus-4.8", "effort": "max"},
+        "implementation": {"model": "claude-sonnet-5", "effort": "high"},
+        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+    }
+    assert config["model"] == "claude-opus-4.8"
+    assert config["reasoning_effort"] == "max"
+
+
+def test_run_init_cancel_during_routing_writes_nothing(tmp_path: Path) -> None:
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(
+            "1",  # global model
+            "",  # global effort
+            "y",  # configure routing
+            "n",  # walk the recommendations
+            "q",  # cancel at the first route
+        ),
+        output_fn=_Output(),
+        fetch_choices=_routing_choices,
+        **_packaged(tmp_path),
+    )
+
+    assert rc != 0
+    assert not settings.project_config_path(tmp_path).exists()
+
+
 def test_run_init_project_writes_config_and_declines_assets(tmp_path: Path) -> None:
     out = _Output()
     rc = init_module.run_init(
@@ -506,7 +632,7 @@ def test_run_init_project_writes_config_and_declines_assets(tmp_path: Path) -> N
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("2", "1", "n"),  # model #2, effort #1, no scaffold
+        input_fn=_Input("2", "1", "n", "n"),  # no routing, no scaffold
         output_fn=out,
         fetch_choices=lambda: [
             _choice("claude-opus-4.8"),
@@ -532,7 +658,7 @@ def test_run_init_project_scaffolds_assets_when_accepted(tmp_path: Path) -> None
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "y"),  # model #1, effort #4 (max), yes scaffold
+        input_fn=_Input("1", "4", "n", "y"),  # no routing, yes scaffold
         output_fn=_Output(),
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **pkg,
@@ -551,7 +677,7 @@ def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
         assume_yes=False,
         repo_root=tmp_path,
         env=env,
-        input_fn=_Input("1", "4", "y"),
+        input_fn=_Input("1", "4", "n", "y"),
         output_fn=_Output(),
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **_packaged(tmp_path),
@@ -575,7 +701,7 @@ def _scaffold_prompt(inp: _Input) -> str:
 
 def test_scaffold_prompt_names_the_workflow_skill_catalog(tmp_path: Path) -> None:
     """The combined default-yes prompt names the catalog, not a vague "agent skills"."""
-    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
     rc = init_module.run_init(
         scope="project",
         assume_yes=False,
@@ -598,7 +724,7 @@ def test_scaffold_prompt_global_scope_flags_machine_wide_location(
     tmp_path: Path,
 ) -> None:
     """Global scope warns the operator it writes the shared, machine-wide location."""
-    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
     rc = init_module.run_init(
         scope="global",
         assume_yes=False,
@@ -619,7 +745,7 @@ def test_scaffold_prompt_project_scope_omits_machine_wide_flag(
     tmp_path: Path,
 ) -> None:
     """The machine-wide caveat is scope-specific — project scope stays unqualified."""
-    inp = _Input("1", "4", "n")  # model, effort, decline the scaffold
+    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
     rc = init_module.run_init(
         scope="project",
         assume_yes=False,
@@ -643,7 +769,7 @@ def test_run_init_config_round_trips_through_settings_loader(tmp_path: Path) -> 
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "n"),
+        input_fn=_Input("1", "4", "n", "n"),
         output_fn=_Output(),
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **_packaged(tmp_path),
@@ -807,7 +933,7 @@ def test_run_init_existing_skills_refresh_on_yes(tmp_path: Path) -> None:
     """Re-run + Yes refreshes every catalog skill and adds the missing ones."""
     pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
     target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    inp = _Input("1", "4", "y", "y")  # model, effort, scaffold=yes, refresh=yes
+    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
 
     rc = init_module.run_init(
         scope="project",
@@ -830,7 +956,7 @@ def test_run_init_existing_skills_keep_on_no(tmp_path: Path) -> None:
     """Re-run + No keeps existing skills byte-for-byte and adds only the missing ones."""
     pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
     target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    inp = _Input("1", "4", "y", "n")  # scaffold=yes, refresh=no
+    inp = _Input("1", "4", "n", "y", "n")  # no routing, scaffold=yes, refresh=no
 
     rc = init_module.run_init(
         scope="project",
@@ -878,7 +1004,7 @@ def test_run_init_refresh_leaves_non_git_loopy_skills_untouched(tmp_path: Path) 
     target = _skill_tree(
         _project_skills_dir(tmp_path), {"a": "LOCAL-A\n", "mine": "MINE\n"}
     )
-    inp = _Input("1", "4", "y", "y")  # scaffold=yes, refresh=yes
+    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
 
     rc = init_module.run_init(
         scope="project",
@@ -901,7 +1027,7 @@ def test_run_init_cancel_at_merge_prompt_writes_nothing(tmp_path: Path) -> None:
     pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
     target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
     out = _Output()
-    inp = _Input("1", "4", "y", "q")  # cancel at the merge prompt
+    inp = _Input("1", "4", "n", "y", "q")  # cancel at the merge prompt
 
     rc = init_module.run_init(
         scope="project",
@@ -939,7 +1065,7 @@ def test_run_init_summary_names_catalog_and_reports_computed_count(
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "y"),  # model, effort, scaffold=yes (fresh: no merge)
+        input_fn=_Input("1", "4", "n", "y"),  # no routing, scaffold=yes
         output_fn=out,
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **pkg,
@@ -965,7 +1091,7 @@ def test_run_init_summary_reports_added_kept_on_declined_overwrite(
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "y", "n"),  # scaffold=yes, refresh=no
+        input_fn=_Input("1", "4", "n", "y", "n"),  # no routing, refresh=no
         output_fn=out,
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **pkg,
@@ -1013,7 +1139,7 @@ def test_run_init_summary_reports_a_count_not_a_skill_roster(tmp_path: Path) -> 
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "y"),
+        input_fn=_Input("1", "4", "n", "y"),
         output_fn=out,
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
         **pkg,

@@ -581,6 +581,7 @@ def run_init(
         if assume_yes:
             model = default_model
             effort = _gate_default_effort(default_model, default_effort)  # type: ignore[arg-type]
+            routing = None
             scaffold = True
             overwrite_skills = True
         else:
@@ -591,6 +592,20 @@ def run_init(
                 default_model=default_model,
                 default_effort=default_effort,  # type: ignore[arg-type]
                 warn=warn,
+            )
+            routing = (
+                collect_routing(
+                    input_fn=input_fn,
+                    output_fn=output_fn,
+                    fetch_choices=fetch_choices,
+                    warn=warn,
+                )
+                if _ask_yes_no(
+                    input_fn,
+                    "Configure per-task-type routing?",
+                    default=False,
+                )
+                else None
             )
             destination = (
                 "the global scope (the shared, machine-wide skills location)"
@@ -617,6 +632,11 @@ def run_init(
     values: dict[str, object] = {"model": model}
     if effort is not None:
         values["reasoning_effort"] = effort
+    if routing is not None:
+        values["routing"] = {
+            key: {"model": route_model, "effort": route_effort}
+            for key, (route_model, route_effort) in routing.items()
+        }
     settings.write_config(targets.config_path, values)
     output_fn(f"Wrote {targets.config_path}")
 
