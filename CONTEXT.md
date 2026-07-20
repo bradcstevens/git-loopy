@@ -44,8 +44,9 @@ until the work is exhausted or the strike limit is reached.
 **Iteration**:
 One cycle of the loop — collect the pool, let the agent work exactly one task, then
 do commit accounting and a progress check. The unit by which elapsed time and
-streamed output are measured and attributed.
-_Avoid_: round, pass, tick.
+streamed output are measured and attributed. Each fresh agent session is a new
+Iteration, including a context-cutover continuation pinned to the same **Active issue**.
+_Avoid_: round, pass, tick; session as a separate accounting unit.
 
 **Pool**:
 The set of `ready-for-agent` issues collected at the start of an iteration and
@@ -83,7 +84,9 @@ _Avoid_: current task, current ticket.
 
 **Working marker**:
 The agent's explicit, up-front declaration of its active issue, used to attribute the
-iteration's timing and streamed output to that issue in real time.
+iteration's timing and streamed output to that issue in real time. The first valid
+marker immutably binds a serial **Iteration**; later conflicting markers do not
+reassign its work.
 
 **Queue**:
 The per-run ledger of every issue seen in any pool during the run, each carrying a
@@ -97,6 +100,18 @@ An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (finished and closed via a commit close-keyword), **advanced** (progressed but not
 closed), **no-progress** (worked without meaningful change), **gone** (left the pool
 without resolution).
+
+**Closed**:
+The successful terminal **Status** in which the source issue has actually been
+closed. It alone has a closure timestamp; **advanced**, **no-progress**, and
+**gone** are not completions.
+_Avoid_: completed, ended (when the source issue remains open).
+
+**Issue elapsed**:
+The span from an issue's first activation to its **Closed** instant, including
+inactive gaps between **Iterations**. Distinct from the Queue's Active duration,
+which sums only time actually active.
+_Avoid_: active time, waiting time.
 
 ### Leaving a run
 
@@ -126,9 +141,10 @@ view that enter opens from the **Queue**. It auto-scrolls to the latest entry.
 _Avoid_: transcript (the prior code term), output, stream.
 
 **Summary**:
-The per-run, per-iteration accounting band of the **Dashboard** (tokens, cost,
-commits, closures, strikes), updated each iteration and mirrored in the run-end
-table. A band of the **Dashboard**, not a separate screen.
+The per-run, per-iteration accounting band of the **Dashboard** (**Consumption**,
+**Observed tokens**, tools, skill calls, skills consulted, commits, closures, and
+strikes), updated each iteration and mirrored in the run-end table. A band of the
+**Dashboard**, not a separate screen.
 
 **Activity**:
 The **Dashboard** band that renders the live current tail — the **Active issue**'s
@@ -139,6 +155,13 @@ doing right now, so a run reads as active instead of appearing stuck while issue
 for the full, scrollable history. A band of the **Dashboard**, not a separate screen.
 _Avoid_: stream, feed.
 
+**Context fill**:
+The current **Iteration**'s live context-window occupancy — current tokens divided by
+the model's token limit — shown in the **Dashboard** header with Smart-Zone target and
+ceiling cues. It resets at every Iteration boundary and is distinct from both
+**Observed tokens** and **Consumption**, which accumulates billed tokens and cost.
+_Avoid_: context usage, cumulative tokens, token consumption.
+
 **Consumption**:
 The tokens-in / tokens-out and the model they were billed against, attributed to a
 scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or an
@@ -147,6 +170,18 @@ scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or 
 rule (first non-None model wins; tokens sum), represented in code by the `UsageTally`
 value object (`git_loopy.usage`).
 _Avoid_: usage, spend (for the token measure); billing.
+
+**Observed tokens**:
+The cumulative tokens-in plus tokens-out reported during an **Iteration**. An
+accounting total, not model-window occupancy; it is never expressed as a percentage
+of the context window.
+_Avoid_: context used, context utilisation, context fill.
+
+**Iteration breakdown**:
+The per-issue drill-in band that itemizes each **Iteration**'s contribution to that
+issue, including its **Consumption**, Cost, and available peak **Context fill**. In
+**Parallel mode**, the row is the issue's **Lane** contribution.
+_Avoid_: session breakdown, history table.
 
 **ModelSelectionMode**:
 The opt-in startup state — entered with the `--select-model` flag or
@@ -231,10 +266,17 @@ Python `Renderer`).
 
 **Event schema**:
 The single JSONL event vocabulary every **Orchestrator** emits and the **TUI helper** and the
-replay log both consume — the envelope (`ts`, `run_id`, `iter`, `type`, payload) plus the fixed
-`WRAPPER_*` and SDK-mapped `type` string literals (`git_loopy.events`). The string *literals*,
-not the constant names, are the contract downstream tooling reads.
+replay log both consume — low-level live records plus authoritative lifecycle and accounting
+records, all sharing the envelope (`ts`, `run_id`, `iter`, `type`, payload) and fixed type
+string literals (`git_loopy.events`). The string *literals*, not the constant names, are the
+contract downstream tooling reads.
 _Avoid_: log format, event stream (as the name), telemetry.
+
+**Insight capability**:
+An **Orchestrator**'s declaration that its runtime can truthfully supply a particular
+**Dashboard** signal. An unavailable signal remains unknown rather than being
+estimated; zero and an empty set mean the signal was observed and nothing occurred.
+_Avoid_: renderer feature, best-effort metric.
 
 **Wrapper contract**:
 The language-neutral behavioural specification every **Orchestrator** must satisfy —
@@ -259,24 +301,38 @@ each isolated in its own worktree, instead of one at a time. Off by default — 
 one-issue-at-a-time loop is the default.
 _Avoid_: concurrent mode, multi mode.
 
-**Wave**:
-One barrier-synchronized round of **Parallel mode**: the runner dispatches up to N
-**Lanes** at once, lets them work, joins them, then runs a single **Integration**. The
-Parallel-mode analogue of an **Iteration**.
-_Avoid_: batch, cohort, round.
+**Rolling dispatch**:
+The **Parallel mode** scheduling model that continuously refills reusable **Lanes**
+instead of grouping them behind a barrier. It fills toward the **Lane cap** while
+eligible work and **Integration** admission capacity exist; worktree setup, Lane work,
+and Integration may overlap.
+_Avoid_: Wave, batch, cohort, sliding window.
 
 **Lane**:
-One concurrent slot within a **Wave** — a single agent working a single **Parallel-safe**
-issue in its own worktree and branch. Shown as one active row in the **Dashboard**, with
-its own timer and **Log**.
-_Avoid_: worker, slot, thread.
+One reusable concurrent execution slot in **Parallel mode**. A Lane works one
+**Parallel-safe** issue at a time in its own worktree and branch, then becomes available
+for refill once its finished branch is admitted to **Integration**. Shown as one active
+row in the **Dashboard**, with its own timer and **Log**.
+_Avoid_: worker, thread.
+
+**Lane cap**:
+The configured upper bound on concurrent **Lane** work. It is a safety and resource
+ceiling, not a utilization promise: **Rolling dispatch** may deliberately leave capacity
+idle when the eligible **Pool** is small or **Integration** applies backpressure.
+_Avoid_: worker count, target concurrency.
+
+**Integration backlog**:
+The bounded set of finished Lane branches admitted to **Integration** but not yet
+landed. Its high-water mark applies backpressure to **Rolling dispatch**, preventing
+unbounded branch staleness and wasted API capacity.
+_Avoid_: Queue (the per-Run issue ledger), merge queue.
 
 **Integration**:
-The serialized step that ends a **Wave**: it brings each **Lane**'s branch into the base
-branch one at a time, re-running the feedback loops after each and closing the issue on
-success. A conflicting or loop-failing branch triggers a runner-driven auto-resolution
-attempt; persistent failure falls back to a serial **Iteration**. Runner-owned — it never
-waits on a human.
+The serialized **Parallel mode** stage that consumes the **Integration backlog**, brings
+each finished Lane branch into the base branch one at a time, re-runs the feedback loops,
+and closes the issue on success. A conflicting or loop-failing branch triggers a
+runner-driven auto-resolution attempt; persistent failure falls back to a serial
+**Iteration**. Runner-owned — it never waits on a human.
 _Avoid_: merge (as the name for this step), landing.
 
 **Parallel-safe**:
@@ -292,6 +348,8 @@ _Avoid_: independent, parallelizable (as the label name).
 - A **Queue** belongs to exactly one **Run** and aggregates every issue seen across
   its **Iterations**, keyed by issue.
 - An **Active issue** is the **Pool** member named by the current **Working marker**.
+- A serial **Iteration** binds to at most one **Active issue**; its first valid
+  **Working marker** is authoritative for the rest of that Iteration.
 - The **Dashboard** shows the **Queue**; selecting a row opens that issue's **Log**.
   Each issue has its own **Log**, which accumulates across every **Iteration** that
   worked it.
@@ -304,12 +362,18 @@ _Avoid_: independent, parallelizable (as the label name).
 - **Consumption** is attributed to a scope: an **Iteration** (the **Summary**'s Cost)
   or an **Active issue** (the **Queue**'s per-issue Cost). Both derive Cost from the
   same `UsageTally` rule, so per-issue and per-iteration figures stay reconcilable.
-- In **Parallel mode**, a **Run** is a sequence of **Waves** interleaved with serial
-  **Iterations** for any work that is not **Parallel-safe**.
-- A **Wave** dispatches up to N **Lanes** and is followed by exactly one **Integration**.
-- A **Lane** works exactly one **Parallel-safe** issue; **Integration** brings its branch
-  to base and closes the issue, so the **Queue** reaches **closed** the same way it does
-  in serial mode.
+- A context cutover starts another **Iteration** pinned to the same **Active issue**;
+  it does not create a sub-Iteration accounting entity.
+- An issue's **Iteration breakdown** has one row per Iteration contribution; the
+  Queue's Iteration count is the number of those rows.
+- In **Parallel mode**, **Rolling dispatch** reuses **Lanes** continuously rather than
+  grouping them into barrier-synchronized rounds.
+- The **Lane cap** is an upper bound; **Integration** backpressure may intentionally
+  leave Lane capacity idle.
+- A **Lane** works exactly one **Parallel-safe** issue at a time. Once its finished
+  branch enters the bounded **Integration backlog**, the Lane can take another issue.
+- **Integration** consumes that backlog serially, brings each branch to base, and closes
+  the issue, so the **Queue** reaches **closed** the same way it does in serial mode.
 - In **Parallel mode** the **Sandbox** is per-**Lane**: each Lane's agent runs in its own
   **Sandbox** scoped to that Lane's worktree — the parallel analogue of the per-**Iteration**
   Sandbox.
@@ -337,9 +401,11 @@ _Avoid_: independent, parallelizable (as the label name).
 - `commit` was ambiguous once the runner began authoring commits — resolved: an
   agent-authored commit is a plain commit and counts as progress; a runner-authored
   one is a **Checkpoint** and does not.
-- `wave` vs `iteration` — an **Iteration** is the serial unit (one **Active issue**); a
-  **Wave** is the parallel unit (up to N **Lanes** plus one **Integration**). They are
-  the serial and parallel analogues of one round of work, not synonyms.
+- `wave` vs `iteration` — resolved historically as parallel and serial round units, then
+  superseded for Parallel mode: **Rolling dispatch** has no barrier round. An
+  **Iteration** remains the serial session/accounting unit; **Lanes** are reusable and
+  **Integration** is a separate serialized stage. **Wave** remains only as the
+  historical ADR-0008 model.
 - `ralph` / `ralph-afk` / `copiloop` / `git-loopy` were used interchangeably for the tool —
   resolved: **git-loopy** is the framework, CLI, and brand (`git-loopy` as the distribution and
   console command, `git_loopy` as the importable Python package); a **Ralph loop** is the
@@ -356,3 +422,14 @@ _Avoid_: independent, parallelizable (as the label name).
   named **Orchestrator** (the Python, shell, PowerShell, or Rust Orchestrator); the shared
   live-interface binary is the **TUI helper**, distinct from the Python runner's own Textual
   renderer. "The runner" as a proper name is avoided (ADR-0013).
+- `session` was proposed as a finer-grained Dashboard/accounting unit once context
+  cutovers were introduced — resolved: every fresh agent session starts another
+  **Iteration**, so no sub-Iteration Session concept is added.
+- `completed` was used for any terminal Queue outcome — resolved: only **Closed**
+  means the source issue actually finished. **Issue elapsed** is first activation
+  through closure; **advanced**, **no-progress**, and **gone** keep an empty closure
+  stamp.
+- `context usage` was used for both cumulative observed tokens and live window
+  pressure — resolved: **Context fill** is the current Iteration's live occupancy,
+  **Observed tokens** is its cumulative token total, and **Consumption** is the
+  scoped tokens-and-cost measure.
