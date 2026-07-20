@@ -16,7 +16,7 @@ The single most common point of confusion is treating "install the skills" and "
 
 | Step | Command | Scope | What it changes | Run how often |
 | --- | --- | --- | --- | --- |
-| **1. Install** the skills at the user level | `cp -R .copilot/skills/* ~/.copilot/skills/` | Your machine | Makes `/intake`, `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest discoverable in **any** Copilot CLI session. The copy touches nothing in the target repo. | Once per machine (or per git-loopy upgrade) |
+| **1. Install** the workflow skill catalog | `git-loopy init --project` or `git-loopy init --global` | This repo or your machine | Scaffolds the packaged workflow skills into the selected scope so `/intake`, `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest are discoverable. | Once per scope (re-run after a git-loopy upgrade) |
 | **2. Configure** the skills for this repo | `/setup-agent-skills` (inside `copilot`) | This repo | Edits **this repo's** `AGENTS.md` `## Agent skills` block and writes **this repo's** `docs/agents/*.md`, telling the other skills which issue tracker, label vocabulary, and context layout this project uses. | Once per repo (re-run to change trackers/labels) |
 
 Step 1 makes the commands _exist_. Step 2 makes them _correct for this project_. You must do both, in order, before any of the planning or implementation skills will behave.
@@ -29,10 +29,12 @@ Step 1 makes the commands _exist_. Step 2 makes them _correct for this project_.
 - **[`gh`](https://cli.github.com/)** on `PATH` and signed in (`gh auth login`). The loop's default issue source is GitHub Issues.
 - **`git`** on `PATH`.
 - **A GitHub repository** for your project.
-- **Python ≥ 3.11** and **[`uv`](https://docs.astral.sh/uv/)** (or `pip ≥ 24`) for the Python reference Orchestrator ([`git-loopy/python/`](../git-loopy/python/)). They are only needed once you start autonomous execution.
+- **Python ≥ 3.11** and **[`uv`](https://docs.astral.sh/uv/)** (or `pip ≥ 24`) for the recommended `git-loopy init` install and the Python reference Orchestrator ([`git-loopy/python/`](../git-loopy/python/)).
 
-You can install the skills and start planning before Python or `uv` is present;
-they are required for the [execution phase](workflow.md#execution-phase-autonomous).
+If Python or `uv` is not present yet, use the
+[manual-copy alternative](#13-alternative-copy-the-source-catalog-manually) to
+install the skills and start planning before the
+[execution phase](workflow.md#execution-phase-autonomous).
 
 ---
 
@@ -50,22 +52,46 @@ rm -rf .git
 git init && git add -A && git commit -m "Initialize project from git-loopy"
 ```
 
-### 1.2 Install the vendored skills at the user level
+### 1.2 Recommended: install the workflow skill catalog with `git-loopy init`
 
-git-loopy vendors the complete skill catalog used by the workflow under
-[`.copilot/skills/`](../.copilot/skills). Copy it to your user skills directory
-so `/skillname` resolves in any session on this machine:
+Install the [`git-loopy` command](../git-loopy/python/README.md#install-run-from-anywhere),
+then scaffold the packaged workflow skill catalog into the scope where you want
+to use it:
+
+```bash
+# Recommended for one repository.
+git-loopy init --project
+
+# User-level equivalent: make the catalog available in every repository.
+git-loopy init --global
+```
+
+Accept the default offer to scaffold the editable `PROMPT.md` override and
+workflow skill catalog. Project scope writes `./.copilot/skills/`; global scope
+writes `~/.copilot/skills/`. On a re-run, `init` asks once whether to refresh
+catalog skills that already exist; declining keeps those copies and adds only
+missing catalog skills. This installs the commands but does not configure their
+issue tracker, labels, or domain layout - that is
+[Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
+
+### 1.3 Alternative: copy the source catalog manually
+
+Use a manual copy when Python or `uv` is not available yet, or when you want
+all 30 skills from the source checkout rather than the 27-skill catalog
+packaged for `init`:
 
 ```bash
 mkdir -p ~/.copilot/skills
 cp -R .copilot/skills/* ~/.copilot/skills/
 ```
 
-This is a **plain copy**. It does not read your repo, edit any file in it, or
-configure anything - that is [Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
-Repeat the copy after updating git-loopy to pick up skill changes.
+The difference is three optional tool/vendor integrations:
+`microsoft-docs`, `microsoft-foundry`, and `playwright-cli`. They are excluded
+from the packaged workflow catalog and remain available through
+`/find-skills` or this manual copy. The copy is user-level, touches nothing in
+the target repo, and should be repeated after updating the source checkout.
 
-### 1.3 Verify the skills are discoverable
+### 1.4 Verify the skills are discoverable
 
 Launch Copilot CLI from the project root and open the slash-command menu:
 
@@ -76,8 +102,10 @@ copilot
 
 You should see `grill-me`, `grill-with-docs`, `wayfinder`, `to-spec`,
 `to-tickets`, `triage`, `implement`, `setup-agent-skills`, and the rest. If
-they are missing, the copy in 1.2 did not land in `~/.copilot/skills/`; repeat
-it and relaunch `copilot`.
+they are missing, re-run `git-loopy init --project` or
+`git-loopy init --global`, accept the catalog scaffold, and relaunch `copilot`.
+If you used the alternative, confirm the copy landed in
+`~/.copilot/skills/`.
 
 ---
 
@@ -210,7 +238,10 @@ That's the signal you skipped Part 2. Run `/setup-agent-skills` now.
 `docs/agents/issue-tracker.md` doesn't exist yet — `/setup-agent-skills` hasn't run for this repo. Open `copilot` interactively and run `/setup-agent-skills` (if you added the First-run bootstrap directive, it auto-triggers), then re-run the loop.
 
 **`/setup-agent-skills` (or any `/skillname`) isn't recognized.**
-The user-level install in 1.2 didn't land. Re-run `mkdir -p ~/.copilot/skills && cp -R .copilot/skills/* ~/.copilot/skills/` and relaunch `copilot`.
+The catalog install in Part 1 did not land in the intended scope. Re-run
+`git-loopy init --project` or `git-loopy init --global`, accept the catalog
+scaffold, and relaunch `copilot`. If you do not have Python or `uv` yet, use
+the [manual-copy alternative](#13-alternative-copy-the-source-catalog-manually).
 
 **I want to switch issue trackers, rename labels, or move to multi-context.**
 `/setup-agent-skills` is idempotent — re-run it. It edits the `## Agent skills` block in place and rewrites `docs/agents/*.md`. If you've hand-edited those files substantially, diff before accepting the rewrite.
