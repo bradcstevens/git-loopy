@@ -615,6 +615,40 @@ async def test_iteration_session_passes_working_directory_through(
     )
 
 
+async def test_iteration_session_enables_project_and_user_skills(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """SDK sessions load skills from the active worktree and the user's home."""
+    renderer, _ = renderer_pair
+    worktree = tmp_path / "worktree"
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    with event_log:
+        async with IterationSession(
+            fake_client,  # type: ignore[arg-type]
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+            working_directory=str(worktree),
+        ):
+            pass
+
+    create_call = fake_client.create_calls[0]
+    assert create_call["enable_skills"] is True
+    assert create_call["skill_directories"] == [
+        str(worktree / ".copilot" / "skills"),
+        str(home / ".copilot" / "skills"),
+    ]
+    assert "enable_config_discovery" not in create_call
+
+
 async def test_iteration_session_omits_working_directory_by_default(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
@@ -1360,6 +1394,8 @@ def test_session_module_imports_are_constrained() -> None:
     allow = {
         # stdlib
         "__future__",
+        "os",
+        "pathlib",
         "typing",
         # SDK
         "copilot",

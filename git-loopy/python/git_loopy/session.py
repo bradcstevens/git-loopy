@@ -116,6 +116,8 @@ Design notes
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
@@ -163,6 +165,17 @@ SKILL_TOOL_NAME: str = "skill"
 # the deny lists.
 _REASON_TOOL_DENY: str = "tool_in_deny_list"
 _REASON_SKILL_DENY: str = "skill_in_deny_list"
+
+
+def _skill_directories(working_directory: str | None) -> list[str]:
+    """Return the explicit project and user skill roots for an SDK session."""
+    project_root = Path(working_directory or os.getcwd())
+    home = os.environ.get("HOME")
+    user_home = Path(home) if home and home.strip() else Path.home()
+    return [
+        str(project_root / ".copilot" / "skills"),
+        str(user_home / ".copilot" / "skills"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +574,9 @@ class IterationSession:
             model=self._model,
             reasoning_effort=self._reasoning_effort,
             working_directory=self._working_directory,
+            # ADR-0014: load skills without opting into unrelated config discovery.
+            enable_skills=True,
+            skill_directories=_skill_directories(self._working_directory),
             # NB: on_user_input_request is intentionally NOT set.
             # Leaving it None tells the SDK to not enable ask_user; the
             # permission handler is the second line of defence.
