@@ -204,18 +204,23 @@ def _reaction_table(state: model.State) -> str:
 
 
 def _policy_reactions() -> str:
-    return """signal / state                         fixed cap                 bounded adaptive
-------------------------------------------------------------------------------------------------
-Integration WIP reaches H=2              stop refill; finisher parks stop refill; finisher parks
-H full + parked Lane for 4/6 ticks       no cap change              cap -1 after cooldown
->=3 observed 429s in 6 ticks             no cap change              cap -2 after cooldown
-AI-credit burn >110% target for 6 ticks  no cap change              cap -1 after cooldown
-host/setup load >102% for 6 ticks        no cap change              cap -1 after cooldown
-auto-resolution active                   outside Lane cap           outside cap; counts as pressure
-parked completed work                    consumes its Lane slot      consumes its Lane slot
-10 healthy ticks after cooldown          no cap change              cap +1, never above user cap
-any external signal unavailable          unchanged user cap         freeze at min(cap,3), hard H only
-all external signals unavailable         unchanged user cap         same static-safe behavior"""
+    return """signal / state                         confirmed bounded-adaptive reaction
+--------------------------------------------------------------------------------------------
+startup                                  effective cap = min(configured Lane cap, 3)
+Integration WIP reaches H=2              stop refill; finisher parks (H includes Integrating)
+H full + parked Lane for >=4/6           cap -1, Integration-only floor 2
+>=3 observed 429s in 6                   cap -2; may reach 0
+credit burn >110% explicit target        cap -1; may reach 0
+max host/setup ratio >102%               cap -1; may reach 0
+several signals in one window            strongest only: 429 -2 wins, otherwise one -1
+prior contraction still draining         suppress repeat contraction
+5-observation cooldown + 10 healthy      cap +1, never above configured Lane cap
+healthy                                  0 429; no parked; H full <=1/6; credit/host <85%;
+                                         remaining eligible demand
+required signal/config unavailable       freeze at min(cap,3), H=2; never estimate
+auto-resolution                          outside Lane cap; contributes all pressure signals
+parked completed work                    consumes its Lane slot
+validated serial demand                  full drain; one serial turn; one full refill turn"""
 
 
 def _trigger_probes(scenario: model.Scenario, cap: int) -> str:

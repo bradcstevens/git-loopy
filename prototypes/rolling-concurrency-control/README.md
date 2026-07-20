@@ -4,7 +4,8 @@
 > [Prototype Lane-cap and Integration-backlog concurrency control](https://github.com/bradcstevens/git-loopy/issues/199)
 > under
 > [Wayfinder: Keep every Lane busy — rolling-dispatch scheduling for Parallel mode](https://github.com/bradcstevens/git-loopy/issues/131).
-> It is evidence for a HITL decision, not production code.
+> It captures the confirmed HITL answer as prototype evidence, not production
+> code.
 
 ## Question
 
@@ -107,22 +108,21 @@ while four parked finishers retain Lane occupancy and cannot enter the full
 Integration backlog. Auto-resolution therefore cannot be delayed behind Lane
 capacity; it can instead contribute to 429, credit, and host pressure.
 
-## Provisional ADR/PRD reaction table
+## Confirmed ADR/PRD reaction table
 
-Pending HITL confirmation:
-
-| Signal/state | Proposed reaction |
+| Signal/state | Confirmed reaction |
 |---|---|
 | Startup, complete signals | Effective cap starts at `min(user Lane cap, 3)` |
-| Integration WIP reaches `H=2` | Stop refill; a completing Lane parks |
+| Integration WIP reaches `H=2` | `H` includes the integrating candidate + one FIFO waiter; stop refill and park a completing Lane |
 | `H` full + parked Lane for 4 of 6 ticks | Cap −1 after cooldown, no lower than 2 for Integration pressure alone |
 | At least 3 observed 429s in 6 ticks | Cap −2 after cooldown |
-| Credit burn above 110% target for 6 ticks | Cap −1 |
-| Host/setup load above 102% capacity for 6 ticks | Cap −1 |
+| Credit burn above 110% target for 6 ticks | Cap −1; target must be explicitly configured from authoritative AI-credit telemetry |
+| Host/setup pressure above 102% for 6 ticks | Cap −1; pressure is the maximum configured CPU, memory, disk/worktree-I/O, or setup concurrency/latency ratio |
+| Several signals fire in one window | Apply one strongest reaction only: 429 −2 wins, otherwise one −1 |
 | Repeated external pressure at cap 1 | Cap 1→0; active work continues and Integration drains |
 | A prior contraction is still draining | Do not contract again |
-| 10 healthy ticks after a 5-tick cooldown | Cap +1, never above user Lane cap |
-| Any external pressure signal unavailable | Freeze at `min(user Lane cap, 3)` with hard `H=2` backpressure |
+| 10 healthy observations after a 5-observation cooldown | Cap +1, never above user Lane cap; healthy means zero 429s, no parked work, `H` full ≤1/6, credit and host below 85%, and remaining eligible demand |
+| Any required pressure signal/configuration unavailable | Freeze at `min(user Lane cap, 3)` with hard `H=2`; never estimate missing signals |
 | Parked completed work | Retains and consumes its Lane |
 | Auto-resolution | Starts immediately outside Lane cap; counts toward rate, credit, and host pressure |
 | Validated serial demand | Latch refill off, drain fully, run one serial Iteration, grant one full refill turn |
