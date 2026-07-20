@@ -1,4 +1,4 @@
-# Loop Engineering with GitHub Copilot
+![git-loopy — PRDs in. Issues out. Loops run.](assets/RepoHeader_01.png)
 
 ## Intro to Loop Engineering
 
