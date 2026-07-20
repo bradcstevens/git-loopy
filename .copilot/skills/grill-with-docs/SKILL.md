@@ -5,3 +5,5 @@ disable-model-invocation: true
 ---
 
 Run a `/grilling` session, using the `/domain-modeling` skill.
+
+At the conclusion of a `/grilling` session, run the `/next` skill.
