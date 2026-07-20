@@ -119,12 +119,15 @@ GIT_LOOPY_INCLUDE_PRS=1 uv run --project git-loopy/python git-loopy
 
 First-run setup: `git-loopy init` is an interactive wizard that writes a
 `config.toml` (and, by default, scaffolds an editable `PROMPT.md` override and
-git-loopy's agent skills) into a **global** or **project** scope, then exits
-without running the loop. You rarely run it by hand: the **first** bare
-`git-loopy` with no Config in either scope auto-runs it on a TTY, then continues
-into the loop; with no TTY (or `GIT_LOOPY_INTERACTIVE=0`) it is skipped and the
-run falls back to the built-in defaults, so CI never hangs on a prompt. See
-[`git-loopy/python/README.md`](../git-loopy/python/README.md#first-run-setup-git-loopy-init).
+git-loopy's packaged **workflow skill catalog**) into a **global** or
+**project** scope, then exits without running the loop. Its completion summary
+computes the catalog count from the packaged contents (currently **27 skills**).
+You rarely run it by hand: the **first** bare `git-loopy` with no Config in
+either scope auto-runs it on a TTY, then continues into the loop; with no TTY
+(or `GIT_LOOPY_INTERACTIVE=0`) it is skipped and the run falls back to the
+built-in defaults, so CI never hangs on a prompt. See the
+[`git-loopy init` reference](../git-loopy/python/README.md#first-run-setup-git-loopy-init)
+and the [recommended workflow skill catalog install path](skills-setup.md).
 
 Managing Config: `git-loopy config` is a fast (SDK-free) convenience group over
 hand-editing `config.toml`. `config set <key> <value>` persists one key to a

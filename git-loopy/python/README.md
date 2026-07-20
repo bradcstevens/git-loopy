@@ -120,9 +120,15 @@ The wizard:
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses, rendered as a plain numbered list (no `[tui]` extra required).
 - **Then offers (default yes)** to scaffold an editable `PROMPT.md` override and
-  git-loopy's agent skills into the scope — project `./git-loopy/PROMPT.md` +
-  `./.copilot/skills/`, global `~/.config/git-loopy/PROMPT.md` +
-  `~/.copilot/skills/`.
+  git-loopy's packaged **workflow skill catalog** into the scope — project
+  `./git-loopy/PROMPT.md` + `./.copilot/skills/`, global
+  `~/.config/git-loopy/PROMPT.md` + `~/.copilot/skills/`. The completion summary
+  computes the catalog count from the packaged contents (currently **27 skills**).
+  See the [recommended workflow skill catalog install
+  path](../../docs/skills-setup.md).
+- The three optional tool/vendor integrations (`microsoft-docs`,
+  `microsoft-foundry`, and `playwright-cli`) are excluded because they are
+  cleanly separable from the core loop-engineering workflow.
 - **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
   runs nothing, and exits non-zero.
 
