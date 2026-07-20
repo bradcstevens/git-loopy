@@ -390,13 +390,16 @@ def build_parser() -> argparse.ArgumentParser:
 _SUBCOMMANDS = ("init", "config")
 
 
-def _add_scope_flags(parser: argparse.ArgumentParser) -> None:
+def _add_scope_flags(
+    parser: argparse.ArgumentParser, *, suppress_default: bool = False
+) -> None:
     """Add the shared ``--global`` / ``--project`` scope selector.
 
-    Used by ``init`` and by the scope-taking ``config`` ops (``edit`` / ``set`` /
-    ``path``) so scope handling is identical across them (ADR-0006): the flags
-    pick the scope, and with neither the handler defaults to project inside a
-    repo, else global.
+    Used by ``init`` and by the scope-taking ``config`` ops (including routing)
+    so scope handling is identical across them (ADR-0006): the flags pick the
+    scope, and with neither the handler defaults to project inside a repo, else
+    global. Nested routing parsers suppress their default so a scope selected on
+    the parent parser survives.
     """
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(
@@ -404,6 +407,7 @@ def _add_scope_flags(parser: argparse.ArgumentParser) -> None:
         dest="scope",
         action="store_const",
         const="global",
+        default=argparse.SUPPRESS if suppress_default else None,
         help="Use the global scope (~/.config/git-loopy/, honouring $XDG_CONFIG_HOME).",
     )
     scope.add_argument(
@@ -411,9 +415,9 @@ def _add_scope_flags(parser: argparse.ArgumentParser) -> None:
         dest="scope",
         action="store_const",
         const="project",
+        default=argparse.SUPPRESS if suppress_default else None,
         help="Use the project scope (<repo-root>/git-loopy/).",
     )
-    parser.set_defaults(scope=None)
 
 
 def build_subcommand_parser() -> argparse.ArgumentParser:
@@ -462,7 +466,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     config = sub.add_parser(
         "config",
-        help="Manage persisted settings: edit / set / get / list / path.",
+        help="Manage persisted settings, including per-task-type routing.",
         description=(
             "Manage persisted Config without hand-finding the file, and inspect "
             "the effective settings a run will use. Hand-editing config.toml "
@@ -472,7 +476,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     config_sub = config.add_subparsers(
         dest="config_command",
         required=True,
-        metavar="{edit,set,get,list,path}",
+        metavar="{edit,set,get,list,path,routing}",
     )
 
     edit = config_sub.add_parser(
@@ -527,6 +531,44 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_scope_flags(path)
+
+    routing = config_sub.add_parser(
+        "routing",
+        help="Manage per-task-type model and effort routing.",
+        description=(
+            "Manage the [routing] Config table. With no operation, run the guided "
+            "recommended routing walk."
+        ),
+    )
+    _add_scope_flags(routing)
+    routing_sub = routing.add_subparsers(
+        dest="routing_command",
+        metavar="{set,unset,list,use-recommended}",
+    )
+
+    routing_set = routing_sub.add_parser(
+        "set", help="Validate and merge one task-type route into a scope."
+    )
+    _add_scope_flags(routing_set, suppress_default=True)
+    routing_set.add_argument("task_type", metavar="TYPE")
+    routing_set.add_argument("model", metavar="MODEL")
+    routing_set.add_argument("effort", metavar="EFFORT")
+
+    routing_unset = routing_sub.add_parser(
+        "unset", help="Remove one task-type route from a scope."
+    )
+    _add_scope_flags(routing_unset, suppress_default=True)
+    routing_unset.add_argument("task_type", metavar="TYPE")
+
+    routing_sub.add_parser(
+        "list", help="Print the effective project-over-global routing map."
+    )
+
+    routing_recommended = routing_sub.add_parser(
+        "use-recommended",
+        help="Seed the recommended six-type routing core into a scope.",
+    )
+    _add_scope_flags(routing_recommended, suppress_default=True)
     return parser
 
 
@@ -556,9 +598,9 @@ def _run_config(args: argparse.Namespace) -> int:
     """Dispatch ``git-loopy config <op>`` to the config-management handlers.
 
     The handler module (:mod:`git_loopy.configcmd`) is imported lazily so the
-    subcommand parser stays SDK-free; ``configcmd`` itself only imports stdlib +
-    :mod:`git_loopy.settings` (and lazily this module for the resolver), never the
-    loop / SDK / renderer, so ``git-loopy config`` dispatch stays snappy.
+    subcommand parser stays SDK-free. Scriptable routing primitives use the
+    static roster and stay network-free; only bare ``config routing`` may lazily
+    fetch the live model list for its guided walk.
 
     The project scope needs a git repo; outside one, ``resolve_repo_root``
     raises and the handlers fall back to the global scope (or reject a
@@ -574,6 +616,33 @@ def _run_config(args: argparse.Namespace) -> int:
     command = args.config_command
     scope = getattr(args, "scope", None)
     env = os.environ
+    if command == "routing":
+        routing_command = args.routing_command
+        if routing_command == "set":
+            return configcmd.run_routing_set(
+                args.task_type,
+                args.model,
+                args.effort,
+                scope=scope,
+                repo_root=repo_root,
+                env=env,
+            )
+        if routing_command == "unset":
+            return configcmd.run_routing_unset(
+                args.task_type,
+                scope=scope,
+                repo_root=repo_root,
+                env=env,
+            )
+        if routing_command == "list":
+            return configcmd.run_routing_list(repo_root=repo_root, env=env)
+        if routing_command == "use-recommended":
+            return configcmd.run_routing_use_recommended(
+                scope=scope, repo_root=repo_root, env=env
+            )
+        return configcmd.run_routing_guided(
+            scope=scope, repo_root=repo_root, env=env
+        )
     if command == "set":
         return configcmd.run_set(
             args.key, args.value, scope=scope, repo_root=repo_root, env=env

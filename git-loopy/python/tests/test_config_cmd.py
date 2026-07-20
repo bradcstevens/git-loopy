@@ -41,6 +41,16 @@ class _Sink:
         return "\n".join(self.lines)
 
 
+class _Input:
+    def __init__(self, *answers: str) -> None:
+        self._answers = list(answers)
+
+    def __call__(self, _prompt: str) -> str:
+        if not self._answers:
+            raise EOFError
+        return self._answers.pop(0)
+
+
 def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
     base = {
         "HOME": str(tmp_path / "home"),
@@ -201,6 +211,209 @@ def test_set_project_scope_outside_repo_errors(tmp_path: Path) -> None:
     )
     assert rc == 1
     assert "project" in err.text and "repository" in err.text
+
+
+# ---------------------------------------------------------------------------
+# `config routing set` — validate and merge one task-type route
+# ---------------------------------------------------------------------------
+
+
+def test_routing_set_validates_and_preserves_sibling_routes(tmp_path: Path) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        path,
+        {
+            "model": "claude-opus-4.8",
+            "routing": {
+                "planning": {"model": "claude-opus-4.8", "effort": "max"},
+            },
+        },
+    )
+
+    rc = configcmd.run_routing_set(
+        "docs",
+        "gpt-5-mini",
+        "medium",
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=_Sink(),
+    )
+
+    assert rc == 0
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == {
+        "model": "claude-opus-4.8",
+        "routing": {
+            "planning": {"model": "claude-opus-4.8", "effort": "max"},
+            "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [
+        ("not-in-roster", "high"),
+        ("gpt-5-mini", "max"),
+        ("gpt-5-mini", "ultra"),
+    ],
+)
+def test_routing_set_rejects_invalid_model_or_effort_without_writing(
+    tmp_path: Path, model: str, effort: str
+) -> None:
+    err = _Sink()
+
+    rc = configcmd.run_routing_set(
+        "docs",
+        model,
+        effort,
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=err,
+    )
+
+    assert rc == 1
+    assert "routing" in err.text.lower()
+    assert not settings.project_config_path(tmp_path).exists()
+
+
+def test_routing_unset_removes_only_the_named_route(tmp_path: Path) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        path,
+        {
+            "model": "gpt-5.4",
+            "routing": {
+                "planning": {"model": "claude-opus-4.8", "effort": "max"},
+                "docs": {"model": "gpt-5-mini", "effort": "medium"},
+            },
+        },
+    )
+
+    rc = configcmd.run_routing_unset(
+        "planning",
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=_Sink(),
+    )
+
+    assert rc == 0
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == {
+        "model": "gpt-5.4",
+        "routing": {
+            "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        },
+    }
+
+
+def test_routing_list_prints_effective_project_over_global_map(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    settings.write_config(
+        settings.global_config_path(env),
+        {
+            "routing": {
+                "planning": {"model": "claude-opus-4.8", "effort": "max"},
+                "docs": {"model": "gpt-5-mini", "effort": "low"},
+            }
+        },
+    )
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {
+            "routing": {
+                "docs": {"model": "gpt-5-mini", "effort": "medium"},
+            }
+        },
+    )
+    out = _Sink()
+
+    rc = configcmd.run_routing_list(
+        repo_root=tmp_path, env=env, out=out, err=_Sink()
+    )
+
+    assert rc == 0
+    assert out.lines == [
+        "task-type:docs = gpt-5-mini @ medium",
+        "task-type:planning = claude-opus-4.8 @ max",
+    ]
+
+
+def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
+    tmp_path: Path,
+) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        path,
+        {
+            "routing": {
+                "custom": {"model": "gpt-5.4", "effort": "high"},
+                "docs": {"model": "gpt-5.4", "effort": "high"},
+            }
+        },
+    )
+
+    rc = configcmd.run_routing_use_recommended(
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=_Sink(),
+    )
+
+    assert rc == 0
+    routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
+    assert routing["custom"] == {"model": "gpt-5.4", "effort": "high"}
+    assert routing["planning"] == {"model": "claude-opus-4.8", "effort": "max"}
+    assert routing["docs"] == {"model": "gpt-5-mini", "effort": "medium"}
+    assert len(routing) == 7
+
+
+def test_routing_guided_accept_all_commits_recommended_core(tmp_path: Path) -> None:
+    from git_loopy import init as init_module
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    rc = configcmd.run_routing_guided(
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(""),
+        out=_Sink(),
+        err=_Sink(),
+        fetch_choices=init_module._static_choices,
+    )
+
+    assert rc == 0
+    parsed = tomllib.loads(
+        settings.project_config_path(tmp_path).read_text(encoding="utf-8")
+    )
+    assert {
+        key: (entry["model"], entry["effort"])
+        for key, entry in parsed["routing"].items()
+    } == dict(RECOMMENDED_ROUTING)
+
+
+def test_routing_guided_cancel_writes_nothing(tmp_path: Path) -> None:
+    from git_loopy import init as init_module
+
+    rc = configcmd.run_routing_guided(
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("n", "q"),
+        out=_Sink(),
+        err=_Sink(),
+        fetch_choices=init_module._static_choices,
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------

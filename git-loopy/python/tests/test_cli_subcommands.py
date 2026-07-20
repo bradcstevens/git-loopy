@@ -70,6 +70,36 @@ def test_subcommand_parser_parses_config_set_with_scope() -> None:
     assert (args.key, args.value, args.scope) == ("model", "gpt-5.4", "global")
 
 
+def test_subcommand_parser_parses_bare_config_routing_walk() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["config", "routing", "--project"]
+    )
+    assert args.config_command == "routing"
+    assert args.routing_command is None
+    assert args.scope == "project"
+
+
+def test_subcommand_parser_parses_config_routing_set() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(
+        [
+            "config",
+            "routing",
+            "set",
+            "docs",
+            "gpt-5-mini",
+            "medium",
+            "--global",
+        ]
+    )
+    assert args.routing_command == "set"
+    assert (args.task_type, args.model, args.effort, args.scope) == (
+        "docs",
+        "gpt-5-mini",
+        "medium",
+        "global",
+    )
+
+
 # ---------------------------------------------------------------------------
 # main() pre-dispatch routing
 # ---------------------------------------------------------------------------
@@ -191,6 +221,72 @@ def test_main_config_path_prints_resolved_location(
     out = capsys.readouterr().out.strip()
     assert out == str(tmp_path / "git-loopy" / "config.toml")
     assert captured == []
+
+
+def test_main_config_routing_primitives_round_trip_without_guided_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import init as init_module
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        init_module,
+        "_default_fetch_choices",
+        lambda: (_ for _ in ()).throw(AssertionError("unexpected model fetch")),
+    )
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    assert (
+        cli_module.main(["config", "routing", "use-recommended", "--project"]) == 0
+    )
+    capsys.readouterr()
+    assert (
+        cli_module.main(
+            [
+                "config",
+                "routing",
+                "set",
+                "custom",
+                "gpt-5.4",
+                "high",
+                "--project",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert cli_module.main(["config", "routing", "list"]) == 0
+    listed = capsys.readouterr().out
+    assert "task-type:custom = gpt-5.4 @ high" in listed
+    assert "task-type:planning = claude-opus-4.8 @ max" in listed
+    assert (
+        cli_module.main(
+            ["config", "routing", "unset", "custom", "--project"]
+        )
+        == 0
+    )
+    assert captured == []
+
+
+def test_main_bare_config_routing_dispatches_shared_walk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from git_loopy import configcmd
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    seen: list[tuple[str | None, Path | None]] = []
+
+    def fake_walk(**kwargs: Any) -> int:
+        seen.append((kwargs["scope"], kwargs["repo_root"]))
+        return 0
+
+    monkeypatch.setattr(configcmd, "run_routing_guided", fake_walk)
+
+    assert cli_module.main(["config", "routing", "--project"]) == 0
+    assert seen == [("project", tmp_path)]
 
 
 # ---------------------------------------------------------------------------

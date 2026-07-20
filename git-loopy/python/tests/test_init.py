@@ -363,6 +363,85 @@ def test_ask_index_rejects_disabled_default_on_blank() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared guided routing collector
+# ---------------------------------------------------------------------------
+
+
+def _routing_choices() -> list[ModelChoice]:
+    return [
+        _choice(
+            "claude-opus-4.8",
+            efforts=("low", "medium", "high", "xhigh", "max"),
+            default="max",
+        ),
+        _choice(
+            "claude-sonnet-5",
+            efforts=("low", "medium", "high", "xhigh", "max"),
+            default="max",
+        ),
+        _choice(
+            "gpt-5-mini",
+            efforts=("low", "medium", "high"),
+            default="high",
+        ),
+    ]
+
+
+def test_collect_routing_accept_all_returns_recommended_core_with_annotations() -> None:
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    out = _Output()
+    routing = init_module.collect_routing(
+        input_fn=_Input(""),
+        output_fn=out,
+        fetch_choices=_routing_choices,
+        warn=lambda _message: None,
+    )
+
+    assert routing == dict(RECOMMENDED_ROUTING)
+    assert "task-type:planning" in out.text
+    assert "premium 1×" in out.text
+    assert "ctx 200K" in out.text
+    assert "reasoning:" in out.text
+    assert "Unlabelled issues use the global default" in out.text
+
+
+def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
+    routing = init_module.collect_routing(
+        input_fn=_Input(
+            "n",  # do not accept all
+            "",  # planning: keep
+            "3",  # review: skip
+            "2",  # implementation: override
+            "",  # keep the pre-seeded claude-sonnet-5 model
+            "",  # keep its pre-seeded "high" effort, not model default "max"
+            "3",  # test: skip
+            "",  # docs: keep
+            "3",  # chore: skip
+        ),
+        output_fn=_Output(),
+        fetch_choices=_routing_choices,
+        warn=lambda _message: None,
+    )
+
+    assert routing == {
+        "planning": ("claude-opus-4.8", "max"),
+        "implementation": ("claude-sonnet-5", "high"),
+        "docs": ("gpt-5-mini", "medium"),
+    }
+
+
+def test_collect_routing_cancel_raises_before_any_commit() -> None:
+    with pytest.raises(init_module.InitCancelled):
+        init_module.collect_routing(
+            input_fn=_Input("n", "q"),
+            output_fn=_Output(),
+            fetch_choices=_routing_choices,
+            warn=lambda _message: None,
+        )
+
+
+# ---------------------------------------------------------------------------
 # run_init — cancel writes nothing
 # ---------------------------------------------------------------------------
 

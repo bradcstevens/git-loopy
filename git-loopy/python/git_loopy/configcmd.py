@@ -9,43 +9,53 @@ and let you inspect what a run will actually use:
 * ``config get K``  — print the **effective merged** value of one key.
 * ``config list``   — print every effective merged key = value.
 * ``config path``   — print the resolved ``config.toml`` location(s).
+* ``config routing`` — author or inspect per-task-type model + effort routes.
 
 Design (mirrors :mod:`git_loopy.init`):
 
 * **Injectable.** Every op takes captured ``out`` / ``err`` sinks and its scope
   targets (from an injected ``repo_root`` + ``env``); ``edit`` also takes an
-  injected ``launch_editor``. So no test touches a real TTY, ``~/.config``, or an
-  editor.
+  injected ``launch_editor``, and the guided routing walk takes injected input
+  and model-fetch seams. So no test touches a real TTY, ``~/.config``, an editor,
+  or the network.
 * **Scope matches the ``init`` wizard.** ``--global`` / ``--project`` pick the
   scope; with neither, the default is **project when inside a repo, else
   global** — the same resolution ``init --yes`` uses. The project scope needs a
-  git repo. ``set`` / ``edit`` / ``path`` act on one scope; ``get`` / ``list``
-  ignore scope and always show the merged effective value.
+  git repo. ``set`` / ``edit`` / ``path`` and routing writes act on one scope;
+  ``get`` / ``list`` and ``routing list`` show effective merged values.
 * **Effective values come from the resolver.** ``get`` / ``list`` reuse
   :func:`git_loopy.cli.resolve_config` over a defaulted args namespace + the live
   ``env`` + both loaded scopes, so the printed value is exactly what a run would
   use (env > project > global > default; denylists unioned). Values go to
   **stdout**; warnings / errors to **stderr**, so ``$(git-loopy config get model)``
   captures only the value.
-* **SDK-free.** Imports only stdlib + :mod:`git_loopy.settings`, and lazily
-  :mod:`git_loopy.cli` (already imported at dispatch). It never imports the loop /
-  SDK / renderer, so ``git-loopy config`` dispatch stays snappy.
+* **Network-free primitives.** Routing ``set`` / ``unset`` / ``list`` /
+  ``use-recommended`` use only the static roster. Only the bare guided routing
+  walk may lazily fetch the live model list.
 """
 
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
 from git_loopy import settings
-from git_loopy.config import REASONING_EFFORT_ORDER, REASONING_EFFORTS
+from git_loopy.config import (
+    RECOMMENDED_ROUTING,
+    REASONING_EFFORT_ORDER,
+    REASONING_EFFORTS,
+    SUPPORTED_MODELS,
+    gate_reasoning_effort,
+)
 
 if TYPE_CHECKING:
     from git_loopy.cli import ResolvedConfig
+    from git_loopy.interactive.models import ModelChoice
 
 __all__ = [
     "ConfigCommandError",
@@ -56,6 +66,11 @@ __all__ = [
     "run_list",
     "run_path",
     "run_edit",
+    "run_routing_guided",
+    "run_routing_list",
+    "run_routing_set",
+    "run_routing_unset",
+    "run_routing_use_recommended",
 ]
 
 _ISSUE_SOURCES = ("github", "prds")
@@ -292,6 +307,216 @@ def run_set(
         f"Set {key} = {_display_value(typed)} in the {resolved_scope} config "
         f"({path})"
     )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# `config routing set`
+# ---------------------------------------------------------------------------
+
+
+def _routing_key(raw: str) -> str:
+    key = raw.strip()
+    if key.startswith("task-type:"):
+        key = key.removeprefix("task-type:")
+    if not key:
+        raise ConfigCommandError("routing type must not be empty")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key) is None:
+        raise ConfigCommandError(
+            "routing type must contain only letters, numbers, hyphens, or underscores"
+        )
+    return key
+
+
+def _validated_route(model: str, effort: str) -> tuple[str, str]:
+    normalized_effort = effort.strip().lower()
+    if model not in SUPPORTED_MODELS:
+        raise ConfigCommandError(
+            f"routing model {model!r} is not in the supported model roster"
+        )
+    gated = gate_reasoning_effort(model, normalized_effort)
+    if normalized_effort not in REASONING_EFFORTS or gated.effort is None:
+        accepted = [
+            candidate
+            for candidate in REASONING_EFFORT_ORDER
+            if gate_reasoning_effort(model, candidate).effort is not None
+        ]
+        raise ConfigCommandError(
+            f"routing effort {effort!r} is not accepted by {model}; "
+            f"choose one of: {', '.join(accepted) or '(none)'}"
+        )
+    return model, normalized_effort
+
+
+def _writable_routing(
+    table: Mapping[str, object], *, scope: str
+) -> dict[str, dict[str, str]]:
+    return {
+        key: {"model": model, "effort": effort}
+        for key, (model, effort) in settings.table_routing(table, scope=scope).items()
+    }
+
+
+def run_routing_set(
+    task_type: str,
+    model: str,
+    effort: str,
+    *,
+    scope: str | None,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    out: Callable[[str], None] = _default_out,
+    err: Callable[[str], None] = _default_err,
+) -> int:
+    """Validate and merge one task-type route into the chosen Config scope."""
+    try:
+        key = _routing_key(task_type)
+        model, effort = _validated_route(model, effort)
+        resolved_scope = _resolve_scope(scope, repo_root)
+        path = _scope_config_path(resolved_scope, repo_root, env)
+        table = dict(settings.load_config_table(path))
+        routing = _writable_routing(table, scope=resolved_scope)
+        routing[key] = {"model": model, "effort": effort}
+        table["routing"] = routing
+        settings.write_config(path, table)
+    except (ConfigCommandError, settings.SettingsError) as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
+    out(
+        f"Set task-type:{key} = {model} @ {effort} in the {resolved_scope} "
+        f"config ({path})"
+    )
+    return 0
+
+
+def run_routing_unset(
+    task_type: str,
+    *,
+    scope: str | None,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    out: Callable[[str], None] = _default_out,
+    err: Callable[[str], None] = _default_err,
+) -> int:
+    """Remove exactly one task-type route from the chosen Config scope."""
+    try:
+        key = _routing_key(task_type)
+        resolved_scope = _resolve_scope(scope, repo_root)
+        path = _scope_config_path(resolved_scope, repo_root, env)
+        table = dict(settings.load_config_table(path))
+        routing = _writable_routing(table, scope=resolved_scope)
+        routing.pop(key, None)
+        if routing:
+            table["routing"] = routing
+        else:
+            table.pop("routing", None)
+        settings.write_config(path, table)
+    except (ConfigCommandError, settings.SettingsError) as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
+    out(f"Unset task-type:{key} in the {resolved_scope} config ({path})")
+    return 0
+
+
+def run_routing_list(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    out: Callable[[str], None] = _default_out,
+    err: Callable[[str], None] = _default_err,
+) -> int:
+    """Print the effective project-over-global task-type routing map."""
+    try:
+        project, global_ = _load_tables(repo_root, env)
+        routing = {
+            **settings.table_routing(global_, scope="global"),
+            **settings.table_routing(project, scope="project"),
+        }
+    except settings.SettingsError as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
+    for key in sorted(routing):
+        model, effort = routing[key]
+        out(f"task-type:{key} = {model} @ {effort}")
+    return 0
+
+
+def run_routing_use_recommended(
+    *,
+    scope: str | None,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    out: Callable[[str], None] = _default_out,
+    err: Callable[[str], None] = _default_err,
+) -> int:
+    """Merge the recommended six-type core into the chosen Config scope."""
+    try:
+        resolved_scope = _resolve_scope(scope, repo_root)
+        path = _scope_config_path(resolved_scope, repo_root, env)
+        table = dict(settings.load_config_table(path))
+        routing = _writable_routing(table, scope=resolved_scope)
+        routing.update(
+            {
+                key: {"model": model, "effort": effort}
+                for key, (model, effort) in RECOMMENDED_ROUTING.items()
+            }
+        )
+        table["routing"] = routing
+        settings.write_config(path, table)
+    except (ConfigCommandError, settings.SettingsError) as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
+    out(
+        f"Seeded {len(RECOMMENDED_ROUTING)} recommended task-type routes in the "
+        f"{resolved_scope} config ({path})"
+    )
+    return 0
+
+
+def run_routing_guided(
+    *,
+    scope: str | None,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    input_fn: Callable[[str], str] = input,
+    out: Callable[[str], None] = _default_out,
+    err: Callable[[str], None] = _default_err,
+    fetch_choices: Callable[[], Sequence["ModelChoice"]] | None = None,
+) -> int:
+    """Run the shared guided walk, then atomically replace its recommended slice."""
+    from git_loopy import init as init_module
+
+    try:
+        resolved_scope = _resolve_scope(scope, repo_root)
+        path = _scope_config_path(resolved_scope, repo_root, env)
+        routing = init_module.collect_routing(
+            input_fn=input_fn,
+            output_fn=out,
+            fetch_choices=fetch_choices or init_module._default_fetch_choices,
+            warn=lambda message: err(f"git-loopy: warning: {message}"),
+        )
+        table = dict(settings.load_config_table(path))
+        writable = _writable_routing(table, scope=resolved_scope)
+        for key in RECOMMENDED_ROUTING:
+            writable.pop(key, None)
+        writable.update(
+            {
+                key: {"model": model, "effort": effort}
+                for key, (model, effort) in routing.items()
+            }
+        )
+        if writable:
+            table["routing"] = writable
+        else:
+            table.pop("routing", None)
+        settings.write_config(path, table)
+    except init_module.InitCancelled:
+        out("git-loopy config routing cancelled; nothing was written.")
+        return 1
+    except (ConfigCommandError, settings.SettingsError) as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
+    out(f"Wrote {len(routing)} task-type routes to the {resolved_scope} config ({path})")
     return 0
 
 

@@ -40,6 +40,7 @@ from typing import Callable, Mapping, Sequence
 from git_loopy import settings
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
+    RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
     gate_reasoning_effort,
 )
@@ -52,7 +53,7 @@ from git_loopy.interactive.models import (
     to_model_choices,
 )
 
-__all__ = ["run_init", "InitCancelled"]
+__all__ = ["collect_routing", "run_init", "InitCancelled"]
 
 #: Tokens that cancel the wizard at any prompt (case-insensitive).
 _CANCEL_TOKENS = frozenset({"q", "quit"})
@@ -229,15 +230,21 @@ def _default_fetch_choices() -> list[ModelChoice]:
 
 def _model_label(choice: ModelChoice) -> str:
     """One numbered-list row: ``<id>  (premium <mult>, ctx <window>, reasoning: ...)``."""
-    parts = [
-        f"premium {format_multiplier(choice.multiplier)}",
-        f"ctx {format_context_window(choice.context_window)}",
-        f"reasoning: {format_reasoning(choice)}",
-    ]
-    label = f"{choice.id}  ({', '.join(parts)})"
+    label = f"{choice.id}  ({_model_details(choice)})"
     if not choice.selectable:
         label = f"{label} [disabled]"
     return label
+
+
+def _model_details(choice: ModelChoice) -> str:
+    """Render the cost, context, and reasoning annotation shared by guided rows."""
+    return ", ".join(
+        [
+        f"premium {format_multiplier(choice.multiplier)}",
+        f"ctx {format_context_window(choice.context_window)}",
+        f"reasoning: {format_reasoning(choice)}",
+        ]
+    )
 
 
 def _gate_default_effort(model: str, effort: str | None) -> str | None:
@@ -264,16 +271,7 @@ def _collect_model_and_effort(
     warn: Callable[[str], None],
 ) -> tuple[str, str | None]:
     """Interactively seed the run's model + reasoning effort from a numbered list."""
-    try:
-        choices = list(fetch_choices())
-    except Exception as exc:  # offline / unauthed / list_models error
-        warn(
-            f"could not load the live model list ({type(exc).__name__}: {exc}); "
-            "using the built-in model list."
-        )
-        choices = []
-    if not choices:
-        choices = _static_choices()
+    choices = _load_model_choices(fetch_choices, warn=warn)
 
     model_index = _ask_index(
         input_fn,
@@ -291,7 +289,9 @@ def _collect_model_and_effort(
         return chosen.id, None
 
     efforts = list(chosen.supported_efforts)
-    if chosen.default_effort in efforts:
+    if chosen.id == default_model and default_effort in efforts:
+        effort_default = efforts.index(default_effort)
+    elif chosen.default_effort in efforts:
         effort_default = efforts.index(chosen.default_effort)
     else:
         effort_default = len(efforts) - 1
@@ -304,6 +304,89 @@ def _collect_model_and_effort(
         prompt_label="Reasoning effort",
     )
     return chosen.id, efforts[effort_index]
+
+
+def _load_model_choices(
+    fetch_choices: Callable[[], Sequence[ModelChoice]],
+    *,
+    warn: Callable[[str], None],
+) -> list[ModelChoice]:
+    """Load live model rows once, falling back to the static roster."""
+    try:
+        choices = list(fetch_choices())
+    except Exception as exc:  # offline / unauthed / list_models error
+        warn(
+            f"could not load the live model list ({type(exc).__name__}: {exc}); "
+            "using the built-in model list."
+        )
+        choices = []
+    return choices or _static_choices()
+
+
+def collect_routing(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    fetch_choices: Callable[[], Sequence[ModelChoice]] = _default_fetch_choices,
+    warn: Callable[[str], None],
+) -> dict[str, tuple[str, str]]:
+    """Collect the shared recommended routing walk without writing Config.
+
+    The returned map is complete only after every prompt succeeds. Cancellation
+    raises :class:`InitCancelled`, leaving the caller free to preserve the
+    collect-then-commit guarantee.
+    """
+    choices = _load_model_choices(fetch_choices, warn=warn)
+    static_by_id = {choice.id: choice for choice in _static_choices()}
+    by_id = {choice.id: choice for choice in choices}
+    for model, _effort in RECOMMENDED_ROUTING.values():
+        if model not in by_id:
+            fallback = static_by_id[model]
+            choices.append(fallback)
+            by_id[model] = fallback
+
+    output_fn("Recommended task-type routing:")
+    for key, (model, effort) in RECOMMENDED_ROUTING.items():
+        output_fn(
+            f"  task-type:{key} -> {model} @ {effort}  "
+            f"({_model_details(by_id[model])})"
+        )
+    output_fn("Unlabelled issues use the global default model and effort.")
+
+    if _ask_yes_no(
+        input_fn,
+        "Use all recommended task-type routes?",
+        default=True,
+    ):
+        return dict(RECOMMENDED_ROUTING)
+
+    routing: dict[str, tuple[str, str]] = {}
+    override_choices = [choice for choice in choices if choice.supported_efforts]
+    for key, (recommended_model, recommended_effort) in RECOMMENDED_ROUTING.items():
+        action = _ask_index(
+            input_fn,
+            output_fn,
+            f"task-type:{key} ({recommended_model} @ {recommended_effort}):",
+            ["keep recommended", "override", "skip"],
+            default_index=0,
+            prompt_label="Action",
+        )
+        if action == 2:
+            continue
+        if action == 0:
+            routing[key] = (recommended_model, recommended_effort)
+            continue
+        model, effort = _collect_model_and_effort(
+            input_fn=input_fn,
+            output_fn=output_fn,
+            fetch_choices=lambda: override_choices,
+            default_model=recommended_model,
+            default_effort=recommended_effort,
+            warn=warn,
+        )
+        assert effort is not None  # override_choices contains reasoning-capable models
+        routing[key] = (model, effort)
+    return routing
 
 
 # ---------------------------------------------------------------------------
