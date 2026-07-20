@@ -296,15 +296,18 @@ def _trigger_probes(scenario: model.Scenario, cap: int) -> str:
 
 def _autores_budget_report() -> str:
     scenario = model.Scenario(
-        seed=1,
+        seed=2,
         issues=(
-            model.IssueSpec("A", 1, 1, 8, 0.0, 2),
+            model.IssueSpec("A", 1, 1, 18, 0.0, 2),
             model.IssueSpec("B", 1, 1, 3, 1.0, 1),
             model.IssueSpec("C", 1, 1, 3, 1.0, 1),
+            model.IssueSpec("D", 1, 1, 3, 1.0, 1),
+            model.IssueSpec("E", 1, 1, 3, 1.0, 1),
+            model.IssueSpec("F", 1, 1, 3, 1.0, 1),
         ),
     )
     common = dict(
-        safe_lane_cap=3,
+        safe_lane_cap=6,
         rate_cost_work=0,
         rate_cost_auto=0,
         host_capacity=99,
@@ -314,23 +317,23 @@ def _autores_budget_report() -> str:
     outside = model.run_to_completion(
         scenario,
         model.Config.adaptive(
-            3, 1, autores_counts_against_lane_cap=False, **common
+            6, 2, autores_counts_against_lane_cap=False, **common
         ),
-        max_ticks=100,
+        max_ticks=120,
     )
     shared = model.run_to_completion(
         scenario,
         model.Config.adaptive(
-            3, 1, autores_counts_against_lane_cap=True, **common
+            6, 2, autores_counts_against_lane_cap=True, **common
         ),
-        max_ticks=100,
+        max_ticks=120,
     )
 
     def row(name: str, state: model.State) -> str:
         metric = model.metrics(state)
         cts = model.counts(state)
         return (
-            f"{name:<32}{str(model.is_done(state)):<10}"
+            f"{name:<33}{str(model.is_done(state)):<10}"
             f"{metric.makespan:>5} {metric.landed:>6} {cts['parked']:>6} "
             f"{cts['admitted']:>8} {cts['integrating']:>11} "
             f"{metric.autores_wait_ticks:>9}"
@@ -338,7 +341,7 @@ def _autores_budget_report() -> str:
 
     return "\n".join(
         [
-            "Three-item edge case: H=1, cap contracts 3->2 while two finishers park.",
+            "Six-item edge case: H=2, cap contracts while four finishers park.",
             "policy                         complete  tick landed parked "
             "admitted integrating auto-wait",
             "-" * 91,
@@ -346,7 +349,7 @@ def _autores_budget_report() -> str:
             row("hard shared Lane/auto budget", shared),
             (
                 "Hard sharing deadlocks here: private Integration waits for a "
-                "budget slot while both parked finishers retain the two effective Lanes."
+                "budget slot while four parked finishers retain Lane occupancy."
             ),
         ]
     )

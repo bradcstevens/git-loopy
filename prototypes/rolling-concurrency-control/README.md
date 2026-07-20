@@ -88,15 +88,16 @@ latency. `H=2` is the provisional knee.
 
 ### Auto-resolution budget edge case
 
-With `H=1`, a cap contraction from 3 to 2, and two parked finishers:
+With the selected `H=2`, a long-running conflicting candidate, one FIFO-admitted
+candidate, and four parked finishers:
 
-| Policy | Complete by tick 100 | Landed | Parked | Auto budget wait |
+| Policy | Complete by tick 120 | Landed | Parked | Auto budget wait |
 |---|---:|---:|---:|---:|
-| Auto-resolution outside Lane cap | yes (tick 23) | 3 | 0 | 0 |
-| Hard shared Lane/auto budget | **no** | 0 | 2 | 89 |
+| Auto-resolution outside Lane cap | yes (tick 42) | 6 | 0 | 0 |
+| Hard shared Lane/auto budget | **no** | 0 | 4 | 99 |
 
 A hard shared budget circularly waits: private Integration needs a budget slot,
-while parked finishers retain both effective Lanes and cannot enter the full
+while four parked finishers retain Lane occupancy and cannot enter the full
 Integration backlog. Auto-resolution therefore cannot be delayed behind Lane
 capacity; it can instead contribute to 429, credit, and host pressure.
 
