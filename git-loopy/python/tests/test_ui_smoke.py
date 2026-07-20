@@ -902,6 +902,17 @@ def test_iteration_panel_rendered_at_iteration_end() -> None:
     assert "deadbeef" in out or "commit" in out.lower()
 
 
+def test_iteration_panel_labels_explicit_skill_calls() -> None:
+    """A zero count describes skill() calls, not all skill consultation."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 168})
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
+
+    out = buf.getvalue()
+    assert "Skill calls: 0" in out
+    assert "Skills:" not in out
+
+
 def test_iteration_panel_cost_is_em_dash_for_unknown_model() -> None:
     """When the iteration's model is not in the pricing table, cost = ``—``."""
     renderer, summary, buf = _make_renderer()

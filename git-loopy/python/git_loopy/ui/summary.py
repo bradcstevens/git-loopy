@@ -383,10 +383,10 @@ class RunSummary:
         body.append_text(cost_text)
         body.append("\n")
 
-        # Tool / skill counts
+        # Tool / explicit skill-call counts
         body.append("Tools: ", style=STYLES["meta"])
         body.append(str(snap.tool_count))
-        body.append("    Skills: ", style=STYLES["meta"])
+        body.append("    Skill calls: ", style=STYLES["meta"])
         body.append(str(snap.skill_count))
         body.append("\n")
 
