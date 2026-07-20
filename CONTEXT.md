@@ -35,6 +35,105 @@ The human who designs, triages, and supervises the loop. The loop engineer owns
 intent, domain language, issue slicing, acceptance criteria, guardrails, and final
 judgment; git-loopy owns repeatable execution.
 
+### Workflow continuation
+
+**Workflow**:
+The reusable network of valid transitions and human/autonomous boundaries through
+which project work can advance. It is composable, not a mandatory linear checklist.
+_Avoid_: pipeline, fixed sequence, live effort.
+
+**Workstream**:
+One project-local traversal of a **Workflow** toward a single **Destination**,
+identified across transitions by one durable **Anchor**.
+_Avoid_: workflow (for a live effort), session, thread.
+
+**Anchor**:
+The one durable artifact that identifies a **Workstream** while its active
+**Targets** change.
+_Avoid_: current target, source of truth.
+
+**Destination**:
+The affirmative condition a **Workstream** is meant to satisfy. It defines successful
+completion and the Workstream's in-scope boundary.
+_Avoid_: next step, target.
+
+**Continuation guidance**:
+The current set of unmet **Continuation actions** and explicit **Workstream outcomes**
+across the project, together with their prerequisite relationships.
+_Avoid_: activity log, project journal, handoff.
+
+**Continuation view**:
+A **Consumer**-specific ordered projection of **Continuation guidance**. Its ordering
+helps select work but does not itself establish prerequisites.
+_Avoid_: canonical sequence, queue, timeline.
+
+**Continuation action**:
+One prospective, concrete unit of intent that advances exactly one **Workstream**
+against one primary **Target**. It is not an execution event, result, historical
+record, or **Handoff**.
+_Avoid_: event, history entry, handoff.
+
+**Instruction**:
+The concrete direction a **Performer** follows to carry out a **Continuation action**;
+a copy-pasteable skill prompt is one form of Instruction.
+_Avoid_: prompt (as the universal term), description.
+
+**Target**:
+The primary durable subject a **Continuation action** operates on.
+_Avoid_: anchor, basis, context.
+
+**Basis**:
+The durable evidence and **Producer** provenance establishing why a
+**Continuation action** belongs in current **Continuation guidance**. It may
+reference the **Target**, but is distinct from it.
+_Avoid_: target, copied context, source of truth.
+
+**Producer**:
+The role that contributes or refreshes a **Continuation action** or
+**Workstream outcome** from a **Workflow** transition.
+
+**Consumer**:
+The role that inspects a **Continuation view** to understand or choose available
+work.
+
+**Performer**:
+The role that carries out a **Continuation action**. A Consumer is a Performer only
+when that action is eligible for it.
+
+**Prerequisite**:
+A durably based condition that must hold before a **Continuation action** may
+proceed.
+
+**Blocker**:
+A currently unsatisfied **Prerequisite**.
+
+**Readiness**:
+Whether a **Continuation action** has any **Blockers**: **Ready** when it has none,
+**Blocked** otherwise.
+
+**HITL-required**:
+An action classification meaning human judgment, authority, consent, or interaction
+is inherent to the **Continuation action**. Tooling availability cannot make it
+**AFK-eligible**.
+
+**AFK-safe**:
+An action classification meaning no human judgment or authority is inherent to the
+**Continuation action**, so it may be considered for unattended performance.
+
+**AFK-eligible**:
+The contextual relationship between a **Ready**, **AFK-safe** action and a specific
+**Performer** that has the required capability, access, and policy permission.
+
+**Workstream outcome**:
+An affirmative, durably evidenced terminal disposition of a **Workstream**.
+**Complete** means its **Destination** was satisfied; other terminal dispositions are
+not completion.
+
+**Handoff**:
+Session-specific context for continuing one active thread. It may support a
+**Continuation action**, but is neither that action nor project-level
+**Continuation guidance**.
+
 ### The run loop
 
 **Run**:
@@ -343,6 +442,26 @@ _Avoid_: independent, parallelizable (as the label name).
 
 ## Relationships
 
+- A **Workflow** can be traversed by many **Workstreams**. Each Workstream has
+  exactly one durable **Anchor** and one **Destination**.
+- A **Workstream** owns many **Continuation actions**; each action belongs to exactly
+  one Workstream and has one primary **Target**.
+- A **Continuation action** has an **Instruction**, durable **Basis** and Producer
+  provenance, zero or more **Prerequisites**, an interaction classification, and a
+  durably evaluable completion condition.
+- A **Prerequisite** becomes a **Blocker** only while it is unsatisfied. **Readiness**
+  is independent of whether an action is **HITL-required** or **AFK-safe**.
+- An action is **AFK-eligible** for a **Performer** only when it is **Ready** and
+  **AFK-safe**, and the Performer has the required capability, access, and policy
+  permission.
+- **Continuation guidance** contains current unmet actions and explicit
+  **Workstream outcomes**, not execution history. A **Continuation view** projects
+  that guidance for one Consumer without turning display order into dependency.
+- A **Handoff** may be referenced as supporting context, but its suggested next step
+  is not current **Continuation guidance** until a Producer reconciles it against
+  durable workflow state.
+- `ready-for-agent` is a tracker delegation signal that may provide **Basis** for an
+  issue-execution action; it is not a synonym for **AFK-safe** or **AFK-eligible**.
 - A **Run** has many **Iterations**.
 - An **Iteration** is offered one **Pool** and produces at most one **Active issue**.
 - A **Queue** belongs to exactly one **Run** and aggregates every issue seen across
