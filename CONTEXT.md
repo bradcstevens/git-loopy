@@ -144,21 +144,27 @@ the strike limit is reached.
 **Skill**:
 A named capability package whose instructions and resources a **Performer** may load
 when a task matches its purpose. Its canonical name is its policy identity; when
-multiple sources provide that name, the external agent client's source precedence
-selects the active package.
+multiple sources provide that name, git-loopy's explicit project source wins and the
+external agent client's source precedence resolves the remaining candidates before
+git-loopy's packaged fallback.
 _Avoid_: custom instruction, tool.
 
 **Skill baseline**:
 The exact initial enabled/disabled selection across the **Skill catalog**, copied from
-an operator's external agent client when establishing a **Skill policy**. It seeds that
-policy but does not remain its authority.
+an operator's external agent client when establishing the first configured
+**Skill policy**. It seeds that policy but does not remain its authority. A later
+project Skill policy starts from the inherited global policy unless the operator
+explicitly requests another external-client sync.
 _Avoid_: live mirror, source of truth.
 
 **Skill catalog**:
 The inventory of Skills an operator may inspect and select for git-loopy, including
 project, personal, plugin, built-in, and custom sources reported by the external agent
-client. Catalog membership does not make a Skill available to a **Run**; the
-**Skill policy** does.
+client, plus git-loopy's explicit project and packaged Skill sources. It is refreshed
+at Run preflight to resolve each Skill name to its current source, but the external
+client's enabled state has no authority after the **Skill baseline** is established.
+Catalog discovery reads metadata only. Catalog membership does not load a Skill's
+instructions or resources or make it available to a **Run**; the **Skill policy** does.
 _Avoid_: enabled skills, runtime tools.
 
 **Skill policy**:
@@ -169,25 +175,33 @@ explicit git-loopy action, not merely because another agent client's settings ch
 A project Skill policy replaces the global Skill policy; the global policy applies
 only when the project has not established one. A project Skill policy is a shared
 repository contract: every operator must be able to resolve each enabled Skill name.
+An explicitly empty Skill policy is still a policy; absence means inheritance or the
+unconfigured fallback. Any enabled name that cannot be resolved makes the **Run**
+invalid without changing the saved policy. A project-sourced Skill enabled by a
+project Skill policy must be versioned with the repository.
 _Avoid_: Copilot settings, deny list, permission list.
 
 **Effective Skill policy**:
 The **Skill policy** selected for a **Run**, after applying that invocation's temporary
 enable and disable overrides and any legacy deny guards. Conflicting overrides resolve
-to disabled, and the result must still contain every **Required Skill**.
+to disabled, and the result must still contain every **Required Skill**. It is frozen
+at Run preflight for every work session and **Lane** in that Run.
 _Avoid_: persisted policy, Copilot state.
 
 **Minimal Skill policy**:
 The unconfigured, non-interactive fallback that exposes only git-loopy's packaged
 **Required Skills**. It keeps a first CI Run usable without consulting personal or
-machine-global Skill sources.
+machine-global Skill sources and is also the policy persisted by unattended setup
+unless that setup explicitly requests an external-client import. It also governs
+unattended Runs during migration from the former open-world skill behavior.
 _Avoid_: default user policy, imported baseline.
 
 **Required Skill**:
 A Skill declared by the active Run instructions' machine-readable metadata as one a
 Performer must be able to invoke. A **Run** whose **Skill policy** omits a Required
 Skill is invalid and stops before its first work session rather than silently restoring
-or ignoring the Skill.
+or ignoring the Skill. Legacy custom instructions without that metadata inherit the
+packaged instructions' Required Skills until they declare their own set.
 _Avoid_: default skill, recommended skill.
 
 **Iteration**:
