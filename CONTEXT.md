@@ -42,15 +42,33 @@ The reusable network of valid transitions and human/autonomous boundaries throug
 which project work can advance. It is composable, not a mandatory linear checklist.
 _Avoid_: pipeline, fixed sequence, live effort.
 
+**Workflow transition rule**:
+The versioned semantics that recognize durable workflow facts and derive a
+**Continuation action**, **Workstream outcome**, or distinct **Successor Workstream**.
+The rule is a **Producer**; a Consumer that evaluates it does not become its owner.
+_Avoid_: router, display rule, Skill sequence.
+
 **Workstream**:
 One project-local traversal of a **Workflow** toward a single **Destination**,
 identified across transitions by one durable **Anchor**.
 _Avoid_: workflow (for a live effort), session, thread.
 
+**Successor Workstream**:
+A distinct **Workstream** established from a predecessor Workstream's terminal outcome
+and one **Workflow transition rule**. It has its own Destination and never extends or
+resurrects the terminal predecessor.
+_Avoid_: next phase of the same Workstream, child Workstream.
+
 **Anchor**:
 The one durable artifact that identifies a **Workstream** while its active
 **Targets** change.
 _Avoid_: current target, source of truth.
+
+**Successor slot**:
+The durably addressable, versioned position on a predecessor **Workstream outcome** for
+one successor transition. The outcome plus slot is the immutable **Anchor** for that
+Successor Workstream before its first Target exists.
+_Avoid_: mutable anchor, placeholder artifact.
 
 **Destination**:
 The affirmative condition a **Workstream** is meant to satisfy. It defines successful
@@ -73,6 +91,37 @@ against one primary **Target**. It is not an execution event, result, historical
 record, or **Handoff**.
 _Avoid_: event, history entry, handoff.
 
+**Action kind**:
+The versioned semantic operation a **Continuation action** intends to perform within
+a **Workflow**. It is broader than the wording of one **Instruction** and may be
+performed through different compatible representations.
+The current vocabulary is **Chart workstream**, **Resolve decision**, **Research fact**,
+**Prototype decision**, **Publish spec**, **Decompose spec**, **Triage item**,
+**Provide information**, **Implement ticket**, **Address review findings**,
+**Review head**, **Resolve conflict**, **Publish head**, **Review and merge PR**, and
+**Close parent**.
+_Avoid_: prompt, display label, Producer name.
+
+**Action occurrence**:
+One durably distinguishable lifecycle instance of an **Action kind** against a
+**Target**. A recurrence after retirement is a new Action occurrence rather than a
+resurrection of the retired one.
+_Avoid_: attempt, session, timestamp.
+
+**Action identity**:
+The stable logical identity of one **Action occurrence**, determined by its
+**Workstream**'s **Anchor**, **Action kind**, **Target**, and durable occurrence
+discriminator. **Producer**, carrier, wording, timestamps, **Readiness**, and display
+order do not define it.
+_Avoid_: record id, content hash, execution id.
+
+**Action semantics**:
+The behaviorally significant content carried under one **Action identity**: its
+**Instruction**, **Prerequisites**, interaction classification, and completion
+condition. Different **Basis** or **Producer** provenance may support equivalent
+Action semantics.
+_Avoid_: presentation, provenance, observation.
+
 **Instruction**:
 The concrete direction a **Performer** follows to carry out a **Continuation action**;
 a copy-pasteable skill prompt is one form of Instruction.
@@ -81,6 +130,12 @@ _Avoid_: prompt (as the universal term), description.
 **Target**:
 The primary durable subject a **Continuation action** operates on.
 _Avoid_: anchor, basis, context.
+
+**Artifact role**:
+The semantic part a durable artifact plays in a **Workflow**, independent of tracker
+labels or physical representation. A specification parent and an executable leaf may
+share a label while supporting different transitions.
+_Avoid_: issue type, label, file format.
 
 **Basis**:
 The durable evidence and **Producer** provenance establishing why a
@@ -91,6 +146,18 @@ _Avoid_: target, copied context, source of truth.
 **Producer**:
 The role that contributes or refreshes a **Continuation action** or
 **Workstream outcome** from a **Workflow** transition.
+
+**Transition owner**:
+The one **Producer** responsible for the semantic delta from a durable **Workflow**
+transition. Ownership follows the transition rather than the Skill, command, human, or
+platform adapter used to perform it.
+_Avoid_: top-level Skill, last writer.
+
+**Pointer-only participant**:
+A surface that returns evidence or a durable reference to a **Transition owner** without
+publishing shared guidance for that transition. It becomes a Producer only when it owns
+a separate, durably anchored transition.
+_Avoid_: Producer, Consumer.
 
 **Consumer**:
 The role that inspects a **Continuation view** to understand or choose available
@@ -111,6 +178,40 @@ A currently unsatisfied **Prerequisite**.
 Whether a **Continuation action** has any **Blockers**: **Ready** when it has none,
 **Blocked** otherwise.
 
+**Producer revision**:
+One durable version of a **Producer** contribution at its carrier, based on one
+observed predecessor revision. Competing non-equivalent successors are a
+**Continuation conflict**, never a timestamp contest.
+
+**Reconciliation**:
+The on-demand derivation of current **Continuation guidance** from durable Producer
+revisions and current workflow facts. It evaluates support, completion, Prerequisites,
+identity equivalence, and conflicts rather than maintaining a central mutable sequence.
+
+**Observation**:
+A non-authoritative account of one **Reconciliation** read, including the durable-source
+validators inspected and any derived **Readiness** or uncertainty.
+
+**Unverified**:
+An **Observation** classification used when required durable facts cannot be fetched or
+stabilized. It makes no Ready or Blocked claim.
+
+**Continuation conflict**:
+An incompatibility that prevents safe **Reconciliation**, such as different live
+**Action semantics** under one **Action identity**, cyclic Prerequisites, or competing
+Producer revisions.
+
+**Action retirement**:
+The evidence-backed removal of a **Continuation action** from current guidance because
+it completed, lost supporting Basis, was superseded, or its Workstream reached a
+terminal outcome. A Ready-to-Blocked or Blocked-to-Ready transition is not retirement.
+
+**Retirement receipt**:
+The bounded durable explanation in a successor **Producer revision** for each prior
+**Continuation action** it removes, including the retirement reason, evidence, and
+replacement **Action identity** when superseded. It is not a live Action or a central
+tombstone.
+
 **HITL-required**:
 An action classification meaning human judgment, authority, consent, or interaction
 is inherent to the **Continuation action**. Tooling availability cannot make it
@@ -126,8 +227,17 @@ The contextual relationship between a **Ready**, **AFK-safe** action and a speci
 
 **Workstream outcome**:
 An affirmative, durably evidenced terminal disposition of a **Workstream**.
-**Complete** means its **Destination** was satisfied; other terminal dispositions are
-not completion.
+**Complete** means its **Destination** was satisfied. **Rejected** means the authorized
+decision was not to pursue it. **Abandoned** means it ended intentionally without a
+replacement. **Superseded** means another named Successor Workstream replaces it. Only
+Complete has a satisfied Destination.
+
+**Parent cleanup**:
+The independent transition that verifies a parent artifact's own lifecycle condition
+and records its closure or other disposition. Terminal child outcomes may make Parent
+cleanup actionable, but do not prove the parent's Destination was satisfied. Parent
+cleanup neither creates nor blocks a substantive Successor Workstream.
+_Avoid_: automatic cascade close, final child side effect.
 
 **Handoff**:
 Session-specific context for continuing one active thread. It may support a
@@ -516,24 +626,69 @@ _Avoid_: independent, parallelizable (as the label name).
 
 - A **Workflow** can be traversed by many **Workstreams**. Each Workstream has
   exactly one durable **Anchor** and one **Destination**.
+- Artifacts created before a Workstream reaches its Destination may become Targets or
+  Basis without changing its Anchor. Crossing a Destination boundary terminates that
+  Workstream; later work belongs to a distinct **Successor Workstream**.
+- A **Workflow transition rule** derives a Successor Workstream from durable terminal
+  evidence. Its predecessor outcome and **Successor slot** form the successor's
+  immutable Anchor.
 - A **Workstream** owns many **Continuation actions**; each action belongs to exactly
   one Workstream and has one primary **Target**.
 - A **Continuation action** has an **Instruction**, durable **Basis** and Producer
   provenance, zero or more **Prerequisites**, an interaction classification, and a
   durably evaluable completion condition.
+- One **Action identity** denotes one **Action occurrence**. Equivalent live claims
+  collapse and combine their **Basis** and **Producer** provenance; different live
+  **Action semantics** under that identity form a **Continuation conflict**.
+- Each durable Workflow transition has one **Transition owner**. Nested or supporting
+  surfaces are **Pointer-only participants** unless they own a separate anchored
+  transition.
+- A Transition owner publishes only after durable transition evidence exists and may
+  replace only its own prior fragment. Failed writes and undefined successors are
+  errors, not `no-guidance`.
+- Shared Workstream discovery follows durable Anchors, Producer carriers, and typed
+  Artifact roles or relationships. Local worktrees, conversations, and temporary
+  documents can support only explicitly ephemeral guidance.
+- An artifact-creation transition must reach a durable Complete outcome before its
+  partial artifacts can support successor Actions. Incomplete specification or ticket
+  publication is quarantined rather than treated as executable work.
 - A **Prerequisite** becomes a **Blocker** only while it is unsatisfied. **Readiness**
   is independent of whether an action is **HITL-required** or **AFK-safe**.
+- **Reconciliation** may move the same Action between Ready and Blocked without
+  changing its identity. It retires the Action only with durable evidence and a
+  **Retirement receipt** when a **Producer revision** removes it.
+- A **Continuation view** respects the Prerequisite graph. Workflow semantics may rank
+  otherwise-independent Actions only within a local Workstream rule; Action kind does
+  not impose a global stage order across unrelated Workstreams. Stable **Anchor** and
+  **Action identity** ordering breaks remaining display ties; timestamps and discovery
+  order do not.
+- An **Unverified** Action or **Continuation conflict** is outside actionable ordering.
+  Its affected dependents are quarantined while independently verified guidance remains
+  usable.
 - An action is **AFK-eligible** for a **Performer** only when it is **Ready** and
   **AFK-safe**, and the Performer has the required capability, access, and policy
   permission.
 - **Continuation guidance** contains current unmet actions and explicit
   **Workstream outcomes**, not execution history. A **Continuation view** projects
   that guidance for one Consumer without turning display order into dependency.
+- **Parent cleanup** is an independent, low-priority Workstream and never blocks a
+  substantive successor.
+- A review Action occurrence is pinned to one exact durable code revision. Any changed
+  head, including conflict resolution or review remediation, requires a new review
+  occurrence before publication or integration.
+- Empty frontiers, phase completion, clean review, and lack of AFK-eligible work are not
+  **Workstream outcomes**. Only a durably recorded Complete, Rejected, Abandoned, or
+  Superseded disposition terminates a Workstream.
 - A **Handoff** may be referenced as supporting context, but its suggested next step
   is not current **Continuation guidance** until a Producer reconciles it against
   durable workflow state.
 - `ready-for-agent` is a tracker delegation signal that may provide **Basis** for an
   issue-execution action; it is not a synonym for **AFK-safe** or **AFK-eligible**.
+- A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
+  expand that policy.
+- A **Run** resolves one **Effective Skill policy** before work begins. Every
+  **Required Skill** must belong to it, and every serial **Iteration** and parallel
+  **Lane** shares it.
 - A **Run** has many serial **Iterations** and/or parallel **Lane contributions**.
 - An **Iteration** is offered one **Pool** and produces at most one **Active issue**.
 - A **Queue** belongs to exactly one **Run** and aggregates every issue seen across

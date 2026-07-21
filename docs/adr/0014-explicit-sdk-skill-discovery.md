@@ -1,6 +1,6 @@
 # Explicit skill discovery for Python SDK sessions
 
-**Status:** accepted
+**Status:** superseded by ADR-0015
 
 ## Context
 
