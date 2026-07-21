@@ -1,0 +1,3 @@
+interface:
+  display_name: "Next"
+  short_description: "Route the next workflow action"

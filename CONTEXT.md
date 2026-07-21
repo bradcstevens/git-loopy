@@ -137,14 +137,65 @@ Session-specific context for continuing one active thread. It may support a
 ### The run loop
 
 **Run**:
-One invocation of the git-loopy loop, identified by a `run_id`, spanning many iterations
-until the work is exhausted or the strike limit is reached.
+One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
+**Iterations** and/or parallel **Lane contributions** until the work is exhausted or
+the strike limit is reached.
+
+**Skill**:
+A named capability package whose instructions and resources a **Performer** may load
+when a task matches its purpose. Its canonical name is its policy identity; when
+multiple sources provide that name, the external agent client's source precedence
+selects the active package.
+_Avoid_: custom instruction, tool.
+
+**Skill baseline**:
+The exact initial enabled/disabled selection across the **Skill catalog**, copied from
+an operator's external agent client when establishing a **Skill policy**. It seeds that
+policy but does not remain its authority.
+_Avoid_: live mirror, source of truth.
+
+**Skill catalog**:
+The inventory of Skills an operator may inspect and select for git-loopy, including
+project, personal, plugin, built-in, and custom sources reported by the external agent
+client. Catalog membership does not make a Skill available to a **Run**; the
+**Skill policy** does.
+_Avoid_: enabled skills, runtime tools.
+
+**Skill policy**:
+The git-loopy-owned, closed-world set of Skills a **Run** may expose to its
+Performers. A Skill that is absent from the set remains disabled even if it later
+appears in a discovered location. Once established, the set changes only through an
+explicit git-loopy action, not merely because another agent client's settings changed.
+A project Skill policy replaces the global Skill policy; the global policy applies
+only when the project has not established one. A project Skill policy is a shared
+repository contract: every operator must be able to resolve each enabled Skill name.
+_Avoid_: Copilot settings, deny list, permission list.
+
+**Effective Skill policy**:
+The **Skill policy** selected for a **Run**, after applying that invocation's temporary
+enable and disable overrides and any legacy deny guards. Conflicting overrides resolve
+to disabled, and the result must still contain every **Required Skill**.
+_Avoid_: persisted policy, Copilot state.
+
+**Minimal Skill policy**:
+The unconfigured, non-interactive fallback that exposes only git-loopy's packaged
+**Required Skills**. It keeps a first CI Run usable without consulting personal or
+machine-global Skill sources.
+_Avoid_: default user policy, imported baseline.
+
+**Required Skill**:
+A Skill declared by the active Run instructions' machine-readable metadata as one a
+Performer must be able to invoke. A **Run** whose **Skill policy** omits a Required
+Skill is invalid and stops before its first work session rather than silently restoring
+or ignoring the Skill.
+_Avoid_: default skill, recommended skill.
 
 **Iteration**:
-One cycle of the loop — collect the pool, let the agent work exactly one task, then
-do commit accounting and a progress check. The unit by which elapsed time and
-streamed output are measured and attributed. Each fresh agent session is a new
-Iteration, including a context-cutover continuation pinned to the same **Active issue**.
+One serial cycle of the loop — collect the pool, let the agent work exactly one task,
+then do commit accounting and a progress check. The serial unit by which elapsed time
+and streamed output are measured and attributed. Each fresh serial work session is a
+new Iteration, including a context-cutover continuation pinned to the same
+**Active issue**.
 _Avoid_: round, pass, tick; session as a separate accounting unit.
 
 **Pool**:
@@ -153,16 +204,16 @@ offered to the agent together in a single prompt; the agent picks one.
 _Avoid_: batch, backlog.
 
 **Strike**:
-A recorded instance of an iteration making no meaningful progress; a fixed number of
-strikes ends the run. Progress means an **agent** commit or a closure — a runner
-**Checkpoint** does not count.
+A recorded no-progress result: a serial **Iteration** made no meaningful progress, or
+a parallel **Lane contribution** terminated unpublished. A fixed number of consecutive
+strikes ends the run. A runner **Checkpoint** does not count as progress.
 _Avoid_: failure, miss.
 
 **Checkpoint**:
 A runner-authored commit that captures any uncommitted or untracked changes the agent
-left at an iteration boundary, so the next iteration starts on a clean worktree and the
-work is pushed to the remote. It is close-keyword-free (never auto-closes an issue) and
-does not count as Strike progress. Distinct from the agent's own commits.
+left at a serial **Iteration** or Lane-work boundary, so subsequent work starts from a
+clean durable branch. It is close-keyword-free (never auto-closes an issue) and does
+not count as Strike progress. Distinct from the agent's own commits.
 _Avoid_: autosave, stash, snapshot.
 
 **Sandbox**:
@@ -240,10 +291,10 @@ view that enter opens from the **Queue**. It auto-scrolls to the latest entry.
 _Avoid_: transcript (the prior code term), output, stream.
 
 **Summary**:
-The per-run, per-iteration accounting band of the **Dashboard** (**Consumption**,
-**Observed tokens**, tools, skill calls, skills consulted, commits, closures, and
-strikes), updated each iteration and mirrored in the run-end table. A band of the
-**Dashboard**, not a separate screen.
+The per-run accounting band of the **Dashboard**, with one row per serial
+**Iteration** or parallel **Lane contribution** (**Consumption**, **Observed tokens**,
+tools, skill calls, skills consulted, commits, closures, and strikes), mirrored in
+the run-end table. A band of the **Dashboard**, not a separate screen.
 
 **Activity**:
 The **Dashboard** band that renders the live current tail — the **Active issue**'s
@@ -263,11 +314,11 @@ _Avoid_: context usage, cumulative tokens, token consumption.
 
 **Consumption**:
 The tokens-in / tokens-out and the model they were billed against, attributed to a
-scope: an **Iteration** (the basis for the **Summary**'s per-iteration Cost) or an
-**Active issue** — summed across every **Iteration** that worked it — the basis for the
-**Queue**'s per-issue Cost. Every Cost figure derives from Consumption by one shared
-rule (first non-None model wins; tokens sum), represented in code by the `UsageTally`
-value object (`git_loopy.usage`).
+scope: a serial **Iteration** or parallel **Lane contribution** (the basis for a
+**Summary** row's Cost), or an **Active issue** — summed across every accounting unit
+that worked it — the basis for the **Queue**'s per-issue Cost. Every Cost figure
+derives from Consumption by one shared rule (first non-None model wins; tokens sum),
+represented in code by the `UsageTally` value object (`git_loopy.usage`).
 _Avoid_: usage, spend (for the token measure); billing.
 
 **Observed tokens**:
@@ -414,6 +465,13 @@ for refill once its finished branch is admitted to **Integration**. Shown as one
 row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
 
+**Lane contribution**:
+One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
+when its Lane agent session starts and ending at green publication or a terminal
+unpublished handoff. It persists through parking, **Integration**, and recovery even
+after the reusable **Lane** moves on.
+_Avoid_: parallel Iteration, round, Wave, session.
+
 **Lane cap**:
 The configured upper bound on concurrent **Lane** work. It is a safety and resource
 ceiling, not a utilization promise: **Rolling dispatch** may deliberately leave capacity
@@ -462,31 +520,34 @@ _Avoid_: independent, parallelizable (as the label name).
   durable workflow state.
 - `ready-for-agent` is a tracker delegation signal that may provide **Basis** for an
   issue-execution action; it is not a synonym for **AFK-safe** or **AFK-eligible**.
-- A **Run** has many **Iterations**.
+- A **Run** has many serial **Iterations** and/or parallel **Lane contributions**.
 - An **Iteration** is offered one **Pool** and produces at most one **Active issue**.
 - A **Queue** belongs to exactly one **Run** and aggregates every issue seen across
-  its **Iterations**, keyed by issue.
+  its serial **Iterations** and parallel **Lane contributions**, keyed by issue.
 - An **Active issue** is the **Pool** member named by the current **Working marker**.
 - A serial **Iteration** binds to at most one **Active issue**; its first valid
   **Working marker** is authoritative for the rest of that Iteration.
 - The **Dashboard** shows the **Queue**; selecting a row opens that issue's **Log**.
-  Each issue has its own **Log**, which accumulates across every **Iteration** that
-  worked it.
-- A **Checkpoint** is authored by the runner (not the agent) at an **Iteration**
-  boundary and is attributed to the **Active issue**, but never counts as **Strike**
-  progress.
+  Each issue has its own **Log**, which accumulates across every serial **Iteration**
+  and parallel **Lane contribution** that worked it.
+- A **Checkpoint** is authored by the runner (not the agent) at a serial
+  **Iteration** or Lane-work boundary and is attributed to the **Active issue**, but
+  never counts as **Strike** progress.
 - A **Sandbox** is scoped to an **Iteration**: each **Iteration**'s agent shell runs
   inside a fresh **Sandbox**, so per-issue isolation follows from per-**Iteration**
   freshness.
-- **Consumption** is attributed to a scope: an **Iteration** (the **Summary**'s Cost)
-  or an **Active issue** (the **Queue**'s per-issue Cost). Both derive Cost from the
-  same `UsageTally` rule, so per-issue and per-iteration figures stay reconcilable.
+- **Consumption** is attributed to a scope: a serial **Iteration** or parallel
+  **Lane contribution** (a **Summary** row's Cost), or an **Active issue** (the
+  **Queue**'s per-issue Cost). Both derive Cost from the same `UsageTally` rule, so
+  per-issue and accounting-row figures stay reconcilable.
 - A context cutover starts another **Iteration** pinned to the same **Active issue**;
   it does not create a sub-Iteration accounting entity.
 - An issue's **Iteration breakdown** has one row per Iteration contribution; the
   Queue's Iteration count is the number of those rows.
 - In **Parallel mode**, **Rolling dispatch** reuses **Lanes** continuously rather than
   grouping them into barrier-synchronized rounds.
+- A **Lane contribution** belongs to one **Active issue** and may outlive the reusable
+  **Lane** that began it while it parks, integrates, or recovers.
 - The **Lane cap** is an upper bound; **Integration** backpressure may intentionally
   leave Lane capacity idle.
 - A **Lane** works exactly one **Parallel-safe** issue at a time. Once its finished

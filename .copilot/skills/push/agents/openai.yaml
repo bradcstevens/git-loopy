@@ -1,0 +1,5 @@
+interface:
+  display_name: "Push Changes"
+  short_description: "Commit, push, and open a pull request"
+policy:
+  allow_implicit_invocation: false
