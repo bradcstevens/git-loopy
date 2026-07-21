@@ -35,6 +35,7 @@
 {"ts":"2026-07-20T18:00:34Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c02","issue":302,"lane_id":"L2","published":true,"reason":"published"}
 {"ts":"2026-07-20T18:00:35Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c03","issue":303,"lane_id":"L3"}
 {"ts":"2026-07-20T18:00:36Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:36.500Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.branch_observed","contribution_id":"c03","issue":303,"lane_id":"L3","base_publications_since_cut":3,"frame":"authoritative branch drift crosses the headline threshold"}
 {"ts":"2026-07-20T18:00:37Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.recovery_started","contribution_id":"c03","issue":303,"lane_id":"L3","attempt":3,"max_attempts":3}
 {"ts":"2026-07-20T18:00:38Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c03","issue":303,"lane_id":"L3","published":false,"reason":"serial_fallback"}
 {"ts":"2026-07-20T18:00:39Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c04","issue":304,"lane_id":"L1"}

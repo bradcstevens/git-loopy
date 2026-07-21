@@ -47,6 +47,7 @@ class Contribution:
     lane_id: str
     started_at: int
     phase: str = "working"
+    phase_started: int = 0
     ended_at: int | None = None
     updated_at: int = 0
     published: bool | None = None
@@ -54,6 +55,7 @@ class Contribution:
     tokens_in: int = 0
     tokens_out: int = 0
     commits: int = 0
+    work_seconds: int = 0
     recovery_attempts: int = 0
     base_drift: int | None = None
     last_line: str = "agent session started"
@@ -215,6 +217,7 @@ class DashboardState:
             issue=issue_ref,
             lane_id=lane_id,
             started_at=self.now,
+            phase_started=self.now,
             updated_at=self.now,
         )
         self.contributions[cid] = contribution
@@ -272,7 +275,10 @@ class DashboardState:
 
     def _set_phase(self, event: dict[str, Any], phase: str, line: str) -> None:
         contribution = self._contribution(event)
+        if contribution.phase == "working":
+            contribution.work_seconds += self.now - contribution.phase_started
         contribution.phase = phase
+        contribution.phase_started = self.now
         contribution.updated_at = self.now
         contribution.last_line = line
         self._issue(contribution.issue).state = phase
@@ -308,6 +314,8 @@ class DashboardState:
         contribution.terminal_reason = reason
         contribution.ended_at = self.now
         contribution.updated_at = self.now
+        if contribution.phase == "working":
+            contribution.work_seconds += self.now - contribution.phase_started
         contribution.phase = (
             "closed"
             if published
@@ -476,8 +484,25 @@ class DashboardState:
             phase = contribution.phase
             if contribution.contribution_id in self.admitted_wait:
                 phase += f" · FIFO {self.admitted_wait.index(contribution.contribution_id) + 1}"
+            phase += f" · age {_duration(self.now - contribution.phase_started)}"
+            if contribution.base_drift is not None:
+                phase += f" · drift {contribution.base_drift} pub"
             return phase, lane, contribution.contribution_id
         return issue.state, "—", "—"
+
+    def issue_active_seconds(self, issue: Issue) -> int:
+        total = 0
+        for cid in issue.contributions:
+            contribution = self.contributions[cid]
+            total += contribution.work_seconds
+            if contribution.ended_at is None and contribution.phase == "working":
+                total += self.now - contribution.phase_started
+        for row in self.summary:
+            if row.issue == issue.ref and row.kind == "Iteration":
+                total += row.elapsed
+        if self.current_iteration and self.current_iteration.issue == issue.ref:
+            total += self.now - self.current_iteration.started_at
+        return total
 
 
 def render_dashboard(state: DashboardState) -> str:
@@ -486,7 +511,20 @@ def render_dashboard(state: DashboardState) -> str:
         for c in state.contributions.values()
         if c.ended_at is None and c.base_drift is not None
     ]
-    drift = f"{max(known_drift)} pub" if known_drift else UNKNOWN
+    drift_alert = (
+        f"  drift threshold={max(known_drift)} pub"
+        if known_drift and max(known_drift) >= 2
+        else ""
+    )
+
+    def signal(name: str) -> str:
+        value = state.signals[name]
+        if value == UNKNOWN:
+            return UNKNOWN
+        if state.pressure == name:
+            return "active"
+        return "ok"
+
     lines = [
         (
             f"git-loopy  {state.mode}  run {state.run_id}  "
@@ -495,9 +533,9 @@ def render_dashboard(state: DashboardState) -> str:
             f"parked {len(state.parked)}  strikes {state.strikes}/{state.max_strikes}"
         ),
         (
-            f"pressure {state.pressure}  signals "
-            f"429={state.signals['429']} credits={state.signals['credits']} "
-            f"host={state.signals['host']}  branch drift={drift}"
+            f"pressure {state.pressure}  inputs "
+            f"429={signal('429')} credits={signal('credits')} "
+            f"host={signal('host')}{drift_alert}"
         ),
     ]
     if state.refill_note:
@@ -506,32 +544,44 @@ def render_dashboard(state: DashboardState) -> str:
         [
             "",
             "QUEUE — keyed by issue; Lane is only the currently occupied reusable slot",
-            f"{'Issue':<34} {'State':<31} {'Lane':<5} {'Contribution':<12}",
-            "-" * 88,
+            f"{'Issue':<34} {'State + phase age':<51} {'Lane':<5} {'Active':<8} {'Contribution':<12}",
+            "-" * 118,
         ]
     )
-    phase_rank = {
-        "auto-resolution": 0,
-        "integrating": 1,
-        "admitted FIFO wait": 2,
-        "parked awaiting admission": 3,
-        "working": 4,
-        "serial working": 0,
-        "queued": 5,
-        "closed": 8,
-    }
-    projected: list[tuple[int, Issue, str, str, str]] = []
-    for issue in state.issues.values():
+    projected: list[tuple[int, int, Issue, str, str, str]] = []
+    for order, issue in enumerate(state.issues.values()):
         phase, lane, cid = state.queue_state(issue)
-        rank = phase_rank.get(phase.split(" ·", 1)[0], 7)
-        projected.append((rank, issue, phase, lane, cid))
-    for _, issue, phase, lane, cid in sorted(projected, key=lambda row: (row[0], row[1].ref)):
+        is_live = (
+            state.current_iteration is not None
+            and state.current_iteration.issue == issue.ref
+        ) or any(
+            state.contributions[cid].ended_at is None for cid in issue.contributions
+        )
+        group = 0 if is_live else 1 if issue.state == "queued" else 2
+        projected.append((group, order, issue, phase, lane, cid))
+    for _, _, issue, phase, lane, cid in sorted(
+        projected, key=lambda row: (row[0], row[1])
+    ):
         label = f"#{issue.ref} {issue.title}"[:33]
-        lines.append(f"{label:<34} {phase:<31} {lane:<5} {cid:<12}")
+        lines.append(
+            f"{label:<34} {phase:<51} {lane:<5} "
+            f"{_duration(state.issue_active_seconds(issue)):<8} {cid:<12}"
+        )
 
     lines.extend(["", "ACTIVITY — one attributable tail per overlapping live contribution"])
     active = [c for c in state.contributions.values() if c.ended_at is None]
-    active.sort(key=lambda c: c.updated_at, reverse=True)
+    activity_priority = {
+        "auto-resolution": 0,
+        "integrating": 1,
+        "publishing": 1,
+        "admitted FIFO wait": 2,
+        "parked awaiting admission": 3,
+        "awaiting admission": 3,
+        "working": 4,
+    }
+    active.sort(
+        key=lambda c: (activity_priority.get(c.phase, 5), -c.updated_at)
+    )
     if state.current_iteration is not None:
         lines.append(
             f"Iteration {state.current_iteration.number:<3} "
