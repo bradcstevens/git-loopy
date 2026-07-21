@@ -1,0 +1,73 @@
+{"ts":"2026-07-20T18:00:00Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.run.start","configured_lane_cap":6,"effective_lane_cap":3,"integration_high_water":2,"max_nmt_strikes":3}
+{"ts":"2026-07-20T18:00:01Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.pool.refreshed","issues":[{"issue":301,"title":"Refresh dependency cache"},{"issue":302,"title":"Normalize retry telemetry"},{"issue":303,"title":"Repair release handoff"},{"issue":304,"title":"Tighten worktree cleanup"},{"issue":305,"title":"Document quota warnings"},{"issue":306,"title":"Handle empty refresh"}]}
+{"ts":"2026-07-20T18:00:02Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:03Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:04Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c03","issue":303,"lane_id":"L3","frame":"three overlapping Lane contributions"}
+{"ts":"2026-07-20T18:00:05Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"assistant.message","contribution_id":"c01","issue":301,"lane_id":"L1","content":"Updating lockfile cache keys"}
+{"ts":"2026-07-20T18:00:06Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"assistant.message","contribution_id":"c02","issue":302,"lane_id":"L2","content":"Tracing retry counters"}
+{"ts":"2026-07-20T18:00:07Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"assistant.message","contribution_id":"c03","issue":303,"lane_id":"L3","content":"Inspecting release handoff"}
+{"ts":"2026-07-20T18:00:08Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"usage.tokens","contribution_id":"c01","issue":301,"lane_id":"L1","model":"m","input":900,"output":120}
+{"ts":"2026-07-20T18:00:09Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.commit.recorded","contribution_id":"c01","issue":301,"lane_id":"L1","sha":"aaaaaaaa11111111"}
+{"ts":"2026-07-20T18:00:10Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:11Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:12Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:13Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c04","issue":304,"lane_id":"L1","frame":"Lane L1 immediately reused while c01 persists"}
+{"ts":"2026-07-20T18:00:14Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.commit.recorded","contribution_id":"c02","issue":302,"lane_id":"L2","sha":"bbbbbbbb22222222"}
+{"ts":"2026-07-20T18:00:15Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:16Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:17Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.commit.recorded","contribution_id":"c03","issue":303,"lane_id":"L3","sha":"cccccccc33333333"}
+{"ts":"2026-07-20T18:00:18Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c03","issue":303,"lane_id":"L3"}
+{"ts":"2026-07-20T18:00:19Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.parked","contribution_id":"c03","issue":303,"lane_id":"L3"}
+{"ts":"2026-07-20T18:00:20Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.branch_observed","contribution_id":"c02","issue":302,"lane_id":"L2","base_publications_since_cut":1}
+{"ts":"2026-07-20T18:00:21Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.concurrency.changed","effective_lane_cap":3,"pressure":"Integration","429":"healthy","credits":"?","host":"?","frame":"H=2 full plus a parked finisher outside admission"}
+{"ts":"2026-07-20T18:00:22Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.recovery_started","contribution_id":"c01","issue":301,"lane_id":"L1","attempt":1,"max_attempts":3}
+{"ts":"2026-07-20T18:00:23Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.concurrency.changed","effective_lane_cap":0,"pressure":"429","429":"3/6","credits":"?","host":"?","frame":"auto-resolution overlaps while effective concurrency contracts to zero"}
+{"ts":"2026-07-20T18:00:24Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:25Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.parked","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:26Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"usage.tokens","contribution_id":"c01","issue":301,"lane_id":"L1","model":"m","input":300,"output":80}
+{"ts":"2026-07-20T18:00:27Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.published","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:28Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.auto_close","contribution_id":"c01","issue":301,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:29Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c01","issue":301,"lane_id":"L1","published":true,"reason":"published"}
+{"ts":"2026-07-20T18:00:30Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:31Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c03","issue":303,"lane_id":"L3","frame":"publication finalizes one row and advances FIFO admission"}
+{"ts":"2026-07-20T18:00:32Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.published","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:33Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.auto_close","contribution_id":"c02","issue":302,"lane_id":"L2"}
+{"ts":"2026-07-20T18:00:34Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c02","issue":302,"lane_id":"L2","published":true,"reason":"published"}
+{"ts":"2026-07-20T18:00:35Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c03","issue":303,"lane_id":"L3"}
+{"ts":"2026-07-20T18:00:36Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:37Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.recovery_started","contribution_id":"c03","issue":303,"lane_id":"L3","attempt":3,"max_attempts":3}
+{"ts":"2026-07-20T18:00:38Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c03","issue":303,"lane_id":"L3","published":false,"reason":"serial_fallback"}
+{"ts":"2026-07-20T18:00:39Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:40Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.serial.requested","issue":303,"reason":"integration_fallback","frame":"serial fallback latches refill off while remaining Integration drains"}
+{"ts":"2026-07-20T18:00:41Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.recovery_started","contribution_id":"c04","issue":304,"lane_id":"L1","attempt":1,"max_attempts":3}
+{"ts":"2026-07-20T18:00:42Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.published","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:43Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.auto_close","contribution_id":"c04","issue":304,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:44Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c04","issue":304,"lane_id":"L1","published":true,"reason":"published"}
+{"ts":"2026-07-20T18:00:45Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.concurrency.changed","effective_lane_cap":1,"pressure":"none","429":"healthy","credits":"?","host":"?"}
+{"ts":"2026-07-20T18:00:46Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.pipeline.quiescent","frame":"full drain grants exclusive serial ownership"}
+{"ts":"2026-07-20T18:00:47Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"wrapper.iteration.start","issue":303}
+{"ts":"2026-07-20T18:00:48Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"assistant.message","content":"Serial path resolves the release handoff","frame":"serial Iteration events and semantics remain unchanged"}
+{"ts":"2026-07-20T18:00:49Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"usage.tokens","model":"m","input":700,"output":110}
+{"ts":"2026-07-20T18:00:50Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"wrapper.commit.recorded","sha":"dddddddd44444444"}
+{"ts":"2026-07-20T18:00:51Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"wrapper.auto_close","issue":303}
+{"ts":"2026-07-20T18:00:52Z","run_id":"01ROLLINGDASHBOARD","iter":1,"type":"wrapper.iteration.end"}
+{"ts":"2026-07-20T18:00:53Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.pool.refreshed","issues":[{"issue":305,"title":"Document quota warnings"},{"issue":306,"title":"Handle empty refresh"}]}
+{"ts":"2026-07-20T18:00:54Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.concurrency.changed","effective_lane_cap":2,"pressure":"none","429":"healthy","credits":"?","host":"?"}
+{"ts":"2026-07-20T18:00:55Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.rolling.refill_turn","reserved":2}
+{"ts":"2026-07-20T18:00:56Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:00:57Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.start","contribution_id":"c06","issue":306,"lane_id":"L2","frame":"one full rolling refill turn after serial ownership"}
+{"ts":"2026-07-20T18:00:58Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"assistant.message","contribution_id":"c05","issue":305,"lane_id":"L1","content":"Writing authoritative quota wording"}
+{"ts":"2026-07-20T18:00:59Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"assistant.message","contribution_id":"c06","issue":306,"lane_id":"L2","content":"Checking complete-empty refresh"}
+{"ts":"2026-07-20T18:01:00Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.commit.recorded","contribution_id":"c05","issue":305,"lane_id":"L1","sha":"eeeeeeee55555555"}
+{"ts":"2026-07-20T18:01:01Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:01:02Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:01:03Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:01:04Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.work_finished","contribution_id":"c06","issue":306,"lane_id":"L2"}
+{"ts":"2026-07-20T18:01:05Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.admitted","contribution_id":"c06","issue":306,"lane_id":"L2"}
+{"ts":"2026-07-20T18:01:06Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.published","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:01:07Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.auto_close","contribution_id":"c05","issue":305,"lane_id":"L1"}
+{"ts":"2026-07-20T18:01:08Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c05","issue":305,"lane_id":"L1","published":true,"reason":"published"}
+{"ts":"2026-07-20T18:01:09Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.integration.started","contribution_id":"c06","issue":306,"lane_id":"L2"}
+{"ts":"2026-07-20T18:01:10Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.contribution.end","contribution_id":"c06","issue":306,"lane_id":"L2","published":false,"reason":"unchanged_branch"}
+{"ts":"2026-07-20T18:01:11Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.pool.refreshed","issues":[]}
+{"ts":"2026-07-20T18:01:12Z","run_id":"01ROLLINGDASHBOARD","iter":null,"type":"wrapper.run.end","outcome":"empty_pool","frame":"full quiescence before run end"}
