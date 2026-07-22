@@ -1,0 +1,227 @@
+{
+  "fixture_schema_version": "1.0",
+  "continuation_contract_version": "1.0",
+  "record_format": 1,
+  "wrapper_contract_version": "1.2",
+  "event_schema_version": "1.1",
+  "capability_manifest": {
+    "continuation_contract_versions": ["1.0"],
+    "record_formats": [1],
+    "wrapper_contract_version": "1.2",
+    "event_schema_version": "1.1",
+    "tracker_adapters": {
+      "github": {
+        "operations": []
+      }
+    },
+    "operations": {
+      "capabilities": true,
+      "publish": false,
+      "reconcile": false,
+      "record-dispatch-result": false,
+      "repair-index": false
+    },
+    "instruction_handlers": [],
+    "instruction_modes": [],
+    "evaluators": [],
+    "effect_scopes": [],
+    "optional_capabilities": {
+      "terminal_rendering": false,
+      "concurrent_dispatch": false
+    },
+    "continuation_modes": {
+      "default": "off",
+      "off": true,
+      "report": false,
+      "execute-frontier": false
+    }
+  },
+  "scenarios": [
+    {
+      "id": "capabilities",
+      "arguments": ["continuation", "capabilities"],
+      "request": null,
+      "github_script": [],
+      "expected": {
+        "exit_code": 0,
+        "stdout": {
+          "ok": true,
+          "capabilities": {
+            "$fixture": "capability_manifest"
+          }
+        },
+        "stderr_contains": null,
+        "github_calls": []
+      }
+    },
+    {
+      "id": "publish-fails-closed-from-stdin",
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "publish",
+          "error": {
+            "code": "unsupported_operation",
+            "message": "publish is not supported by this distribution"
+          }
+        },
+        "stderr_contains": "publish is not supported",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "reconcile-terminal-is-explicit-and-fails-closed",
+      "arguments": ["continuation", "reconcile", "--terminal"],
+      "request": {
+        "source": "stdin",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "reconcile",
+          "error": {
+            "code": "unsupported_operation",
+            "message": "reconcile is not supported by this distribution"
+          }
+        },
+        "stderr_contains": "reconcile is not supported",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "record-dispatch-result-fails-closed-from-file",
+      "arguments": [
+        "continuation",
+        "record-dispatch-result",
+        "--input",
+        "$INPUT_FILE"
+      ],
+      "request": {
+        "source": "file",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "record-dispatch-result",
+          "error": {
+            "code": "unsupported_operation",
+            "message": "record-dispatch-result is not supported by this distribution"
+          }
+        },
+        "stderr_contains": "record-dispatch-result is not supported",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "repair-index-fails-closed",
+      "arguments": ["continuation", "repair-index"],
+      "request": {
+        "source": "stdin",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "repair-index",
+          "error": {
+            "code": "unsupported_operation",
+            "message": "repair-index is not supported by this distribution"
+          }
+        },
+        "stderr_contains": "repair-index is not supported",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "invalid-request-is-semantic-rejection",
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "raw": "[]"
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "publish",
+          "error": {
+            "code": "invalid_request",
+            "message": "request must be one UTF-8 JSON object"
+          }
+        },
+        "stderr_contains": "request must be one UTF-8 JSON object",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "request-must-be-utf8",
+      "arguments": [
+        "continuation",
+        "publish",
+        "--input",
+        "$INPUT_FILE"
+      ],
+      "request": {
+        "source": "file",
+        "base64": "/w=="
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "publish",
+          "error": {
+            "code": "invalid_request",
+            "message": "request must be one UTF-8 JSON object"
+          }
+        },
+        "stderr_contains": "request must be one UTF-8 JSON object",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "terminal-selection-is-reconcile-only",
+      "arguments": ["continuation", "publish", "--terminal"],
+      "request": {
+        "source": "stdin",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 2,
+        "stdout": null,
+        "stderr_contains": "usage:",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "unknown-operation-is-usage-error",
+      "arguments": ["continuation", "dispatch"],
+      "request": null,
+      "github_script": [],
+      "expected": {
+        "exit_code": 2,
+        "stdout": null,
+        "stderr_contains": "usage:",
+        "github_calls": []
+      }
+    }
+  ]
+}

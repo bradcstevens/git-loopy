@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.1 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.2 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -175,6 +175,8 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 Every Orchestrator MUST emit its structured record as JSONL using the shared **Event schema**
 (`git_loopy.events`), so the **TUI helper**, the `.git-loopy/logs/<iso>-<run_id>.jsonl` replay
 log, and any external consumer read one format regardless of which port produced it.
+The additive Event schema is independently versioned at **1.1**; changing the Wrapper contract
+does not implicitly change the Event schema.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
@@ -188,10 +190,14 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.run.end`, `wrapper.iteration.start`, `wrapper.iteration.end`,
 `wrapper.afk_ready.collected`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
 `wrapper.push.recorded`, `wrapper.auto_close`, `wrapper.strike`, `wrapper.pr.advanced`,
-`wrapper.ask_user.attempted`. Note the shape: each is dotted `wrapper.<noun>.<verb>`, with
-underscores used only *within* a segment (`afk_ready`, `auto_close`, `ask_user`, `pr`), and two
-that are two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port
-streams SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
+`wrapper.ask_user.attempted`. Continuation-schema 1.1 additions:
+`wrapper.continuation.reconciled`, `wrapper.continuation_dispatch.started`,
+`wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
+observations only and never carry authoritative fragments, secrets, or runnable Instructions.
+Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
+segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`), and two that are
+two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
+SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
 `assistant.reasoning`, `tool.call`, `tool.result`, `tool.permission_requested`,
 `tool.permission_denied`, `usage.tokens`. Secrets MUST be scrubbed before a line is written. Ports
 MUST copy these literals verbatim from `git_loopy.events`; a drifted literal (e.g. an underscore
@@ -259,7 +265,36 @@ result and whether it warns). The Python reference adapter drives all three agai
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
 constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
 
-## 15. Changing this contract
+## 15. Native Continuation boundary (Continuation rollout, MUST)
+
+The separately versioned [Continuation contract](continuation-contract.md) governs Producer
+publication, Reconciliation, Dispatch evidence, capability declarations, and future Automation.
+Wrapper contract 1.2 requires every supported Orchestrator distribution to expose the same public
+namespace without making Continuation part of the Run loop:
+
+```text
+git-loopy continuation capabilities
+git-loopy continuation publish
+git-loopy continuation reconcile
+git-loopy continuation record-dispatch-result
+git-loopy continuation repair-index
+```
+
+`capabilities` MUST return the native distribution's truthful **Continuation capability
+manifest**. Capability never grants authority. Every other operation MUST consume exactly one
+UTF-8 JSON object from stdin or an explicitly selected input file. Machine responses emit exactly
+one JSON object on stdout; diagnostics use stderr. Terminal rendering is available only through
+an explicit `reconcile --terminal` selection.
+
+Command exits are independent of Run exits: success and committed or idempotent receipts use `0`;
+semantic or operational rejection uses `1`; malformed invocation uses `2`. An operation present
+in the namespace but not advertised as supported MUST fail closed with exit `1`, and the command
+boundary MUST never perform a **Continuation action**.
+
+Continuation mode remains `off` by default. This foundation does not authorize report mode,
+execute-frontier, or concurrent Dispatch.
+
+## 16. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).
@@ -274,4 +309,6 @@ which is the whole point of the backbone.
 
 **See also:** [`docs/runners.md`](runners.md) (the operator-facing runner reference),
 [ADR-0013](adr/0013-multi-language-runner-family.md) (the family decision),
+[`docs/continuation-contract.md`](continuation-contract.md) (the independent Continuation
+contract),
 [`CONTEXT.md`](../CONTEXT.md) (the glossary).

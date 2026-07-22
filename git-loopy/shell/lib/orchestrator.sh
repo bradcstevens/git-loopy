@@ -15,6 +15,8 @@ _git_loopy_orchestrator_dir="$(
 
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/events.sh"
+# shellcheck disable=SC1091
+source "$_git_loopy_orchestrator_dir/continuation.sh"
 
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()
@@ -28,6 +30,9 @@ GIT_LOOPY_POOL_JSON='[]'
 git_loopy_usage() {
   cat <<'EOF'
 Usage: git-loopy.sh [<max-iterations>] [options]
+
+Commands:
+  continuation                    Native Continuation contract commands.
 
 Options:
   --model ID
@@ -1475,6 +1480,12 @@ git_loopy_run_discovery() {
 git_loopy_main() {
   local packaged_prompt="$1"
   shift
+
+  if [[ "${1:-}" == "continuation" ]]; then
+    shift
+    git_loopy_continuation_main "$@"
+    return $?
+  fi
 
   local config_status=0
   git_loopy_resolve_config "$@" || config_status=$?

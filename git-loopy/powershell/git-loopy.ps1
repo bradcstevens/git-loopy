@@ -11,13 +11,27 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ModulePath = Join-Path $PSScriptRoot "GitLoopy.Orchestrator.psm1"
+$ContinuationModulePath = Join-Path $PSScriptRoot "GitLoopy.Continuation.psm1"
 $PackagedPrompt = Join-Path (Split-Path -Parent $PSScriptRoot) "PROMPT.md"
 Import-Module $ModulePath -Force
+Import-Module $ContinuationModulePath -Force
 
 try {
-    $ExitCode = Invoke-GitLoopyMain `
-        -Arguments $args `
-        -PackagedPrompt $PackagedPrompt
+    if ($args.Count -gt 0 -and $args[0] -ceq "continuation") {
+        $ContinuationArguments = if ($args.Count -gt 1) {
+            [string[]]$args[1..($args.Count - 1)]
+        }
+        else {
+            [string[]]@()
+        }
+        $ExitCode = Invoke-GitLoopyContinuationMain `
+            -Arguments $ContinuationArguments
+    }
+    else {
+        $ExitCode = Invoke-GitLoopyMain `
+            -Arguments $args `
+            -PackagedPrompt $PackagedPrompt
+    }
 }
 catch [System.Management.Automation.ParseException] {
     [Console]::Error.WriteLine($_.Exception.Message)

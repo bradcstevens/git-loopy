@@ -74,6 +74,10 @@ __all__ = [
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
     "WRAPPER_ASK_USER_ATTEMPTED",
+    "WRAPPER_CONTINUATION_RECONCILED",
+    "WRAPPER_CONTINUATION_DISPATCH_STARTED",
+    "WRAPPER_CONTINUATION_DISPATCH_ENDED",
+    "WRAPPER_CONTINUATION_STOPPED",
     # SDK-mapped event-type constants
     "SESSION_CREATED",
     "SESSION_IDLE",
@@ -117,6 +121,10 @@ WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"
 WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
+WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
+WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
+WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
+WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
 
 # SDK-mapped events. :func:`map_sdk_event` translates SDK :class:`SessionEvent`
 # instances to payload dicts using these type literals.

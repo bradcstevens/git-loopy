@@ -47,10 +47,13 @@ _Job = dict[str, Any]
 # still satisfies the shared Wrapper contract. A job is the family member's gate
 # iff its steps run these scripts.
 SHELL_CONFORMANCE = "test-orchestrator-conformance.sh"
+SHELL_CONTINUATION = "test-continuation-conformance.sh"
 SHELL_BOUNDARY = "test-orchestrator-boundary.sh"
 POWERSHELL_CONFORMANCE = "test-orchestrator-conformance.ps1"
+POWERSHELL_CONTINUATION = "test-continuation-conformance.ps1"
 POWERSHELL_BOUNDARY = "test-orchestrator-boundary.ps1"
 PYTHON_CONFORMANCE = "test_conformance.py"
+PYTHON_CONTINUATION = "test_continuation_scenarios.py"
 PYTHON_TEST_TREE = "git-loopy/python/tests"
 
 # The operating systems each member claims to support (ADR-0013 "Runtime floors";
@@ -157,19 +160,32 @@ def _all_jobs(
 def _is_python_gate(job: _Job) -> bool:
     """Runs the Python test suite *and* the Conformance adapter as a named step."""
     text = _job_run_text(job)
-    return "pytest" in text and PYTHON_TEST_TREE in text and PYTHON_CONFORMANCE in text
+    return (
+        "pytest" in text
+        and PYTHON_TEST_TREE in text
+        and PYTHON_CONFORMANCE in text
+        and PYTHON_CONTINUATION in text
+    )
 
 
 def _is_shell_gate(job: _Job) -> bool:
     """Runs both the shell Conformance adapter and the real-script boundary suite."""
     text = _job_run_text(job)
-    return SHELL_CONFORMANCE in text and SHELL_BOUNDARY in text
+    return (
+        SHELL_CONFORMANCE in text
+        and SHELL_CONTINUATION in text
+        and SHELL_BOUNDARY in text
+    )
 
 
 def _is_powershell_gate(job: _Job) -> bool:
     """Runs both the PowerShell Conformance adapter and the boundary suite."""
     text = _job_run_text(job)
-    return POWERSHELL_CONFORMANCE in text and POWERSHELL_BOUNDARY in text
+    return (
+        POWERSHELL_CONFORMANCE in text
+        and POWERSHELL_CONTINUATION in text
+        and POWERSHELL_BOUNDARY in text
+    )
 
 
 def _loaded_workflows() -> list[tuple[Path, _Workflow]]:

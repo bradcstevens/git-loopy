@@ -220,6 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  skills edit                    Edit a project or global Skill "
             "policy.\n"
             "                                 See `git-loopy skills -h`.\n"
+            "  continuation                   Native Continuation contract commands.\n"
+            "                                 See `git-loopy continuation -h`.\n"
             "\n"
             "Environment variables:\n"
             "  GIT_LOOPY_MODEL              Copilot model id override "
@@ -423,7 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills")
+_SUBCOMMANDS = ("init", "config", "skills", "continuation")
 
 
 def _add_scope_flags(
@@ -457,7 +459,7 @@ def _add_scope_flags(
 
 
 def build_subcommand_parser() -> argparse.ArgumentParser:
-    """Construct the parser for ``init``, ``config``, and ``skills`` commands.
+    """Construct the parser for management and Continuation commands.
 
     Kept separate from :func:`build_parser` on purpose (see :data:`_SUBCOMMANDS`):
     :func:`main` pre-dispatches on the first token, so this parser is only ever
@@ -467,12 +469,15 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="git-loopy",
-        description="git-loopy subcommands (setup, Config, and Skill management).",
+        description=(
+            "git-loopy subcommands (setup, Config, Skill management, and "
+            "Continuation)."
+        ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills}",
+        metavar="{init,config,skills,continuation}",
     )
 
     init = sub.add_parser(
@@ -535,6 +540,43 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_scope_flags(skills_edit)
+
+    continuation = sub.add_parser(
+        "continuation",
+        help="Inspect or invoke the native Continuation contract boundary.",
+        description=(
+            "Native Continuation commands. Capability is not authority; unsupported "
+            "operations fail closed and never perform an Action."
+        ),
+    )
+    continuation_sub = continuation.add_subparsers(
+        dest="continuation_operation",
+        required=True,
+        metavar=(
+            "{capabilities,publish,reconcile,record-dispatch-result,repair-index}"
+        ),
+    )
+    continuation_sub.add_parser(
+        "capabilities",
+        help="Print the machine-readable Continuation capability manifest.",
+    )
+    for operation in ("publish", "reconcile", "record-dispatch-result", "repair-index"):
+        command = continuation_sub.add_parser(
+            operation,
+            help=f"Invoke {operation} through the native Continuation module.",
+        )
+        command.add_argument(
+            "--input",
+            dest="input_path",
+            metavar="FILE",
+            help="Read the one UTF-8 JSON request object from FILE instead of stdin.",
+        )
+        if operation == "reconcile":
+            command.add_argument(
+                "--terminal",
+                action="store_true",
+                help="Explicitly select terminal rendering instead of machine JSON.",
+            )
 
     config = sub.add_parser(
         "config",
@@ -746,6 +788,17 @@ def _run_skills(args: argparse.Namespace) -> int:
             env=os.environ,
         )
     raise AssertionError(f"unhandled skills command: {args.skills_command}")
+
+
+def _run_continuation(args: argparse.Namespace) -> int:
+    """Dispatch one native Continuation command without starting a Run."""
+    from git_loopy.continuation import run_command
+
+    return run_command(
+        args.continuation_operation,
+        input_path=getattr(args, "input_path", None),
+        terminal=bool(getattr(args, "terminal", False)),
+    )
 
 
 def _parse_csv_env(value: str | None) -> list[str]:
@@ -1477,6 +1530,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_init(sub_args)
         if sub_args.command == "skills":
             return _run_skills(sub_args)
+        if sub_args.command == "continuation":
+            return _run_continuation(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()

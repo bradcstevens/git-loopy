@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from git_loopy import events as events_module
+from git_loopy import continuation as continuation_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
@@ -140,6 +141,12 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
     assert actual == _EVENT_SCHEMA["event_types"]
 
 
+def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
+    assert _EVENT_SCHEMA["schema_version"] == 1
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
+    assert _EVENT_SCHEMA["contract_version"] == "1.2"
+
+
 @pytest.mark.parametrize(
     "case",
     _EVENT_SCHEMA["serialization_cases"],
@@ -147,6 +154,33 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 )
 def test_event_serialization_fixture(case: dict[str, Any]) -> None:
     assert events_module.to_jsonl_line(case["event"]) == case["jsonl"]
+
+
+_CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
+
+
+def test_continuation_fixture_pins_independent_version_axes() -> None:
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.0"
+    assert (
+        _CONTINUATION_SCENARIOS["continuation_contract_version"]
+        == continuation_module.CONTINUATION_CONTRACT_VERSION
+    )
+    assert (
+        _CONTINUATION_SCENARIOS["record_format"]
+        == continuation_module.RECORD_FORMAT
+    )
+    assert (
+        _CONTINUATION_SCENARIOS["wrapper_contract_version"]
+        == continuation_module.WRAPPER_CONTRACT_VERSION
+    )
+    assert (
+        _CONTINUATION_SCENARIOS["event_schema_version"]
+        == continuation_module.EVENT_SCHEMA_VERSION
+    )
+    assert (
+        _CONTINUATION_SCENARIOS["capability_manifest"]
+        == continuation_module.CAPABILITY_MANIFEST
+    )
 
 
 _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")

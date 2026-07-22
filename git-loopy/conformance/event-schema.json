@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "1.0",
+  "contract_version": "1.2",
+  "event_schema_version": "1.1",
   "event_types": {
     "WRAPPER_RUN_START": "wrapper.run.start",
     "WRAPPER_RUN_END": "wrapper.run.end",
@@ -14,6 +15,10 @@
     "WRAPPER_PR_ADVANCED": "wrapper.pr.advanced",
     "WRAPPER_STRIKE": "wrapper.strike",
     "WRAPPER_ASK_USER_ATTEMPTED": "wrapper.ask_user.attempted",
+    "WRAPPER_CONTINUATION_RECONCILED": "wrapper.continuation.reconciled",
+    "WRAPPER_CONTINUATION_DISPATCH_STARTED": "wrapper.continuation_dispatch.started",
+    "WRAPPER_CONTINUATION_DISPATCH_ENDED": "wrapper.continuation_dispatch.ended",
+    "WRAPPER_CONTINUATION_STOPPED": "wrapper.continuation.stopped",
     "SESSION_CREATED": "session.created",
     "SESSION_IDLE": "session.idle",
     "SESSION_DELETED": "session.deleted",

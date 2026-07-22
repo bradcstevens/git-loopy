@@ -13,15 +13,19 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
-| `event-schema.json` | Event type literals and stable envelope-first JSON serialization |
+| `event-schema.json` | Event schema 1.1 type literals, including Continuation observations, and stable envelope-first JSON serialization |
+| `continuation-scenarios.json` | Continuation 1.0 native command framing, capability manifest, fail-closed operations, and scripted GitHub transport |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 
-Every file carries `schema_version` and `contract_version`. Fixture content is
-data only: do not add host-language expressions, executable hooks, or
-implementation-specific expected-value generation.
+Legacy decision fixtures carry `schema_version` and the Wrapper
+`contract_version` they pin. The Continuation harness names every independent
+version axis explicitly: fixture schema, Continuation contract, record format,
+Wrapper contract, and Event schema. Fixture content is data only: do not add
+host-language expressions, executable hooks, or implementation-specific
+expected-value generation.
 
 A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references
@@ -40,6 +44,11 @@ from
 [`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
+The native Continuation adapters invoke each real public entrypoint from
+[`python/tests/test_continuation_scenarios.py`](../python/tests/test_continuation_scenarios.py),
+[`shell/tests/test-continuation-conformance.sh`](../shell/tests/test-continuation-conformance.sh),
+and
+[`powershell/tests/test-continuation-conformance.ps1`](../powershell/tests/test-continuation-conformance.ps1).
 
 The Python reference adapter additionally pins the phase-3 per-issue routing
 decisions (Wrapper contract §14): it drives `routing-resolution.json` and
@@ -52,10 +61,13 @@ Run them from the repository root:
 
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
+uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_continuation_scenarios.py
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
+bash git-loopy/shell/tests/test-continuation-conformance.sh
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-orchestrator-conformance.ps1
+pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-continuation-conformance.ps1
 ```
 
 To change the Wrapper contract, update the written contract and its version,

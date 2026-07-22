@@ -1896,6 +1896,9 @@ function Get-GitLoopyUsage {
     return @"
 Usage: git-loopy.ps1 [<max-iterations>] [options]
 
+Commands:
+  continuation                    Native Continuation contract commands.
+
 Options:
   --model ID
   --reasoning-effort none|minimal|low|medium|high|xhigh|max

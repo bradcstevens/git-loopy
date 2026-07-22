@@ -34,6 +34,7 @@ jobs:
         run: >-
           uv run --project git-loopy/python --all-extras
           python -m pytest -q git-loopy/python/tests/test_conformance.py
+          git-loopy/python/tests/test_continuation_scenarios.py
 
       - name: Python test suite
         run: >-
@@ -74,11 +75,13 @@ jobs:
           "$BASH_BIN" --version
           "$BASH_BIN" -n \
             git-loopy/shell/git-loopy.sh \
+            git-loopy/shell/lib/continuation.sh \
             git-loopy/shell/lib/events.sh \
             git-loopy/shell/lib/orchestrator.sh \
             git-loopy/shell/tests/*.sh
           "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-continuation-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-boundary.sh
 
   powershell:
@@ -104,5 +107,7 @@ jobs:
             git-loopy/powershell/tests/test-event-conformance.ps1
           pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-orchestrator-conformance.ps1
+          pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-continuation-conformance.ps1
           pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-orchestrator-boundary.ps1
