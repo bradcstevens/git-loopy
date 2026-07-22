@@ -201,6 +201,10 @@ class SkillPolicyInputs:
     enable_skills: frozenset[str] = field(default_factory=frozenset)
     disable_skills: frozenset[str] = field(default_factory=frozenset)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enable_skills", frozenset(self.enable_skills))
+        object.__setattr__(self, "disable_skills", frozenset(self.disable_skills))
+
 
 class EffortGateWarning(Enum):
     """Why :func:`gate_reasoning_effort` would warn — the caller owns surfacing it.

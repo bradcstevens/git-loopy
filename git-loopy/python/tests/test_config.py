@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy.config import RunConfig
+from git_loopy.config import RunConfig, SkillPolicyInputs
 from git_loopy.session import SessionConfig
 
 
@@ -59,6 +59,22 @@ def test_run_config_is_frozen() -> None:
     cfg = RunConfig()
     with pytest.raises(Exception):
         cfg.verbosity = 2  # type: ignore[misc]
+
+
+def test_skill_policy_overlays_copy_mutable_inputs() -> None:
+    """Frozen Skill-policy inputs do not retain mutable caller-owned sets."""
+    enabled = {"alpha"}
+    disabled = {"beta"}
+    inputs = SkillPolicyInputs(  # type: ignore[arg-type]
+        enable_skills=enabled,
+        disable_skills=disabled,
+    )
+
+    enabled.add("later")
+    disabled.add("later")
+
+    assert inputs.enable_skills == frozenset({"alpha"})
+    assert inputs.disable_skills == frozenset({"beta"})
 
 
 def test_run_config_satisfies_session_config_protocol() -> None:
