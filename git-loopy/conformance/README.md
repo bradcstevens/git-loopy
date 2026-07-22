@@ -14,7 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Event schema 1.1 type literals, including Continuation observations, and stable envelope-first JSON serialization |
-| `continuation-scenarios.json` | Continuation 1.0 native command framing, completion-record vocabularies and canonical bounds, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
+| `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact Python publish results, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
@@ -31,6 +31,14 @@ Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered
 scripted-GitHub transport. An adapter runs only records naming its distribution,
 must consume every scripted call, and must reject unlisted calls.
+
+Fixture schema 1.2 adds pinned completion-record vocabularies and physical JSON
+bounds. Fixture schema 1.3 adds complete Action-classification,
+interaction-evidence, and condition schemas; exact Python native-publish stdout
+and stderr; raw-segment stress requests; and literal request templates with
+RFC 6902 `add`, `remove`, and `replace` patches for invalid completion cases.
+Adapters may materialize those generic fixture records but must not recreate the
+semantic dispatch they describe.
 
 A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references

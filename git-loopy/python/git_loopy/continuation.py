@@ -118,6 +118,7 @@ INTERACTION_EVIDENCE_SCHEMAS: dict[str, dict[str, Any]] = {
         "optional_fields": frozenset({"advisory_extensions"}),
         "string_fields": frozenset(),
         "condition_fields": frozenset({"resolution_condition"}),
+        "bound_fields": {},
         "enum_fields": {"reason": HUMAN_BOUNDARY_REASONS},
     },
     "transition-owner-attestation": {
@@ -126,6 +127,7 @@ INTERACTION_EVIDENCE_SCHEMAS: dict[str, dict[str, Any]] = {
         "optional_fields": frozenset({"advisory_extensions"}),
         "string_fields": frozenset({"owner"}),
         "condition_fields": frozenset(),
+        "bound_fields": {"owner": "completion.transition.owner"},
         "enum_fields": {},
     },
 }
@@ -549,6 +551,7 @@ def _interaction(
     value: Any,
     *,
     repository: str,
+    transition_owner: str,
 ) -> str:
     name = "completion.actions item.interaction"
     interaction = _object(value, name)
@@ -596,6 +599,15 @@ def _interaction(
             repository=repository,
             allow_local=False,
         )
+    for field, binding in schema["bound_fields"].items():
+        if binding == "completion.transition.owner":
+            expected = transition_owner
+        else:
+            raise AssertionError(f"unsupported interaction evidence binding: {binding}")
+        if evidence.get(field) != expected:
+            raise ContinuationError(
+                f"{evidence_name}.{field} must match {binding}"
+            )
     return classification
 
 
@@ -661,6 +673,7 @@ def _validate_action(
     value: Any,
     *,
     repository: str,
+    transition_owner: str,
 ) -> tuple[dict[str, Any], list[str]]:
     action = _object(value, "completion.actions item")
     _fields(
@@ -759,6 +772,7 @@ def _validate_action(
     classification = _interaction(
         action.get("interaction"),
         repository=repository,
+        transition_owner=transition_owner,
     )
     if instruction["mode"] == "manual" and classification != "HITL-required":
         raise ContinuationError("manual Instructions must be HITL-required")
@@ -883,7 +897,10 @@ def _validate_completion(
         required=frozenset({"owner", "evidence"}),
         optional=frozenset({"advisory_extensions"}),
     )
-    _string(transition.get("owner"), "completion.transition.owner")
+    transition_owner = _string(
+        transition.get("owner"),
+        "completion.transition.owner",
+    )
     evidence = _array(
         transition.get("evidence"),
         "completion.transition.evidence",
@@ -941,7 +958,11 @@ def _validate_completion(
         keys: set[str] = set()
         local_references: list[tuple[str, str]] = []
         for item in actions:
-            action, references = _validate_action(item, repository=repository)
+            action, references = _validate_action(
+                item,
+                repository=repository,
+                transition_owner=transition_owner,
+            )
             key = str(action["key"])
             if key in keys:
                 raise ContinuationError(

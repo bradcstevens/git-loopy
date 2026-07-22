@@ -220,6 +220,7 @@ def test_continuation_fixture_pins_completion_vocabularies() -> None:
             "optional_fields": frozenset(schema["optional_fields"]),
             "string_fields": frozenset(schema["string_fields"]),
             "condition_fields": frozenset(schema["condition_fields"]),
+            "bound_fields": schema["bound_fields"],
             "enum_fields": {
                 field: frozenset(values)
                 for field, values in schema["enum_fields"].items()

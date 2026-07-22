@@ -79,7 +79,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.2,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.3,
 Continuation contract 1.0, record format 1, Wrapper contract 1.2, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -97,11 +97,14 @@ selection, fail-closed operations, and exit mapping without contacting GitHub or
 Later semantic tickets extend the same harness rather than creating private command or transport
 oracles.
 
-Fixture schema 1.2 permits distribution selectors, literal distribution-specific capability
-scenarios, workflows, and pinned completion-record vocabularies and physical bounds. A workflow
-executes multiple fresh native commands against one ordered scripted-GitHub transport. Family
-adapters run only scenarios and workflows naming their distribution, so a member advertises and
-proves a capability only when its native implementation lands.
+Fixture schema 1.3 permits distribution selectors, literal distribution-specific capability
+scenarios, workflows, pinned completion-record vocabularies and physical bounds, complete
+Action/interaction/condition schemas, raw-segment stress requests, and exact Python `publish`
+stdout/stderr. Invalid completion cases derive from literal valid request templates through
+data-only RFC 6902 `add`, `remove`, and `replace` patches. A workflow executes multiple fresh
+native commands against one ordered scripted-GitHub transport. Family adapters run only scenarios
+and workflows naming their distribution, so a member advertises and proves a capability only when
+its native implementation lands.
 
 ## 7. Python atomic completion records
 
@@ -127,10 +130,15 @@ contract-defined hard-HITL Action kinds must be `HITL-required`. Local prerequis
 name another Action in the same fragment. Unknown Action, condition, outcome, reason, reference,
 effect, requirement, or trigger semantics reject the whole envelope.
 
-The v1 Action-kind and condition-kind registries are closed and pinned in the Conformance fixture.
-Conditions are machine-evaluable durable references or an `action-completed` local reference;
-free-text-only prerequisites and completion conditions are invalid. Unknown fields are rejected
-outside reserved `advisory_extensions` maps, whose content cannot establish behavior.
+The v1 Action-kind, interaction-evidence, and condition registries are closed and pinned in the
+Conformance fixture. `transition-owner-attestation` is valid only for `AFK-safe` and its required
+owner must match `completion.transition.owner`. `human-boundary` is valid only for
+`HITL-required`; it carries one pinned human-boundary reason and a durable typed resolution
+condition. Conditions pin their required and optional fields, string fields, local-reference field,
+allowed durable Target kinds, and enum values such as pull-request review state. They are
+machine-evaluable durable references or an `action-completed` local reference; free-text-only
+prerequisites and completion conditions are invalid. Unknown fields are rejected outside reserved
+`advisory_extensions` maps, whose content cannot establish behavior.
 
 Publication verifies the durable transition-evidence comment before mutation, establishes the
 repairable `git-loopy-continuation` discovery label, appends one record-format-1 carrier comment,
@@ -147,7 +155,8 @@ Validation and canonicalization finish before the first GitHub call. The portabl
 without BOM, NFC-normalized strings, duplicate-key rejection, lexically sorted object keys, compact
 JSON, no floats, interoperable signed 53-bit integers, maximum depth 16, maximum array length 256,
 maximum individual string length 8 KiB UTF-8, and maximum canonical record length 48 KiB. The
-command also checks the live carrier body limit before establishing the discovery label.
+command iteratively checks raw JSON nesting before invoking Python's recursive decoder, and also
+checks the live carrier body limit before establishing the discovery label.
 
 The revision identity is the SHA-256 digest of the canonical completion envelope. Each Action also
 gets a SHA-256 semantic fingerprint over only its Instruction, Prerequisites, interaction

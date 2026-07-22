@@ -47,6 +47,7 @@
         "optional_fields": ["advisory_extensions"],
         "string_fields": [],
         "condition_fields": ["resolution_condition"],
+        "bound_fields": {},
         "enum_fields": {
           "reason": [
             "consent-required",
@@ -65,6 +66,9 @@
         "optional_fields": ["advisory_extensions"],
         "string_fields": ["owner"],
         "condition_fields": [],
+        "bound_fields": {
+          "owner": "completion.transition.owner"
+        },
         "enum_fields": {}
       }
     },
@@ -684,6 +688,125 @@
         }
       },
       {
+        "id": "unknown-interaction-evidence-kind",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/interaction/evidence",
+            "value": {"kind": "confidence-note"}
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence.kind is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence.kind is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "incomplete-human-boundary-evidence",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/interaction",
+            "value": {
+              "classification": "HITL-required",
+              "evidence": {
+                "kind": "human-boundary",
+                "reason": "human-decision"
+              }
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence is missing required field: resolution_condition\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence is missing required field: resolution_condition\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "interaction-evidence-classification-mismatch",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/interaction/evidence",
+            "value": {
+              "kind": "human-boundary",
+              "reason": "human-decision",
+              "resolution_condition": {
+                "kind": "issue-label-present",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "label": "human-resolved"
+              }
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence.kind is incompatible with AFK-safe\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence.kind is incompatible with AFK-safe\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "condition-target-kind-mismatch",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/completion_condition",
+            "value": {
+              "kind": "branch-head-equals",
+              "target": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 239
+              }
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.completion_condition.target.kind must be one of: branch\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.completion_condition.target.kind must be one of: branch\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "condition-enum-value-mismatch",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/completion_condition",
+            "value": {
+              "kind": "pull-request-review-state",
+              "target": {
+                "kind": "pull-request-review",
+                "repository": "octo/example",
+                "pull_request": 42,
+                "review_id": 91
+              },
+              "state": "pending"
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.completion_condition.state is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.completion_condition.state is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
         "id": "contradictory-no-guidance",
         "template": "shared-continue",
         "patch": [
@@ -742,6 +865,23 @@
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"Chart workstream Actions must be HITL-required\"}}\n",
           "stderr_exact": "git-loopy continuation: Chart workstream Actions must be HITL-required\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "interaction-owner-mismatch",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/interaction/evidence/owner",
+            "value": "different-owner"
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence.owner must match completion.transition.owner\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence.owner must match completion.transition.owner\n",
           "github_calls": []
         }
       },
