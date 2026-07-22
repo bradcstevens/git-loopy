@@ -96,6 +96,162 @@ run_transport_probe() {
 
 run_transport_probe
 
+run_github_failure_probes() {
+  local workflow
+  workflow="$(
+    jq -c '
+      .workflows[]
+      | select(
+          .id == "trusted-planning-action"
+          and ((.distributions // []) | index("shell"))
+        )
+    ' "$fixture"
+  )"
+  local request
+  request="$(jq -c '.commands[0].request.json' <<<"$workflow")"
+  local github_script="$tmp/publish-failure-github-script.json"
+  local github_state="$tmp/publish-failure-github-state"
+  local github_log="$tmp/publish-failure-github-calls"
+  jq -cn \
+    --arg command "api repos/octo/example/issues/comments/7001" \
+    '[{
+      command: $command,
+      exit_code: 1,
+      stdout: "",
+      stderr: "evidence unavailable"
+    }]' >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/publish-failure.stdout"
+  local stderr_path="$tmp/publish-failure.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 1 ]] ||
+    fail "publish GitHub failure exit: expected 1, got $status"
+  jq -e '
+    .ok == false
+    and .operation == "publish"
+    and .error.code == "github_error"
+  ' "$stdout_path" >/dev/null ||
+    fail "publish GitHub failure did not return a typed error"
+  [[ "$(wc -l <"$github_log" | tr -d ' ')" == 1 ]] ||
+    fail "publish continued mutating GitHub after evidence failure"
+
+  request="$(jq -c '.commands[1].request.json' <<<"$workflow")"
+  github_script="$tmp/reconcile-failure-github-script.json"
+  github_state="$tmp/reconcile-failure-github-state"
+  github_log="$tmp/reconcile-failure-github-calls"
+  jq -cn \
+    --arg command \
+      "issue list --repo octo/example --state all --label git-loopy-continuation --limit 100 --json number,state,url,comments" \
+    '[{
+      command: $command,
+      exit_code: 1,
+      stdout: "",
+      stderr: "carrier discovery unavailable"
+    }]' >"$github_script"
+  : >"$github_log"
+
+  stdout_path="$tmp/reconcile-failure.stdout"
+  stderr_path="$tmp/reconcile-failure.stderr"
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation reconcile \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 1 ]] ||
+    fail "reconcile GitHub failure exit: expected 1, got $status"
+  jq -e '
+    .ok == false
+    and .operation == "reconcile"
+    and .error.code == "github_error"
+  ' "$stdout_path" >/dev/null ||
+    fail "reconcile GitHub failure did not return a typed error"
+}
+
+run_github_failure_probes
+
+run_tracer_scope_rejection_probes() {
+  local case
+  while IFS= read -r case; do
+    local id request github_script github_state github_log
+    id="$(jq -r '.id' <<<"$case")"
+    request="$(
+      jq -c \
+        --argjson case "$case" '
+        def pointer:
+          ltrimstr("/")
+          | split("/")
+          | map(gsub("~1"; "/") | gsub("~0"; "~"))
+          | map(if test("^(0|[1-9][0-9]*)$") then tonumber else . end);
+        .completion_records.publish_request_templates[$case.template]
+        | reduce $case.patch[] as $operation (.;
+            if $operation.op == "remove" then
+              delpaths([$operation.path | pointer])
+            else
+              setpath($operation.path | pointer; $operation.value)
+            end
+          )
+      ' "$fixture"
+    )"
+    github_script="$tmp/$id-rejection-github-script.json"
+    github_state="$tmp/$id-rejection-github-state"
+    github_log="$tmp/$id-rejection-github-calls"
+    printf '[]\n' >"$github_script"
+    : >"$github_log"
+
+    local stdout_path="$tmp/$id-rejection.stdout"
+    local stderr_path="$tmp/$id-rejection.stderr"
+    local status
+    set +e
+    printf '%s' "$request" |
+      PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+      GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+      "$bash_bin" "$entrypoint" continuation publish \
+        >"$stdout_path" 2>"$stderr_path"
+    status="${PIPESTATUS[1]}"
+    set -e
+
+    [[ "$status" == 1 ]] ||
+      fail "$id tracer-scope rejection exit: expected 1, got $status"
+    jq -e '
+      .ok == false
+      and .operation == "publish"
+      and .error.code == "invalid_request"
+    ' "$stdout_path" >/dev/null ||
+      fail "$id was not rejected as outside the shell tracer contract"
+    [[ ! -s "$github_log" ]] ||
+      fail "$id mutated GitHub before tracer-scope rejection"
+  done < <(
+    jq -c '
+      .completion_records.semantic_rejections[]
+      | select(.id == "manual-afk"
+          or .id == "hard-hitl-afk"
+          or .id == "interaction-owner-mismatch")
+    ' "$fixture"
+  )
+}
+
+run_tracer_scope_rejection_probes
+
 while IFS= read -r scenario; do
   id="$(jq -r '.id' <<<"$scenario")"
   mapfile -d '' -t arguments < <(jq -j '.arguments[] + "\u0000"' <<<"$scenario")
@@ -193,6 +349,77 @@ done < <(
   jq -c '
     .scenarios[]
     | select((.distributions // ["shell"]) | index("shell"))
+  ' "$fixture"
+)
+
+while IFS= read -r workflow; do
+  id="$(jq -r '.id' <<<"$workflow")"
+  github_log="$tmp/$id.github"
+  github_script="$tmp/$id-github-script.json"
+  github_state="$tmp/$id-github-state"
+  jq -c '.github_script' <<<"$workflow" >"$github_script"
+  : >"$github_log"
+  rm -f "$github_state"
+
+  while IFS= read -r command; do
+    mapfile -d '' -t arguments < <(
+      jq -j '.arguments[] + "\u0000"' <<<"$command"
+    )
+    request_content="$(jq -c '.request.json' <<<"$command")"
+    stdout_path="$tmp/$id.stdout"
+    stderr_path="$tmp/$id.stderr"
+    set +e
+    printf '%s' "$request_content" |
+      PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+      GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+      "$bash_bin" "$entrypoint" "${arguments[@]}" \
+        >"$stdout_path" 2>"$stderr_path"
+    status="${PIPESTATUS[1]}"
+    set -e
+
+    expected_status="$(jq -r '.expected.exit_code' <<<"$command")"
+    [[ "$status" == "$expected_status" ]] ||
+      fail "$id exit: expected $expected_status, got $status"
+    expected_json="$(jq -c '.expected.stdout' <<<"$command")"
+    actual_json="$(jq -c . "$stdout_path")" ||
+      fail "$id stdout is not one JSON object"
+    if jq -e '.expected | has("stdout_exact")' <<<"$command" >/dev/null; then
+      expected_stdout="$(jq -r '.expected.stdout_exact' <<<"$command")"
+      [[ "$(<"$stdout_path")" == "$expected_stdout" ]] ||
+        fail "$id exact stdout mismatch"
+      [[ "$(wc -l <"$stdout_path" | tr -d ' ')" == "1" ]] ||
+        fail "$id exact stdout is not one newline-terminated line"
+    else
+      jq -e --argjson expected "$expected_json" \
+        '. == $expected' "$stdout_path" >/dev/null ||
+        fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
+    fi
+    stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$command")"
+    if [[ -z "$stderr_needle" ]]; then
+      [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+    else
+      grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
+        fail "$id stderr does not contain: $stderr_needle"
+    fi
+  done < <(jq -c '.commands[]' <<<"$workflow")
+
+  actual_github_calls="$(
+    jq -Rsc 'split("\n") | map(select(length > 0))' <"$github_log"
+  )"
+  expected_github_calls="$(jq -c '.expected_github_calls' <<<"$workflow")"
+  [[ "$actual_github_calls" == "$expected_github_calls" ]] ||
+    fail "$id scripted GitHub calls"$'\n'"expected: $expected_github_calls"$'\n'"actual:   $actual_github_calls"
+  consumed=0
+  [[ ! -f "$github_state" ]] || consumed="$(<"$github_state")"
+  expected_steps="$(jq '.github_script | length' <<<"$workflow")"
+  [[ "$consumed" == "$expected_steps" ]] ||
+    fail "$id did not consume every scripted GitHub call"
+done < <(
+  jq -c '
+    .workflows[]
+    | select((.distributions // []) | index("shell"))
   ' "$fixture"
 )
 
