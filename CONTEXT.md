@@ -96,10 +96,10 @@ The versioned semantic operation a **Continuation action** intends to perform wi
 a **Workflow**. It is broader than the wording of one **Instruction** and may be
 performed through different compatible representations.
 The current vocabulary is **Chart workstream**, **Resolve decision**, **Research fact**,
-**Prototype decision**, **Publish spec**, **Decompose spec**, **Triage item**,
-**Provide information**, **Implement ticket**, **Address review findings**,
-**Review head**, **Resolve conflict**, **Publish head**, **Review and merge PR**, and
-**Close parent**.
+**Prototype evidence**, **Publish spec**, **Decompose spec**, **Triage item**,
+**Provide information**, **Perform manual validation**, **Authorize operation**,
+**Implement ticket**, **Address review findings**, **Review head**, **Resolve conflict**,
+**Publish head**, **Review and merge PR**, and **Close parent**.
 _Avoid_: prompt, display label, Producer name.
 
 **Action occurrence**:
@@ -117,9 +117,9 @@ _Avoid_: record id, content hash, execution id.
 
 **Action semantics**:
 The behaviorally significant content carried under one **Action identity**: its
-**Instruction**, **Prerequisites**, interaction classification, and completion
-condition. Different **Basis** or **Producer** provenance may support equivalent
-Action semantics.
+**Instruction**, **Prerequisites**, interaction classification and classification
+evidence, and completion condition. Different **Basis** or **Producer** provenance
+may support equivalent Action semantics.
 _Avoid_: presentation, provenance, observation.
 
 **Instruction**:
@@ -213,22 +213,38 @@ replacement **Action identity** when superseded. It is not a live Action or a ce
 tombstone.
 
 **HITL-required**:
-An action classification meaning human judgment, authority, consent, missing intent,
-live interaction, or subjective or physical validation is inherent to the
-**Continuation action**. Tooling availability cannot make it **AFK-eligible**.
+An intrinsic action classification, backed by a typed human-boundary reason, meaning
+completion requires a human to supply intent or information, exercise judgment,
+authority, or consent, authorize access, or perform subjective or physical validation.
+Missing AFK evidence is not itself a human boundary.
 
 **AFK-safe**:
-An action classification published by its **Transition owner** from versioned
-workflow semantics, meaning no human judgment or authority is inherent to the
-**Continuation action**; all human-owned decisions and inputs are durably fixed and
-completion is durably evaluable. A Consumer or Performer may narrow eligibility but
-cannot infer or upgrade this classification.
+An intrinsic action classification positively attested by its **Transition owner**
+through an **AFK safety case**, meaning every permitted completion path is unattended,
+all human-owned decisions and inputs are durably fixed, and completion is objectively
+evaluable. A Consumer or Performer may narrow but cannot infer or upgrade it.
+
+**AFK safety case**:
+The versioned, evidence-backed **Action semantics** that justify **AFK-safe** by
+declaring bounded effects, typed safety assumptions, **Eligibility requirements**, an
+objective completion condition, and exceptional **HITL triggers**. It is neither
+current Performer eligibility nor Run authorization.
+
+**HITL trigger**:
+A typed exceptional condition in an **AFK safety case** that revokes unattended
+eligibility when detected. A foreseeable normal human branch invalidates
+**AFK-safe** rather than serving as a trigger.
+
+**Safety-case violation**:
+Evidence that an **AFK safety case** omitted or contradicted an inherent human
+boundary or safety requirement. It quarantines the smallest justified scope until the
+**Transition owner** revises or replaces the Action; a Performer cannot reclassify it.
 
 **AFK-eligible**:
-A positively verified contextual relationship between a **Ready**, **AFK-safe**
-action and a specific **Performer** that has the required capability, access, and
-policy permission. Missing, ambiguous, or stale evidence means the action is not
-AFK-eligible.
+A point-in-time, positively verified relationship between a **Ready**, **AFK-safe**
+action and a specific **Performer** whose current **Performer posture** satisfies every
+**Eligibility requirement**. It means the Performer could safely act, not that a Run
+is authorized to select the Action.
 
 **Eligibility requirement**:
 A versioned, machine-evaluable capability, access, policy, or completion-evaluation
@@ -236,19 +252,36 @@ requirement an **AFK-safe** action declares for matching to a **Performer**.
 _Avoid_: prompt hint, inferred requirement.
 
 **Performer posture**:
-The positively observed capability, access, and policy facts used to decide whether
-one **Performer** satisfies an action's **Eligibility requirements**.
+The current, non-secret capability, noninteractive access, and policy facts used to
+decide whether one **Performer** satisfies an action's **Eligibility requirements**.
 _Avoid_: agent confidence, generic capability.
 
+**Automation scope**:
+The preauthorized, Run-frozen boundary containing coverage—the Workstreams and Targets
+the Run observes—and execution grants—the Action and effect scopes it may perform.
+It may narrow on revocation but cannot expand during the Run.
+
+**Automation frontier**:
+The fixed set of in-coverage **Action identities** and semantic fingerprints captured
+by a Run's initial verified **Reconciliation**. Known Actions may change Readiness or
+eligibility; new or semantically changed Actions are report-only for that Run.
+
+**Automation-selectable**:
+The contextual state of an **AFK-eligible** Action whose identity and semantic
+fingerprint belong to the Run's **Automation frontier** and whose effects are covered
+by its **Automation scope** execution grants. It does not establish concurrency.
+
 **Continuation dispatch**:
-One Orchestrator authorization to perform exactly one selected, **AFK-eligible**
-**Action occurrence**. Its completion never authorizes a successor action.
+One bounded Orchestrator authorization to perform exactly one
+**Automation-selectable** **Action occurrence** under one semantic fingerprint and
+**AFK safety case**. A Run may issue multiple dispatches only from its fixed
+**Automation frontier**; a dispatch never authorizes a successor Action.
 _Avoid_: autonomous chain, workflow run.
 
-**Orchestrator stop**:
-An explicit, typed result that ends a **Continuation dispatch** without authorizing
-another action and explains the human boundary, eligibility failure, waiting state,
-guidance uncertainty, or dispatch limit. It is not a **Workstream outcome**.
+**Automation stop**:
+An explicit, typed Run result explaining why no further unattended progress can be
+selected from its **Automation frontier**. It is not a **Workstream outcome**, Action
+retirement, **Strike**, or generic execution failure.
 _Avoid_: completion, no work.
 
 **Workstream outcome**:
@@ -282,8 +315,8 @@ _Avoid_: handoff action, shared handoff record, copied handoff.
 
 **Run**:
 One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
-**Iterations** and/or parallel **Lane contributions** until the work is exhausted or
-the strike limit is reached.
+**Iterations** and/or parallel **Lane contributions** until its authorized work is
+exhausted, an **Automation stop** occurs, or the strike limit is reached.
 
 **Skill**:
 A named capability package whose instructions and resources a **Performer** may load
@@ -671,6 +704,16 @@ _Avoid_: independent, parallelizable (as the label name).
 - A **Continuation action** has an **Instruction**, durable **Basis** and Producer
   provenance, zero or more **Prerequisites**, an interaction classification, and a
   durably evaluable completion condition.
+- Interaction classification evidence is part of **Action semantics**. **AFK-safe**
+  requires an **AFK safety case**; **HITL-required** requires a typed human boundary
+  and a durable human-resolution condition. Uncertainty is not a fallback HITL label.
+- **Chart workstream**, **Resolve decision**, **Provide information**, **Perform manual
+  validation**, **Authorize operation**, and **Review and merge PR** are always
+  **HITL-required**. **Prototype evidence** may establish objective evidence but never
+  resolves the human decision it informs; other Action kinds are classified per Action.
+- A `manual` **Instruction** is always **HITL-required**. A `skill` or `command`
+  Instruction is only a candidate for **AFK-safe** and must expose a compatible
+  noninteractive behavior.
 - One **Action identity** denotes one **Action occurrence**. Equivalent live claims
   collapse and combine their **Basis** and **Producer** provenance; different live
   **Action semantics** under that identity form a **Continuation conflict**.
@@ -700,8 +743,27 @@ _Avoid_: independent, parallelizable (as the label name).
   Its affected dependents are quarantined while independently verified guidance remains
   usable.
 - An action is **AFK-eligible** for a **Performer** only when it is **Ready** and
-  **AFK-safe**, and the Performer has the required capability, access, and policy
-  permission.
+  **AFK-safe**, and fresh positive **Performer posture** evidence satisfies every
+  declared **Eligibility requirement**. Eligibility is rechecked before consequential
+  effects and never implies Run authorization.
+- An **Automation scope** separates observed coverage from execution grants and is
+  frozen before dispatch. Revocations may narrow it immediately; later grants do not
+  expand the current Run.
+- A Run's **Automation frontier** freezes all current in-coverage Action identities and
+  semantic fingerprints. Existing Blocked Actions may become
+  **Automation-selectable** as facts change; new Actions and changed semantics remain
+  report-only until a later authorized Run.
+- Each **Continuation dispatch** binds exactly one Action. A Run may reconcile and
+  dispatch multiple independent members of its fixed frontier, but it never adds a
+  newly produced successor, and AFK eligibility never implies **Parallel-safe**.
+- A detected human boundary never becomes an implicit interactive prompt. Authorized
+  partial effects may remain, but the Action stays unmet and a **Safety-case violation**
+  requires Transition-owner correction; independently verified frontier work may
+  continue.
+- An **Automation stop** is a Run-level explanation, not a **Strike** or Workstream
+  disposition. Only verified terminal outcomes for every Workstream in closed coverage
+  permit completion; a drained frontier, HITL boundary, missing grant, ineligible
+  Performer, Blocker, or guidance fault leaves nonterminal Workstreams active.
 - **Continuation guidance** contains current unmet actions and explicit
   **Workstream outcomes**, not execution history. A **Continuation view** projects
   that guidance for one Consumer without turning display order into dependency.
