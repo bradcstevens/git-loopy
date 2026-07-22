@@ -513,7 +513,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     skills_sub = skills.add_subparsers(
         dest="skills_command",
         required=True,
-        metavar="{list}",
+        metavar="{list,edit}",
     )
     skills_sub.add_parser(
         "list",
@@ -523,6 +523,16 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Required status, source, canonical name, and description."
         ),
     )
+    skills_edit = skills_sub.add_parser(
+        "edit",
+        help="Interactively edit a project or global Skill policy.",
+        description=(
+            "Search and toggle normalized Skill winners, validate Required and "
+            "project-tracking rules, then atomically save one closed-world policy. "
+            "This command never changes Copilot settings."
+        ),
+    )
+    _add_scope_flags(skills_edit)
 
     config = sub.add_parser(
         "config",
@@ -727,6 +737,12 @@ def _run_skills(args: argparse.Namespace) -> int:
         return 1
     if args.skills_command == "list":
         return skillscmd.run_skills_list(repo_root=repo_root, env=os.environ)
+    if args.skills_command == "edit":
+        return skillscmd.run_skills_edit(
+            scope=args.scope or "project",
+            repo_root=repo_root,
+            env=os.environ,
+        )
     raise AssertionError(f"unhandled skills command: {args.skills_command}")
 
 

@@ -62,6 +62,15 @@ def test_subcommand_parser_parses_skills_list() -> None:
     assert args.skills_command == "list"
 
 
+def test_subcommand_parser_parses_skills_edit_scope() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["skills", "edit", "--global"]
+    )
+    assert args.command == "skills"
+    assert args.skills_command == "edit"
+    assert args.scope == "global"
+
+
 def test_subcommand_parser_config_requires_an_op() -> None:
     """Bare ``config`` (no op) is an argparse error, not a fall-through run."""
     with pytest.raises(SystemExit):
@@ -199,6 +208,28 @@ def test_main_skills_list_routes_to_handler_no_loop(
     assert cli_module.main(["skills", "list"]) == 0
     assert seen == ["list"]
     assert captured == []
+
+
+def test_skills_edit_dispatches_selected_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from git_loopy import skillscmd
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    seen: list[tuple[str, Path]] = []
+
+    def fake_edit(**kwargs: Any) -> int:
+        seen.append((kwargs["scope"], kwargs["repo_root"]))
+        return 0
+
+    monkeypatch.setattr(skillscmd, "run_skills_edit", fake_edit)
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["skills", "edit", "--global"]
+    )
+
+    assert cli_module._run_skills(args) == 0
+    assert seen == [("global", tmp_path)]
 
 
 def test_main_config_bad_op_errors_no_loop(

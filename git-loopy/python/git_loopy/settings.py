@@ -30,6 +30,9 @@ Design notes:
 
 from __future__ import annotations
 
+import os
+import secrets
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +51,7 @@ __all__ = [
     "load_configs",
     "dump_config_toml",
     "write_config",
+    "write_config_atomic",
     "table_str",
     "table_bool",
     "table_int",
@@ -330,6 +334,39 @@ def write_config(
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dump_config_toml(values, header=header), encoding="utf-8")
+
+
+def write_config_atomic(
+    path: Path,
+    values: Mapping[str, object],
+    *,
+    header: Sequence[str] = CONFIG_HEADER,
+) -> None:
+    """Atomically replace one Config after fully serializing it beside the target."""
+    content = dump_config_toml(values, header=header)
+    target = path.resolve(strict=False) if path.is_symlink() else path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        existing_mode = None
+    temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o666,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            if existing_mode is not None:
+                os.fchmod(handle.fileno(), existing_mode)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 # ---------------------------------------------------------------------------

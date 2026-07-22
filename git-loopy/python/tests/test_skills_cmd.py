@@ -2,12 +2,352 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any
 
 from git_loopy import settings
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
-from git_loopy.skillscmd import run_skills_list
+from git_loopy.skillscmd import (
+    SkillSelectionModel,
+    SkillSelectionResult,
+    SkillSelectionRow,
+    run_plain_skill_picker,
+    run_skills_edit,
+    run_skills_list,
+)
+from tests.fakes import FakeGitClient
+
+
+def test_skill_selection_filter_preserves_hidden_selections() -> None:
+    model = SkillSelectionModel(
+        rows=(
+            SkillSelectionRow(name="alpha", source="builtin"),
+            SkillSelectionRow(name="beta", source="personal"),
+        ),
+        enabled=("alpha", "beta"),
+    )
+
+    filtered = model.filter("bet").toggle("beta")
+
+    assert [row.name for row in filtered.visible_rows] == ["beta"]
+    assert filtered.enabled == ("alpha",)
+
+
+def test_plain_picker_searches_without_losing_selection_and_locks_invalid_rows() -> None:
+    model = SkillSelectionModel(
+        rows=(
+            SkillSelectionRow(
+                name="alpha",
+                source="packaged",
+                required=True,
+                description="Required workflow",
+            ),
+            SkillSelectionRow(name="beta", source="personal"),
+            SkillSelectionRow(
+                name="project-local",
+                source="project",
+                blocked_reason="not git-tracked",
+            ),
+        ),
+        enabled=("alpha", "beta"),
+    )
+    answers = iter(("alp", "1", "project", "1", "bet", "1", "done", "yes"))
+    output: list[str] = []
+
+    result = run_plain_skill_picker(
+        model,
+        input_fn=lambda _prompt: next(answers),
+        output_fn=output.append,
+    )
+
+    assert result is not None
+    assert result.enabled == ("alpha",)
+    rendered = "\n".join(output)
+    assert "Required" in rendered
+    assert "not git-tracked" in rendered
+
+
+def test_skills_edit_first_global_policy_seeds_from_copilot_and_packaged_fallback(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.global_config_path(env)
+    settings.write_config(config_path, {"model": "gpt-5.4"})
+    catalog = SkillCatalog(
+        winners={
+            "alpha": SkillCatalogWinner(
+                "alpha", "builtin", copilot_enabled=True
+            ),
+            "beta": SkillCatalogWinner(
+                "beta", "personal", copilot_enabled=False
+            ),
+            "fallback": SkillCatalogWinner("fallback", "packaged"),
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(
+        model: SkillSelectionModel,
+        **kwargs: object,
+    ) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=("alpha",),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert seen[0].enabled == ("alpha", "fallback")
+    assert tomllib.loads(config_path.read_text(encoding="utf-8")) == {
+        "model": "gpt-5.4",
+        "enabled_skills": ["alpha", "fallback"],
+    }
+
+
+def test_skills_edit_new_project_policy_inherits_global_without_catalog_additions(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.global_config_path(env),
+        {"enabled_skills": ["inherited"]},
+    )
+    catalog = SkillCatalog(
+        winners={
+            "copilot-new": SkillCatalogWinner(
+                "copilot-new", "builtin", copilot_enabled=True
+            ),
+            "inherited": SkillCatalogWinner(
+                "inherited", "personal", copilot_enabled=False
+            ),
+            "packaged-new": SkillCatalogWinner("packaged-new", "packaged"),
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert seen[0].enabled == ("inherited",)
+    assert settings.load_config_table(settings.project_config_path(tmp_path))[
+        "enabled_skills"
+    ] == ["inherited"]
+
+
+def test_skills_edit_rejects_untracked_project_winner_without_writing(
+    tmp_path: Path,
+) -> None:
+    skill_path = tmp_path / ".copilot" / "skills" / "local"
+    catalog = SkillCatalog(
+        winners={
+            "local": SkillCatalogWinner(
+                "local",
+                "project",
+                copilot_enabled=True,
+                project_path=skill_path,
+            )
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    writes: list[tuple[Path, dict[str, object]]] = []
+    errors: list[str] = []
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(("local",))
+
+    result = run_skills_edit(
+        scope="project",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        error_fn=errors.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append((path, dict(table))),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert seen[0].rows[0].blocked_reason == "project Skill is not git-tracked"
+    assert "UntrackedProjectSkills" in errors[0]
+
+
+def test_skills_edit_rejects_picker_result_missing_required_skill(
+    tmp_path: Path,
+) -> None:
+    catalog = SkillCatalog(
+        winners={"required": SkillCatalogWinner("required", "packaged")}
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    writes: list[object] = []
+    errors: list[str] = []
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        error_fn=errors.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=lambda model, **kwargs: SkillSelectionResult(()),
+        git=FakeGitClient(tmp_path),
+        required_skills=("required",),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append((path, table)),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert "MissingRequiredSkills" in errors[0]
+
+
+def test_skills_edit_projects_missing_required_skill_as_blocked_row(
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return SkillCatalog()
+
+    seen: list[SkillSelectionModel] = []
+
+    def cancel(model: SkillSelectionModel, **kwargs: object) -> None:
+        seen.append(model)
+        return None
+
+    run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        error_fn=lambda _message: None,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=cancel,
+        git=FakeGitClient(tmp_path),
+        required_skills=("required",),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert seen[0].rows == (
+        SkillSelectionRow(
+            name="required",
+            source="missing",
+            required=True,
+            blocked_reason="missing from the Skill catalog",
+        ),
+    )
+    assert seen[0].validation_errors == ("required is a Required Skill",)
+
+
+def test_skills_edit_cancellation_writes_nothing(tmp_path: Path) -> None:
+    catalog = SkillCatalog()
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    writes: list[object] = []
+    errors: list[str] = []
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        error_fn=errors.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=lambda model, **kwargs: None,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append((path, table)),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert errors == [
+        "git-loopy: Skill policy edit cancelled; no changes written."
+    ]
 
 
 def test_skills_list_prints_stable_path_free_policy_rows(tmp_path: Path) -> None:

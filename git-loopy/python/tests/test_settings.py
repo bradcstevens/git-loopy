@@ -445,6 +445,51 @@ def test_write_config_creates_scope_dir_and_round_trips(tmp_path: Path) -> None:
     }
 
 
+def test_write_config_atomic_replaces_complete_config_without_temp_artifacts(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "git-loopy" / "config.toml"
+    settings.write_config(target, {"model": "old"})
+    target.chmod(0o640)
+
+    settings.write_config_atomic(
+        target,
+        {"model": "new", "enabled_skills": ["beta", "alpha"]},
+    )
+
+    assert settings.load_config_table(target) == {
+        "model": "new",
+        "enabled_skills": ["alpha", "beta"],
+    }
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_write_config_atomic_preserves_symlinked_config(tmp_path: Path) -> None:
+    target = tmp_path / "dotfiles" / "config.toml"
+    settings.write_config(target, {"model": "old"})
+    link = tmp_path / "git-loopy" / "config.toml"
+    link.parent.mkdir()
+    link.symlink_to(target)
+
+    settings.write_config_atomic(link, {"model": "new"})
+
+    assert link.is_symlink()
+    assert settings.load_config_table(target) == {"model": "new"}
+
+
+def test_write_config_atomic_new_file_uses_normal_config_permissions(
+    tmp_path: Path,
+) -> None:
+    regular = tmp_path / "regular" / "config.toml"
+    atomic = tmp_path / "atomic" / "config.toml"
+    settings.write_config(regular, {"model": "same"})
+
+    settings.write_config_atomic(atomic, {"model": "same"})
+
+    assert atomic.stat().st_mode & 0o777 == regular.stat().st_mode & 0o777
+
+
 def test_settings_module_imports_only_stdlib() -> None:
     """The loader stays stdlib-only (like :mod:`git_loopy.pricing`)."""
     import git_loopy.settings as mod
