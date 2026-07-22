@@ -232,6 +232,13 @@ def test_skills_edit_dispatches_selected_scope(
     assert seen == [("global", tmp_path)]
 
 
+def test_root_help_advertises_skill_policy_inspection_and_editing() -> None:
+    help_text = cli_module.build_parser().format_help()
+
+    assert "skills list" in help_text
+    assert "skills edit" in help_text
+
+
 def test_main_config_bad_op_errors_no_loop(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
