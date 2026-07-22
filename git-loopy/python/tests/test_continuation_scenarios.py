@@ -119,6 +119,11 @@ def test_python_native_continuation_scenario(
     stdin = ""
     if request is not None:
         content = request.get("raw")
+        if content is None and "raw_segments" in request:
+            content = "".join(
+                segment["text"] * int(segment.get("repeat", 1))
+                for segment in request["raw_segments"]
+            )
         if content is None and "json" in request:
             content = json.dumps(request["json"], separators=(",", ":"))
         if request["source"] == "file":
@@ -153,12 +158,16 @@ def test_python_native_continuation_scenario(
     captured = capsys.readouterr()
     expected = scenario["expected"]
     assert exit_code == expected["exit_code"], captured.err
-    if expected["stdout"] is None:
+    if "stdout_exact" in expected:
+        assert captured.out == expected["stdout_exact"]
+    elif expected["stdout"] is None:
         assert captured.out == ""
     else:
         assert json.loads(captured.out) == expected["stdout"]
         assert len(captured.out.splitlines()) == 1
-    if expected["stderr_contains"] is None:
+    if "stderr_exact" in expected:
+        assert captured.err == expected["stderr_exact"]
+    elif expected["stderr_contains"] is None:
         assert captured.err == ""
     else:
         assert expected["stderr_contains"].lower() in captured.err.lower()

@@ -329,6 +329,26 @@
       }
     },
     {
+      "id": "deeply-nested-request-is-rejected-before-json-recursion",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "raw_segments": [
+          {"text": "[", "repeat": 2048},
+          {"text": "0"},
+          {"text": "]", "repeat": 2048}
+        ]
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request exceeds maximum nesting depth 16\"}}\n",
+        "stderr_exact": "git-loopy continuation: request exceeds maximum nesting depth 16\n",
+        "github_calls": []
+      }
+    },
+    {
       "id": "request-must-be-utf8",
       "arguments": [
         "continuation",

@@ -179,6 +179,31 @@ def _reject_float(_value: str) -> Any:
     raise ContinuationError("request must not contain floating-point values")
 
 
+def _check_json_nesting(value: str, *, name: str) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_DEPTH:
+                raise ContinuationError(
+                    f"{name} exceeds maximum nesting depth {_MAX_DEPTH}"
+                )
+        elif character in "]}":
+            depth = max(0, depth - 1)
+
+
 def _portable_json(value: Any, *, name: str, depth: int = 1) -> None:
     if depth > _MAX_DEPTH:
         raise ContinuationError(f"{name} exceeds maximum nesting depth {_MAX_DEPTH}")
@@ -246,13 +271,18 @@ def _read_request(input_path: str | None, stdin: TextIO) -> dict[str, Any]:
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ContinuationError("request must be UTF-8 without a BOM")
     try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("request must be one UTF-8 JSON object") from exc
+    _check_json_nesting(text, name="request")
+    try:
         value = json.loads(
-            raw.decode("utf-8"),
+            text,
             object_pairs_hook=_unique_object,
             parse_float=_reject_float,
             parse_constant=_reject_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ValueError("request must be one UTF-8 JSON object") from exc
     if not isinstance(value, dict):
         raise ValueError("request must be one UTF-8 JSON object")
@@ -972,6 +1002,7 @@ def _parse_record(comment: ContinuationComment) -> dict[str, Any] | None:
     if not comment.body.startswith(prefix) or not comment.body.endswith(suffix):
         return None
     raw = comment.body[len(prefix) : -len(suffix)]
+    _check_json_nesting(raw, name=f"Producer revision comment {comment.id}")
     try:
         record = json.loads(
             raw,
@@ -979,7 +1010,7 @@ def _parse_record(comment: ContinuationComment) -> dict[str, Any] | None:
             parse_float=_reject_float,
             parse_constant=_reject_float,
         )
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ContinuationError(
             f"Producer revision comment {comment.id} contains invalid JSON"
         ) from exc
