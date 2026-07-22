@@ -213,17 +213,22 @@ replacement **Action identity** when superseded. It is not a live Action or a ce
 tombstone.
 
 **HITL-required**:
-An action classification meaning human judgment, authority, consent, or interaction
-is inherent to the **Continuation action**. Tooling availability cannot make it
-**AFK-eligible**.
+An action classification meaning human judgment, authority, consent, missing intent,
+live interaction, or subjective or physical validation is inherent to the
+**Continuation action**. Tooling availability cannot make it **AFK-eligible**.
 
 **AFK-safe**:
-An action classification meaning no human judgment or authority is inherent to the
-**Continuation action**, so it may be considered for unattended performance.
+An action classification published by its **Transition owner** from versioned
+workflow semantics, meaning no human judgment or authority is inherent to the
+**Continuation action**; all human-owned decisions and inputs are durably fixed and
+completion is durably evaluable. A Consumer or Performer may narrow eligibility but
+cannot infer or upgrade this classification.
 
 **AFK-eligible**:
-The contextual relationship between a **Ready**, **AFK-safe** action and a specific
-**Performer** that has the required capability, access, and policy permission.
+A positively verified contextual relationship between a **Ready**, **AFK-safe**
+action and a specific **Performer** that has the required capability, access, and
+policy permission. Missing, ambiguous, or stale evidence means the action is not
+AFK-eligible.
 
 **Workstream outcome**:
 An affirmative, durably evidenced terminal disposition of a **Workstream**.
@@ -243,6 +248,14 @@ _Avoid_: automatic cascade close, final child side effect.
 Session-specific context for continuing one active thread. It may support a
 **Continuation action**, but is neither that action nor project-level
 **Continuation guidance**.
+
+**Handoff reference**:
+A non-authoritative contextual pointer attached only when one current
+**Action occurrence** resumes the exact active thread or **Target** described by a
+**Handoff**. It is not **Action semantics**, **Basis**, a **Prerequisite**, completion
+evidence, or a **Producer** contribution. Its availability is an **Observation** and
+cannot change **Readiness** or recreate an Action removed by **Reconciliation**.
+_Avoid_: handoff action, shared handoff record, copied handoff.
 
 ### The run loop
 
