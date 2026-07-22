@@ -1076,7 +1076,7 @@
       }
     },
     {
-      "id": "capabilities-shell-powershell",
+      "id": "capabilities-powershell",
       "distributions": ["powershell"],
       "arguments": ["continuation", "capabilities"],
       "request": null,
@@ -1092,13 +1092,13 @@
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
-                "operations": []
+                "operations": ["publish", "reconcile"]
               }
             },
             "operations": {
               "capabilities": true,
-              "publish": false,
-              "reconcile": false,
+              "publish": true,
+              "reconcile": true,
               "record-dispatch-result": false,
               "repair-index": false
             },
@@ -1184,11 +1184,11 @@
           "ok": false,
           "operation": "publish",
           "error": {
-            "code": "unsupported_operation",
-            "message": "publish is not supported by this distribution"
+            "code": "invalid_request",
+            "message": "request is missing required field: completion"
           }
         },
-        "stderr_contains": "publish is not supported",
+        "stderr_contains": "request is missing required field: completion",
         "github_calls": []
       }
     },
@@ -1231,10 +1231,10 @@
           "operation": "reconcile",
           "error": {
             "code": "unsupported_operation",
-            "message": "reconcile is not supported by this distribution"
+            "message": "terminal rendering is not supported by this distribution"
           }
         },
-        "stderr_contains": "reconcile is not supported",
+        "stderr_contains": "terminal rendering is not supported",
         "github_calls": []
       }
     },
@@ -1336,7 +1336,7 @@
     },
     {
       "id": "duplicate-object-key-is-rejected-before-publication",
-      "distributions": ["python", "shell"],
+      "distributions": ["python", "shell", "powershell"],
       "arguments": ["continuation", "publish"],
       "request": {
         "source": "stdin",
@@ -1680,7 +1680,7 @@
   "workflows": [
     {
       "id": "trusted-planning-action",
-      "distributions": ["python", "shell"],
+      "distributions": ["python", "shell", "powershell"],
       "github_script": [
         {
           "command": "api repos/octo/example/issues/comments/7001",

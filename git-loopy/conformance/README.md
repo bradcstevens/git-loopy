@@ -40,7 +40,9 @@ RFC 6902 `add`, `remove`, and `replace` patches for invalid completion cases.
 Adapters may materialize those generic fixture records but must not recreate the
 semantic dispatch they describe. The shell adapter drives those same portable
 JSON, completion-envelope, vocabulary, fingerprint, receipt, and atomic-failure
-records through its public native `publish` command.
+records through its public native `publish` command. The PowerShell adapter
+drives the shared trusted publish-to-Reconciliation workflow through its public
+native command and deterministic scripted GitHub transport.
 
 A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references

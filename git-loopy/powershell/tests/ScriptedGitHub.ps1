@@ -75,7 +75,12 @@ elseif ($Step.Contains("expected_stdin")) {
 [IO.File]::WriteAllText($StatePath, [string]($Index + 1), $Utf8)
 if ($Step.Contains("stdout_json")) {
     [Console]::Out.WriteLine(
-        ($Step["stdout_json"] | ConvertTo-Json -Compress -Depth 50)
+        (
+            ConvertTo-Json `
+                -InputObject $Step["stdout_json"] `
+                -Compress `
+                -Depth 50
+        )
     )
 }
 else {

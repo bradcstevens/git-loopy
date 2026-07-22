@@ -136,6 +136,21 @@ git-loopy --issue-source prds
 `pwsh -NoLogo -NoProfile -File /path/to/git-loopy/powershell/git-loopy.ps1`,
 passing the same arguments after the file path.)
 
+### Native Continuation tracer
+
+The public `continuation` command currently supports the trusted one-Action
+`publish` and read-only `reconcile` tracer:
+
+```powershell
+git-loopy continuation capabilities
+git-loopy continuation publish --input completion.json
+git-loopy continuation reconcile --input reconciliation.json
+```
+
+The capability manifest is authoritative. Continuation remains off by default;
+terminal rendering, Runner modes, Dispatch recording, index repair, and
+concurrent Dispatch are not advertised by this distribution.
+
 ---
 
 ## Configuration surface (phase 1)
