@@ -525,6 +525,33 @@ def test_has_untracked_raises_outside_repo(tmp_path: Path) -> None:
         SubprocessGitClient(tmp_path).has_untracked()
 
 
+def test_is_tracked_requires_versioned_skill_contents(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    skill_path = tmp_path / ".copilot" / "skills" / "project"
+    skill_path.mkdir(parents=True)
+    _commit(
+        tmp_path,
+        "track skill",
+        file_name=".copilot/skills/project/SKILL.md",
+    )
+    client = SubprocessGitClient(tmp_path)
+
+    assert client.is_tracked(skill_path) is True
+
+    (skill_path / "script.py").write_text("print('untracked')")
+    assert client.is_tracked(skill_path) is False
+    (skill_path / "script.py").unlink()
+    _commit(
+        tmp_path,
+        "ignore local skill content",
+        file_name=".gitignore",
+        content=".copilot/skills/project/private.py\n",
+    )
+    (skill_path / "private.py").write_text("print('ignored but runtime-visible')")
+    assert client.is_tracked(skill_path) is False
+    assert client.is_tracked(tmp_path.parent / "outside") is False
+
+
 def test_add_all_stages_modification_and_untracked(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init", file_name="a.txt", content="v1")

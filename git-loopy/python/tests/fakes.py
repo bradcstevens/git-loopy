@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
 from git_loopy.gh import GhError, Issue, PullRequest, Repo
@@ -71,6 +71,7 @@ class FakeGitClient:
         push_error: GitError | None = None,
         sha_prefix: str = "face",
         merge_conflicts: Sequence[int] | None = None,
+        tracked_paths: Iterable[Path | str] = (),
     ) -> None:
         self._root = Path(root)
         self._sha_counter = 0
@@ -88,6 +89,11 @@ class FakeGitClient:
         # Test-controlled worktree state (read by is_dirty / has_untracked).
         self.dirty = dirty
         self.untracked = untracked
+        self._tracked_paths = frozenset(
+            relative
+            for path in tracked_paths
+            if (relative := self._relative_path(path)) is not None
+        )
         self.branch = branch
         # Injected failures (None = the happy path).
         self.commit_error = commit_error
@@ -147,6 +153,15 @@ class FakeGitClient:
                 return i
         raise GitError(["git", "rev-parse", sha], 128, f"bad revision {sha!r}")
 
+    def _relative_path(self, path: Path | str) -> Path | None:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            return candidate
+        try:
+            return candidate.relative_to(self._root)
+        except ValueError:
+            return None
+
     # -- GitClient mechanics ----------------------------------------------
 
     def head_sha(self) -> str:
@@ -159,6 +174,10 @@ class FakeGitClient:
 
     def has_untracked(self) -> bool:
         return self.untracked
+
+    def is_tracked(self, path: Path | str) -> bool:
+        relative = self._relative_path(path)
+        return relative is not None and relative in self._tracked_paths
 
     def add_all(self) -> None:
         self.add_all_calls += 1
@@ -230,6 +249,7 @@ class FakeGitClient:
             commits=list(self._log),
             branch=branch,
             sha_prefix=f"wt{self._worktree_seq}",
+            tracked_paths=self._tracked_paths,
         )
         self._worktrees[wt_path] = child
         self._branches[branch] = child

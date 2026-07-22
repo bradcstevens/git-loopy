@@ -294,6 +294,10 @@ class GitClient(Protocol):
         """Return ``True`` if the tree has any untracked, non-ignored file."""
         ...
 
+    def is_tracked(self, path: Path | str) -> bool:
+        """Return whether ``path`` contains tracked files and no untracked files."""
+        ...
+
     def add_all(self) -> None:
         """Stage every change in the worktree (``git add -A``)."""
         ...
@@ -525,6 +529,26 @@ class SubprocessGitClient:
         """
         out = _run(["ls-files", "--others", "--exclude-standard"], cwd=self._root)
         return bool(out.strip())
+
+    def is_tracked(self, path: Path | str) -> bool:
+        """Return whether a repository path is completely represented in git."""
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self._root / candidate
+        try:
+            relative = candidate.resolve().relative_to(self._root.resolve())
+        except ValueError:
+            return False
+
+        pathspec = relative.as_posix()
+        tracked = _run(["ls-files", "--", pathspec], cwd=self._root)
+        if not tracked.strip():
+            return False
+        untracked = _run(
+            ["ls-files", "--others", "--", pathspec],
+            cwd=self._root,
+        )
+        return not untracked.strip()
 
     def add_all(self) -> None:
         """Stage every change in the worktree via ``git add -A``.
