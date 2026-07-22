@@ -262,7 +262,8 @@ def _validate_completion(
         )
     producer = _object(completion.get("producer"), "completion.producer")
     login = _string(producer.get("login"), "completion.producer.login")
-    _string(producer.get("role"), "completion.producer.role")
+    if producer.get("role") != "planning":
+        raise ContinuationError("completion.producer.role must be planning")
     if login not in trusted:
         raise ContinuationError("completion producer is not trusted")
     _issue_locator(

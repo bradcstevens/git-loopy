@@ -162,6 +162,12 @@ function Invoke-Scenario {
 
 try {
     foreach ($Scenario in $Fixture["scenarios"]) {
+        if (
+            $Scenario.Contains("distributions") -and
+            "powershell" -notin @($Scenario["distributions"])
+        ) {
+            continue
+        }
         $Result = Invoke-Scenario -Scenario $Scenario
         $Expected = $Scenario["expected"]
         Assert-True (

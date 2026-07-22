@@ -233,6 +233,82 @@
       }
     },
     {
+      "id": "python-publish-requires-planning-producer",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": ["reviewer"],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {"kind": "issue", "repository": "octo/example", "number": 237},
+              "destination": {
+                "kind": "issue-closed",
+                "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {"login": "reviewer", "role": "review"},
+            "carrier": {"kind": "issue", "repository": "octo/example", "number": 237},
+            "actions": [
+              {
+                "key": "publish-spec",
+                "summary": "Publish the approved Continuation specification",
+                "kind": "Publish spec",
+                "occurrence": "prd-v1",
+                "instruction": {"mode": "skill", "value": "/to-spec 237"},
+                "target": {"kind": "issue", "repository": "octo/example", "number": 239},
+                "basis": [
+                  {"kind": "issue", "repository": "octo/example", "number": 237}
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {"kind": "issue", "repository": "octo/example", "number": 239}
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout": {
+          "ok": false,
+          "operation": "publish",
+          "error": {
+            "code": "invalid_request",
+            "message": "completion.producer.role must be planning"
+          }
+        },
+        "stderr_contains": "completion.producer.role must be planning",
+        "github_calls": []
+      }
+    },
+    {
       "id": "terminal-selection-is-reconcile-only",
       "arguments": ["continuation", "publish", "--terminal"],
       "request": {

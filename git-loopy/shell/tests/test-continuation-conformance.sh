@@ -114,6 +114,11 @@ while IFS= read -r scenario; do
   expected_github_calls="$(jq -c '.expected.github_calls' <<<"$scenario")"
   [[ "$actual_github_calls" == "$expected_github_calls" ]] ||
     fail "$id scripted GitHub calls"$'\n'"expected: $expected_github_calls"$'\n'"actual:   $actual_github_calls"
-done < <(jq -c '.scenarios[]' "$fixture")
+done < <(
+  jq -c '
+    .scenarios[]
+    | select((.distributions // ["shell"]) | index("shell"))
+  ' "$fixture"
+)
 
 printf 'shell Continuation conformance: ok\n'
