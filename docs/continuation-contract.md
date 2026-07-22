@@ -3,7 +3,8 @@
 > The separately versioned, language-neutral contract for Workflow Continuation across the
 > git-loopy Runner family. Domain terms are defined in [`CONTEXT.md`](../CONTEXT.md).
 
-**Continuation contract version:** 1.0  
+**Continuation contract version:** 1.0
+
 **Record format:** 1
 
 The Continuation contract is independent of Wrapper contract 1.2, Event schema 1.1, and the
