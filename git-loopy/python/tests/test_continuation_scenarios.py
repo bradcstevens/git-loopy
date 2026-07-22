@@ -386,9 +386,7 @@ def test_python_publish_accepts_fixture_completion_modes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    records = FIXTURE["completion_records"]
-    request = copy.deepcopy(records["publish_request_templates"][case["template"]])
-    _apply_fixture_patch(request, case["patch"])
+    request = _materialize_publish_case(case)
     github = _RecordingGitHub()
 
     exit_code, stdout, stderr = _publish_output(
@@ -429,23 +427,32 @@ def _apply_fixture_patch(
             if op == "remove":
                 parent.pop(index)
             elif op == "add":
-                parent.insert(index, _fixture_patch_value(operation))
+                parent.insert(index, copy.deepcopy(operation["value"]))
             else:
                 assert op == "replace"
-                parent[index] = _fixture_patch_value(operation)
+                parent[index] = copy.deepcopy(operation["value"])
         elif op == "remove":
             del parent[token]
         else:
             assert op in {"add", "replace"}
-            parent[token] = _fixture_patch_value(operation)
+            parent[token] = copy.deepcopy(operation["value"])
 
 
-def _fixture_patch_value(operation: dict[str, Any]) -> Any:
-    if "value_json_segments" in operation:
-        return json.loads(
-            _materialize_raw_segments(operation["value_json_segments"])
+def _materialize_publish_case(case: dict[str, Any]) -> dict[str, Any]:
+    records = FIXTURE["completion_records"]
+    if "base_case" in case:
+        base_case = next(
+            item
+            for item in records["valid_publish_cases"]
+            if item["id"] == case["base_case"]
         )
-    return copy.deepcopy(operation["value"])
+        request = _materialize_publish_case(base_case)
+    else:
+        request = copy.deepcopy(
+            records["publish_request_templates"][case["template"]]
+        )
+    _apply_fixture_patch(request, case["patch"])
+    return request
 
 
 def _valid_publish_request(case_id: str) -> dict[str, Any]:
@@ -453,11 +460,7 @@ def _valid_publish_request(case_id: str) -> dict[str, Any]:
     valid_case = next(
         case for case in records["valid_publish_cases"] if case["id"] == case_id
     )
-    request = copy.deepcopy(
-        records["publish_request_templates"][valid_case["template"]]
-    )
-    _apply_fixture_patch(request, valid_case["patch"])
-    return request
+    return _materialize_publish_case(valid_case)
 
 
 @pytest.mark.parametrize(
@@ -470,9 +473,7 @@ def test_python_publish_rejects_invalid_completion_atomically(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    records = FIXTURE["completion_records"]
-    request = copy.deepcopy(records["publish_request_templates"][case["template"]])
-    _apply_fixture_patch(request, case["patch"])
+    request = _materialize_publish_case(case)
     github = _RecordingGitHub()
 
     exit_code, stdout, stderr = _publish_output(
@@ -537,31 +538,30 @@ def test_python_reconcile_reports_unsupported_valid_target_without_crashing(
 
 
 @pytest.mark.parametrize(
-    "outcome_kind",
-    FIXTURE["completion_records"]["outcome_kinds"],
+    "case",
+    FIXTURE["completion_records"]["terminal_outcome_cases"],
+    ids=lambda case: case["id"],
 )
 def test_python_publish_accepts_every_pinned_terminal_outcome(
-    outcome_kind: str,
+    case: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    request = _valid_publish_request("shared-terminal")
-    outcome = request["completion"]["outcome"]
-    outcome["kind"] = outcome_kind
-    outcome["destination_satisfied"] = outcome_kind == "complete"
-    if outcome_kind == "superseded":
-        outcome["successor"] = _issue(240)
+    request = _materialize_publish_case(case)
+    github = _RecordingGitHub()
 
-    exit_code, result, stderr = _publish_result(
+    exit_code, stdout, stderr = _publish_output(
         request,
-        _RecordingGitHub(),
+        github,
         monkeypatch,
         capsys,
     )
 
-    assert exit_code == 0
-    assert result["receipt"]["status"] == "committed"
-    assert stderr == ""
+    expected = case["expected"]
+    assert exit_code == expected["exit_code"]
+    assert stdout == expected["stdout_exact"]
+    assert stderr == expected["stderr_exact"]
+    assert github.calls == expected["github_calls"]
 
 
 @pytest.mark.parametrize(
@@ -574,9 +574,42 @@ def test_python_publish_enforces_portable_canonical_json_profile(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    records = FIXTURE["completion_records"]
-    request = copy.deepcopy(records["publish_request_templates"][case["template"]])
-    _apply_fixture_patch(request, case["patch"])
+    request = _materialize_publish_case(case)
+    github = _RecordingGitHub()
+
+    exit_code, stdout, stderr = _publish_output(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    expected = case["expected"]
+    assert exit_code == expected["exit_code"]
+    assert stdout == expected["stdout_exact"]
+    assert stderr == expected["stderr_exact"]
+    assert github.calls == expected["github_calls"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    FIXTURE["completion_records"]["canonical_json_acceptances"],
+    ids=lambda case: case["id"],
+)
+def test_python_publish_accepts_portable_json_boundaries(
+    case: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request = _materialize_publish_case(case)
+    if "canonical_completion_bytes" in case:
+        canonical_completion = json.dumps(
+            request["completion"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        assert len(canonical_completion) == case["canonical_completion_bytes"]
     github = _RecordingGitHub()
 
     exit_code, stdout, stderr = _publish_output(
@@ -668,17 +701,7 @@ def test_python_publish_locks_semantic_fingerprint_cases(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    records = FIXTURE["completion_records"]
-    valid_cases = {
-        valid_case["id"]: valid_case
-        for valid_case in records["valid_publish_cases"]
-    }
-    base_case = valid_cases[case["base_case"]]
-    request = copy.deepcopy(
-        records["publish_request_templates"][base_case["template"]]
-    )
-    _apply_fixture_patch(request, base_case["patch"])
-    _apply_fixture_patch(request, case["patch"])
+    request = _materialize_publish_case(case)
     github = _RecordingGitHub()
 
     exit_code, stdout, stderr = _publish_output(

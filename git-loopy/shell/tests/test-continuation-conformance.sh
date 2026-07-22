@@ -187,43 +187,43 @@ run_github_failure_probes() {
 
 run_github_failure_probes
 
+materialize_publish_case() {
+  local case="$1"
+  jq -c --argjson case "$case" '
+    def pointer:
+      ltrimstr("/")
+      | split("/")
+      | map(gsub("~1"; "/") | gsub("~0"; "~"))
+      | map(if test("^(0|[1-9][0-9]*)$") then tonumber else . end);
+    def apply_patch($operations):
+      reduce $operations[] as $operation (.;
+        if $operation.op == "remove" then
+          delpaths([$operation.path | pointer])
+        else
+          setpath($operation.path | pointer; $operation.value)
+        end
+      );
+    .completion_records as $records
+    | if ($case | has("base_case")) then
+        (
+          $records.valid_publish_cases[]
+          | select(.id == $case.base_case)
+        ) as $base
+        | $records.publish_request_templates[$base.template]
+        | apply_patch($base.patch)
+      else
+        $records.publish_request_templates[$case.template]
+      end
+    | apply_patch($case.patch)
+  ' "$fixture"
+}
+
 run_portable_json_profile_probes() {
   local case
   while IFS= read -r case; do
     local id request github_script github_state github_log
     id="$(jq -r '.id' <<<"$case")"
-    request="$(
-      jq -c \
-        --argjson case "$case" '
-        def pointer:
-          ltrimstr("/")
-          | split("/")
-          | map(gsub("~1"; "/") | gsub("~0"; "~"))
-          | map(if test("^(0|[1-9][0-9]*)$") then tonumber else . end);
-        def operation_value:
-          if has("value_json_segments") then
-            [
-              .value_json_segments[]
-              | .text * (.repeat // 1)
-            ]
-            | join("")
-            | fromjson
-          else
-            .value
-          end;
-        .completion_records.publish_request_templates[$case.template]
-        | reduce $case.patch[] as $operation (.;
-            if $operation.op == "remove" then
-              delpaths([$operation.path | pointer])
-            else
-              setpath(
-                $operation.path | pointer;
-                $operation | operation_value
-              )
-            end
-          )
-      ' "$fixture"
-    )"
+    request="$(materialize_publish_case "$case")"
     github_script="$tmp/$id-profile-github-script.json"
     github_state="$tmp/$id-profile-github-state"
     github_log="$tmp/$id-profile-github-calls"
@@ -256,6 +256,33 @@ run_portable_json_profile_probes() {
 }
 
 run_portable_json_profile_probes
+
+run_portable_json_acceptance_probes() {
+  local case
+  while IFS= read -r case; do
+    local id request expected_bytes actual_bytes
+    id="$(jq -r '.id' <<<"$case")"
+    request="$(materialize_publish_case "$case")"
+    expected_bytes="$(jq -r '.canonical_completion_bytes // empty' <<<"$case")"
+    if [[ -n "$expected_bytes" ]]; then
+      actual_bytes="$(
+        jq -cS '.completion' <<<"$request" |
+          tr -d '\n' |
+          LC_ALL=C wc -c |
+          tr -d ' '
+      )"
+      [[ "$actual_bytes" == "$expected_bytes" ]] ||
+        fail "$id canonical completion byte length mismatch"
+    fi
+    run_ephemeral_acceptance \
+      "$id" \
+      "$request" \
+      '["action"]' \
+      "$(jq -c '.expected.stdout_exact' <<<"$case")"
+  done < <(
+    jq -c '.completion_records.canonical_json_acceptances[]' "$fixture"
+  )
+}
 
 run_producer_revision_bound_probe() {
   local request completion_length padding
@@ -364,24 +391,7 @@ run_completion_semantic_rejection_probes() {
   while IFS= read -r case; do
     local id request github_script github_state github_log
     id="$(jq -r '.id' <<<"$case")"
-    request="$(
-      jq -c \
-        --argjson case "$case" '
-        def pointer:
-          ltrimstr("/")
-          | split("/")
-          | map(gsub("~1"; "/") | gsub("~0"; "~"))
-          | map(if test("^(0|[1-9][0-9]*)$") then tonumber else . end);
-        .completion_records.publish_request_templates[$case.template]
-        | reduce $case.patch[] as $operation (.;
-            if $operation.op == "remove" then
-              delpaths([$operation.path | pointer])
-            else
-              setpath($operation.path | pointer; $operation.value)
-            end
-          )
-      ' "$fixture"
-    )"
+    request="$(materialize_publish_case "$case")"
     github_script="$tmp/$id-rejection-github-script.json"
     github_state="$tmp/$id-rejection-github-state"
     github_log="$tmp/$id-rejection-github-calls"
@@ -473,6 +483,7 @@ run_ephemeral_acceptance() {
   local id="$1"
   local request="$2"
   local expected_keys="$3"
+  local expected_stdout_json="${4:-null}"
   local github_script="$tmp/$id-acceptance-github-script.json"
   local github_state="$tmp/$id-acceptance-github-state"
   local github_log="$tmp/$id-acceptance-github-calls"
@@ -504,11 +515,19 @@ run_ephemeral_acceptance() {
     )
   ' "$stdout_path" >/dev/null ||
     fail "$id acceptance receipt mismatch"
+  if [[ "$expected_stdout_json" != "null" ]]; then
+    local expected_stdout_path="$tmp/$id-acceptance-expected.stdout"
+    jq -jr '.' <<<"$expected_stdout_json" >"$expected_stdout_path"
+    cmp -s "$stdout_path" "$expected_stdout_path" ||
+      fail "$id exact stdout mismatch"
+  fi
   [[ ! -s "$stderr_path" ]] ||
     fail "$id acceptance unexpectedly wrote stderr"
   [[ ! -s "$github_log" ]] ||
     fail "$id ephemeral acceptance reached GitHub"
 }
+
+run_portable_json_acceptance_probes
 
 while IFS= read -r entry; do
   action_kind="$(jq -r '.key' <<<"$entry")"
@@ -533,7 +552,8 @@ while IFS= read -r entry; do
   run_ephemeral_acceptance \
     "action-kind-$(jq -rn --arg value "$action_kind" '$value | @uri')" \
     "$action_request" \
-    '["action"]'
+    '["action"]' \
+    "$(jq -c '.expected_stdout_exact' <<<"$action_schema")"
 done < <(jq -c '.completion_records.action_kind_schemas | to_entries[]' "$fixture")
 
 while IFS= read -r entry; do
@@ -565,12 +585,14 @@ while IFS= read -r entry; do
   run_ephemeral_acceptance \
     "condition-kind-$condition_kind" \
     "$condition_request" \
-    "$expected_condition_keys"
+    "$expected_condition_keys" \
+    "$(jq -c '.expected_stdout_exact' <<<"$condition_schema")"
 done < <(jq -c '.completion_records.condition_schemas | to_entries[]' "$fixture")
 
 run_shared_disposition_probe() {
   local disposition="$1"
   local request="$2"
+  local expected_stdout_json="${3:-null}"
   local canonical_completion revision_id record body
   canonical_completion="$(jq -cS '.completion' <<<"$request")"
   revision_id="$(
@@ -672,41 +694,26 @@ run_shared_disposition_probe() {
     and .receipt.semantic_fingerprints == {}
   ' "$stdout_path" >/dev/null ||
     fail "$disposition shared publication receipt mismatch"
+  if [[ "$expected_stdout_json" != "null" ]]; then
+    local expected_stdout_path="$tmp/$disposition-expected.stdout"
+    jq -jr '.' <<<"$expected_stdout_json" >"$expected_stdout_path"
+    cmp -s "$stdout_path" "$expected_stdout_path" ||
+      fail "$disposition exact stdout mismatch"
+  fi
   [[ ! -s "$stderr_path" ]] ||
     fail "$disposition shared publication unexpectedly wrote stderr"
   [[ "$(wc -l <"$github_log" | tr -d ' ')" == 5 ]] ||
     fail "$disposition shared publication GitHub boundary mismatch"
 }
 
-while IFS= read -r outcome_kind; do
-  terminal_request="$(
-    jq -c --arg kind "$outcome_kind" '
-      .completion_records.publish_request_templates["shared-continue"]
-      | del(.completion.actions)
-      | .completion.disposition = "terminal"
-      | .completion.outcome = {
-          kind: $kind,
-          destination_satisfied: ($kind == "complete"),
-          effective_at: "2026-07-22T18:00:00Z",
-          evidence: [
-            {kind: "issue", repository: "octo/example", number: 237}
-          ],
-          summary: "The Workstream reached a durable terminal outcome."
-        }
-      | if $kind == "superseded" then
-          .completion.outcome.successor = {
-            kind: "issue",
-            repository: "octo/example",
-            number: 240
-          }
-        else .
-        end
-    ' "$fixture"
-  )"
+while IFS= read -r terminal_case; do
+  outcome_kind="$(jq -r '.id' <<<"$terminal_case")"
+  terminal_request="$(materialize_publish_case "$terminal_case")"
   run_shared_disposition_probe \
     "terminal-$outcome_kind" \
-    "$terminal_request"
-done < <(jq -r '.completion_records.outcome_kinds[]' "$fixture")
+    "$terminal_request" \
+    "$(jq -c '.expected.stdout_exact' <<<"$terminal_case")"
+done < <(jq -c '.completion_records.terminal_outcome_cases[]' "$fixture")
 
 no_guidance_request="$(
   jq -c '
