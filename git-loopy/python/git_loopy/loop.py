@@ -110,7 +110,9 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Coroutine, Iterable, Mapping, Protocol
 
 from copilot import CopilotClient
@@ -130,7 +132,7 @@ from git_loopy.persist import (
     create_writers,
 )
 from git_loopy.pricing import Pricing, PricingError, load_pricing
-from git_loopy.prompt import load_prompt
+from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -138,6 +140,13 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     PrdsIssueSource,
+)
+from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
+from git_loopy.skill_exposure import SkillExposureError
+from git_loopy.skill_policy import SkillPolicyResolutionError
+from git_loopy.skill_run_preflight import (
+    RunSkillPreflight,
+    resolve_run_skill_preflight,
 )
 from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
@@ -359,9 +368,12 @@ def _packaged_prompt_path() -> Path:
     with no ``git-loopy/`` folder still has a working prompt — the "run from
     anywhere" story (ADR-0006).
     """
-    from importlib.resources import files
-
     return Path(str(files("git_loopy") / "PROMPT.md"))
+
+
+def _packaged_skills_path() -> Path:
+    """Resolve the packaged fallback Skill catalog."""
+    return Path(str(files("git_loopy") / "skills"))
 
 
 def _read_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
@@ -476,6 +488,7 @@ class _Loop:
         sinks: SinkFanout,
         summary: RunSummary,
         client: CopilotClient,
+        skill_preflight: RunSkillPreflight,
         source: IssueSource,
         diag: logging.Logger,
         include_prs: bool = False,
@@ -488,6 +501,8 @@ class _Loop:
         self._sinks = sinks
         self._summary = summary
         self._client = client
+        self._skill_preflight = skill_preflight
+        self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
         self._include_prs = include_prs
@@ -534,6 +549,20 @@ class _Loop:
         so callers can still read the SHA / subject off their own events.
         """
         return self._emitter.emit(event_type, iter_num=iter_num, **payload)
+
+    def _emit_skill_policy_resolved(self) -> None:
+        if self._skill_preflight.migration_warning:
+            print(
+                "git-loopy: active prompt has no required-skills metadata; "
+                "inherited packaged Required Skills for this Run. Add "
+                "required-skills frontmatter to complete migration.",
+                file=sys.stderr,
+            )
+        self._emit(
+            events_module.WRAPPER_SKILL_POLICY_RESOLVED,
+            iter_num=None,
+            **self._skill_preflight.event_payload,
+        )
 
     # -- iteration body ----------------------------------------------------
 
@@ -664,6 +693,7 @@ class _Loop:
                         iter_num=iter_num,
                         model=self._config.model,
                         reasoning_effort=self._config.reasoning_effort,
+                        skill_exposure=self._skill_exposure,
                     ) as sdk_session:
                         try:
                             await sdk_session.send_and_wait(
@@ -1000,6 +1030,7 @@ class _Loop:
 
     async def drive(self) -> int:
         """Drive the iteration loop to its terminal outcome."""
+        self._emit_skill_policy_resolved()
         # Preflight via the source — GitHub validates gh + repo; PRDs
         # is a no-op (returns None) so an empty / missing prds/ dir is
         # not a preflight failure, just an empty pool.
@@ -1173,6 +1204,7 @@ class _ParallelLoop:
         sinks: SinkFanout,
         summary: RunSummary,
         client: CopilotClient,
+        skill_preflight: RunSkillPreflight,
         source: IssueSource,
         diag: logging.Logger,
         gate_runner: gate_module.GateRunner,
@@ -1186,6 +1218,7 @@ class _ParallelLoop:
         self._sinks = sinks
         self._summary = summary
         self._client = client
+        self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
         # Injected runner-side Integration gate (#60, ADR-0009): re-runs the
@@ -1219,6 +1252,7 @@ class _ParallelLoop:
             sinks=sinks,
             summary=summary,
             client=client,
+            skill_preflight=skill_preflight,
             source=source,
             diag=diag,
             include_prs=include_prs,
@@ -1233,6 +1267,7 @@ class _ParallelLoop:
         ``parallel-safe`` issues) or a single serial **Iteration** fallback. The
         shared Strike machine ticks exactly once per round.
         """
+        self._serial._emit_skill_policy_resolved()
         rc = self._source.preflight()
         if rc is not None:
             return rc
@@ -1529,6 +1564,7 @@ class _ParallelLoop:
                 reasoning_effort=lane.reasoning_effort,
                 working_directory=str(lane.git.root),
                 issue_ref=lane.item.ref,
+                skill_exposure=self._skill_exposure,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
@@ -1913,6 +1949,7 @@ class _ParallelLoop:
                 model=lane.model,
                 reasoning_effort=lane.reasoning_effort,
                 working_directory=str(int_git.root),
+                skill_exposure=self._skill_exposure,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(prompt, timeout=send_timeout)
@@ -2170,8 +2207,8 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         print(f"git-loopy: {exc}", file=sys.stderr)
         try:
             writers.run_summary.flush()
-        except Exception:
-            pass
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
         return 1
 
     # 5) SDK client (lazy via the factory the tests monkeypatch). If
@@ -2195,8 +2232,65 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         # least an empty run-summary JSON pointing at the failure.
         try:
             writers.run_summary.flush()
-        except Exception:
-            pass
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        return 1
+
+    skill_workspace = TemporaryDirectory(prefix="git-loopy-run-skills-")
+    try:
+        await client.start()
+        skill_preflight = await resolve_run_skill_preflight(
+            client,
+            config=config,
+            git=git,
+            prompt_text=prompt_text,
+            repo_root=repo_root,
+            packaged_skills_dir=_packaged_skills_path(),
+            workspace=Path(skill_workspace.name),
+            discoverer=_discover_skill_catalog,
+        )
+    except (
+        OSError,
+        PromptMetadataError,
+        SkillExposureError,
+        SkillPolicyResolutionError,
+    ) as exc:
+        diag.error("Skill policy preflight failed: %s: %s", type(exc).__name__, exc)
+        print(
+            f"git-loopy: Skill policy preflight failed: {exc}. "
+            "Inspect the catalog and configured policy with `git-loopy skills`.",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
+        return 1
+    except RuntimeError as exc:
+        diag.error(
+            "CopilotClient start or Skill catalog preflight failed: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        print(
+            "git-loopy: failed to start Copilot or discover the Skill catalog: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
         return 1
 
     # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
@@ -2214,6 +2308,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             sinks=sinks,
             summary=summary,
             client=client,
+            skill_preflight=skill_preflight,
             source=source,
             diag=diag,
             gate_runner=_make_gate_runner(),
@@ -2230,6 +2325,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             sinks=sinks,
             summary=summary,
             client=client,
+            skill_preflight=skill_preflight,
             source=source,
             diag=diag,
             include_prs=include_prs,
@@ -2281,6 +2377,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
                 await client.stop()
             except Exception as exc:
                 diag.warning("CopilotClient.stop() failed: %s", exc)
+        skill_workspace.cleanup()
         # Drain OTel exporters AFTER the root `git_loopy.run` span has
         # closed. BatchSpanProcessor buffers — without an explicit
         # flush, spans queued near the end of the run could be dropped

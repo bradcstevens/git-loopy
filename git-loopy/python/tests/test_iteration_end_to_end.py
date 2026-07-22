@@ -43,6 +43,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, cast
 from uuid import uuid4
 
@@ -59,12 +60,13 @@ from copilot.generated.session_events import (
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
-from git_loopy.config import RunConfig
+from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.pricing import Pricing
 from git_loopy.sinks import SinkFanout
+from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.ui import RunSummary
 from git_loopy.wrapper import is_checkpoint_message
 from tests.fakes import FakeGitClient, FakeGitHubClient
@@ -136,7 +138,12 @@ class FakeCopilotClient:
         self._scripted_events = scripted_events
         self.on_send = on_send
         self.created: list[FakeCopilotSession] = []
+        self.create_calls: list[dict[str, Any]] = []
+        self.start_call_count = 0
         self.stop_call_count = 0
+
+    async def start(self) -> None:
+        self.start_call_count += 1
 
     async def create_session(
         self,
@@ -145,8 +152,9 @@ class FakeCopilotClient:
         on_event: Callable[[SessionEvent], None] | None = None,
         on_user_input_request: Any = None,
         model: str | None = None,
-        **_extra: Any,
+        **extra: Any,
     ) -> FakeCopilotSession:
+        self.create_calls.append({"model": model, **extra})
         session = FakeCopilotSession(
             on_event=on_event,
             scripted_events=self._scripted_events,
@@ -202,12 +210,24 @@ def _logged_types(tmp_path: Path) -> list[str]:
     return [json.loads(raw)["type"] for raw in lines]
 
 
+@pytest.fixture(autouse=True)
+def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def discover(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            packaged_skills_dir=Path(str(kwargs["packaged_skills_dir"])),
+        )
+
+    monkeypatch.setattr(loop_module, "_discover_skill_catalog", discover)
+
+
 # ---------------------------------------------------------------------------
 # The end-to-end test
 # ---------------------------------------------------------------------------
 
 
-def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
+def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> None:
     """One iteration: SDK fires events; loop persists JSONL + run summary; auto-close fires.
 
     Wires:
@@ -322,7 +342,12 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
 
     # SDK lifecycle.
     assert len(fake_client.created) == 1, "expected exactly one SDK session"
+    assert fake_client.start_call_count == 1
     assert fake_client.stop_call_count == 1, "client.stop() must be called once at end"
+    assert fake_client.create_calls[0]["enable_skills"] is True
+    disabled_skills = fake_client.create_calls[0]["disabled_skills"]
+    assert disabled_skills == sorted(disabled_skills)
+    assert len(fake_client.create_calls[0]["skill_directories"]) == 1
 
     # send_and_wait got the prompt.
     sdk_session = fake_client.created[0]
@@ -367,6 +392,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     # Must have seen at minimum: run.start, iteration.start, afk_ready,
     # iteration.end, commit.recorded, auto_close, run.end.
     for expected_type in (
+        "wrapper.skill_policy.resolved",
         "wrapper.run.start",
         "wrapper.iteration.start",
         "wrapper.afk_ready.collected",
@@ -379,6 +405,26 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
             f"expected to see {expected_type} in JSONL log; "
             f"saw types: {types_seen}"
         )
+    assert types_seen.index("wrapper.skill_policy.resolved") < types_seen.index(
+        "wrapper.run.start"
+    )
+    resolved = next(
+        json.loads(raw)
+        for raw in log_lines
+        if json.loads(raw)["type"] == "wrapper.skill_policy.resolved"
+    )
+    assert resolved["base_scope"] == "minimal"
+    assert resolved["fallback"] == "minimal"
+    assert resolved["migration_warning"] is True
+    assert sorted(resolved["enabled"]) == sorted(resolved["required"])
+    assert set(disabled_skills).isdisjoint(resolved["enabled"])
+    assert str(tmp_path) not in json.dumps(resolved)
+    warning_lines = [
+        line
+        for line in capsys.readouterr().err.splitlines()
+        if "required-skills" in line
+    ]
+    assert len(warning_lines) == 1
 
     # run-summary JSON present with documented schema.
     runs_dir = tmp_path / ".git-loopy" / "runs"
@@ -398,6 +444,51 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch) -> None:
     assert iter_row["tokens_out"] == 567
     assert iter_row["tool_count"] == 1
     assert iter_row["strikes"] == 0  # progress was made (1 commit + 1 close)
+
+
+def test_skill_policy_failure_stops_before_source_collection_or_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text(
+        "---\nrequired-skills: []\n---\n",
+        encoding="utf-8",
+    )
+    fake_git = FakeGitClient(tmp_path)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42)],
+    )
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                skill_policy=SkillPolicyInputs(
+                    project=SkillPolicyInput(
+                        present=True,
+                        names=("missing-skill",),
+                    )
+                )
+            )
+        )
+    )
+
+    assert exit_code == 1
+    assert fake_client.start_call_count == 1
+    assert fake_client.stop_call_count == 1
+    assert fake_client.created == []
+    assert fake_gh.issue_list_calls == []
+    stderr = capsys.readouterr().err
+    assert "missing-skill" in stderr
+    assert "has no required-skills metadata" not in stderr
+    logs = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    assert logs == [] or logs[0].read_text(encoding="utf-8") == ""
 
 
 def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
@@ -1537,6 +1628,14 @@ def _make_loop(
         sinks=sinks,
         summary=RunSummary(pricing=pricing),
         client=cast(CopilotClient, None),
+        skill_preflight=cast(
+            Any,
+            SimpleNamespace(
+                exposure=None,
+                migration_warning=False,
+                event_payload={},
+            ),
+        ),
         source=_NoopSource(),
         diag=writers.diagnostics,
     )

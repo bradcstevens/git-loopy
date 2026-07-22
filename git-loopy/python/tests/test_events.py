@@ -77,6 +77,7 @@ from git_loopy.events import (
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
+    WRAPPER_SKILL_POLICY_RESOLVED,
     WRAPPER_STRIKE,
     make_event,
     map_sdk_event,
@@ -93,6 +94,7 @@ def test_wrapper_event_constants_are_literal_strings() -> None:
     """Every wrapper event-type literal listed in the PRD must exist."""
     assert WRAPPER_RUN_START == "wrapper.run.start"
     assert WRAPPER_RUN_END == "wrapper.run.end"
+    assert WRAPPER_SKILL_POLICY_RESOLVED == "wrapper.skill_policy.resolved"
     assert WRAPPER_ITERATION_START == "wrapper.iteration.start"
     assert WRAPPER_ITERATION_END == "wrapper.iteration.end"
     assert WRAPPER_AFK_READY_COLLECTED == "wrapper.afk_ready.collected"

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+import pytest
 from copilot.generated.session_events import (
     AssistantUsageData,
     SessionEvent,
@@ -52,6 +53,7 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
+from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
@@ -153,7 +155,11 @@ class _ParallelFakeClient:
         self._serial_closes = serial_closes
         self.create_calls: list[dict[str, Any]] = []
         self.created: list[_ParallelFakeSession] = []
+        self.start_call_count = 0
         self.stop_call_count = 0
+
+    async def start(self) -> None:
+        self.start_call_count += 1
 
     async def create_session(
         self,
@@ -164,13 +170,14 @@ class _ParallelFakeClient:
         model: str | None = None,
         reasoning_effort: str | None = None,
         working_directory: str | None = None,
-        **_extra: Any,
+        **extra: Any,
     ) -> _ParallelFakeSession:
         self.create_calls.append(
             {
                 "working_directory": working_directory,
                 "model": model,
                 "reasoning_effort": reasoning_effort,
+                **extra,
             }
         )
         session = _ParallelFakeSession(
@@ -206,6 +213,18 @@ def _usage_event(model: str) -> SessionEvent:
 _AFK_BODY = (
     "## Parent\n#49\n\n## What to build\nthing\n\n## Acceptance criteria\nbar"
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def discover(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            packaged_skills_dir=Path(str(kwargs["packaged_skills_dir"])),
+        )
+
+    monkeypatch.setattr(loop_module, "_discover_skill_catalog", discover)
 
 
 def _make_issue(
@@ -1052,6 +1071,15 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
         serial_closes=True,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    original_session = loop_module.IterationSession
+    exposures: list[object] = []
+
+    class RecordingIterationSession(original_session):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            exposures.append(kwargs["skill_exposure"])
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(loop_module, "IterationSession", RecordingIterationSession)
     # 42 red on its landing + all K=3 attempts (four reds); 43 (default) green.
     monkeypatch.setattr(
         loop_module,
@@ -1084,6 +1112,8 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     ]
     assert len(resolution_dirs) == loop_module._AUTO_RESOLUTION_MAX_ATTEMPTS
     assert all(wd.endswith("/issue-42") for wd in resolution_dirs)
+    assert len(exposures) == len(fake_client.create_calls)
+    assert all(exposure is exposures[0] for exposure in exposures)
 
     # Exactly ONE automated breadcrumb was posted on 42 for the fallback.
     assert [n for (n, _b) in fake_gh.issue_comment_calls] == [42]

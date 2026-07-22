@@ -102,6 +102,7 @@ __all__ = [
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_RUN_END = "wrapper.run.end"
+WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
 WRAPPER_ITERATION_END = "wrapper.iteration.end"
 WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"

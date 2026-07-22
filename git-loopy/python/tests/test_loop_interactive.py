@@ -16,13 +16,16 @@ interactive sink, and the driver owns driving.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+import pytest
 from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.sinks import SinkFanout
+from git_loopy.skill_catalog import build_skill_catalog
 from tests.fakes import FakeGitClient, FakeGitHubClient
 
 
@@ -30,7 +33,11 @@ class _FakeClient:
     """Minimal CopilotClient stub: the empty-pool path only calls ``stop``."""
 
     def __init__(self) -> None:
+        self.start_call_count = 0
         self.stop_call_count = 0
+
+    async def start(self) -> None:
+        self.start_call_count += 1
 
     async def stop(self) -> None:
         self.stop_call_count += 1
@@ -73,6 +80,18 @@ class _DelegatingDriver:
         self.run_called = True
         self.received_drive = drive
         return await drive()
+
+
+@pytest.fixture(autouse=True)
+def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def discover(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            packaged_skills_dir=Path(str(kwargs["packaged_skills_dir"])),
+        )
+
+    monkeypatch.setattr(loop_module, "_discover_skill_catalog", discover)
 
 
 class _SkippingDriver:
