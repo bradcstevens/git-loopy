@@ -85,7 +85,10 @@ Continuation contract 1.0, record format 1, Wrapper contract 1.2, and Event sche
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
 objects are supplied through the declared stdin or file source. `$INPUT_FILE` is the fixture
 harness's sole path placeholder. `github_script` is an ordered deterministic scripted-GitHub
-transport; adapters fail on an unlisted call and compare observed calls with `github_calls`.
+transport whose data records pin the command, optional expected stdin, stdout, stderr, and exit
+code. Adapters consume every listed call in order, fail on an unlisted call, and compare observed
+calls with `github_calls`. The shared transport probe exercises both a listed response and
+unlisted-call rejection in every host adapter.
 Fixture records contain data only—no host-language expression, executable hook, or duplicated
 expected-value algorithm.
 
@@ -94,10 +97,11 @@ selection, fail-closed operations, and exit mapping without contacting GitHub or
 Later semantic tickets extend the same harness rather than creating private command or transport
 oracles.
 
-Fixture schema 1.1 permits distribution-specific capability manifests and workflows. A workflow
-executes multiple fresh native commands against one ordered scripted-GitHub transport. Family
-adapters run only scenarios and workflows naming their distribution, so a member advertises and
-proves a capability only when its native implementation lands.
+Fixture schema 1.1 permits distribution selectors, literal distribution-specific capability
+scenarios, and workflows. A workflow executes multiple fresh native commands against one ordered
+scripted-GitHub transport. Family adapters run only scenarios and workflows naming their
+distribution, so a member advertises and proves a capability only when its native implementation
+lands.
 
 ## 7. Python trusted-Action tracer bullet
 

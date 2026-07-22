@@ -177,8 +177,13 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
         _CONTINUATION_SCENARIOS["event_schema_version"]
         == continuation_module.EVENT_SCHEMA_VERSION
     )
+    python_capabilities = next(
+        scenario
+        for scenario in _CONTINUATION_SCENARIOS["scenarios"]
+        if scenario["id"] == "capabilities-python"
+    )
     assert (
-        _CONTINUATION_SCENARIOS["distribution_capability_manifests"]["python"]
+        python_capabilities["expected"]["stdout"]["capabilities"]
         == continuation_module.CAPABILITY_MANIFEST
     )
 

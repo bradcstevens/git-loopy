@@ -7,6 +7,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+$ScriptedGitHubPath = Join-Path $PSScriptRoot "ScriptedGitHub.ps1"
 $FixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/continuation-scenarios.json"
@@ -23,9 +24,13 @@ $TempRoot = Join-Path (
 $FakeBin = Join-Path $TempRoot "bin"
 [IO.Directory]::CreateDirectory($FakeBin) | Out-Null
 if ($IsWindows) {
+    $FakeGh = Join-Path $FakeBin "gh.cmd"
     [IO.File]::WriteAllText(
-        (Join-Path $FakeBin "gh.cmd"),
-        "@echo %*>>`"%GIT_LOOPY_SCRIPTED_GITHUB_LOG%`"`r`n@exit /b 97`r`n",
+        $FakeGh,
+        "@echo off`r`n" +
+            "`"$Pwsh`" -NoLogo -NoProfile -File " +
+            "`"$ScriptedGitHubPath`" %*`r`n" +
+            "exit /b %ERRORLEVEL%`r`n",
         [Text.ASCIIEncoding]::new()
     )
 }
@@ -33,7 +38,8 @@ else {
     $FakeGh = Join-Path $FakeBin "gh"
     [IO.File]::WriteAllText(
         $FakeGh,
-        "#!/bin/sh`nprintf '%s\n' `"`$*`" >>`"`$GIT_LOOPY_SCRIPTED_GITHUB_LOG`"`nexit 97`n",
+        "#!/bin/sh`nexec `"$Pwsh`" -NoLogo -NoProfile -File " +
+            "`"$ScriptedGitHubPath`" `"`$@`"`n",
         [Text.UTF8Encoding]::new($false)
     )
     & chmod +x $FakeGh
@@ -54,27 +60,102 @@ function Assert-True {
     }
 }
 
-function Convert-ExpectedValue {
-    param([AllowNull()][object]$Value)
-    if (
-        $Value -is [Collections.IDictionary] -and
-        $Value.Count -eq 1 -and
-        $Value.Contains('$fixture') -and
-        $Value['$fixture'] -ceq "capability_manifest"
-    ) {
-        return $Fixture["capability_manifest"]
+function Get-ConsumedSteps {
+    param([Parameter(Mandatory)][string]$StatePath)
+
+    if ([IO.File]::Exists($StatePath)) {
+        return [int][IO.File]::ReadAllText($StatePath)
     }
-    if ($Value -is [Collections.IDictionary]) {
-        $Result = [ordered]@{}
-        foreach ($Key in $Value.Keys) {
-            $Result[$Key] = Convert-ExpectedValue $Value[$Key]
+    return 0
+}
+
+function Test-ScriptedGitHubTransport {
+    $Probe = $Fixture["github_transport_probe"]
+    $ScriptPath = Join-Path $TempRoot "probe-github-script.json"
+    $StatePath = Join-Path $TempRoot "probe-github-state"
+    $LogPath = Join-Path $TempRoot "probe-github-calls"
+    [IO.File]::WriteAllText(
+        $ScriptPath,
+        (ConvertTo-Json -InputObject @($Probe["github_script"]) -Compress -Depth 50),
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText($LogPath, "", [Text.UTF8Encoding]::new($false))
+    [IO.File]::Delete($StatePath)
+
+    foreach ($Invocation in $Probe["invocations"]) {
+        $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+        $StartInfo.FileName = $Pwsh
+        $StartInfo.UseShellExecute = $false
+        $StartInfo.RedirectStandardInput = $true
+        $StartInfo.RedirectStandardOutput = $true
+        $StartInfo.RedirectStandardError = $true
+        $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_LOG"] = $LogPath
+        $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"] = $ScriptPath
+        $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_STATE"] = $StatePath
+        foreach ($Argument in @(
+            "-NoLogo",
+            "-NoProfile",
+            "-File",
+            $ScriptedGitHubPath
+        )) {
+            $StartInfo.ArgumentList.Add($Argument)
         }
-        return $Result
+        foreach ($Argument in $Invocation["arguments"]) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
+
+        $Process = [Diagnostics.Process]::new()
+        $Process.StartInfo = $StartInfo
+        Assert-True ($Process.Start()) "scripted GitHub probe process starts"
+        $ProbeInput = if ($Invocation.Contains("stdin_json")) {
+            $Invocation["stdin_json"] | ConvertTo-Json -Compress -Depth 50
+        }
+        else {
+            [string]($Invocation["stdin"] ?? "")
+        }
+        $Process.StandardInput.Write($ProbeInput)
+        $Process.StandardInput.Close()
+        $Stdout = $Process.StandardOutput.ReadToEnd()
+        $Stderr = $Process.StandardError.ReadToEnd()
+        $Process.WaitForExit()
+
+        $Expected = $Invocation["expected"]
+        Assert-True (
+            $Process.ExitCode -eq $Expected["exit_code"]
+        ) "scripted GitHub probe exit code"
+        if ($Expected.Contains("stdout_json")) {
+            $ActualJson = $Stdout | ConvertFrom-Json -AsHashtable |
+                ConvertTo-Json -Compress -Depth 50
+            $ExpectedJson = $Expected["stdout_json"] |
+                ConvertTo-Json -Compress -Depth 50
+            Assert-True (
+                $ActualJson -ceq $ExpectedJson
+            ) "scripted GitHub probe JSON stdout"
+        }
+        else {
+            Assert-True (
+                $Stdout -ceq [string]$Expected["stdout"]
+            ) "scripted GitHub probe stdout"
+        }
+        Assert-True (
+            $Stderr.Contains(
+                [string]$Expected["stderr_contains"],
+                [StringComparison]::OrdinalIgnoreCase
+            )
+        ) "scripted GitHub probe stderr"
     }
-    if ($Value -is [Collections.IList]) {
-        return @($Value | ForEach-Object { Convert-ExpectedValue $_ })
-    }
-    return $Value
+
+    Assert-True (
+        (Get-ConsumedSteps $StatePath) -eq @($Probe["github_script"]).Count
+    ) "scripted GitHub probe consumed every listed call"
+    $ActualCalls = @([IO.File]::ReadAllLines($LogPath))
+    Assert-True (
+        (
+            $ActualCalls | ConvertTo-Json -Compress
+        ) -ceq (
+            @($Probe["expected_github_calls"]) | ConvertTo-Json -Compress
+        )
+    ) "scripted GitHub probe call log"
 }
 
 function Invoke-Scenario {
@@ -119,14 +200,31 @@ function Invoke-Scenario {
         )
     }
 
+    $GithubLog = Join-Path $TempRoot "$($Scenario["id"])-github.log"
+    $ScriptPath = Join-Path $TempRoot "$($Scenario["id"])-github-script.json"
+    $StatePath = Join-Path $TempRoot "$($Scenario["id"])-github-state"
+    [IO.File]::WriteAllText(
+        $ScriptPath,
+        (
+            ConvertTo-Json `
+                -InputObject @($Scenario["github_script"]) `
+                -Compress `
+                -Depth 50
+        ),
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText($GithubLog, "", [Text.UTF8Encoding]::new($false))
+    [IO.File]::Delete($StatePath)
+
     $StartInfo = [Diagnostics.ProcessStartInfo]::new()
     $StartInfo.FileName = $Pwsh
     $StartInfo.UseShellExecute = $false
     $StartInfo.RedirectStandardInput = $true
     $StartInfo.RedirectStandardOutput = $true
     $StartInfo.RedirectStandardError = $true
-    $GithubLog = Join-Path $TempRoot "$($Scenario["id"])-github.log"
     $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_LOG"] = $GithubLog
+    $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"] = $ScriptPath
+    $StartInfo.Environment["GIT_LOOPY_SCRIPTED_GITHUB_STATE"] = $StatePath
     $StartInfo.Environment["PATH"] = (
         $FakeBin + [IO.Path]::PathSeparator + $env:PATH
     )
@@ -157,10 +255,13 @@ function Invoke-Scenario {
         else {
             @()
         }
+        ConsumedSteps = Get-ConsumedSteps $StatePath
     }
 }
 
 try {
+    Test-ScriptedGitHubTransport
+
     foreach ($Scenario in $Fixture["scenarios"]) {
         if (
             $Scenario.Contains("distributions") -and
@@ -181,7 +282,7 @@ try {
         }
         else {
             $ActualObject = $Result.Stdout | ConvertFrom-Json -AsHashtable
-            $ExpectedObject = Convert-ExpectedValue $Expected["stdout"]
+            $ExpectedObject = $Expected["stdout"]
             $ActualJson = $ActualObject | ConvertTo-Json -Compress -Depth 20
             $ExpectedJson = $ExpectedObject | ConvertTo-Json -Compress -Depth 20
             Assert-True (
@@ -217,6 +318,9 @@ try {
                 @($Expected["github_calls"]) | ConvertTo-Json -Compress
             )
         ) "$($Scenario["id"]) scripted GitHub calls match"
+        Assert-True (
+            $Result.ConsumedSteps -eq @($Scenario["github_script"]).Count
+        ) "$($Scenario["id"]) consumed every scripted GitHub call"
     }
 }
 finally {

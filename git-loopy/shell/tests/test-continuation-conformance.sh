@@ -11,6 +11,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/continuation-scenarios.json"
 entrypoint="$port_dir/git-loopy.sh"
+scripted_github="$script_dir/scripted-github.sh"
 real_jq_dir="$(dirname "$(command -v jq)")"
 bash_bin="$(command -v bash)"
 tmp="$(mktemp -d)"
@@ -22,14 +23,79 @@ fail() {
 }
 
 mkdir -p "$tmp/bin"
-cat >"$tmp/bin/gh" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GIT_LOOPY_SCRIPTED_GITHUB_LOG"
-exit 97
-EOF
+cp "$scripted_github" "$tmp/bin/gh"
 chmod +x "$tmp/bin/gh"
 
-manifest="$(jq -c '.capability_manifest' "$fixture")"
+run_transport_probe() {
+  local probe_script="$tmp/probe-github-script.json"
+  local probe_state="$tmp/probe-github-state"
+  local probe_log="$tmp/probe-github-calls"
+  jq -c '.github_transport_probe.github_script' "$fixture" >"$probe_script"
+  : >"$probe_log"
+  rm -f "$probe_state"
+
+  local invocation
+  while IFS= read -r invocation; do
+    local -a probe_arguments=()
+    mapfile -d '' -t probe_arguments < <(
+      jq -j '.arguments[] + "\u0000"' <<<"$invocation"
+    )
+    local probe_stdin
+    if jq -e 'has("stdin_json")' <<<"$invocation" >/dev/null; then
+      probe_stdin="$(jq -c '.stdin_json' <<<"$invocation")"
+    else
+      probe_stdin="$(jq -r '.stdin // ""' <<<"$invocation")"
+    fi
+    local stdout_path="$tmp/probe.stdout"
+    local stderr_path="$tmp/probe.stderr"
+    local status
+    set +e
+    printf '%s' "$probe_stdin" |
+      PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+      GIT_LOOPY_SCRIPTED_GITHUB_LOG="$probe_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$probe_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$probe_state" \
+      "$tmp/bin/gh" "${probe_arguments[@]}" \
+        >"$stdout_path" 2>"$stderr_path"
+    status="${PIPESTATUS[1]}"
+    set -e
+
+    local expected_status
+    expected_status="$(jq -r '.expected.exit_code' <<<"$invocation")"
+    [[ "$status" == "$expected_status" ]] ||
+      fail "scripted GitHub probe exit: expected $expected_status, got $status"
+    if jq -e '.expected | has("stdout_json")' <<<"$invocation" >/dev/null; then
+      jq -e --argjson expected "$(jq -c '.expected.stdout_json' <<<"$invocation")" \
+        '. == $expected' "$stdout_path" >/dev/null ||
+        fail "scripted GitHub probe JSON stdout mismatch"
+    else
+      local expected_stdout
+      expected_stdout="$(jq -r '.expected.stdout' <<<"$invocation")"
+      [[ "$(<"$stdout_path")" == "$expected_stdout" ]] ||
+        fail "scripted GitHub probe stdout mismatch"
+    fi
+    local stderr_needle
+    stderr_needle="$(jq -r '.expected.stderr_contains' <<<"$invocation")"
+    grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
+      fail "scripted GitHub probe stderr does not contain: $stderr_needle"
+  done < <(jq -c '.github_transport_probe.invocations[]' "$fixture")
+
+  local consumed=0
+  [[ ! -f "$probe_state" ]] || consumed="$(<"$probe_state")"
+  local expected_steps
+  expected_steps="$(jq '.github_transport_probe.github_script | length' "$fixture")"
+  [[ "$consumed" == "$expected_steps" ]] ||
+    fail "scripted GitHub probe did not consume every listed call"
+  local actual_calls
+  actual_calls="$(jq -Rsc 'split("\n") | map(select(length > 0))' <"$probe_log")"
+  local expected_calls
+  expected_calls="$(jq -c '.github_transport_probe.expected_github_calls' "$fixture")"
+  [[ "$actual_calls" == "$expected_calls" ]] ||
+    fail "scripted GitHub probe call log mismatch"
+}
+
+run_transport_probe
+
 while IFS= read -r scenario; do
   id="$(jq -r '.id' <<<"$scenario")"
   mapfile -d '' -t arguments < <(jq -j '.arguments[] + "\u0000"' <<<"$scenario")
@@ -63,18 +129,26 @@ while IFS= read -r scenario; do
   stdout_path="$tmp/$id.stdout"
   stderr_path="$tmp/$id.stderr"
   github_log="$tmp/$id.github"
+  github_script="$tmp/$id-github-script.json"
+  github_state="$tmp/$id-github-state"
+  jq -c '.github_script' <<<"$scenario" >"$github_script"
   : >"$github_log"
+  rm -f "$github_state"
   set +e
   if [[ "$request_source" == "stdin" ]]; then
     printf '%s' "$request_content" |
       PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
       GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
       "$bash_bin" "$entrypoint" "${arguments[@]}" \
         >"$stdout_path" 2>"$stderr_path"
     status="${PIPESTATUS[1]}"
   else
     PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
       GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
       "$bash_bin" "$entrypoint" "${arguments[@]}" \
         >"$stdout_path" 2>"$stderr_path"
     status=$?
@@ -89,10 +163,6 @@ while IFS= read -r scenario; do
     [[ ! -s "$stdout_path" ]] || fail "$id unexpectedly wrote stdout"
   else
     expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
-    if [[ "$expected_json" == *'"$fixture":"capability_manifest"'* ]]; then
-      expected_json="$(jq -cn --argjson manifest "$manifest" \
-        '{ok:true,capabilities:$manifest}')"
-    fi
     actual_json="$(jq -c . "$stdout_path")" ||
       fail "$id stdout is not one JSON object"
     [[ "$actual_json" == "$expected_json" ]] ||
@@ -114,6 +184,11 @@ while IFS= read -r scenario; do
   expected_github_calls="$(jq -c '.expected.github_calls' <<<"$scenario")"
   [[ "$actual_github_calls" == "$expected_github_calls" ]] ||
     fail "$id scripted GitHub calls"$'\n'"expected: $expected_github_calls"$'\n'"actual:   $actual_github_calls"
+  consumed=0
+  [[ ! -f "$github_state" ]] || consumed="$(<"$github_state")"
+  expected_steps="$(jq '.github_script | length' <<<"$scenario")"
+  [[ "$consumed" == "$expected_steps" ]] ||
+    fail "$id did not consume every scripted GitHub call"
 done < <(
   jq -c '
     .scenarios[]

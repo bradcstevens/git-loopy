@@ -6,6 +6,8 @@ import base64
 import io
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,22 +18,79 @@ from git_loopy import cli
 
 
 CONFORMANCE_DIR = Path(__file__).parents[2] / "conformance"
+SCRIPTED_GITHUB = Path(__file__).with_name("scripted_github.py")
 FIXTURE = json.loads(
     (CONFORMANCE_DIR / "continuation-scenarios.json").read_text(encoding="utf-8")
 )
 
 
-def _expected_stdout(value: Any) -> Any:
-    if (
-        isinstance(value, dict)
-        and value == {"$fixture": "capability_manifest"}
-    ):
-        return FIXTURE["distribution_capability_manifests"]["python"]
-    if isinstance(value, dict):
-        return {key: _expected_stdout(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_expected_stdout(item) for item in value]
-    return value
+def _install_scripted_github(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    script: list[dict[str, Any]],
+) -> tuple[Path, Path, Path]:
+    script_path = tmp_path / "github-script.json"
+    script_path.write_text(
+        json.dumps(script, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "github-script-state"
+    log_path = tmp_path / "github-calls"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\nexec "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(SCRIPTED_GITHUB))} \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_LOG", str(log_path))
+    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT", str(script_path))
+    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_STATE", str(state_path))
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    return state_path, log_path, fake_gh
+
+
+def _consumed_steps(state_path: Path) -> int:
+    return int(state_path.read_text(encoding="utf-8")) if state_path.exists() else 0
+
+
+def test_python_scripted_github_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    probe = FIXTURE["github_transport_probe"]
+    state_path, log_path, fake_gh = _install_scripted_github(
+        monkeypatch,
+        tmp_path,
+        probe["github_script"],
+    )
+
+    for invocation in probe["invocations"]:
+        stdin = invocation.get("stdin")
+        if "stdin_json" in invocation:
+            stdin = json.dumps(invocation["stdin_json"], separators=(",", ":"))
+        completed = subprocess.run(
+            [str(fake_gh), *invocation["arguments"]],
+            input=stdin or "",
+            text=True,
+            capture_output=True,
+            check=False,
+            env=os.environ.copy(),
+        )
+        expected = invocation["expected"]
+        assert completed.returncode == expected["exit_code"]
+        if "stdout_json" in expected:
+            assert json.loads(completed.stdout) == expected["stdout_json"]
+        else:
+            assert completed.stdout == expected["stdout"]
+        assert expected["stderr_contains"].lower() in completed.stderr.lower()
+
+    assert _consumed_steps(state_path) == len(probe["github_script"])
+    assert log_path.read_text(encoding="utf-8").splitlines() == probe[
+        "expected_github_calls"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -69,18 +128,11 @@ def test_python_native_continuation_scenario(
         else:
             stdin = content
 
-    github_log = tmp_path / "github-calls"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir(exist_ok=True)
-    fake_gh = fake_bin / "gh"
-    fake_gh.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$GIT_LOOPY_SCRIPTED_GITHUB_LOG\"\n"
-        "exit 97\n",
-        encoding="utf-8",
+    state_path, github_log, _fake_gh = _install_scripted_github(
+        monkeypatch,
+        tmp_path,
+        scenario["github_script"],
     )
-    fake_gh.chmod(0o755)
-    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_LOG", str(github_log))
-    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
     try:
         exit_code = cli.main(arguments)
@@ -98,7 +150,7 @@ def test_python_native_continuation_scenario(
     if expected["stdout"] is None:
         assert captured.out == ""
     else:
-        assert json.loads(captured.out) == _expected_stdout(expected["stdout"])
+        assert json.loads(captured.out) == expected["stdout"]
         assert len(captured.out.splitlines()) == 1
     if expected["stderr_contains"] is None:
         assert captured.err == ""
@@ -110,6 +162,7 @@ def test_python_native_continuation_scenario(
         else []
     )
     assert github_calls == expected["github_calls"]
+    assert _consumed_steps(state_path) == len(scenario["github_script"])
 
 
 @pytest.mark.parametrize(
@@ -127,58 +180,11 @@ def test_python_native_continuation_workflow(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    script_path = tmp_path / "github-script.json"
-    script_path.write_text(
-        json.dumps(workflow["github_script"], separators=(",", ":")),
-        encoding="utf-8",
+    state_path, github_log, _fake_gh = _install_scripted_github(
+        monkeypatch,
+        tmp_path,
+        workflow["github_script"],
     )
-    state_path = tmp_path / "github-script-state"
-    github_log = tmp_path / "github-calls"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_gh = fake_bin / "gh"
-    fake_gh.write_text(
-        """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-command = " ".join(sys.argv[1:])
-log_path = Path(os.environ["GIT_LOOPY_SCRIPTED_GITHUB_LOG"])
-with log_path.open("a", encoding="utf-8") as stream:
-    stream.write(command + "\\n")
-script = json.loads(
-    Path(os.environ["GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"]).read_text(encoding="utf-8")
-)
-state_path = Path(os.environ["GIT_LOOPY_SCRIPTED_GITHUB_STATE"])
-index = int(state_path.read_text(encoding="utf-8")) if state_path.exists() else 0
-if index >= len(script):
-    print(f"unlisted GitHub call: {command}", file=sys.stderr)
-    raise SystemExit(98)
-step = script[index]
-if command != step["command"]:
-    print(f"expected GitHub call {step['command']!r}, got {command!r}", file=sys.stderr)
-    raise SystemExit(98)
-if "expected_stdin_json" in step:
-    actual_stdin = json.load(sys.stdin)
-    if actual_stdin != step["expected_stdin_json"]:
-        print("GitHub call stdin did not match fixture", file=sys.stderr)
-        raise SystemExit(98)
-state_path.write_text(str(index + 1), encoding="utf-8")
-if "stdout_json" in step:
-    print(json.dumps(step["stdout_json"], separators=(",", ":")))
-else:
-    sys.stdout.write(step.get("stdout", ""))
-raise SystemExit(step["exit_code"])
-""",
-        encoding="utf-8",
-    )
-    fake_gh.chmod(0o755)
-    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_LOG", str(github_log))
-    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT", str(script_path))
-    monkeypatch.setenv("GIT_LOOPY_SCRIPTED_GITHUB_STATE", str(state_path))
-    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
 
     for command in workflow["commands"]:
         request = command["request"]
@@ -199,9 +205,7 @@ raise SystemExit(step["exit_code"])
         else:
             assert expected["stderr_contains"].lower() in captured.err.lower()
 
-    assert int(state_path.read_text(encoding="utf-8")) == len(
-        workflow["github_script"]
-    )
+    assert _consumed_steps(state_path) == len(workflow["github_script"])
     assert github_log.read_text(encoding="utf-8").splitlines() == workflow[
         "expected_github_calls"
     ]

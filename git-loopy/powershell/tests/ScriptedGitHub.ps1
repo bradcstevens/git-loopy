@@ -21,8 +21,10 @@ $Command = $args -join " "
 $Utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::AppendAllText($LogPath, "$Command`n", $Utf8)
 
-$Script = Get-Content -LiteralPath $ScriptPath -Raw |
-    ConvertFrom-Json -AsHashtable
+$Script = @(
+    Get-Content -LiteralPath $ScriptPath -Raw |
+        ConvertFrom-Json -AsHashtable
+)
 $Index = if ([IO.File]::Exists($StatePath)) {
     [int][IO.File]::ReadAllText($StatePath)
 }
