@@ -38,6 +38,7 @@ import pytest
 
 import git_loopy
 from git_loopy import init as init_module
+from git_loopy.prompt import parse_required_skills
 
 # ---------------------------------------------------------------------------
 # The upstream MIT notice, reproduced verbatim from ``mattpocock/skills`` (the
@@ -366,6 +367,24 @@ def test_every_catalog_skill_is_packaged_into_the_built_wheel(
         assert f"git_loopy/skills/{denied}/SKILL.md" not in names, (
             f"denied skill {denied!r} was packaged into the wheel"
         )
+
+
+def test_wheel_prompt_required_skills_exist_in_wheel_catalog(
+    built_wheel: Path,
+) -> None:
+    with zipfile.ZipFile(built_wheel) as zf:
+        names = set(zf.namelist())
+        prompt = zf.read("git_loopy/PROMPT.md").decode("utf-8")
+
+    required_skills = parse_required_skills(prompt)
+
+    assert required_skills is not None
+    missing = [
+        name
+        for name in required_skills
+        if f"git_loopy/skills/{name}/SKILL.md" not in names
+    ]
+    assert missing == []
 
 
 def test_third_party_licenses_notice_is_packaged_into_the_built_wheel(

@@ -1,3 +1,12 @@
+---
+required-skills:
+  - diagnosing-bugs
+  - prototype
+  - tdd
+  - codebase-design
+  - resolving-merge-conflicts
+  - code-review
+---
 # ISSUES
 
 Issues for this iteration are provided at the start of context. They come from one of these sources, distinguishable by the delimiter used in each block:
