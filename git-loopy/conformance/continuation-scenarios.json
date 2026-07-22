@@ -318,14 +318,12 @@
               "comments": [
                 {
                   "id": "IC_kwDO8000",
-                  "databaseId": 8000,
                   "url": "https://github.com/octo/example/issues/237#issuecomment-8000",
                   "body": "<!-- git-loopy-continuation:1 -->\n```json\nnot-json\n```",
                   "author": {"login": "untrusted-user"}
                 },
                 {
                   "id": "IC_kwDO9001",
-                  "databaseId": 9001,
                   "url": "https://github.com/octo/example/issues/237#issuecomment-9001",
                   "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"record_format\":1,\"revision_id\":\"7a651ef60743e9c019272f7ed05520b1926b954a9b9a6e22c73da89d7518f900\",\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
                   "author": {"login": "planner"}

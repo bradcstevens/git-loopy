@@ -516,11 +516,19 @@ def _parse_continuation_comment(
         )
     try:
         raw_id = data["databaseId"] if "databaseId" in data else data["id"]
+        try:
+            comment_id = int(raw_id)
+        except (TypeError, ValueError):
+            url = data.get("url", data.get("html_url"))
+            marker = "#issuecomment-"
+            if not isinstance(url, str) or marker not in url:
+                raise ValueError("comment id") from None
+            comment_id = int(url.rsplit(marker, 1)[1])
         author = data.get("author", data.get("user"))
         if not isinstance(author, dict):
             raise TypeError("author")
         return ContinuationComment(
-            id=int(raw_id),
+            id=comment_id,
             url=str(data.get("url", data.get("html_url", ""))),
             body=str(data.get("body", "")),
             author=str(author["login"]),
