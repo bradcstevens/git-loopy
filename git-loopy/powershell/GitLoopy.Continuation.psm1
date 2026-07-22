@@ -459,6 +459,7 @@ function Test-GitLoopyTracerRequest {
         $Interaction["classification"] -cne "AFK-safe" -or
         $InteractionEvidence -isnot [Collections.IDictionary] -or
         $InteractionEvidence["kind"] -cne "transition-owner-attestation" -or
+        $InteractionEvidence["noninteractive"] -cne $true -or
         $InteractionEvidence["owner"] -cne $Transition["owner"] -or
         $CompletionCondition -isnot [Collections.IDictionary] -or
         $CompletionCondition["kind"] -cne "issue-closed" -or

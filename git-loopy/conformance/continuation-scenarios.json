@@ -24,6 +24,7 @@
         "classification": "AFK-safe",
         "evidence": {
           "kind": "transition-owner-attestation",
+          "noninteractive": true,
           "owner": "wayfinder"
         }
       },
@@ -62,14 +63,16 @@
       },
       "transition-owner-attestation": {
         "classifications": ["AFK-safe"],
-        "required_fields": ["kind", "owner"],
+        "required_fields": ["kind", "noninteractive", "owner"],
         "optional_fields": ["advisory_extensions"],
         "string_fields": ["owner"],
         "condition_fields": [],
         "bound_fields": {
           "owner": "completion.transition.owner"
         },
-        "enum_fields": {}
+        "enum_fields": {
+          "noninteractive": [true]
+        }
       }
     },
     "action_kinds": [
@@ -94,71 +97,88 @@
     "action_kind_schemas": {
       "Address review findings": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Authorize operation": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Chart workstream": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Close parent": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Decompose spec": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Implement ticket": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Perform manual validation": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Prototype evidence": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Provide information": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Publish head": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Publish spec": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Research fact": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Resolve conflict": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Resolve decision": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Review and merge PR": {
         "allowed_classifications": ["HITL-required"],
-        "example_interaction": "hitl-required"
+        "example_interaction": "hitl-required",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"216f430302bdd889e05d8ccf1ba9b1a6101280e1cb57aaf27478084cc19d912c\"}}}\n"
       },
       "Review head": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       },
       "Triage item": {
         "allowed_classifications": ["AFK-safe", "HITL-required"],
-        "example_interaction": "afk-safe"
+        "example_interaction": "afk-safe",
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n"
       }
     },
     "condition_kinds": [
@@ -185,7 +205,8 @@
         "target_kinds": [],
         "enum_fields": {},
         "example": {"kind": "action-completed", "action_key": "predecessor"},
-        "supporting_action_keys": ["predecessor"]
+        "supporting_action_keys": ["predecessor"],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"predecessor\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\",\"action\":\"3112d479d660948da79a3ebf4fc54c2bbacfd0bcbe2f41628f3b8d00a5e9b1ba\"}}}\n"
       },
       "artifact-exists": {
         "required_fields": ["kind", "target"],
@@ -205,7 +226,8 @@
           "kind": "artifact-exists",
           "target": {"kind": "issue", "repository": "octo/example", "number": 237}
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"bd566b14905412ad310062918d43ea86fe21a99a3a5fb12a40573f8bb291e0cf\"}}}\n"
       },
       "branch-head-equals": {
         "required_fields": ["kind", "target"],
@@ -223,7 +245,8 @@
             "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"716a1e184d7e5724a81eba9b84d8b2f65c9ccd610382581ab0cd1c20673a429d\"}}}\n"
       },
       "commit-exists": {
         "required_fields": ["kind", "target"],
@@ -240,7 +263,8 @@
             "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"a7b076f02a02def601b5e781a52ab8c1788b14ba165fe624ca453e7930ab8602\"}}}\n"
       },
       "dependency-satisfied": {
         "required_fields": ["kind", "target"],
@@ -253,7 +277,8 @@
           "kind": "dependency-satisfied",
           "target": {"kind": "issue", "repository": "octo/example", "number": 237}
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"ca13376ed2d595736334366bbe16fd433cb1ba2c3e3daa1be888cb9afd07c933\"}}}\n"
       },
       "issue-closed": {
         "required_fields": ["kind", "target"],
@@ -266,7 +291,8 @@
           "kind": "issue-closed",
           "target": {"kind": "issue", "repository": "octo/example", "number": 237}
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"6f6ffbd965ad4503a1379423dcd858eaa9f85fd1474b4619dc61ac0cd218ebd2\"}}}\n"
       },
       "issue-label-present": {
         "required_fields": ["kind", "label", "target"],
@@ -280,7 +306,8 @@
           "target": {"kind": "issue", "repository": "octo/example", "number": 237},
           "label": "ready-for-agent"
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"0617c0889c024f6900d3759c83d84050107f03c19fde1895155ea11d0c2404db\"}}}\n"
       },
       "issue-open": {
         "required_fields": ["kind", "target"],
@@ -293,7 +320,8 @@
           "kind": "issue-open",
           "target": {"kind": "issue", "repository": "octo/example", "number": 237}
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"8ddb38562de7641ba56c1b529bcbfc86fd07a5c68ec02ccb63f2b33693766cb6\"}}}\n"
       },
       "pull-request-closed": {
         "required_fields": ["kind", "target"],
@@ -310,7 +338,8 @@
             "number": 42
           }
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"55acf966c93480e66353a47fbaf8c3cacd303fb4f710d314a221d691233e0f03\"}}}\n"
       },
       "pull-request-merged": {
         "required_fields": ["kind", "target"],
@@ -327,7 +356,8 @@
             "number": 42
           }
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"f5ed6f43cde98821f6fda220568b43a60e1db526dabd1f428403a59c49426988\"}}}\n"
       },
       "pull-request-open": {
         "required_fields": ["kind", "target"],
@@ -344,7 +374,8 @@
             "number": 42
           }
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"bac886d45953d1fd2cde5b82dc7cc7b9c50ca3e86e9973e503f97e02a6765667\"}}}\n"
       },
       "pull-request-review-state": {
         "required_fields": ["kind", "state", "target"],
@@ -365,7 +396,8 @@
           },
           "state": "approved"
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"407c9d3c21e2303ccd324e6b86aad3ae08a13f8e22a05ac1e243f5018633b0f5\"}}}\n"
       },
       "sub-issues-complete": {
         "required_fields": ["kind", "target"],
@@ -378,7 +410,8 @@
           "kind": "sub-issues-complete",
           "target": {"kind": "issue", "repository": "octo/example", "number": 237}
         },
-        "supporting_action_keys": []
+        "supporting_action_keys": [],
+        "expected_stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"69a08963304a33513f9fb730a0850fa8e0017ec5f1212fa2d84050ce290032e0\"}}}\n"
       }
     },
     "canonical_json": {
@@ -398,7 +431,10 @@
     "canonical_json_rejections": [
       {
         "id": "floating-point-value",
-        "probe": "float",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "add", "path": "/extra", "value": 1.5}
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request must not contain floating-point values\"}}\n",
@@ -408,7 +444,10 @@
       },
       {
         "id": "integer-above-maximum",
-        "probe": "integer",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "add", "path": "/extra", "value": 9007199254740992}
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request integer exceeds interoperable signed 53-bit range\"}}\n",
@@ -418,7 +457,14 @@
       },
       {
         "id": "non-nfc-string",
-        "probe": "nfc",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/producer/login",
+            "value": "é"
+          }
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request strings must be NFC-normalized\"}}\n",
@@ -428,7 +474,18 @@
       },
       {
         "id": "nesting-above-maximum",
-        "probe": "depth",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/extra",
+            "value_json_segments": [
+              {"text": "{\"child\":", "repeat": 17},
+              {"text": "0"},
+              {"text": "}", "repeat": 17}
+            ]
+          }
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request exceeds maximum nesting depth 16\"}}\n",
@@ -438,7 +495,18 @@
       },
       {
         "id": "array-above-maximum",
-        "probe": "array",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/extra",
+            "value_json_segments": [
+              {"text": "["},
+              {"text": "0,", "repeat": 256},
+              {"text": "0]"}
+            ]
+          }
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request array exceeds maximum length 256\"}}\n",
@@ -448,7 +516,18 @@
       },
       {
         "id": "string-above-maximum",
-        "probe": "string",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/extra",
+            "value_json_segments": [
+              {"text": "\""},
+              {"text": "x", "repeat": 8193},
+              {"text": "\""}
+            ]
+          }
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request string exceeds maximum UTF-8 length 8192\"}}\n",
@@ -458,7 +537,30 @@
       },
       {
         "id": "record-above-maximum",
-        "probe": "record",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/completion/advisory_extensions",
+            "value_json_segments": [
+              {"text": "{\"padding\":[\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\",\""},
+              {"text": "x", "repeat": 8192},
+              {"text": "\"]}"}
+            ]
+          }
+        ],
         "expected": {
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion canonical JSON exceeds maximum record length 49152\"}}\n",
@@ -512,6 +614,7 @@
                 "classification": "AFK-safe",
                 "evidence": {
                   "kind": "transition-owner-attestation",
+                  "noninteractive": true,
                   "owner": "wayfinder"
                 }
               },
@@ -524,6 +627,229 @@
         }
       }
     },
+    "valid_publish_cases": [
+      {
+        "id": "shared-continue",
+        "template": "shared-continue",
+        "patch": [],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": [
+            "read-comment:7001",
+            "label:237:git-loopy-continuation",
+            "append:237",
+            "read-comment:9001"
+          ]
+        }
+      },
+      {
+        "id": "shared-terminal",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "terminal"},
+          {
+            "op": "add",
+            "path": "/completion/outcome",
+            "value": {
+              "kind": "complete",
+              "destination_satisfied": true,
+              "effective_at": "2026-07-22T18:00:00Z",
+              "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ],
+              "summary": "The Workstream Destination is satisfied."
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"0736aa2cfd48b281a78543418269950cf6345e5704cf229d45e058538f5a4b2a\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{}}}\n",
+          "stderr_exact": "",
+          "github_calls": [
+            "read-comment:7001",
+            "label:237:git-loopy-continuation",
+            "append:237",
+            "read-comment:9001"
+          ]
+        }
+      },
+      {
+        "id": "shared-no-guidance",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "no-guidance"},
+          {
+            "op": "add",
+            "path": "/completion/no_guidance",
+            "value": {
+              "reason": "no-successor-created",
+              "summary": "No shared successor can be published.",
+              "references": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ]
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"0f0cd19cf9454cd97f5e8d2a563f5b3049e1ad047041ca8c0ceaa2b98ed9490b\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{}}}\n",
+          "stderr_exact": "",
+          "github_calls": [
+            "read-comment:7001",
+            "label:237:git-loopy-continuation",
+            "append:237",
+            "read-comment:9001"
+          ]
+        }
+      },
+      {
+        "id": "ephemeral-continue",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/publication", "value": "ephemeral"},
+          {"op": "remove", "path": "/completion/carrier"},
+          {"op": "remove", "path": "/completion/workstream/anchor"},
+          {"op": "replace", "path": "/completion/transition/evidence", "value": []},
+          {"op": "replace", "path": "/trusted_producers", "value": []}
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "ephemeral-no-guidance",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/publication", "value": "ephemeral"},
+          {"op": "remove", "path": "/completion/carrier"},
+          {"op": "remove", "path": "/completion/workstream/anchor"},
+          {"op": "replace", "path": "/completion/transition/evidence", "value": []},
+          {"op": "replace", "path": "/trusted_producers", "value": []},
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "no-guidance"},
+          {
+            "op": "add",
+            "path": "/completion/no_guidance",
+            "value": {
+              "reason": "ephemeral-only",
+              "summary": "No shared successor can be published.",
+              "references": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ]
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"no-guidance\",\"semantic_fingerprints\":{}}}\n",
+          "stderr_exact": "",
+          "github_calls": []
+        }
+      }
+    ],
+    "fingerprint_cases": [
+      {
+        "id": "original-semantics",
+        "base_case": "ephemeral-continue",
+        "patch": [],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "presentation-only-change",
+        "base_case": "ephemeral-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/summary",
+            "value": "Reworded for a human"
+          },
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/basis",
+            "value": [
+              {"kind": "issue", "repository": "octo/example", "number": 236},
+              {"kind": "issue", "repository": "octo/example", "number": 237}
+            ]
+          },
+          {
+            "op": "add",
+            "path": "/completion/actions/0/context_references",
+            "value": [
+              {"kind": "issue", "repository": "octo/example", "number": 235}
+            ]
+          },
+          {"op": "add", "path": "/completion/actions/0/effects", "value": []},
+          {"op": "add", "path": "/completion/actions/0/requirements", "value": []},
+          {"op": "add", "path": "/completion/actions/0/triggers", "value": []},
+          {
+            "op": "add",
+            "path": "/completion/actions/0/instruction/advisory_extensions",
+            "value": {"display_hint": "compact"}
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "behavioral-semantics-change",
+        "base_case": "ephemeral-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/completion/actions/0/effects",
+            "value": [
+              {"kind": "tracker-write", "scope": "octo/example#239"}
+            ]
+          },
+          {
+            "op": "add",
+            "path": "/completion/actions/0/requirements",
+            "value": [
+              {"kind": "skill", "name": "to-spec"}
+            ]
+          },
+          {
+            "op": "add",
+            "path": "/completion/actions/0/triggers",
+            "value": [
+              {
+                "kind": "human-decision",
+                "condition": {
+                  "kind": "issue-open",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 240
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"continue\",\"semantic_fingerprints\":{\"action\":\"5a5b6436ae3a141e712f72110a76fd133fe16b33740ef475b45a9648a35376d9\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": []
+        }
+      }
+    ],
     "semantic_rejections": [
       {
         "id": "unknown-contract-version",
@@ -882,6 +1208,22 @@
           "exit_code": 1,
           "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence.owner must match completion.transition.owner\"}}\n",
           "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence.owner must match completion.transition.owner\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "missing-afk-safety-attestation",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "remove",
+            "path": "/completion/actions/0/interaction/evidence/noninteractive"
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence is missing required field: noninteractive\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence is missing required field: noninteractive\n",
           "github_calls": []
         }
       },
@@ -1402,6 +1744,30 @@
       }
     },
     {
+      "id": "maximum-depth-request-is-accepted",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "raw_segments": [
+          {
+            "text": "{\"repository\":\"octo/example\",\"trusted_producers\":[],\"completion\":{\"continuation_contract_version\":\"1.0\",\"record_format\":1,\"publication\":\"ephemeral\",\"disposition\":\"no-guidance\",\"workstream\":{\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237}}},\"transition\":{\"owner\":\"wayfinder\",\"evidence\":[]},\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"no_guidance\":{\"reason\":\"ephemeral-only\",\"summary\":\"No shared successor can be published.\",\"references\":[{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237}]},\"advisory_extensions\":"
+          },
+          {"text": "{\"child\":", "repeat": 13},
+          {"text": "{\"leaf\":\"ok\"}"},
+          {"text": "}", "repeat": 13},
+          {"text": "}}"}
+        ]
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 0,
+        "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"unpublished\",\"publication\":\"ephemeral\",\"disposition\":\"no-guidance\",\"semantic_fingerprints\":{}}}\n",
+        "stderr_exact": "",
+        "github_calls": []
+      }
+    },
+    {
       "id": "request-must-be-utf8",
       "arguments": [
         "continuation",
@@ -1501,6 +1867,7 @@
                   "classification": "AFK-safe",
                   "evidence": {
                     "kind": "transition-owner-attestation",
+                    "noninteractive": true,
                     "owner": "wayfinder"
                   }
                 },
@@ -1629,6 +1996,7 @@
                   "classification": "AFK-safe",
                   "evidence": {
                     "kind": "transition-owner-attestation",
+                    "noninteractive": true,
                     "owner": "wayfinder"
                   }
                 },
@@ -1650,7 +2018,26 @@
       }
     },
     {
-      "id": "terminal-selection-is-reconcile-only",
+      "id": "terminal-selection-is-reconcile-only-python",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish", "--terminal"],
+      "request": {
+        "source": "stdin",
+        "json": {}
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 2,
+        "stdout": null,
+        "stdout_exact": "",
+        "stderr_exact": "usage: git-loopy [-h] {init,config,skills,continuation} ...\ngit-loopy: error: unrecognized arguments: --terminal\n",
+        "stderr_contains": "usage:",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "terminal-selection-is-reconcile-only-shell-powershell",
+      "distributions": ["shell", "powershell"],
       "arguments": ["continuation", "publish", "--terminal"],
       "request": {
         "source": "stdin",
@@ -1706,7 +2093,7 @@
           "command": "api --method POST repos/octo/example/issues/237/comments --input -",
           "exit_code": 0,
           "expected_stdin_json": {
-            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22\",\"semantic_fingerprints\":{\"publish-spec\":\"e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8\",\"semantic_fingerprints\":{\"publish-spec\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
           },
           "stdout_json": {
             "id": 9001,
@@ -1720,7 +2107,7 @@
           "stdout_json": {
             "id": 9001,
             "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
-            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22\",\"semantic_fingerprints\":{\"publish-spec\":\"e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8\",\"semantic_fingerprints\":{\"publish-spec\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
             "user": {"login": "planner"}
           }
         },
@@ -1742,7 +2129,7 @@
                 {
                   "id": "IC_kwDO9001",
                   "url": "https://github.com/octo/example/issues/237#issuecomment-9001",
-                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22\",\"semantic_fingerprints\":{\"publish-spec\":\"e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"publish-spec\",\"kind\":\"Publish spec\",\"occurrence\":\"prd-v1\",\"prerequisites\":[],\"summary\":\"Publish the approved Continuation specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8\",\"semantic_fingerprints\":{\"publish-spec\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
                   "author": {"login": "planner"}
                 }
               ]
@@ -1808,6 +2195,7 @@
                       "classification": "AFK-safe",
                       "evidence": {
                         "kind": "transition-owner-attestation",
+                        "noninteractive": true,
                         "owner": "wayfinder"
                       }
                     },
@@ -1827,7 +2215,7 @@
               "operation": "publish",
               "receipt": {
                 "status": "committed",
-                "revision_id": "b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22",
+                "revision_id": "923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8",
                 "carrier": {"kind": "issue", "repository": "octo/example", "number": 237},
                 "comment": {
                   "id": 9001,
@@ -1835,11 +2223,11 @@
                 },
                 "index_label": "git-loopy-continuation",
                 "semantic_fingerprints": {
-                  "publish-spec": "e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6"
+                  "publish-spec": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7"
                 }
               }
             },
-            "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"publish-spec\":\"e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6\"}}}\n",
+            "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"publish-spec\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
             "stderr_exact": "",
             "stderr_contains": null
           }
@@ -1868,7 +2256,7 @@
                 "actions": [
                   {
                     "identity": "1ca240ccca4c86e1e11cb617eaa30b765d6c3b9951a2834c46760d0e11416728",
-                    "semantic_fingerprint": "e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6",
+                    "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
                     "workstream_anchor": {"kind": "issue", "repository": "octo/example", "number": 237},
                     "summary": "Publish the approved Continuation specification",
                     "kind": "Publish spec",
@@ -1882,7 +2270,7 @@
                       "login": "planner",
                       "role": "planning",
                       "carrier": {"kind": "issue", "repository": "octo/example", "number": 237},
-                      "revision_id": "b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22",
+                      "revision_id": "923ea5cc1f4aa75741e4e9441db36e52979386d9680eea49d53b0e56e6c10fd8",
                       "comment_id": 9001,
                       "comment_url": "https://github.com/octo/example/issues/237#issuecomment-9001"
                     },
@@ -1891,6 +2279,7 @@
                       "classification": "AFK-safe",
                       "evidence": {
                         "kind": "transition-owner-attestation",
+                        "noninteractive": true,
                         "owner": "wayfinder"
                       }
                     },

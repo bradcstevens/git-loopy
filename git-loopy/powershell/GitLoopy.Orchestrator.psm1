@@ -1670,12 +1670,14 @@ function Invoke-GitLoopyDiscovery {
         -Payload ([ordered]@{
             deny_skills = [string[]]$Config.DenySkills
             deny_tools = [string[]]$Config.DenyTools
+            insight_capabilities = Get-GitLoopyInsightCapabilities
             issue_source = $Config.IssueSource
             max_iterations = $Config.MaxIterations
             max_nmt_strikes = $Config.MaxNmtStrikes
             model = $Config.Model
             prompt_path = $Preflight.PromptPath
             reasoning_effort = $Config.ReasoningEffort
+            schema_version = Get-GitLoopyEventSchemaVersion
             send_timeout_seconds = $Config.SendTimeoutSeconds
         })
 

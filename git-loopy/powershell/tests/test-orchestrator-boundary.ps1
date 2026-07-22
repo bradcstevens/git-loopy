@@ -486,6 +486,25 @@ try {
         "empty-Pool event sequence"
     )
     Assert-Equal "github" $Events[0]["issue_source"] "Run issue source"
+    Assert-Equal 1 $Events[0]["schema_version"] "Run Event-schema version"
+    $ExpectedInsightCapabilities = [ordered]@{
+        agent_output = $false
+        structured_agent_events = $false
+        token_usage = $false
+        context_window = $false
+        skill_consultation = $false
+        cost = $false
+    }
+    foreach ($Name in $ExpectedInsightCapabilities.Keys) {
+        Assert-True (
+            $Events[0]["insight_capabilities"].Contains($Name)
+        ) "Run Insight capability $Name is declared"
+        Assert-Equal (
+            $ExpectedInsightCapabilities[$Name]
+        ) $Events[0]["insight_capabilities"][$Name] (
+            "Run Insight capability $Name"
+        )
+    }
     Assert-Equal 0 $Events[2]["issues"].Count "empty collected Pool"
     Assert-Equal "empty_pool" $Events[4]["outcome"] "empty Run outcome"
     Assert-Equal 1 $Events[4]["iterations_run"] "empty Run Iteration count"

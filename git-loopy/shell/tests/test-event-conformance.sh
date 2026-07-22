@@ -35,6 +35,14 @@ actual_types="$(
 )"
 jq -e --argjson actual "$actual_types" '.event_types == $actual' "$fixture" \
   >/dev/null || fail "event type literals drifted from event-schema.json"
+jq -e \
+  --argjson schema_version "$GIT_LOOPY_EVENT_SCHEMA_VERSION" \
+  --argjson capabilities "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
+  '
+    .schema_version == $schema_version
+    and .insight_capabilities.orchestrators.shell == $capabilities
+  ' "$fixture" >/dev/null ||
+  fail "shell Insight capability manifest drifted from event-schema.json"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

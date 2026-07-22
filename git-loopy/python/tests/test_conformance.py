@@ -142,9 +142,86 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
-    assert _EVENT_SCHEMA["schema_version"] == 1
+    assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
     assert _EVENT_SCHEMA["contract_version"] == "1.2"
+
+
+def test_event_fixture_pins_dashboard_insight_contract() -> None:
+    capabilities = _EVENT_SCHEMA["insight_capabilities"]
+    assert capabilities["names"] == list(events_module.INSIGHT_CAPABILITY_NAMES)
+    assert set(capabilities["orchestrators"]) == {"python", "shell", "powershell"}
+    for manifest in capabilities["orchestrators"].values():
+        assert set(manifest) == set(events_module.INSIGHT_CAPABILITY_NAMES)
+        assert all(isinstance(value, bool) for value in manifest.values())
+    assert (
+        capabilities["orchestrators"]["python"]
+        == events_module.PYTHON_INSIGHT_CAPABILITIES
+    )
+
+    assert _EVENT_SCHEMA["payload_contracts"] == {
+        "wrapper.run.start": {
+            "required": ["schema_version", "insight_capabilities"],
+        },
+        "wrapper.issue.activated": {
+            "required_when_present": ["issue", "activated_at", "binding_source"],
+        },
+        "agent.output": {
+            "required_when_present": ["text", "kind"],
+            "kind_values": ["unclassified"],
+        },
+        "usage.context_window": {
+            "required_when_present": [
+                "current_tokens",
+                "token_limit",
+                "effective_target_tokens",
+                "effective_ceiling_tokens",
+            ],
+        },
+        "wrapper.iteration.end": {
+            "required_when_present": [
+                "outcome",
+                "duration_seconds",
+                "summary",
+                "issues",
+            ],
+            "summary_required": [
+                "model",
+                "tokens_in",
+                "tokens_out",
+                "observed_tokens",
+                "cost_usd",
+                "tool_count",
+                "skill_call_count",
+                "skills_consulted",
+                "commits",
+                "auto_closures",
+                "pr_advances",
+                "strikes",
+                "peak_context_window",
+            ],
+            "issue_required": [
+                "issue",
+                "status",
+                "first_started_at",
+                "closed_at",
+                "issue_elapsed_seconds",
+                "active_seconds",
+                "cumulative_active_seconds",
+                "consumption",
+                "cost_usd",
+                "peak_context_window",
+            ],
+            "consumption_required": ["model", "tokens_in", "tokens_out"],
+        },
+    }
+    assert _EVENT_SCHEMA["value_semantics"] == {
+        "unknown": None,
+        "observed_none": {"counter": 0, "collection": []},
+        "timestamp_format": "RFC3339 UTC with trailing Z",
+        "duration_source": "monotonic clock",
+        "duration_unit": "seconds",
+    }
 
 
 @pytest.mark.parametrize(

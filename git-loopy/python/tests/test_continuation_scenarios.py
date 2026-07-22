@@ -62,6 +62,38 @@ def _consumed_steps(state_path: Path) -> int:
     return int(state_path.read_text(encoding="utf-8")) if state_path.exists() else 0
 
 
+def _materialize_raw_segments(segments: list[dict[str, Any]]) -> str:
+    return "".join(
+        segment["text"] * int(segment.get("repeat", 1))
+        for segment in segments
+    )
+
+
+def _assert_native_output(
+    expected: dict[str, Any],
+    *,
+    stdout: str,
+    stderr: str,
+    exact: bool = False,
+) -> None:
+    if exact:
+        assert "stdout_exact" in expected
+        assert "stderr_exact" in expected
+    if "stdout_exact" in expected:
+        assert stdout == expected["stdout_exact"]
+    elif expected["stdout"] is None:
+        assert stdout == ""
+    else:
+        assert json.loads(stdout) == expected["stdout"]
+        assert len(stdout.splitlines()) == 1
+    if "stderr_exact" in expected:
+        assert stderr == expected["stderr_exact"]
+    elif expected["stderr_contains"] is None:
+        assert stderr == ""
+    else:
+        assert expected["stderr_contains"].lower() in stderr.lower()
+
+
 def test_python_scripted_github_transport(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -120,10 +152,7 @@ def test_python_native_continuation_scenario(
     if request is not None:
         content = request.get("raw")
         if content is None and "raw_segments" in request:
-            content = "".join(
-                segment["text"] * int(segment.get("repeat", 1))
-                for segment in request["raw_segments"]
-            )
+            content = _materialize_raw_segments(request["raw_segments"])
         if content is None and "json" in request:
             content = json.dumps(request["json"], separators=(",", ":"))
         if request["source"] == "file":
@@ -158,22 +187,12 @@ def test_python_native_continuation_scenario(
     captured = capsys.readouterr()
     expected = scenario["expected"]
     assert exit_code == expected["exit_code"], captured.err
-    if arguments[:2] == ["continuation", "publish"] and exit_code != 2:
-        assert "stdout_exact" in expected
-        assert "stderr_exact" in expected
-    if "stdout_exact" in expected:
-        assert captured.out == expected["stdout_exact"]
-    elif expected["stdout"] is None:
-        assert captured.out == ""
-    else:
-        assert json.loads(captured.out) == expected["stdout"]
-        assert len(captured.out.splitlines()) == 1
-    if "stderr_exact" in expected:
-        assert captured.err == expected["stderr_exact"]
-    elif expected["stderr_contains"] is None:
-        assert captured.err == ""
-    else:
-        assert expected["stderr_contains"].lower() in captured.err.lower()
+    _assert_native_output(
+        expected,
+        stdout=captured.out,
+        stderr=captured.err,
+        exact=arguments[:2] == ["continuation", "publish"],
+    )
     github_calls = (
         github_log.read_text(encoding="utf-8").splitlines()
         if github_log.exists()
@@ -216,20 +235,12 @@ def test_python_native_continuation_workflow(
         captured = capsys.readouterr()
         expected = command["expected"]
         assert exit_code == expected["exit_code"], captured.err
-        if command["arguments"][:2] == ["continuation", "publish"]:
-            assert "stdout_exact" in expected
-            assert "stderr_exact" in expected
-        if "stdout_exact" in expected:
-            assert captured.out == expected["stdout_exact"]
-        else:
-            assert json.loads(captured.out) == expected["stdout"]
-            assert len(captured.out.splitlines()) == 1
-        if "stderr_exact" in expected:
-            assert captured.err == expected["stderr_exact"]
-        elif expected["stderr_contains"] is None:
-            assert captured.err == ""
-        else:
-            assert expected["stderr_contains"].lower() in captured.err.lower()
+        _assert_native_output(
+            expected,
+            stdout=captured.out,
+            stderr=captured.err,
+            exact=command["arguments"][:2] == ["continuation", "publish"],
+        )
 
     assert _consumed_steps(state_path) == len(workflow["github_script"])
     assert github_log.read_text(encoding="utf-8").splitlines() == workflow[
@@ -333,91 +344,6 @@ def _issue(number: int) -> dict[str, Any]:
     }
 
 
-def _action(
-    *,
-    kind: str = "Publish spec",
-    classification: str = "AFK-safe",
-) -> dict[str, Any]:
-    return {
-        "key": "action",
-        "summary": "Publish the specification",
-        "kind": kind,
-        "occurrence": "v1",
-        "instruction": {"mode": "skill", "value": "/to-spec 237"},
-        "target": _issue(239),
-        "basis": [_issue(237)],
-        "prerequisites": [],
-        "interaction": {
-            "classification": classification,
-            "evidence": {
-                "kind": "transition-owner-attestation",
-                "owner": "wayfinder",
-            },
-        },
-        "completion_condition": {
-            "kind": "issue-closed",
-            "target": _issue(239),
-        },
-    }
-
-
-def _request(
-    *,
-    publication: str = "shared",
-    disposition: str = "continue",
-) -> dict[str, Any]:
-    completion: dict[str, Any] = {
-        "continuation_contract_version": "1.0",
-        "record_format": 1,
-        "publication": publication,
-        "disposition": disposition,
-        "workstream": {
-            "destination": {
-                "kind": "issue-closed",
-                "target": _issue(237),
-            }
-        },
-        "transition": {"owner": "wayfinder", "evidence": []},
-        "producer": {"login": "planner", "role": "planning"},
-    }
-    if publication == "shared":
-        completion["workstream"]["anchor"] = _issue(237)
-        completion["transition"]["evidence"] = [
-            {
-                "kind": "issue-comment",
-                "repository": "octo/example",
-                "issue": 237,
-                "comment_id": 7001,
-            }
-        ]
-        completion["carrier"] = _issue(237)
-    if disposition == "continue":
-        completion["actions"] = [_action()]
-    elif disposition == "terminal":
-        completion["outcome"] = {
-            "kind": "complete",
-            "destination_satisfied": True,
-            "effective_at": "2026-07-22T18:00:00Z",
-            "evidence": [_issue(237)],
-            "summary": "The Workstream Destination is satisfied.",
-        }
-    else:
-        completion["no_guidance"] = {
-            "reason": (
-                "no-successor-created"
-                if publication == "shared"
-                else "ephemeral-only"
-            ),
-            "summary": "No shared successor can be published.",
-            "references": [_issue(237)],
-        }
-    return {
-        "repository": "octo/example",
-        "trusted_producers": ["planner"] if publication == "shared" else [],
-        "completion": completion,
-    }
-
-
 def _publish_output(
     request: dict[str, Any],
     github: _RecordingGitHub,
@@ -450,59 +376,33 @@ def _publish_result(
     return exit_code, json.loads(stdout), stderr
 
 
-@pytest.mark.parametrize("disposition", ["terminal", "no-guidance"])
-def test_python_publish_commits_each_shared_completion_disposition(
-    disposition: str,
+@pytest.mark.parametrize(
+    "case",
+    FIXTURE["completion_records"]["valid_publish_cases"],
+    ids=lambda case: case["id"],
+)
+def test_python_publish_accepts_fixture_completion_modes(
+    case: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    records = FIXTURE["completion_records"]
+    request = copy.deepcopy(records["publish_request_templates"][case["template"]])
+    _apply_fixture_patch(request, case["patch"])
     github = _RecordingGitHub()
 
-    exit_code, result, stderr = _publish_result(
-        _request(disposition=disposition),
+    exit_code, stdout, stderr = _publish_output(
+        request,
         github,
         monkeypatch,
         capsys,
     )
 
-    assert exit_code == 0
-    assert result["receipt"]["status"] == "committed"
-    assert result["receipt"]["semantic_fingerprints"] == {}
-    assert stderr == ""
-    assert github.calls == [
-        "read-comment:7001",
-        "label:237:git-loopy-continuation",
-        "append:237",
-        "read-comment:9001",
-    ]
-
-
-def test_python_publish_keeps_ephemeral_advice_visibly_unpublished(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    github = _RecordingGitHub()
-
-    exit_code, result, stderr = _publish_result(
-        _request(publication="ephemeral", disposition="no-guidance"),
-        github,
-        monkeypatch,
-        capsys,
-    )
-
-    assert exit_code == 0
-    assert result == {
-        "ok": True,
-        "operation": "publish",
-        "receipt": {
-            "status": "unpublished",
-            "publication": "ephemeral",
-            "disposition": "no-guidance",
-            "semantic_fingerprints": {},
-        },
-    }
-    assert stderr == ""
-    assert github.calls == []
+    expected = case["expected"]
+    assert exit_code == expected["exit_code"]
+    assert stdout == expected["stdout_exact"]
+    assert stderr == expected["stderr_exact"]
+    assert github.calls == expected["github_calls"]
 
 
 def _json_pointer_tokens(path: str) -> list[str]:
@@ -529,15 +429,35 @@ def _apply_fixture_patch(
             if op == "remove":
                 parent.pop(index)
             elif op == "add":
-                parent.insert(index, copy.deepcopy(operation["value"]))
+                parent.insert(index, _fixture_patch_value(operation))
             else:
                 assert op == "replace"
-                parent[index] = copy.deepcopy(operation["value"])
+                parent[index] = _fixture_patch_value(operation)
         elif op == "remove":
             del parent[token]
         else:
             assert op in {"add", "replace"}
-            parent[token] = copy.deepcopy(operation["value"])
+            parent[token] = _fixture_patch_value(operation)
+
+
+def _fixture_patch_value(operation: dict[str, Any]) -> Any:
+    if "value_json_segments" in operation:
+        return json.loads(
+            _materialize_raw_segments(operation["value_json_segments"])
+        )
+    return copy.deepcopy(operation["value"])
+
+
+def _valid_publish_request(case_id: str) -> dict[str, Any]:
+    records = FIXTURE["completion_records"]
+    valid_case = next(
+        case for case in records["valid_publish_cases"] if case["id"] == case_id
+    )
+    request = copy.deepcopy(
+        records["publish_request_templates"][valid_case["template"]]
+    )
+    _apply_fixture_patch(request, valid_case["patch"])
+    return request
 
 
 @pytest.mark.parametrize(
@@ -573,7 +493,7 @@ def test_python_reconcile_reports_unsupported_valid_target_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    request = _request()
+    request = _valid_publish_request("shared-continue")
     action = request["completion"]["actions"][0]
     commit = {
         "kind": "commit",
@@ -625,7 +545,7 @@ def test_python_publish_accepts_every_pinned_terminal_outcome(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    request = _request(disposition="terminal")
+    request = _valid_publish_request("shared-terminal")
     outcome = request["completion"]["outcome"]
     outcome["kind"] = outcome_kind
     outcome["destination_satisfied"] = outcome_kind == "complete"
@@ -654,34 +574,9 @@ def test_python_publish_enforces_portable_canonical_json_profile(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    profile = FIXTURE["completion_records"]["canonical_json"]
-    request = _request(publication="ephemeral")
-    probe = case["probe"]
-    if probe == "float":
-        request["extra"] = 1.5
-    elif probe == "integer":
-        request["extra"] = profile["integer_max"] + 1
-    elif probe == "nfc":
-        request["completion"]["producer"]["login"] = "e\u0301"
-    elif probe == "depth":
-        nested: dict[str, Any] = {}
-        request["extra"] = nested
-        for _ in range(profile["maximum_depth"] + 1):
-            child: dict[str, Any] = {}
-            nested["child"] = child
-            nested = child
-    elif probe == "array":
-        request["extra"] = [0] * (profile["maximum_array_length"] + 1)
-    elif probe == "string":
-        request["extra"] = "x" * (profile["maximum_string_bytes"] + 1)
-    else:
-        entry_count = (
-            profile["maximum_record_bytes"] // profile["maximum_string_bytes"]
-        ) + 1
-        request["completion"]["advisory_extensions"] = {
-            f"note_{index}": "x" * profile["maximum_string_bytes"]
-            for index in range(entry_count)
-        }
+    records = FIXTURE["completion_records"]
+    request = copy.deepcopy(records["publish_request_templates"][case["template"]])
+    _apply_fixture_patch(request, case["patch"])
     github = _RecordingGitHub()
 
     exit_code, stdout, stderr = _publish_output(
@@ -708,7 +603,7 @@ def test_python_publish_accepts_every_pinned_action_kind(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    request = _request(publication="ephemeral")
+    request = _valid_publish_request("ephemeral-continue")
     action = request["completion"]["actions"][0]
     action["kind"] = kind
     action["interaction"] = copy.deepcopy(
@@ -718,7 +613,7 @@ def test_python_publish_accepts_every_pinned_action_kind(
     )
     github = _RecordingGitHub()
 
-    exit_code, result, stderr = _publish_result(
+    exit_code, stdout, stderr = _publish_output(
         request,
         github,
         monkeypatch,
@@ -726,8 +621,7 @@ def test_python_publish_accepts_every_pinned_action_kind(
     )
 
     assert exit_code == 0
-    assert result["receipt"]["status"] == "unpublished"
-    assert set(result["receipt"]["semantic_fingerprints"]) == {"action"}
+    assert stdout == schema["expected_stdout_exact"]
     assert stderr == ""
     assert github.calls == []
 
@@ -742,7 +636,7 @@ def test_python_publish_accepts_every_pinned_condition_kind(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    request = _request(publication="ephemeral")
+    request = _valid_publish_request("ephemeral-continue")
     action = request["completion"]["actions"][0]
     for supporting_key in schema["supporting_action_keys"]:
         predecessor = copy.deepcopy(action)
@@ -751,7 +645,7 @@ def test_python_publish_accepts_every_pinned_condition_kind(
     action["prerequisites"] = [copy.deepcopy(schema["example"])]
     github = _RecordingGitHub()
 
-    exit_code, result, stderr = _publish_result(
+    exit_code, stdout, stderr = _publish_output(
         request,
         github,
         monkeypatch,
@@ -759,52 +653,43 @@ def test_python_publish_accepts_every_pinned_condition_kind(
     )
 
     assert exit_code == 0
-    assert result["receipt"]["status"] == "unpublished"
+    assert stdout == schema["expected_stdout_exact"]
     assert stderr == ""
     assert github.calls == []
 
 
-def test_python_publish_fingerprints_only_action_semantics(
+@pytest.mark.parametrize(
+    "case",
+    FIXTURE["completion_records"]["fingerprint_cases"],
+    ids=lambda case: case["id"],
+)
+def test_python_publish_locks_semantic_fingerprint_cases(
+    case: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    original = _request(publication="ephemeral")
-    presentation = copy.deepcopy(original)
-    presentation_action = presentation["completion"]["actions"][0]
-    presentation_action["summary"] = "Reworded for a human"
-    presentation_action["basis"] = [_issue(236), _issue(237)]
-    presentation_action["context_references"] = [_issue(235)]
-    presentation_action["effects"] = []
-    presentation_action["requirements"] = []
-    presentation_action["triggers"] = []
-    presentation_action["instruction"]["advisory_extensions"] = {
-        "display_hint": "compact"
+    records = FIXTURE["completion_records"]
+    valid_cases = {
+        valid_case["id"]: valid_case
+        for valid_case in records["valid_publish_cases"]
     }
-    semantic_change = copy.deepcopy(original)
-    changed_action = semantic_change["completion"]["actions"][0]
-    changed_action["effects"] = [
-        {"kind": "tracker-write", "scope": "octo/example#239"}
-    ]
-    changed_action["requirements"] = [{"kind": "skill", "name": "to-spec"}]
-    changed_action["triggers"] = [
-        {
-            "kind": "human-decision",
-            "condition": {"kind": "issue-open", "target": _issue(240)},
-        }
-    ]
+    base_case = valid_cases[case["base_case"]]
+    request = copy.deepcopy(
+        records["publish_request_templates"][base_case["template"]]
+    )
+    _apply_fixture_patch(request, base_case["patch"])
+    _apply_fixture_patch(request, case["patch"])
+    github = _RecordingGitHub()
 
-    fingerprints = []
-    for request in (original, presentation, semantic_change):
-        exit_code, result, _stderr = _publish_result(
-            request,
-            _RecordingGitHub(),
-            monkeypatch,
-            capsys,
-        )
-        assert exit_code == 0
-        fingerprints.append(
-            result["receipt"]["semantic_fingerprints"]["action"]
-        )
+    exit_code, stdout, stderr = _publish_output(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
 
-    assert fingerprints[0] == fingerprints[1]
-    assert fingerprints[2] != fingerprints[0]
+    expected = case["expected"]
+    assert exit_code == expected["exit_code"]
+    assert stdout == expected["stdout_exact"]
+    assert stderr == expected["stderr_exact"]
+    assert github.calls == expected["github_calls"]

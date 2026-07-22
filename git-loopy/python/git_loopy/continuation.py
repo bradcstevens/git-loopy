@@ -123,12 +123,12 @@ INTERACTION_EVIDENCE_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "transition-owner-attestation": {
         "classifications": frozenset({"AFK-safe"}),
-        "required_fields": frozenset({"kind", "owner"}),
+        "required_fields": frozenset({"kind", "noninteractive", "owner"}),
         "optional_fields": frozenset({"advisory_extensions"}),
         "string_fields": frozenset({"owner"}),
         "condition_fields": frozenset(),
         "bound_fields": {"owner": "completion.transition.owner"},
-        "enum_fields": {},
+        "enum_fields": {"noninteractive": frozenset({True})},
     },
 }
 OUTCOME_KINDS = frozenset({"complete", "rejected", "abandoned", "superseded"})
@@ -313,9 +313,7 @@ def _check_json_nesting(value: str, *, name: str) -> None:
             depth = max(0, depth - 1)
 
 
-def _portable_json(value: Any, *, name: str, depth: int = 1) -> None:
-    if depth > _MAX_DEPTH:
-        raise ContinuationError(f"{name} exceeds maximum nesting depth {_MAX_DEPTH}")
+def _portable_json(value: Any, *, name: str, depth: int = 0) -> None:
     if value is None or isinstance(value, bool):
         return
     if isinstance(value, int):
@@ -335,17 +333,27 @@ def _portable_json(value: Any, *, name: str, depth: int = 1) -> None:
             )
         return
     if isinstance(value, list):
+        container_depth = depth + 1
+        if container_depth > _MAX_DEPTH:
+            raise ContinuationError(
+                f"{name} exceeds maximum nesting depth {_MAX_DEPTH}"
+            )
         if len(value) > _MAX_ARRAY_LENGTH:
             raise ContinuationError(
                 f"{name} array exceeds maximum length {_MAX_ARRAY_LENGTH}"
             )
         for item in value:
-            _portable_json(item, name=name, depth=depth + 1)
+            _portable_json(item, name=name, depth=container_depth)
         return
     if isinstance(value, dict):
+        container_depth = depth + 1
+        if container_depth > _MAX_DEPTH:
+            raise ContinuationError(
+                f"{name} exceeds maximum nesting depth {_MAX_DEPTH}"
+            )
         for key, item in value.items():
-            _portable_json(key, name=name, depth=depth + 1)
-            _portable_json(item, name=name, depth=depth + 1)
+            _portable_json(key, name=name, depth=container_depth)
+            _portable_json(item, name=name, depth=container_depth)
         return
     raise ContinuationError(f"{name} contains an unsupported JSON value")
 

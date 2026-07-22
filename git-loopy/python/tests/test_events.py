@@ -106,6 +106,21 @@ def test_wrapper_event_constants_are_literal_strings() -> None:
     assert WRAPPER_ASK_USER_ATTEMPTED == "wrapper.ask_user.attempted"
 
 
+def test_dashboard_insight_vocabulary_is_additive_schema_version_one() -> None:
+    assert events_module.EVENT_SCHEMA_VERSION == 1
+    assert events_module.INSIGHT_CAPABILITY_NAMES == (
+        "agent_output",
+        "structured_agent_events",
+        "token_usage",
+        "context_window",
+        "skill_consultation",
+        "cost",
+    )
+    assert events_module.WRAPPER_ISSUE_ACTIVATED == "wrapper.issue.activated"
+    assert events_module.AGENT_OUTPUT == "agent.output"
+    assert events_module.USAGE_CONTEXT_WINDOW == "usage.context_window"
+
+
 def test_sdk_mapped_event_constants_are_literal_strings() -> None:
     """Every SDK-mapped event-type literal listed in the PRD must exist."""
     assert SESSION_CREATED == "session.created"

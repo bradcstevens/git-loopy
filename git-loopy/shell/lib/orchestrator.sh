@@ -1267,11 +1267,14 @@ git_loopy_run_discovery() {
       --arg send_timeout "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" \
       --argjson deny_skills "$deny_skills_json" \
       --argjson deny_tools "$deny_tools_json" \
+      --argjson insight_capabilities "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
       --argjson max_iterations "$GIT_LOOPY_MAX_ITERATIONS" \
       --argjson max_nmt_strikes "$GIT_LOOPY_MAX_NMT_STRIKES" \
+      --argjson schema_version "$GIT_LOOPY_EVENT_SCHEMA_VERSION" \
       '{
         deny_skills: $deny_skills,
         deny_tools: $deny_tools,
+        insight_capabilities: $insight_capabilities,
         issue_source: $issue_source,
         max_iterations: $max_iterations,
         max_nmt_strikes: $max_nmt_strikes,
@@ -1283,6 +1286,7 @@ git_loopy_run_discovery() {
           else $reasoning_effort
           end
         ),
+        schema_version: $schema_version,
         send_timeout_seconds: ($send_timeout | tonumber)
       }'
   )" || return 1

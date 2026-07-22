@@ -1056,6 +1056,8 @@ class _Loop:
             events_module.WRAPPER_RUN_START,
             iter_num=None,
             issue_source=self._config.issue_source,
+            schema_version=events_module.EVENT_SCHEMA_VERSION,
+            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
         )
@@ -1276,6 +1278,8 @@ class _ParallelLoop:
             events_module.WRAPPER_RUN_START,
             iter_num=None,
             issue_source=self._config.issue_source,
+            schema_version=events_module.EVENT_SCHEMA_VERSION,
+            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
         )

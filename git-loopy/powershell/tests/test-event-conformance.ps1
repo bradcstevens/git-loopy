@@ -55,6 +55,20 @@ foreach ($Name in $ExpectedTypes.Keys) {
     Assert-True $ActualTypes.Contains($Name) "missing event type $Name"
     Assert-Equal $ExpectedTypes[$Name] $ActualTypes[$Name] "event type $Name"
 }
+$ExpectedCapabilities = $Fixture["insight_capabilities"]["orchestrators"]["powershell"]
+$ActualCapabilities = Get-GitLoopyInsightCapabilities
+Assert-Equal $Fixture["schema_version"] (
+    Get-GitLoopyEventSchemaVersion
+) "Event-schema version"
+Assert-Equal $ExpectedCapabilities.Count $ActualCapabilities.Count (
+    "Insight capability count"
+)
+foreach ($Name in $ExpectedCapabilities.Keys) {
+    Assert-True $ActualCapabilities.Contains($Name) "missing Insight capability $Name"
+    Assert-Equal $ExpectedCapabilities[$Name] $ActualCapabilities[$Name] (
+        "Insight capability $Name"
+    )
+}
 
 foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]

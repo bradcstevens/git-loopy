@@ -556,7 +556,7 @@ _git_loopy_continuation_validate_completion_request() {
           and (if $value.evidence.kind == "transition-owner-attestation" then
                  fields(
                    $value.evidence; $name + ".evidence";
-                   ["kind", "owner"]; ["advisory_extensions"]
+                  ["kind", "noninteractive", "owner"]; ["advisory_extensions"]
                  )
                  and (if $value.classification == "AFK-safe" then true
                       else fail(
@@ -564,6 +564,10 @@ _git_loopy_continuation_validate_completion_request() {
                         + $value.classification
                       ) end)
                  and string($value.evidence.owner; $name + ".evidence.owner")
+                 and (if $value.evidence.noninteractive == true then true
+                      else fail(
+                        $name + ".evidence.noninteractive must be true"
+                      ) end)
                  and (if $value.evidence.owner == $owner then true
                       else fail(
                         $name

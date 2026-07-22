@@ -175,8 +175,10 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 Every Orchestrator MUST emit its structured record as JSONL using the shared **Event schema**
 (`git_loopy.events`), so the **TUI helper**, the `.git-loopy/logs/<iso>-<run_id>.jsonl` replay
 log, and any external consumer read one format regardless of which port produced it.
-The additive Event schema is independently versioned at **1.1**; changing the Wrapper contract
-does not implicitly change the Event schema.
+The additive Event schema has compatibility `schema_version` **1**; changing the Wrapper contract
+does not implicitly change that version. The current fixture revision is **1.1** because
+Continuation added optional event types without breaking schema-1 consumers. Unknown event types
+and unknown payload fields remain additive and MUST be ignored by compatible consumers.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
@@ -194,6 +196,9 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.continuation.reconciled`, `wrapper.continuation_dispatch.started`,
 `wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
 observations only and never carry authoritative fragments, secrets, or runnable Instructions.
+Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
+`agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is also a recognized
+wrapper event. Producing these additive events is capability-dependent.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
 segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`), and two that are
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
@@ -202,6 +207,53 @@ SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.me
 `tool.permission_denied`, `usage.tokens`. Secrets MUST be scrubbed before a line is written. Ports
 MUST copy these literals verbatim from `git_loopy.events`; a drifted literal (e.g. an underscore
 where a dot belongs) is a conformance failure.
+
+Every `wrapper.run.start` MUST carry numeric `schema_version: 1` and an
+`insight_capabilities` object with exactly these boolean keys:
+
+```json
+{
+  "agent_output": true,
+  "structured_agent_events": true,
+  "token_usage": true,
+  "context_window": false,
+  "skill_consultation": true,
+  "cost": true
+}
+```
+
+The values above are the Python Orchestrator's current manifest. Shell and PowerShell currently
+declare all six values `false`; later work may change a value to `true` only when that
+Orchestrator emits the signal truthfully. `false` means unavailable. `true` with no sample yet is
+still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and an
+observed collection with no members is `[]`.
+
+The following additive Insight payload shapes are reserved by schema 1. Existing Phase 1 traces,
+including payload-free `wrapper.iteration.end` records, remain valid. When an Orchestrator begins
+emitting or enriching one of these records, it MUST use the pinned shape; the downstream
+Orchestrator rollout tickets own enabling those producers.
+
+- `wrapper.issue.activated`: `issue`, UTC RFC3339 `activated_at`, and `binding_source`. Once
+  produced, one event authoritatively and immutably binds an Iteration to its Active issue.
+- `agent.output`: `text` and `kind`, where the only schema-1 kind is `unclassified`. Once produced,
+  native CLI text MUST NOT be relabeled as SDK reasoning, assistant, tool-call, or tool-result
+  data.
+- `usage.context_window`: `current_tokens`, nullable `token_limit`, nullable
+  `effective_target_tokens`, and nullable `effective_ceiling_tokens`.
+- An enriched `wrapper.iteration.end`: `outcome`, monotonic `duration_seconds`, normalized
+  `summary`, and an `issues` contribution list.
+
+The normalized `summary` requires `model`, `tokens_in`, `tokens_out`, `observed_tokens`,
+`cost_usd`, `tool_count`, `skill_call_count`, sorted-distinct `skills_consulted`, `commits`,
+`auto_closures`, `pr_advances`, `strikes`, and nullable `peak_context_window`. Each issue
+contribution requires `issue`, `status`, UTC RFC3339 `first_started_at`, closure-only `closed_at`,
+closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_seconds`,
+`consumption` (`model`, `tokens_in`, `tokens_out`), nullable `cost_usd`, and nullable
+`peak_context_window`. Only authoritative source closure populates closure-only fields.
+
+Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
+non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
+subtracting wall-clock timestamps.
 
 ## 13. Conformance (phase 1, MUST)
 

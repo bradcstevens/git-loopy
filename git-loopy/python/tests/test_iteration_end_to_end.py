@@ -408,6 +408,20 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert types_seen.index("wrapper.skill_policy.resolved") < types_seen.index(
         "wrapper.run.start"
     )
+    run_start = next(
+        json.loads(raw)
+        for raw in log_lines
+        if json.loads(raw)["type"] == "wrapper.run.start"
+    )
+    assert run_start["schema_version"] == 1
+    assert run_start["insight_capabilities"] == {
+        "agent_output": True,
+        "structured_agent_events": True,
+        "token_usage": True,
+        "context_window": False,
+        "skill_consultation": True,
+        "cost": True,
+    }
     resolved = next(
         json.loads(raw)
         for raw in log_lines

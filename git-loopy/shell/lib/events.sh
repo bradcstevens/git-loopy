@@ -14,6 +14,8 @@ fi
 declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_RUN_START]="wrapper.run.start"
   [WRAPPER_RUN_END]="wrapper.run.end"
+  [WRAPPER_ISSUE_ACTIVATED]="wrapper.issue.activated"
+  [WRAPPER_SKILL_POLICY_RESOLVED]="wrapper.skill_policy.resolved"
   [WRAPPER_ITERATION_START]="wrapper.iteration.start"
   [WRAPPER_ITERATION_END]="wrapper.iteration.end"
   [WRAPPER_AFK_READY_COLLECTED]="wrapper.afk_ready.collected"
@@ -28,6 +30,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_CONTINUATION_DISPATCH_STARTED]="wrapper.continuation_dispatch.started"
   [WRAPPER_CONTINUATION_DISPATCH_ENDED]="wrapper.continuation_dispatch.ended"
   [WRAPPER_CONTINUATION_STOPPED]="wrapper.continuation.stopped"
+  [AGENT_OUTPUT]="agent.output"
   [SESSION_CREATED]="session.created"
   [SESSION_IDLE]="session.idle"
   [SESSION_DELETED]="session.deleted"
@@ -38,7 +41,17 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [TOOL_PERMISSION_REQUESTED]="tool.permission_requested"
   [TOOL_PERMISSION_DENIED]="tool.permission_denied"
   [USAGE_TOKENS]="usage.tokens"
+  [USAGE_CONTEXT_WINDOW]="usage.context_window"
 )
+declare -r GIT_LOOPY_EVENT_SCHEMA_VERSION=1
+declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
+  "agent_output": false,
+  "structured_agent_events": false,
+  "token_usage": false,
+  "context_window": false,
+  "skill_consultation": false,
+  "cost": false
+}'
 
 GIT_LOOPY_RUN_ID=""
 GIT_LOOPY_STARTED_AT=""

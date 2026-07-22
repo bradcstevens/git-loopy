@@ -2,9 +2,109 @@
   "schema_version": 1,
   "contract_version": "1.2",
   "event_schema_version": "1.1",
+  "insight_capabilities": {
+    "names": [
+      "agent_output",
+      "structured_agent_events",
+      "token_usage",
+      "context_window",
+      "skill_consultation",
+      "cost"
+    ],
+    "orchestrators": {
+      "python": {
+        "agent_output": true,
+        "structured_agent_events": true,
+        "token_usage": true,
+        "context_window": false,
+        "skill_consultation": true,
+        "cost": true
+      },
+      "shell": {
+        "agent_output": false,
+        "structured_agent_events": false,
+        "token_usage": false,
+        "context_window": false,
+        "skill_consultation": false,
+        "cost": false
+      },
+      "powershell": {
+        "agent_output": false,
+        "structured_agent_events": false,
+        "token_usage": false,
+        "context_window": false,
+        "skill_consultation": false,
+        "cost": false
+      }
+    }
+  },
+  "payload_contracts": {
+    "wrapper.run.start": {
+      "required": ["schema_version", "insight_capabilities"]
+    },
+    "wrapper.issue.activated": {
+      "required_when_present": ["issue", "activated_at", "binding_source"]
+    },
+    "agent.output": {
+      "required_when_present": ["text", "kind"],
+      "kind_values": ["unclassified"]
+    },
+    "usage.context_window": {
+      "required_when_present": [
+        "current_tokens",
+        "token_limit",
+        "effective_target_tokens",
+        "effective_ceiling_tokens"
+      ]
+    },
+    "wrapper.iteration.end": {
+      "required_when_present": ["outcome", "duration_seconds", "summary", "issues"],
+      "summary_required": [
+        "model",
+        "tokens_in",
+        "tokens_out",
+        "observed_tokens",
+        "cost_usd",
+        "tool_count",
+        "skill_call_count",
+        "skills_consulted",
+        "commits",
+        "auto_closures",
+        "pr_advances",
+        "strikes",
+        "peak_context_window"
+      ],
+      "issue_required": [
+        "issue",
+        "status",
+        "first_started_at",
+        "closed_at",
+        "issue_elapsed_seconds",
+        "active_seconds",
+        "cumulative_active_seconds",
+        "consumption",
+        "cost_usd",
+        "peak_context_window"
+      ],
+      "consumption_required": ["model", "tokens_in", "tokens_out"]
+    }
+  },
+  "value_semantics": {
+    "unknown": null,
+    "observed_none": {
+      "counter": 0,
+      "collection": []
+    },
+    "timestamp_format": "RFC3339 UTC with trailing Z",
+    "duration_source": "monotonic clock",
+    "duration_unit": "seconds"
+  },
   "event_types": {
+    "AGENT_OUTPUT": "agent.output",
     "WRAPPER_RUN_START": "wrapper.run.start",
     "WRAPPER_RUN_END": "wrapper.run.end",
+    "WRAPPER_ISSUE_ACTIVATED": "wrapper.issue.activated",
+    "WRAPPER_SKILL_POLICY_RESOLVED": "wrapper.skill_policy.resolved",
     "WRAPPER_ITERATION_START": "wrapper.iteration.start",
     "WRAPPER_ITERATION_END": "wrapper.iteration.end",
     "WRAPPER_AFK_READY_COLLECTED": "wrapper.afk_ready.collected",
@@ -28,7 +128,8 @@
     "TOOL_RESULT": "tool.result",
     "TOOL_PERMISSION_REQUESTED": "tool.permission_requested",
     "TOOL_PERMISSION_DENIED": "tool.permission_denied",
-    "USAGE_TOKENS": "usage.tokens"
+    "USAGE_TOKENS": "usage.tokens",
+    "USAGE_CONTEXT_WINDOW": "usage.context_window"
   },
   "serialization_cases": [
     {
@@ -54,6 +155,109 @@
         "count": 2
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000BB\", \"iter\": null, \"type\": \"wrapper.run.start\", \"count\": 2, \"issues\": [79, 80]}\n"
+    },
+    {
+      "id": "run-start-insight-capabilities",
+      "event": {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": null,
+        "type": "wrapper.run.start",
+        "schema_version": 1,
+        "insight_capabilities": {
+          "agent_output": false,
+          "structured_agent_events": false,
+          "token_usage": false,
+          "context_window": false,
+          "skill_consultation": false,
+          "cost": false
+        }
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"schema_version\": 1}\n"
+    },
+    {
+      "id": "authoritative-issue-activation",
+      "event": {
+        "ts": "2026-05-16T00:00:01.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": 1,
+        "type": "wrapper.issue.activated",
+        "issue": 42,
+        "activated_at": "2026-05-16T00:00:01.000Z",
+        "binding_source": "working_marker"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"wrapper.issue.activated\", \"activated_at\": \"2026-05-16T00:00:01.000Z\", \"binding_source\": \"working_marker\", \"issue\": 42}\n"
+    },
+    {
+      "id": "unclassified-agent-output",
+      "event": {
+        "ts": "2026-05-16T00:00:02.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": 1,
+        "type": "agent.output",
+        "text": "Working on #42",
+        "kind": "unclassified"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"agent.output\", \"kind\": \"unclassified\", \"text\": \"Working on #42\"}\n"
+    },
+    {
+      "id": "partial-context-window-sample",
+      "event": {
+        "ts": "2026-05-16T00:00:03.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": 1,
+        "type": "usage.context_window",
+        "current_tokens": 12000,
+        "token_limit": null,
+        "effective_target_tokens": null,
+        "effective_ceiling_tokens": null
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"usage.context_window\", \"current_tokens\": 12000, \"effective_ceiling_tokens\": null, \"effective_target_tokens\": null, \"token_limit\": null}\n"
+    },
+    {
+      "id": "normalized-iteration-rollup-null-and-zero",
+      "event": {
+        "ts": "2026-05-16T00:00:04.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 0.5,
+        "summary": {
+          "model": null,
+          "tokens_in": 0,
+          "tokens_out": 0,
+          "observed_tokens": 0,
+          "cost_usd": null,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 1,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 0.5,
+            "cumulative_active_seconds": 0.5,
+            "consumption": {
+              "model": null,
+              "tokens_in": 0,
+              "tokens_out": 0
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 0.5, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 0.5, \"cumulative_active_seconds\": 0.5, \"consumption\": {\"model\": null, \"tokens_in\": 0, \"tokens_out\": 0}, \"cost_usd\": null, \"peak_context_window\": null}], \"outcome\": \"no_progress\", \"summary\": {\"model\": null, \"tokens_in\": 0, \"tokens_out\": 0, \"observed_tokens\": 0, \"cost_usd\": null, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 1, \"peak_context_window\": null}}\n"
     }
   ]
 }

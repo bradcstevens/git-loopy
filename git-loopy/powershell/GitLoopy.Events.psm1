@@ -3,6 +3,8 @@ Set-StrictMode -Version Latest
 $script:EventTypes = [ordered]@{
     WRAPPER_RUN_START = "wrapper.run.start"
     WRAPPER_RUN_END = "wrapper.run.end"
+    WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
+    WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
     WRAPPER_ITERATION_START = "wrapper.iteration.start"
     WRAPPER_ITERATION_END = "wrapper.iteration.end"
     WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
@@ -17,6 +19,7 @@ $script:EventTypes = [ordered]@{
     WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
     WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
     WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
+    AGENT_OUTPUT = "agent.output"
     SESSION_CREATED = "session.created"
     SESSION_IDLE = "session.idle"
     SESSION_DELETED = "session.deleted"
@@ -27,6 +30,16 @@ $script:EventTypes = [ordered]@{
     TOOL_PERMISSION_REQUESTED = "tool.permission_requested"
     TOOL_PERMISSION_DENIED = "tool.permission_denied"
     USAGE_TOKENS = "usage.tokens"
+    USAGE_CONTEXT_WINDOW = "usage.context_window"
+}
+$script:EventSchemaVersion = 1
+$script:InsightCapabilities = [ordered]@{
+    agent_output = $false
+    structured_agent_events = $false
+    token_usage = $false
+    context_window = $false
+    skill_consultation = $false
+    cost = $false
 }
 
 $script:EnvelopeKeys = @("ts", "run_id", "iter", "type")
@@ -49,6 +62,24 @@ function Get-GitLoopyEventTypes {
     $Copy = [ordered]@{}
     foreach ($Name in $script:EventTypes.Keys) {
         $Copy[$Name] = $script:EventTypes[$Name]
+    }
+    return $Copy
+}
+
+function Get-GitLoopyEventSchemaVersion {
+    [CmdletBinding()]
+    param()
+
+    return $script:EventSchemaVersion
+}
+
+function Get-GitLoopyInsightCapabilities {
+    [CmdletBinding()]
+    param()
+
+    $Copy = [ordered]@{}
+    foreach ($Name in $script:InsightCapabilities.Keys) {
+        $Copy[$Name] = $script:InsightCapabilities[$Name]
     }
     return $Copy
 }
@@ -318,6 +349,8 @@ function Write-GitLoopyEvent {
 
 Export-ModuleMember -Function @(
     "Get-GitLoopyEventTypes",
+    "Get-GitLoopyEventSchemaVersion",
+    "Get-GitLoopyInsightCapabilities",
     "Get-GitLoopyIsoTimestamp",
     "New-GitLoopyRunId",
     "New-GitLoopyEventContext",

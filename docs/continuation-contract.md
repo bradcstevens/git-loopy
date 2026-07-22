@@ -132,13 +132,15 @@ effect, requirement, or trigger semantics reject the whole envelope.
 
 The v1 Action-kind, interaction-evidence, and condition registries are closed and pinned in the
 Conformance fixture. `transition-owner-attestation` is valid only for `AFK-safe` and its required
-owner must match `completion.transition.owner`. `human-boundary` is valid only for
-`HITL-required`; it carries one pinned human-boundary reason and a durable typed resolution
-condition. Conditions pin their required and optional fields, string fields, local-reference field,
-allowed durable Target kinds, and enum values such as pull-request review state. They are
-machine-evaluable durable references or an `action-completed` local reference; free-text-only
-prerequisites and completion conditions are invalid. Unknown fields are rejected outside reserved
-`advisory_extensions` maps, whose content cannot establish behavior.
+owner must match `completion.transition.owner`; it must also attest `noninteractive: true`.
+Together with the typed completion condition and the Action's canonical empty-or-declared effects,
+requirements, and triggers, that attestation is the AFK safety case rather than a bare owner claim.
+`human-boundary` is valid only for `HITL-required`; it carries one pinned human-boundary reason and
+a durable typed resolution condition. Conditions pin their required and optional fields, string
+fields, local-reference field, allowed durable Target kinds, and enum values such as pull-request
+review state. They are machine-evaluable durable references or an `action-completed` local
+reference; free-text-only prerequisites and completion conditions are invalid. Unknown fields are
+rejected outside reserved `advisory_extensions` maps, whose content cannot establish behavior.
 
 Publication verifies the durable transition-evidence comment before mutation, establishes the
 repairable `git-loopy-continuation` discovery label, appends one record-format-1 carrier comment,
@@ -155,8 +157,10 @@ Validation and canonicalization finish before the first GitHub call. The portabl
 without BOM, NFC-normalized strings, duplicate-key rejection, lexically sorted object keys, compact
 JSON, no floats, interoperable signed 53-bit integers, maximum depth 16, maximum array length 256,
 maximum individual string length 8 KiB UTF-8, and maximum canonical record length 48 KiB. The
-command iteratively checks raw JSON nesting before invoking Python's recursive decoder, and also
-checks the live carrier body limit before establishing the discovery label.
+command iteratively checks raw JSON nesting before invoking Python's recursive decoder. Depth counts
+only object and array containers, so a populated value at container depth 16 is valid and depth 17
+is rejected. The command also checks the live carrier body limit before establishing the discovery
+label.
 
 The revision identity is the SHA-256 digest of the canonical completion envelope. Each Action also
 gets a SHA-256 semantic fingerprint over only its Instruction, Prerequisites, interaction

@@ -190,31 +190,38 @@ run_github_failure_probes
 run_portable_json_profile_probes() {
   local case
   while IFS= read -r case; do
-    local id probe request github_script github_state github_log
+    local id request github_script github_state github_log
     id="$(jq -r '.id' <<<"$case")"
-    probe="$(jq -r '.probe' <<<"$case")"
     request="$(
       jq -c \
-        --arg probe "$probe" '
-        .completion_records.publish_request_templates["shared-continue"]
-        | if $probe == "float" then
-            .extra = 1.5
-          elif $probe == "integer" then
-            .extra = 9007199254740992
-          elif $probe == "nfc" then
-            .completion.producer.login = "e\u0301"
-          elif $probe == "depth" then
-            .extra = reduce range(0; 17) as $index ({}; {child: .})
-          elif $probe == "array" then
-            .extra = [range(0; 257) | 0]
-          elif $probe == "string" then
-            .extra = ("x" * 8193)
+        --argjson case "$case" '
+        def pointer:
+          ltrimstr("/")
+          | split("/")
+          | map(gsub("~1"; "/") | gsub("~0"; "~"))
+          | map(if test("^(0|[1-9][0-9]*)$") then tonumber else . end);
+        def operation_value:
+          if has("value_json_segments") then
+            [
+              .value_json_segments[]
+              | .text * (.repeat // 1)
+            ]
+            | join("")
+            | fromjson
           else
-            .completion.advisory_extensions = reduce range(0; 7) as $index (
-              {};
-              .["note_\($index)"] = ("x" * 8192)
-            )
-          end
+            .value
+          end;
+        .completion_records.publish_request_templates[$case.template]
+        | reduce $case.patch[] as $operation (.;
+            if $operation.op == "remove" then
+              delpaths([$operation.path | pointer])
+            else
+              setpath(
+                $operation.path | pointer;
+                $operation | operation_value
+              )
+            end
+          )
       ' "$fixture"
     )"
     github_script="$tmp/$id-profile-github-script.json"

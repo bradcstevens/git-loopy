@@ -333,6 +333,15 @@ actual_types="$(jq -sc '[.[].type]' "$temp_dir/empty.stdout")"
 assert_equal "$expected_types" "$actual_types" "empty-Pool event sequence"
 jq -se '
   .[0].issue_source == "github"
+  and .[0].schema_version == 1
+  and .[0].insight_capabilities == {
+    agent_output: false,
+    structured_agent_events: false,
+    token_usage: false,
+    context_window: false,
+    skill_consultation: false,
+    cost: false
+  }
   and .[2].issues == []
   and .[4].outcome == "empty_pool"
   and .[4].iterations_run == 1

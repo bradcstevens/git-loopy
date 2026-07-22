@@ -663,6 +663,16 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
             "wrapper.iteration.end",
         ):
             assert "lane_issue" not in e
+    run_start = next(e for e in events if e["type"] == "wrapper.run.start")
+    assert run_start["schema_version"] == 1
+    assert run_start["insight_capabilities"] == {
+        "agent_output": True,
+        "structured_agent_events": True,
+        "token_usage": True,
+        "context_window": False,
+        "skill_consultation": True,
+        "cost": True,
+    }
 
 
 def test_parallel_run_falls_back_to_serial_when_under_two_eligible(

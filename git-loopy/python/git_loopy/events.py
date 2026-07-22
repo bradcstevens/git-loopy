@@ -61,9 +61,15 @@ from typing import Any
 from copilot.generated.session_events import SessionEvent, SessionEventType
 
 __all__ = [
+    # Event-schema contract
+    "EVENT_SCHEMA_VERSION",
+    "INSIGHT_CAPABILITY_NAMES",
+    "PYTHON_INSIGHT_CAPABILITIES",
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
+    "WRAPPER_ISSUE_ACTIVATED",
+    "WRAPPER_SKILL_POLICY_RESOLVED",
     "WRAPPER_ITERATION_START",
     "WRAPPER_ITERATION_END",
     "WRAPPER_AFK_READY_COLLECTED",
@@ -89,6 +95,8 @@ __all__ = [
     "TOOL_PERMISSION_REQUESTED",
     "TOOL_PERMISSION_DENIED",
     "USAGE_TOKENS",
+    "AGENT_OUTPUT",
+    "USAGE_CONTEXT_WINDOW",
     # Functions
     "make_event",
     "to_jsonl_line",
@@ -99,6 +107,24 @@ __all__ = [
     "MAX_TOOL_ARGS_CHARS",
 ]
 
+EVENT_SCHEMA_VERSION = 1
+INSIGHT_CAPABILITY_NAMES: tuple[str, ...] = (
+    "agent_output",
+    "structured_agent_events",
+    "token_usage",
+    "context_window",
+    "skill_consultation",
+    "cost",
+)
+PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
+    "agent_output": True,
+    "structured_agent_events": True,
+    "token_usage": True,
+    "context_window": False,
+    "skill_consultation": True,
+    "cost": True,
+}
+
 # ---------------------------------------------------------------------------
 # Event-type string literals
 # ---------------------------------------------------------------------------
@@ -106,6 +132,7 @@ __all__ = [
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_RUN_END = "wrapper.run.end"
+WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
 WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
 WRAPPER_ITERATION_END = "wrapper.iteration.end"
@@ -138,6 +165,8 @@ TOOL_RESULT = "tool.result"
 TOOL_PERMISSION_REQUESTED = "tool.permission_requested"
 TOOL_PERMISSION_DENIED = "tool.permission_denied"
 USAGE_TOKENS = "usage.tokens"
+AGENT_OUTPUT = "agent.output"
+USAGE_CONTEXT_WINDOW = "usage.context_window"
 
 # ---------------------------------------------------------------------------
 # Internal constants
