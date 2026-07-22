@@ -215,6 +215,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  config                         Manage persisted settings: "
             "set / get / list / edit / path.\n"
             "                                 See `git-loopy config -h`.\n"
+            "  skills list                    Inspect the normalized Skill catalog "
+            "and policy state.\n"
+            "                                 See `git-loopy skills -h`.\n"
             "\n"
             "Environment variables:\n"
             "  GIT_LOOPY_MODEL              Copilot model id override "
@@ -418,7 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config")
+_SUBCOMMANDS = ("init", "config", "skills")
 
 
 def _add_scope_flags(
@@ -452,7 +455,7 @@ def _add_scope_flags(
 
 
 def build_subcommand_parser() -> argparse.ArgumentParser:
-    """Construct the argparse parser for git-loopy's subcommands (``init`` / ``config``).
+    """Construct the parser for ``init``, ``config``, and ``skills`` commands.
 
     Kept separate from :func:`build_parser` on purpose (see :data:`_SUBCOMMANDS`):
     :func:`main` pre-dispatches on the first token, so this parser is only ever
@@ -462,9 +465,13 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="git-loopy",
-        description="git-loopy subcommands (first-run setup and config management).",
+        description="git-loopy subcommands (setup, Config, and Skill management).",
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{init,config}")
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="{init,config,skills}",
+    )
 
     init = sub.add_parser(
         "init",
@@ -492,6 +499,28 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Assume defaults and never prompt (CI-friendly). Uses the project "
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills."
+        ),
+    )
+
+    skills = sub.add_parser(
+        "skills",
+        help="Inspect and manage git-loopy's closed-world Skill policy.",
+        description=(
+            "Inspect the normalized Skill catalog and git-loopy policy state. "
+            "Catalog discovery is read-only and never changes Copilot settings."
+        ),
+    )
+    skills_sub = skills.add_subparsers(
+        dest="skills_command",
+        required=True,
+        metavar="{list}",
+    )
+    skills_sub.add_parser(
+        "list",
+        help="List normalized Skill winners and policy state.",
+        description=(
+            "Print stable, path-free rows showing git-loopy state, Copilot state, "
+            "Required status, source, canonical name, and description."
         ),
     )
 
@@ -685,6 +714,20 @@ def _run_config(args: argparse.Namespace) -> int:
     if command == "path":
         return configcmd.run_path(scope=scope, repo_root=repo_root, env=env)
     return configcmd.run_edit(scope=scope, repo_root=repo_root, env=env)
+
+
+def _run_skills(args: argparse.Namespace) -> int:
+    """Dispatch ``git-loopy skills`` without constructing the Run loop."""
+    from git_loopy import skillscmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        return 1
+    if args.skills_command == "list":
+        return skillscmd.run_skills_list(repo_root=repo_root, env=os.environ)
+    raise AssertionError(f"unhandled skills command: {args.skills_command}")
 
 
 def _parse_csv_env(value: str | None) -> list[str]:
@@ -1405,7 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    # Pre-dispatch on the first token: a reserved subcommand (init / config)
+    # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
     # in one parser — `git-loopy 5` would be misread as an invalid subcommand).
@@ -1414,6 +1457,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_args = build_subcommand_parser().parse_args(argv)
         if sub_args.command == "init":
             return _run_init(sub_args)
+        if sub_args.command == "skills":
+            return _run_skills(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()

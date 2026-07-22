@@ -6,11 +6,16 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from importlib.resources import files
+from pathlib import Path
+from typing import Mapping
+
+from . import settings
 
 __all__ = [
     "PromptMetadataError",
     "PromptMetadataFailure",
     "RequiredSkills",
+    "load_prompt",
     "minimal_skill_policy",
     "packaged_required_skills",
     "parse_required_skills",
@@ -193,3 +198,21 @@ def packaged_required_skills() -> tuple[str, ...]:
 def minimal_skill_policy() -> tuple[str, ...]:
     """Return the deterministic Minimal Skill policy from the packaged contract."""
     return packaged_required_skills()
+
+
+def load_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
+    """Load Run instructions with project, global, then packaged precedence."""
+    candidates = (
+        repo_root / "git-loopy" / "prompt.md",
+        repo_root / "git-loopy" / settings.PROMPT_FILENAME,
+        settings.global_prompt_path(env),
+        Path(str(files("git_loopy") / settings.PROMPT_FILENAME)),
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+    raise FileNotFoundError(
+        "prompt file not found: no project override "
+        f"(under {repo_root}/git-loopy/), no global override "
+        f"({settings.global_prompt_path(env)}), and no packaged default"
+    )

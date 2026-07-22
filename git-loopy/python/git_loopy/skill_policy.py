@@ -70,7 +70,24 @@ class SkillCatalogWinner:
 
     name: str
     source_kind: str
+    description: str = ""
+    copilot_enabled: bool | None = None
+    user_invocable: bool = False
+    plugin_name: str | None = None
+    path: Path | None = None
     project_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        path = Path(self.path) if self.path is not None else None
+        project_path = (
+            Path(self.project_path) if self.project_path is not None else None
+        )
+        if self.source_kind == "project":
+            if project_path is None and path is not None:
+                project_path = path.parent if path.name == "SKILL.md" else path
+            path = path or project_path
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "project_path", project_path)
 
 
 @dataclass(frozen=True)

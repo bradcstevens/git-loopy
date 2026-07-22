@@ -56,6 +56,12 @@ def test_subcommand_parser_parses_config() -> None:
     assert args.config_command == "list"
 
 
+def test_subcommand_parser_parses_skills_list() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(["skills", "list"])
+    assert args.command == "skills"
+    assert args.skills_command == "list"
+
+
 def test_subcommand_parser_config_requires_an_op() -> None:
     """Bare ``config`` (no op) is an argparse error, not a fall-through run."""
     with pytest.raises(SystemExit):
@@ -174,6 +180,25 @@ def test_main_config_routes_to_handler_no_loop(
     assert rc == 0
     assert captured == []  # the loop never ran
     assert capsys.readouterr().out.strip() == "claude-opus-4.8"
+
+
+def test_main_skills_list_routes_to_handler_no_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    seen: list[str] = []
+
+    def fake_run_skills(args: Any) -> int:
+        seen.append(args.skills_command)
+        return 0
+
+    monkeypatch.setattr(cli_module, "_run_skills", fake_run_skills)
+
+    assert cli_module.main(["skills", "list"]) == 0
+    assert seen == ["list"]
+    assert captured == []
 
 
 def test_main_config_bad_op_errors_no_loop(
@@ -378,6 +403,10 @@ def test_dispatch_does_not_import_sdk() -> None:
         "assert rc == 0, rc\n"
         "try:\n"
         "    cli.main(['init', '--help'])\n"  # argparse prints help + SystemExit(0)
+        "except SystemExit as exc:\n"
+        "    assert exc.code == 0, exc.code\n"
+        "try:\n"
+        "    cli.main(['skills', '--help'])\n"
         "except SystemExit as exc:\n"
         "    assert exc.code == 0, exc.code\n"
         "for mod in ('copilot', 'rich', 'textual', 'git_loopy.loop'):\n"

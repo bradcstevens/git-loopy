@@ -110,7 +110,6 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Iterable, Mapping, Protocol
 
@@ -121,9 +120,9 @@ from git_loopy import events as events_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
-from git_loopy import settings as settings_module
 from git_loopy import worktree as worktree_module
 from git_loopy.config import RunConfig, resolve_iteration_model
+from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
 from git_loopy.persist import (
     IterationCounters,
@@ -131,6 +130,7 @@ from git_loopy.persist import (
     create_writers,
 )
 from git_loopy.pricing import Pricing, PricingError, load_pricing
+from git_loopy.prompt import load_prompt
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -186,7 +186,7 @@ def _make_client() -> CopilotClient:
     :func:`_build_telemetry_config` — which is ``None`` (a no-op) when
     OTel is disabled.
     """
-    return CopilotClient(telemetry=_build_telemetry_config())
+    return make_copilot_client(telemetry_config=_build_telemetry_config())
 
 
 def _make_git_client() -> git_module.SubprocessGitClient:
@@ -359,6 +359,8 @@ def _packaged_prompt_path() -> Path:
     with no ``git-loopy/`` folder still has a working prompt — the "run from
     anywhere" story (ADR-0006).
     """
+    from importlib.resources import files
+
     return Path(str(files("git_loopy") / "PROMPT.md"))
 
 
@@ -382,20 +384,7 @@ def _read_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
     :exc:`FileNotFoundError` if even the packaged default is absent — a
     defensive last resort, since the wheel always ships it.
     """
-    candidates = (
-        repo_root / "git-loopy" / "prompt.md",
-        repo_root / "git-loopy" / "PROMPT.md",
-        settings_module.global_prompt_path(env),
-        _packaged_prompt_path(),
-    )
-    for cand in candidates:
-        if cand.exists():
-            return cand.read_text(encoding="utf-8")
-    raise FileNotFoundError(
-        "prompt file not found: no project override "
-        f"(under {repo_root}/git-loopy/), no global override "
-        f"({settings_module.global_prompt_path(env)}), and no packaged default"
-    )
+    return load_prompt(repo_root, env)
 
 
 def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
