@@ -78,6 +78,7 @@ dev = [
 
 [project.scripts]
 git-loopy = "git_loopy.cli:main"
+git-loopy-prototype-continuation = "git_loopy.prototypes.continuation_212.app:main"
 
 [build-system]
 requires = ["hatchling>=1.24"]
