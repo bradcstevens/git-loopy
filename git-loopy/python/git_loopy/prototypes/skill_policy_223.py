@@ -82,7 +82,6 @@ def project(case: Case) -> str:
         enabled = set(case.required)
 
     if case.environment is not None:
-        scope = "environment"
         enabled = set(case.environment)
 
     enabled.update(case.enable)
