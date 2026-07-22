@@ -4,75 +4,45 @@
   "record_format": 1,
   "wrapper_contract_version": "1.2",
   "event_schema_version": "1.1",
-  "capability_manifest": {
-    "continuation_contract_versions": ["1.0"],
-    "record_formats": [1],
-    "wrapper_contract_version": "1.2",
-    "event_schema_version": "1.1",
-    "tracker_adapters": {
-      "github": {
-        "operations": []
+  "github_transport_probe": {
+    "github_script": [
+      {
+        "command": "api /scripted-probe",
+        "exit_code": 23,
+        "expected_stdin_json": {"probe": true},
+        "stdout_json": {"scripted": true},
+        "stderr": "scripted diagnostic\n"
       }
-    },
-    "operations": {
-      "capabilities": true,
-      "publish": false,
-      "reconcile": false,
-      "record-dispatch-result": false,
-      "repair-index": false
-    },
-    "instruction_handlers": [],
-    "instruction_modes": [],
-    "evaluators": [],
-    "effect_scopes": [],
-    "optional_capabilities": {
-      "terminal_rendering": false,
-      "concurrent_dispatch": false
-    },
-    "continuation_modes": {
-      "default": "off",
-      "off": true,
-      "report": false,
-      "execute-frontier": false
-    }
-  },
-  "distribution_capability_manifests": {
-    "python": {
-      "continuation_contract_versions": ["1.0"],
-      "record_formats": [1],
-      "wrapper_contract_version": "1.2",
-      "event_schema_version": "1.1",
-      "tracker_adapters": {
-        "github": {
-          "operations": ["publish", "reconcile"]
+    ],
+    "invocations": [
+      {
+        "arguments": ["api", "/scripted-probe"],
+        "stdin_json": {"probe": true},
+        "expected": {
+          "exit_code": 23,
+          "stdout_json": {"scripted": true},
+          "stderr_contains": "scripted diagnostic"
         }
       },
-      "operations": {
-        "capabilities": true,
-        "publish": true,
-        "reconcile": true,
-        "record-dispatch-result": false,
-        "repair-index": false
-      },
-      "instruction_handlers": [],
-      "instruction_modes": [],
-      "evaluators": [],
-      "effect_scopes": [],
-      "optional_capabilities": {
-        "terminal_rendering": false,
-        "concurrent_dispatch": false
-      },
-      "continuation_modes": {
-        "default": "off",
-        "off": true,
-        "report": false,
-        "execute-frontier": false
+      {
+        "arguments": ["api", "/unlisted"],
+        "stdin": "",
+        "expected": {
+          "exit_code": 98,
+          "stdout": "",
+          "stderr_contains": "unlisted GitHub call"
+        }
       }
-    }
+    ],
+    "expected_github_calls": [
+      "api /scripted-probe",
+      "api /unlisted"
+    ]
   },
   "scenarios": [
     {
-      "id": "capabilities",
+      "id": "capabilities-python",
+      "distributions": ["python"],
       "arguments": ["continuation", "capabilities"],
       "request": null,
       "github_script": [],
@@ -81,7 +51,83 @@
         "stdout": {
           "ok": true,
           "capabilities": {
-            "$fixture": "capability_manifest"
+            "continuation_contract_versions": ["1.0"],
+            "record_formats": [1],
+            "wrapper_contract_version": "1.2",
+            "event_schema_version": "1.1",
+            "tracker_adapters": {
+              "github": {
+                "operations": ["publish", "reconcile"]
+              }
+            },
+            "operations": {
+              "capabilities": true,
+              "publish": true,
+              "reconcile": true,
+              "record-dispatch-result": false,
+              "repair-index": false
+            },
+            "instruction_handlers": [],
+            "instruction_modes": [],
+            "evaluators": [],
+            "effect_scopes": [],
+            "optional_capabilities": {
+              "terminal_rendering": false,
+              "concurrent_dispatch": false
+            },
+            "continuation_modes": {
+              "default": "off",
+              "off": true,
+              "report": false,
+              "execute-frontier": false
+            }
+          }
+        },
+        "stderr_contains": null,
+        "github_calls": []
+      }
+    },
+    {
+      "id": "capabilities-shell-powershell",
+      "distributions": ["shell", "powershell"],
+      "arguments": ["continuation", "capabilities"],
+      "request": null,
+      "github_script": [],
+      "expected": {
+        "exit_code": 0,
+        "stdout": {
+          "ok": true,
+          "capabilities": {
+            "continuation_contract_versions": ["1.0"],
+            "record_formats": [1],
+            "wrapper_contract_version": "1.2",
+            "event_schema_version": "1.1",
+            "tracker_adapters": {
+              "github": {
+                "operations": []
+              }
+            },
+            "operations": {
+              "capabilities": true,
+              "publish": false,
+              "reconcile": false,
+              "record-dispatch-result": false,
+              "repair-index": false
+            },
+            "instruction_handlers": [],
+            "instruction_modes": [],
+            "evaluators": [],
+            "effect_scopes": [],
+            "optional_capabilities": {
+              "terminal_rendering": false,
+              "concurrent_dispatch": false
+            },
+            "continuation_modes": {
+              "default": "off",
+              "off": true,
+              "report": false,
+              "execute-frontier": false
+            }
           }
         },
         "stderr_contains": null,
