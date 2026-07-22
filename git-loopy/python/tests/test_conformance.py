@@ -160,7 +160,7 @@ _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.2"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.3"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -190,13 +190,62 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
 
 def test_continuation_fixture_pins_completion_vocabularies() -> None:
     records = _CONTINUATION_SCENARIOS["completion_records"]
+    assert set(records["publications"]) == continuation_module.PUBLICATIONS
+    assert set(records["dispositions"]) == continuation_module.DISPOSITIONS
     assert set(records["action_kinds"]) == continuation_module.ACTION_KINDS
+    assert {
+        kind: frozenset(schema["allowed_classifications"])
+        for kind, schema in records["action_kind_schemas"].items()
+    } == continuation_module.ACTION_KIND_SCHEMAS
+    assert (
+        set(records["interaction_classifications"])
+        == continuation_module.INTERACTION_CLASSIFICATIONS
+    )
+    assert (
+        set(records["human_boundary_reasons"])
+        == continuation_module.HUMAN_BOUNDARY_REASONS
+    )
     assert set(records["condition_kinds"]) == continuation_module.CONDITION_KINDS
     assert set(records["outcome_kinds"]) == continuation_module.OUTCOME_KINDS
     assert (
         set(records["no_guidance_reasons"])
         == continuation_module.NO_GUIDANCE_REASONS
     )
+    assert records["canonical_json"] == continuation_module.CANONICAL_JSON_PROFILE
+
+    fixture_evidence_schemas = {
+        kind: {
+            "classifications": frozenset(schema["classifications"]),
+            "required_fields": frozenset(schema["required_fields"]),
+            "optional_fields": frozenset(schema["optional_fields"]),
+            "string_fields": frozenset(schema["string_fields"]),
+            "condition_fields": frozenset(schema["condition_fields"]),
+            "enum_fields": {
+                field: frozenset(values)
+                for field, values in schema["enum_fields"].items()
+            },
+        }
+        for kind, schema in records["interaction_evidence_schemas"].items()
+    }
+    assert (
+        fixture_evidence_schemas
+        == continuation_module.INTERACTION_EVIDENCE_SCHEMAS
+    )
+    fixture_condition_schemas = {
+        kind: {
+            "required_fields": frozenset(schema["required_fields"]),
+            "optional_fields": frozenset(schema["optional_fields"]),
+            "string_fields": frozenset(schema["string_fields"]),
+            "local_reference_field": schema["local_reference_field"],
+            "target_kinds": frozenset(schema["target_kinds"]),
+            "enum_fields": {
+                field: frozenset(values)
+                for field, values in schema["enum_fields"].items()
+            },
+        }
+        for kind, schema in records["condition_schemas"].items()
+    }
+    assert fixture_condition_schemas == continuation_module.CONDITION_SCHEMAS
 
 
 _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")

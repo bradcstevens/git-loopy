@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.2",
+  "fixture_schema_version": "1.3",
   "continuation_contract_version": "1.0",
   "record_format": 1,
   "wrapper_contract_version": "1.2",
@@ -9,6 +9,65 @@
     "dispositions": ["continue", "no-guidance", "terminal"],
     "no_guidance_reasons": ["ephemeral-only", "no-successor-created"],
     "outcome_kinds": ["abandoned", "complete", "rejected", "superseded"],
+    "interaction_classifications": ["AFK-safe", "HITL-required"],
+    "human_boundary_reasons": [
+      "consent-required",
+      "credential-required",
+      "human-decision",
+      "physical-interaction",
+      "privilege-expansion",
+      "scope-ambiguity",
+      "subjective-validation"
+    ],
+    "interaction_examples": {
+      "afk-safe": {
+        "classification": "AFK-safe",
+        "evidence": {
+          "kind": "transition-owner-attestation",
+          "owner": "wayfinder"
+        }
+      },
+      "hitl-required": {
+        "classification": "HITL-required",
+        "evidence": {
+          "kind": "human-boundary",
+          "reason": "human-decision",
+          "resolution_condition": {
+            "kind": "issue-label-present",
+            "target": {"kind": "issue", "repository": "octo/example", "number": 239},
+            "label": "human-resolved"
+          }
+        }
+      }
+    },
+    "interaction_evidence_schemas": {
+      "human-boundary": {
+        "classifications": ["HITL-required"],
+        "required_fields": ["kind", "reason", "resolution_condition"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "condition_fields": ["resolution_condition"],
+        "enum_fields": {
+          "reason": [
+            "consent-required",
+            "credential-required",
+            "human-decision",
+            "physical-interaction",
+            "privilege-expansion",
+            "scope-ambiguity",
+            "subjective-validation"
+          ]
+        }
+      },
+      "transition-owner-attestation": {
+        "classifications": ["AFK-safe"],
+        "required_fields": ["kind", "owner"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": ["owner"],
+        "condition_fields": [],
+        "enum_fields": {}
+      }
+    },
     "action_kinds": [
       "Address review findings",
       "Authorize operation",
@@ -28,6 +87,76 @@
       "Review head",
       "Triage item"
     ],
+    "action_kind_schemas": {
+      "Address review findings": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Authorize operation": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Chart workstream": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Close parent": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Decompose spec": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Implement ticket": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Perform manual validation": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Prototype evidence": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Provide information": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Publish head": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Publish spec": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Research fact": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Resolve conflict": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Resolve decision": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Review and merge PR": {
+        "allowed_classifications": ["HITL-required"],
+        "example_interaction": "hitl-required"
+      },
+      "Review head": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      },
+      "Triage item": {
+        "allowed_classifications": ["AFK-safe", "HITL-required"],
+        "example_interaction": "afk-safe"
+      }
+    },
     "condition_kinds": [
       "action-completed",
       "artifact-exists",
@@ -43,6 +172,211 @@
       "pull-request-review-state",
       "sub-issues-complete"
     ],
+    "condition_schemas": {
+      "action-completed": {
+        "required_fields": ["action_key", "kind"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": ["action_key"],
+        "local_reference_field": "action_key",
+        "target_kinds": [],
+        "enum_fields": {},
+        "example": {"kind": "action-completed", "action_key": "predecessor"},
+        "supporting_action_keys": ["predecessor"]
+      },
+      "artifact-exists": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": [
+          "branch",
+          "commit",
+          "issue",
+          "issue-comment",
+          "pull-request",
+          "pull-request-review"
+        ],
+        "enum_fields": {},
+        "example": {
+          "kind": "artifact-exists",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+        },
+        "supporting_action_keys": []
+      },
+      "branch-head-equals": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["branch"],
+        "enum_fields": {},
+        "example": {
+          "kind": "branch-head-equals",
+          "target": {
+            "kind": "branch",
+            "repository": "octo/example",
+            "name": "feature",
+            "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "supporting_action_keys": []
+      },
+      "commit-exists": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["commit"],
+        "enum_fields": {},
+        "example": {
+          "kind": "commit-exists",
+          "target": {
+            "kind": "commit",
+            "repository": "octo/example",
+            "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "supporting_action_keys": []
+      },
+      "dependency-satisfied": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["issue"],
+        "enum_fields": {},
+        "example": {
+          "kind": "dependency-satisfied",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+        },
+        "supporting_action_keys": []
+      },
+      "issue-closed": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["issue"],
+        "enum_fields": {},
+        "example": {
+          "kind": "issue-closed",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+        },
+        "supporting_action_keys": []
+      },
+      "issue-label-present": {
+        "required_fields": ["kind", "label", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": ["label"],
+        "local_reference_field": null,
+        "target_kinds": ["issue"],
+        "enum_fields": {},
+        "example": {
+          "kind": "issue-label-present",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237},
+          "label": "ready-for-agent"
+        },
+        "supporting_action_keys": []
+      },
+      "issue-open": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["issue"],
+        "enum_fields": {},
+        "example": {
+          "kind": "issue-open",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+        },
+        "supporting_action_keys": []
+      },
+      "pull-request-closed": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["pull-request"],
+        "enum_fields": {},
+        "example": {
+          "kind": "pull-request-closed",
+          "target": {
+            "kind": "pull-request",
+            "repository": "octo/example",
+            "number": 42
+          }
+        },
+        "supporting_action_keys": []
+      },
+      "pull-request-merged": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["pull-request"],
+        "enum_fields": {},
+        "example": {
+          "kind": "pull-request-merged",
+          "target": {
+            "kind": "pull-request",
+            "repository": "octo/example",
+            "number": 42
+          }
+        },
+        "supporting_action_keys": []
+      },
+      "pull-request-open": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["pull-request"],
+        "enum_fields": {},
+        "example": {
+          "kind": "pull-request-open",
+          "target": {
+            "kind": "pull-request",
+            "repository": "octo/example",
+            "number": 42
+          }
+        },
+        "supporting_action_keys": []
+      },
+      "pull-request-review-state": {
+        "required_fields": ["kind", "state", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["pull-request-review"],
+        "enum_fields": {
+          "state": ["approved", "changes-requested", "commented"]
+        },
+        "example": {
+          "kind": "pull-request-review-state",
+          "target": {
+            "kind": "pull-request-review",
+            "repository": "octo/example",
+            "pull_request": 42,
+            "review_id": 91
+          },
+          "state": "approved"
+        },
+        "supporting_action_keys": []
+      },
+      "sub-issues-complete": {
+        "required_fields": ["kind", "target"],
+        "optional_fields": ["advisory_extensions"],
+        "string_fields": [],
+        "local_reference_field": null,
+        "target_kinds": ["issue"],
+        "enum_fields": {},
+        "example": {
+          "kind": "sub-issues-complete",
+          "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+        },
+        "supporting_action_keys": []
+      }
+    },
     "canonical_json": {
       "encoding": "UTF-8",
       "bom": false,
@@ -56,7 +390,467 @@
       "maximum_string_bytes": 8192,
       "maximum_record_bytes": 49152,
       "digest": "SHA-256"
-    }
+    },
+    "canonical_json_rejections": [
+      {
+        "id": "floating-point-value",
+        "probe": "float",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request must not contain floating-point values\"}}\n",
+          "stderr_exact": "git-loopy continuation: request must not contain floating-point values\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "integer-above-maximum",
+        "probe": "integer",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request integer exceeds interoperable signed 53-bit range\"}}\n",
+          "stderr_exact": "git-loopy continuation: request integer exceeds interoperable signed 53-bit range\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "non-nfc-string",
+        "probe": "nfc",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request strings must be NFC-normalized\"}}\n",
+          "stderr_exact": "git-loopy continuation: request strings must be NFC-normalized\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "nesting-above-maximum",
+        "probe": "depth",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request exceeds maximum nesting depth 16\"}}\n",
+          "stderr_exact": "git-loopy continuation: request exceeds maximum nesting depth 16\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "array-above-maximum",
+        "probe": "array",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request array exceeds maximum length 256\"}}\n",
+          "stderr_exact": "git-loopy continuation: request array exceeds maximum length 256\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "string-above-maximum",
+        "probe": "string",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request string exceeds maximum UTF-8 length 8192\"}}\n",
+          "stderr_exact": "git-loopy continuation: request string exceeds maximum UTF-8 length 8192\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "record-above-maximum",
+        "probe": "record",
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion canonical JSON exceeds maximum record length 49152\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion canonical JSON exceeds maximum record length 49152\n",
+          "github_calls": []
+        }
+      }
+    ],
+    "publish_request_templates": {
+      "shared-continue": {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "completion": {
+          "continuation_contract_version": "1.0",
+          "record_format": 1,
+          "publication": "shared",
+          "disposition": "continue",
+          "workstream": {
+            "anchor": {"kind": "issue", "repository": "octo/example", "number": 237},
+            "destination": {
+              "kind": "issue-closed",
+              "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+            }
+          },
+          "transition": {
+            "owner": "wayfinder",
+            "evidence": [
+              {
+                "kind": "issue-comment",
+                "repository": "octo/example",
+                "issue": 237,
+                "comment_id": 7001
+              }
+            ]
+          },
+          "producer": {"login": "planner", "role": "planning"},
+          "carrier": {"kind": "issue", "repository": "octo/example", "number": 237},
+          "actions": [
+            {
+              "key": "action",
+              "summary": "Publish the specification",
+              "kind": "Publish spec",
+              "occurrence": "v1",
+              "instruction": {"mode": "skill", "value": "/to-spec 237"},
+              "target": {"kind": "issue", "repository": "octo/example", "number": 239},
+              "basis": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ],
+              "prerequisites": [],
+              "interaction": {
+                "classification": "AFK-safe",
+                "evidence": {
+                  "kind": "transition-owner-attestation",
+                  "owner": "wayfinder"
+                }
+              },
+              "completion_condition": {
+                "kind": "issue-closed",
+                "target": {"kind": "issue", "repository": "octo/example", "number": 239}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "semantic_rejections": [
+      {
+        "id": "unknown-contract-version",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/continuation_contract_version",
+            "value": "2.0"
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"unsupported Continuation contract version\"}}\n",
+          "stderr_exact": "git-loopy continuation: unsupported Continuation contract version\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unknown-record-format",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/record_format", "value": 2}
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"unsupported Continuation record format\"}}\n",
+          "stderr_exact": "git-loopy continuation: unsupported Continuation record format\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "missing-disposition",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "remove", "path": "/completion/disposition"}
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion is missing required field: disposition\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion is missing required field: disposition\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unsupported-disposition",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/disposition", "value": "waiting"}
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.disposition is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.disposition is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "mixed-content",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/completion/outcome",
+            "value": {
+              "kind": "complete",
+              "destination_satisfied": true,
+              "effective_at": "2026-07-22T18:00:00Z",
+              "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ],
+              "summary": "Complete."
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion must contain exactly one content branch matching disposition\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion must contain exactly one content branch matching disposition\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "partial-action",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/actions/0/basis", "value": []}
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.basis must be a non-empty array\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.basis must be a non-empty array\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "broken-local-reference",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/prerequisites",
+            "value": [{"kind": "action-completed", "action_key": "absent"}]
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions contains broken local reference: absent\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions contains broken local reference: absent\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "non-durable-reference",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/target",
+            "value": {"kind": "local-file", "path": "/tmp/advice"}
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.target.kind is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.target.kind is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unknown-action-kind",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/kind",
+            "value": "Invent workflow"
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.kind is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.kind is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unknown-condition-kind",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/completion_condition",
+            "value": {"kind": "free-text", "description": "Looks done"}
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.completion_condition.kind is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.actions item.completion_condition.kind is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "contradictory-no-guidance",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/publication", "value": "ephemeral"},
+          {"op": "remove", "path": "/completion/carrier"},
+          {"op": "remove", "path": "/completion/workstream/anchor"},
+          {"op": "replace", "path": "/completion/transition/evidence", "value": []},
+          {"op": "replace", "path": "/trusted_producers", "value": []},
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "no-guidance"},
+          {
+            "op": "add",
+            "path": "/completion/no_guidance",
+            "value": {
+              "reason": "no-successor-created",
+              "summary": "Contradiction.",
+              "references": []
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion publication contradicts no-guidance reason\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion publication contradicts no-guidance reason\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "manual-afk",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/instruction",
+            "value": {"mode": "manual", "value": "Approve the plan"}
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"manual Instructions must be HITL-required\"}}\n",
+          "stderr_exact": "git-loopy continuation: manual Instructions must be HITL-required\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "hard-hitl-afk",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/actions/0/kind",
+            "value": "Chart workstream"
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"Chart workstream Actions must be HITL-required\"}}\n",
+          "stderr_exact": "git-loopy continuation: Chart workstream Actions must be HITL-required\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "terminal-ephemeral",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "replace", "path": "/completion/publication", "value": "ephemeral"},
+          {"op": "remove", "path": "/completion/carrier"},
+          {"op": "remove", "path": "/completion/workstream/anchor"},
+          {"op": "replace", "path": "/completion/transition/evidence", "value": []},
+          {"op": "replace", "path": "/trusted_producers", "value": []},
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "terminal"},
+          {
+            "op": "add",
+            "path": "/completion/outcome",
+            "value": {
+              "kind": "complete",
+              "destination_satisfied": true,
+              "effective_at": "2026-07-22T18:00:00Z",
+              "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ],
+              "summary": "Invalid ephemeral completion."
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"terminal completion must be shared\"}}\n",
+          "stderr_exact": "git-loopy continuation: terminal completion must be shared\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "contradictory-outcome",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "terminal"},
+          {
+            "op": "add",
+            "path": "/completion/outcome",
+            "value": {
+              "kind": "rejected",
+              "destination_satisfied": true,
+              "effective_at": "2026-07-22T18:00:00Z",
+              "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ],
+              "summary": "Rejected."
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.outcome contradicts destination satisfaction\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.outcome contradicts destination satisfaction\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unknown-no-guidance",
+        "template": "shared-continue",
+        "patch": [
+          {"op": "remove", "path": "/completion/actions"},
+          {"op": "replace", "path": "/completion/disposition", "value": "no-guidance"},
+          {
+            "op": "add",
+            "path": "/completion/no_guidance",
+            "value": {
+              "reason": "undefined-successor",
+              "summary": "Must fail rather than downgrade.",
+              "references": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+              ]
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.no_guidance.reason is unsupported\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.no_guidance.reason is unsupported\n",
+          "github_calls": []
+        }
+      },
+      {
+        "id": "unsupported-carrier",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/completion/carrier",
+            "value": {
+              "kind": "pull-request",
+              "repository": "octo/example",
+              "number": 237
+            }
+          }
+        ],
+        "expected": {
+          "exit_code": 1,
+          "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.carrier.kind must be one of: issue\"}}\n",
+          "stderr_exact": "git-loopy continuation: completion.carrier.kind must be one of: issue\n",
+          "github_calls": []
+        }
+      }
+    ]
   },
   "github_transport_probe": {
     "github_script": [
@@ -301,6 +1095,8 @@
             "message": "request must be one UTF-8 JSON object"
           }
         },
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request must be one UTF-8 JSON object\"}}\n",
+        "stderr_exact": "git-loopy continuation: request must be one UTF-8 JSON object\n",
         "stderr_contains": "request must be one UTF-8 JSON object",
         "github_calls": []
       }
@@ -324,6 +1120,8 @@
             "message": "request contains duplicate object key: repository"
           }
         },
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request contains duplicate object key: repository\"}}\n",
+        "stderr_exact": "git-loopy continuation: request contains duplicate object key: repository\n",
         "stderr_contains": "duplicate object key: repository",
         "github_calls": []
       }
@@ -371,7 +1169,30 @@
             "message": "request must be one UTF-8 JSON object"
           }
         },
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request must be one UTF-8 JSON object\"}}\n",
+        "stderr_exact": "git-loopy continuation: request must be one UTF-8 JSON object\n",
         "stderr_contains": "request must be one UTF-8 JSON object",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "python-publish-rejects-utf8-bom",
+      "distributions": ["python"],
+      "arguments": [
+        "continuation",
+        "publish",
+        "--input",
+        "$INPUT_FILE"
+      ],
+      "request": {
+        "source": "file",
+        "base64": "77u/e30="
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request must be UTF-8 without a BOM\"}}\n",
+        "stderr_exact": "git-loopy continuation: request must be UTF-8 without a BOM\n",
         "github_calls": []
       }
     },
@@ -448,7 +1269,128 @@
             "message": "completion.producer.role must be planning"
           }
         },
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.producer.role must be planning\"}}\n",
+        "stderr_exact": "git-loopy continuation: completion.producer.role must be planning\n",
         "stderr_contains": "completion.producer.role must be planning",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "python-publish-rejects-untyped-interaction-evidence",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "ephemeral",
+            "disposition": "continue",
+            "workstream": {
+              "destination": {
+                "kind": "issue-closed",
+                "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": []
+            },
+            "producer": {"login": "planner", "role": "planning"},
+            "actions": [
+              {
+                "key": "publish-spec",
+                "summary": "Publish the approved Continuation specification",
+                "kind": "Publish spec",
+                "occurrence": "prd-v1",
+                "instruction": {"mode": "skill", "value": "/to-spec 237"},
+                "target": {"kind": "issue", "repository": "octo/example", "number": 239},
+                "basis": [
+                  {"kind": "issue", "repository": "octo/example", "number": 237}
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {"note": "trust me"}
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {"kind": "issue", "repository": "octo/example", "number": 239}
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.interaction.evidence is missing required field: kind\"}}\n",
+        "stderr_exact": "git-loopy continuation: completion.actions item.interaction.evidence is missing required field: kind\n",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "python-publish-rejects-incomplete-condition-schema",
+      "distributions": ["python"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "ephemeral",
+            "disposition": "continue",
+            "workstream": {
+              "destination": {
+                "kind": "issue-closed",
+                "target": {"kind": "issue", "repository": "octo/example", "number": 237}
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": []
+            },
+            "producer": {"login": "planner", "role": "planning"},
+            "actions": [
+              {
+                "key": "publish-spec",
+                "summary": "Publish the approved Continuation specification",
+                "kind": "Publish spec",
+                "occurrence": "prd-v1",
+                "instruction": {"mode": "skill", "value": "/to-spec 237"},
+                "target": {"kind": "issue", "repository": "octo/example", "number": 239},
+                "basis": [
+                  {"kind": "issue", "repository": "octo/example", "number": 237}
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-label-present",
+                  "target": {"kind": "issue", "repository": "octo/example", "number": 239}
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"completion.actions item.completion_condition is missing required field: label\"}}\n",
+        "stderr_exact": "git-loopy continuation: completion.actions item.completion_condition is missing required field: label\n",
         "github_calls": []
       }
     },
@@ -642,6 +1584,8 @@
                 }
               }
             },
+            "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"b846107963d54d540560804f68c4eec5812cf03da7e746eec60844214f53fc22\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"publish-spec\":\"e646204a6bdaf56041a058986c643394986d9d383eb5bc4429ef77575f2c72f6\"}}}\n",
+            "stderr_exact": "",
             "stderr_contains": null
           }
         },

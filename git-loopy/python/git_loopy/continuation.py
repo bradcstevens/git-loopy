@@ -60,57 +60,77 @@ _MAX_ARRAY_LENGTH = 256
 _MAX_STRING_BYTES = 8 * 1024
 _MAX_RECORD_BYTES = 48 * 1024
 _MAX_CARRIER_BODY_BYTES = 64 * 1024
+CANONICAL_JSON_PROFILE: dict[str, Any] = {
+    "encoding": "UTF-8",
+    "bom": False,
+    "normalization": "NFC",
+    "duplicate_keys": False,
+    "floats": False,
+    "integer_min": -_MAX_INTEGER,
+    "integer_max": _MAX_INTEGER,
+    "maximum_depth": _MAX_DEPTH,
+    "maximum_array_length": _MAX_ARRAY_LENGTH,
+    "maximum_string_bytes": _MAX_STRING_BYTES,
+    "maximum_record_bytes": _MAX_RECORD_BYTES,
+    "digest": "SHA-256",
+}
 
-ACTION_KINDS = frozenset(
+PUBLICATIONS = frozenset({"ephemeral", "shared"})
+DISPOSITIONS = frozenset({"continue", "no-guidance", "terminal"})
+INTERACTION_CLASSIFICATIONS = frozenset({"AFK-safe", "HITL-required"})
+HUMAN_BOUNDARY_REASONS = frozenset(
     {
-        "Chart workstream",
-        "Resolve decision",
-        "Research fact",
-        "Prototype evidence",
-        "Publish spec",
-        "Decompose spec",
-        "Triage item",
-        "Provide information",
-        "Perform manual validation",
-        "Authorize operation",
-        "Implement ticket",
-        "Address review findings",
-        "Review head",
-        "Resolve conflict",
-        "Publish head",
-        "Review and merge PR",
-        "Close parent",
+        "consent-required",
+        "credential-required",
+        "human-decision",
+        "physical-interaction",
+        "privilege-expansion",
+        "scope-ambiguity",
+        "subjective-validation",
     }
 )
-CONDITION_KINDS = frozenset(
-    {
-        "action-completed",
-        "artifact-exists",
-        "branch-head-equals",
-        "commit-exists",
-        "dependency-satisfied",
-        "issue-closed",
-        "issue-label-present",
-        "issue-open",
-        "pull-request-closed",
-        "pull-request-merged",
-        "pull-request-open",
-        "pull-request-review-state",
-        "sub-issues-complete",
-    }
-)
+_ANY_INTERACTION = INTERACTION_CLASSIFICATIONS
+_HITL_ONLY = frozenset({"HITL-required"})
+ACTION_KIND_SCHEMAS: dict[str, frozenset[str]] = {
+    "Address review findings": _ANY_INTERACTION,
+    "Authorize operation": _HITL_ONLY,
+    "Chart workstream": _HITL_ONLY,
+    "Close parent": _ANY_INTERACTION,
+    "Decompose spec": _ANY_INTERACTION,
+    "Implement ticket": _ANY_INTERACTION,
+    "Perform manual validation": _HITL_ONLY,
+    "Prototype evidence": _ANY_INTERACTION,
+    "Provide information": _HITL_ONLY,
+    "Publish head": _ANY_INTERACTION,
+    "Publish spec": _ANY_INTERACTION,
+    "Research fact": _ANY_INTERACTION,
+    "Resolve conflict": _ANY_INTERACTION,
+    "Resolve decision": _HITL_ONLY,
+    "Review and merge PR": _HITL_ONLY,
+    "Review head": _ANY_INTERACTION,
+    "Triage item": _ANY_INTERACTION,
+}
+ACTION_KINDS = frozenset(ACTION_KIND_SCHEMAS)
+INTERACTION_EVIDENCE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "human-boundary": {
+        "classifications": _HITL_ONLY,
+        "required_fields": frozenset({"kind", "reason", "resolution_condition"}),
+        "optional_fields": frozenset({"advisory_extensions"}),
+        "string_fields": frozenset(),
+        "condition_fields": frozenset({"resolution_condition"}),
+        "enum_fields": {"reason": HUMAN_BOUNDARY_REASONS},
+    },
+    "transition-owner-attestation": {
+        "classifications": frozenset({"AFK-safe"}),
+        "required_fields": frozenset({"kind", "owner"}),
+        "optional_fields": frozenset({"advisory_extensions"}),
+        "string_fields": frozenset({"owner"}),
+        "condition_fields": frozenset(),
+        "enum_fields": {},
+    },
+}
 OUTCOME_KINDS = frozenset({"complete", "rejected", "abandoned", "superseded"})
 NO_GUIDANCE_REASONS = frozenset({"no-successor-created", "ephemeral-only"})
-_HARD_HITL_KINDS = frozenset(
-    {
-        "Chart workstream",
-        "Resolve decision",
-        "Provide information",
-        "Perform manual validation",
-        "Authorize operation",
-        "Review and merge PR",
-    }
-)
 _REFERENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "issue": ("repository", "number"),
     "pull-request": ("repository", "number"),
@@ -119,20 +139,117 @@ _REFERENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "commit": ("repository", "sha"),
     "branch": ("repository", "name", "sha"),
 }
-_CONDITION_REFERENCE_KINDS: dict[str, frozenset[str]] = {
-    "artifact-exists": frozenset(_REFERENCE_FIELDS),
-    "branch-head-equals": frozenset({"branch"}),
-    "commit-exists": frozenset({"commit"}),
-    "dependency-satisfied": frozenset({"issue"}),
-    "issue-closed": frozenset({"issue"}),
-    "issue-label-present": frozenset({"issue"}),
-    "issue-open": frozenset({"issue"}),
-    "pull-request-closed": frozenset({"pull-request"}),
-    "pull-request-merged": frozenset({"pull-request"}),
-    "pull-request-open": frozenset({"pull-request"}),
-    "pull-request-review-state": frozenset({"pull-request-review"}),
-    "sub-issues-complete": frozenset({"issue"}),
+_CONDITION_OPTIONAL_FIELDS = frozenset({"advisory_extensions"})
+_TARGET_CONDITION_FIELDS = frozenset({"kind", "target"})
+CONDITION_SCHEMAS: dict[str, dict[str, Any]] = {
+    "action-completed": {
+        "required_fields": frozenset({"kind", "action_key"}),
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset({"action_key"}),
+        "local_reference_field": "action_key",
+        "target_kinds": frozenset(),
+        "enum_fields": {},
+    },
+    "artifact-exists": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset(_REFERENCE_FIELDS),
+        "enum_fields": {},
+    },
+    "branch-head-equals": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"branch"}),
+        "enum_fields": {},
+    },
+    "commit-exists": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"commit"}),
+        "enum_fields": {},
+    },
+    "dependency-satisfied": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"issue"}),
+        "enum_fields": {},
+    },
+    "issue-closed": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"issue"}),
+        "enum_fields": {},
+    },
+    "issue-label-present": {
+        "required_fields": frozenset({"kind", "target", "label"}),
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset({"label"}),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"issue"}),
+        "enum_fields": {},
+    },
+    "issue-open": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"issue"}),
+        "enum_fields": {},
+    },
+    "pull-request-closed": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"pull-request"}),
+        "enum_fields": {},
+    },
+    "pull-request-merged": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"pull-request"}),
+        "enum_fields": {},
+    },
+    "pull-request-open": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"pull-request"}),
+        "enum_fields": {},
+    },
+    "pull-request-review-state": {
+        "required_fields": frozenset({"kind", "target", "state"}),
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"pull-request-review"}),
+        "enum_fields": {
+            "state": frozenset({"approved", "changes-requested", "commented"})
+        },
+    },
+    "sub-issues-complete": {
+        "required_fields": _TARGET_CONDITION_FIELDS,
+        "optional_fields": _CONDITION_OPTIONAL_FIELDS,
+        "string_fields": frozenset(),
+        "local_reference_field": None,
+        "target_kinds": frozenset({"issue"}),
+        "enum_fields": {},
+    },
 }
+CONDITION_KINDS = frozenset(CONDITION_SCHEMAS)
 _EFFECT_KINDS = frozenset(
     {
         "external-write",
@@ -148,17 +265,7 @@ _EFFECT_KINDS = frozenset(
 _REQUIREMENT_KINDS = frozenset(
     {"access", "capability", "command", "evaluator", "policy", "skill"}
 )
-_TRIGGER_KINDS = frozenset(
-    {
-        "consent-required",
-        "credential-required",
-        "human-decision",
-        "physical-interaction",
-        "privilege-expansion",
-        "scope-ambiguity",
-        "subjective-validation",
-    }
-)
+_TRIGGER_KINDS = HUMAN_BOUNDARY_REASONS
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -410,38 +517,86 @@ def _condition(
 ) -> tuple[dict[str, Any], str | None]:
     condition = _object(value, name)
     kind = _string(condition.get("kind"), f"{name}.kind")
-    if kind not in CONDITION_KINDS:
+    schema = CONDITION_SCHEMAS.get(kind)
+    if schema is None:
         raise ContinuationError(f"{name}.kind is unsupported")
-    if kind == "action-completed":
+    _fields(
+        condition,
+        name,
+        required=schema["required_fields"],
+        optional=schema["optional_fields"],
+    )
+    for field in schema["string_fields"]:
+        _string(condition.get(field), f"{name}.{field}")
+    for field, allowed_values in schema["enum_fields"].items():
+        if condition.get(field) not in allowed_values:
+            raise ContinuationError(f"{name}.{field} is unsupported")
+    local_reference_field = schema["local_reference_field"]
+    if local_reference_field is not None:
         if not allow_local:
             raise ContinuationError(f"{name}.kind requires a durable subject")
-        _fields(
-            condition,
-            name,
-            required=frozenset({"kind", "action_key"}),
-            optional=frozenset({"advisory_extensions"}),
-        )
-        action_key = _string(condition.get("action_key"), f"{name}.action_key")
-        return condition, action_key
-
-    optional = frozenset({"advisory_extensions"})
-    if kind == "issue-label-present":
-        required = frozenset({"kind", "target", "label"})
-        _string(condition.get("label"), f"{name}.label")
-    elif kind == "pull-request-review-state":
-        required = frozenset({"kind", "target", "state"})
-        if condition.get("state") not in {"approved", "changes-requested", "commented"}:
-            raise ContinuationError(f"{name}.state is unsupported")
-    else:
-        required = frozenset({"kind", "target"})
-    _fields(condition, name, required=required, optional=optional)
+        return condition, str(condition[local_reference_field])
     _durable_reference(
         condition.get("target"),
         f"{name}.target",
         repository,
-        allowed_kinds=_CONDITION_REFERENCE_KINDS[kind],
+        allowed_kinds=schema["target_kinds"],
     )
     return condition, None
+
+
+def _interaction(
+    value: Any,
+    *,
+    repository: str,
+) -> str:
+    name = "completion.actions item.interaction"
+    interaction = _object(value, name)
+    _fields(
+        interaction,
+        name,
+        required=frozenset({"classification", "evidence"}),
+        optional=frozenset({"advisory_extensions"}),
+    )
+    classification = _string(
+        interaction.get("classification"),
+        f"{name}.classification",
+    )
+    if classification not in INTERACTION_CLASSIFICATIONS:
+        raise ContinuationError(f"{name}.classification is unsupported")
+    evidence_name = f"{name}.evidence"
+    evidence = _object(interaction.get("evidence"), evidence_name)
+    if "kind" not in evidence:
+        raise ContinuationError(
+            f"{evidence_name} is missing required field: kind"
+        )
+    evidence_kind = _string(evidence.get("kind"), f"{evidence_name}.kind")
+    schema = INTERACTION_EVIDENCE_SCHEMAS.get(evidence_kind)
+    if schema is None:
+        raise ContinuationError(f"{evidence_name}.kind is unsupported")
+    _fields(
+        evidence,
+        evidence_name,
+        required=schema["required_fields"],
+        optional=schema["optional_fields"],
+    )
+    if classification not in schema["classifications"]:
+        raise ContinuationError(
+            f"{evidence_name}.kind is incompatible with {classification}"
+        )
+    for field in schema["string_fields"]:
+        _string(evidence.get(field), f"{evidence_name}.{field}")
+    for field, allowed_values in schema["enum_fields"].items():
+        if evidence.get(field) not in allowed_values:
+            raise ContinuationError(f"{evidence_name}.{field} is unsupported")
+    for field in schema["condition_fields"]:
+        _condition(
+            evidence.get(field),
+            f"{evidence_name}.{field}",
+            repository=repository,
+            allow_local=False,
+        )
+    return classification
 
 
 def _typed_semantics(
@@ -601,35 +756,13 @@ def _validate_action(
         )
         if local_reference is not None:
             local_references.append(local_reference)
-    interaction = _object(
+    classification = _interaction(
         action.get("interaction"),
-        "completion.actions item.interaction",
+        repository=repository,
     )
-    _fields(
-        interaction,
-        "completion.actions item.interaction",
-        required=frozenset({"classification", "evidence"}),
-        optional=frozenset({"advisory_extensions"}),
-    )
-    classification = _string(
-        interaction.get("classification"),
-        "completion.actions item.interaction.classification",
-    )
-    if classification not in {"AFK-safe", "HITL-required"}:
-        raise ContinuationError(
-            "completion.actions item.interaction.classification is unsupported"
-        )
-    evidence = _object(
-        interaction.get("evidence"),
-        "completion.actions item.interaction.evidence",
-    )
-    if not evidence:
-        raise ContinuationError(
-            "completion.actions item.interaction.evidence must be non-empty"
-        )
     if instruction["mode"] == "manual" and classification != "HITL-required":
         raise ContinuationError("manual Instructions must be HITL-required")
-    if kind in _HARD_HITL_KINDS and classification != "HITL-required":
+    if classification not in ACTION_KIND_SCHEMAS[kind]:
         raise ContinuationError(f"{kind} Actions must be HITL-required")
     _validated, completion_local_reference = _condition(
         action.get("completion_condition"),
@@ -707,10 +840,10 @@ def _validate_completion(
     if completion.get("record_format") != RECORD_FORMAT:
         raise ContinuationError("unsupported Continuation record format")
     publication = completion.get("publication")
-    if publication not in {"shared", "ephemeral"}:
+    if publication not in PUBLICATIONS:
         raise ContinuationError("completion.publication is unsupported")
     disposition = completion.get("disposition")
-    if disposition not in {"continue", "terminal", "no-guidance"}:
+    if disposition not in DISPOSITIONS:
         raise ContinuationError("completion.disposition is unsupported")
     trusted_raw = request.get("trusted_producers")
     if not isinstance(trusted_raw, list):
