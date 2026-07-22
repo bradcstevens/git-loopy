@@ -79,7 +79,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.1,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.2,
 Continuation contract 1.0, record format 1, Wrapper contract 1.2, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -97,19 +97,40 @@ selection, fail-closed operations, and exit mapping without contacting GitHub or
 Later semantic tickets extend the same harness rather than creating private command or transport
 oracles.
 
-Fixture schema 1.1 permits distribution selectors, literal distribution-specific capability
-scenarios, and workflows. A workflow executes multiple fresh native commands against one ordered
-scripted-GitHub transport. Family adapters run only scenarios and workflows naming their
-distribution, so a member advertises and proves a capability only when its native implementation
-lands.
+Fixture schema 1.2 permits distribution selectors, literal distribution-specific capability
+scenarios, workflows, and pinned completion-record vocabularies and physical bounds. A workflow
+executes multiple fresh native commands against one ordered scripted-GitHub transport. Family
+adapters run only scenarios and workflows naming their distribution, so a member advertises and
+proves a capability only when its native implementation lands.
 
-## 7. Python trusted-Action tracer bullet
+## 7. Python atomic completion records
 
-Python `publish` accepts the first narrow `continue` completion envelope: one Workstream, one
-planning Producer, one issue Producer carrier, one durable issue-comment transition-evidence
-reference, and exactly one Action with an empty Prerequisite set. The request names the repository
-and an explicit non-empty trusted-Producer policy; publication never infers Producer trust from
-labels, prose, local state, or conversation history.
+Python `publish` accepts one version-identifiable completion envelope for one Workstream and one
+planning Producer transition. Publication is `shared` or `ephemeral`, and the disposition is
+exactly one of:
+
+- `continue`: one or more complete Actions and no outcome or no-guidance branch;
+- `terminal`: one shared, durably evidenced `complete`, `rejected`, `abandoned`, or `superseded`
+  Workstream outcome and no Actions; or
+- `no-guidance`: only the shared `no-successor-created` or ephemeral `ephemeral-only` case.
+
+Ephemeral completion is validated and returned with an `unpublished` receipt. It never establishes
+a carrier, enters Reconciliation, or becomes available to automation. Missing semantics, malformed
+records, undefined successors, and publication failures are errors rather than an implicit
+ephemeral or no-guidance result.
+
+Every Action carries a unique fragment-local key, summary, versioned Action kind, durable
+occurrence discriminator, tagged Skill/command/manual Instruction, primary durable Target,
+non-empty durable Basis, typed Prerequisites, exactly one interaction classification and evidence,
+a typed completion condition, and optional context references. Manual Instructions and the six
+contract-defined hard-HITL Action kinds must be `HITL-required`. Local prerequisite references must
+name another Action in the same fragment. Unknown Action, condition, outcome, reason, reference,
+effect, requirement, or trigger semantics reject the whole envelope.
+
+The v1 Action-kind and condition-kind registries are closed and pinned in the Conformance fixture.
+Conditions are machine-evaluable durable references or an `action-completed` local reference;
+free-text-only prerequisites and completion conditions are invalid. Unknown fields are rejected
+outside reserved `advisory_extensions` maps, whose content cannot establish behavior.
 
 Publication verifies the durable transition-evidence comment before mutation, establishes the
 repairable `git-loopy-continuation` discovery label, appends one record-format-1 carrier comment,
@@ -122,15 +143,23 @@ and rereads that exact comment before returning a committed receipt. The body is
 ```
 ````
 
-The revision identity is the SHA-256 digest of the canonical completion envelope. Record keys are
-sorted and JSON is compact UTF-8. The complete portable canonicalization and completion-envelope
-validation profile remains capability-gated follow-up work; this tracer bullet accepts only its
-single pinned planning shape.
+Validation and canonicalization finish before the first GitHub call. The portable profile is UTF-8
+without BOM, NFC-normalized strings, duplicate-key rejection, lexically sorted object keys, compact
+JSON, no floats, interoperable signed 53-bit integers, maximum depth 16, maximum array length 256,
+maximum individual string length 8 KiB UTF-8, and maximum canonical record length 48 KiB. The
+command also checks the live carrier body limit before establishing the discovery label.
+
+The revision identity is the SHA-256 digest of the canonical completion envelope. Each Action also
+gets a SHA-256 semantic fingerprint over only its Instruction, Prerequisites, interaction
+classification and evidence, completion condition, effects, requirements, and triggers. Summary,
+Basis, Producer provenance, carrier, timestamps, Readiness, and display order do not alter that
+fingerprint.
 
 Python `reconcile` performs a fresh all-state read of labeled carriers, parses marked comments,
 requires the comment author and embedded Producer to match the explicit trusted policy, validates
-the revision digest, and reads the current Action Target. An open Target with the tracer bullet's
-empty Prerequisite set is returned as one Ready Action with its Instruction, Target, Basis,
-Producer provenance, interaction classification, and completion condition. The discovery label
-is an index only: the Producer comment and current GitHub facts are authority, and no queue,
-journal, snapshot, or local cache is created.
+the revision digest and semantic fingerprints, and reads current Action Targets. Supported open
+Targets are returned with their identity, semantic fingerprint, Instruction, Target, Basis,
+Producer provenance, interaction classification, Prerequisites, and completion condition.
+Terminal and no-guidance records contribute no Action. The discovery label is an index only: the
+Producer comment and current GitHub facts are authority, and no queue, journal, snapshot, or local
+cache is created.

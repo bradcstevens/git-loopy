@@ -160,7 +160,7 @@ _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.1"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.2"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -185,6 +185,17 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
     assert (
         python_capabilities["expected"]["stdout"]["capabilities"]
         == continuation_module.CAPABILITY_MANIFEST
+    )
+
+
+def test_continuation_fixture_pins_completion_vocabularies() -> None:
+    records = _CONTINUATION_SCENARIOS["completion_records"]
+    assert set(records["action_kinds"]) == continuation_module.ACTION_KINDS
+    assert set(records["condition_kinds"]) == continuation_module.CONDITION_KINDS
+    assert set(records["outcome_kinds"]) == continuation_module.OUTCOME_KINDS
+    assert (
+        set(records["no_guidance_reasons"])
+        == continuation_module.NO_GUIDANCE_REASONS
     )
 
 
