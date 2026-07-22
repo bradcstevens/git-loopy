@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import ast
 import inspect
-import re
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Iterable
 
-from .skill_policy import SkillCatalog, SkillCatalogWinner
+from .skill_policy import SkillCatalog, SkillCatalogWinner, is_canonical_skill_name
 
-_SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _SOURCE_KINDS = {
     "project": "project",
     "inherited": "inherited",
@@ -105,7 +103,7 @@ def _read_metadata(skill_md: Path) -> _SkillMetadata:
         values[key] = _scalar(raw)
 
     name = values.get("name", "")
-    if _SKILL_NAME.fullmatch(name) is None:
+    if not is_canonical_skill_name(name):
         raise SkillCatalogError(f"{skill_md} has invalid canonical Skill name {name!r}")
     description = values.get("description", "").strip()
     invocable = values.get("user-invocable", "true").strip().lower()
@@ -149,7 +147,7 @@ def _copilot_winners(skills: Iterable[Any]) -> dict[str, SkillCatalogWinner]:
     winners: dict[str, SkillCatalogWinner] = {}
     for skill in skills:
         name = skill.name
-        if not isinstance(name, str) or _SKILL_NAME.fullmatch(name) is None:
+        if not is_canonical_skill_name(name):
             raise SkillCatalogError(f"invalid Copilot Skill name: {name!r}")
         if name in winners:
             raise SkillCatalogError(f"duplicate Copilot Skill winner: {name!r}")
@@ -202,10 +200,11 @@ def validate_sdk_skill_surface(
     assert skill_list_type is not None
 
     create_parameters = inspect.signature(client_type.create_session).parameters
-    if "disabled_skills" not in create_parameters:
-        raise SdkSkillSurfaceError(
-            "CopilotClient.create_session no longer exposes disabled_skills"
-        )
+    for option in ("disabled_skills", "skill_directories"):
+        if option not in create_parameters:
+            raise SdkSkillSurfaceError(
+                f"CopilotClient.create_session no longer exposes {option}"
+            )
     if not hasattr(skills_api_type, "list"):
         raise SdkSkillSurfaceError("typed SkillsApi.list discovery RPC is unavailable")
     source_values = frozenset(member.value for member in source_type)

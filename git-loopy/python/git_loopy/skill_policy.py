@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -12,6 +13,13 @@ from .config import SkillPolicyInputs
 
 if TYPE_CHECKING:
     from .git import GitClient
+
+_SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+
+
+def is_canonical_skill_name(value: object) -> bool:
+    """Return whether a value is a canonical Skill policy identity."""
+    return isinstance(value, str) and _SKILL_NAME.fullmatch(value) is not None
 
 
 class SkillPolicyScope(StrEnum):

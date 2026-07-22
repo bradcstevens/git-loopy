@@ -112,6 +112,19 @@ def test_pinned_sdk_skill_surface_guard_rejects_missing_disabled_option() -> Non
         validate_sdk_skill_surface(client_type=DriftedClient)
 
 
+def test_pinned_sdk_skill_surface_guard_rejects_missing_exposure_option() -> None:
+    class DriftedClient:
+        async def create_session(
+            self,
+            *,
+            disabled_skills: list[str] | None = None,
+        ) -> object:
+            return object()
+
+    with pytest.raises(SdkSkillSurfaceError, match="skill_directories"):
+        validate_sdk_skill_surface(client_type=DriftedClient)
+
+
 @pytest.mark.asyncio
 async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
     tmp_path: Path,

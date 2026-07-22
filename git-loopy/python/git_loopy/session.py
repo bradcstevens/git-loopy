@@ -25,10 +25,10 @@ Public surface
   the SDK session so the caller can ``await session.send_and_wait(prompt)``.
   ``__aexit__`` cleanly disconnects.
 * :func:`build_permission_handler` — factory that returns a sync
-  :class:`PermissionHandlerFn` closing over the deny lists and a
-  ``record_event`` callback. The handler approves every request by
-  default; denies tools in ``deny_tools``; denies ``skill`` tool calls
-  whose ``arguments.skill`` is in ``deny_skills``; and always denies
+  :class:`PermissionHandlerFn` closing over the closed-world Skill policy,
+  deny lists, and a ``record_event`` callback. The handler approves requests by
+  default; denies tools in ``deny_tools``; approves ``skill`` only for a
+  canonical name in the Effective Skill policy; and always denies
   ``ask_user`` (emitting :data:`WRAPPER_ASK_USER_ATTEMPTED` so the
   operator can spot un-triaged issues).
 * :data:`ASK_USER_TOOL_NAME`, :data:`SKILL_TOOL_NAME` — string literals
@@ -38,21 +38,23 @@ Public surface
 Permission posture
 ------------------
 
-Mirrors the PRD's "approve-all by default, opt-in deny-list" model:
+Keeps the approve-all tool posture while enforcing a closed-world Skill boundary:
 
 ================  ==================================================
 Posture           Behaviour
 ================  ==================================================
-Default           Every request approved (``approve-once``); a
+Default           Every non-Skill request is approved (``approve-once``); a
                   :data:`TOOL_PERMISSION_REQUESTED` JSONL event is
                   emitted with tool name and scrubbed arguments.
 ``--deny-tool``   The named tool is rejected with reason
                   ``"tool_in_deny_list"``; a
                   :data:`TOOL_PERMISSION_DENIED` event is emitted.
-``--deny-skill``  ``skill`` tool requests whose ``arguments.skill`` is
-                  in the deny list are rejected with reason
-                  ``"skill_in_deny_list"``; the skill name is included
-                  in the emitted event.
+``--deny-skill``  A denied Skill is rejected as ``"skill_legacy_denied"``
+                  under an Effective policy; legacy open-world callers retain
+                  ``"skill_in_deny_list"``.
+Effective policy  Only a canonical, catalogued, enabled Skill name is
+                  approved. Invalid, unknown, outside-policy, and
+                  legacy-denied requests are rejected distinctly.
 ``ask_user``      Always rejected. The wrapper emits
                   :data:`WRAPPER_ASK_USER_ATTEMPTED` (**not**
                   :data:`TOOL_PERMISSION_DENIED`) so the operator can
@@ -76,12 +78,9 @@ defence-in-depth paths exist because:
 Design notes
 ------------
 
-* **No coupling to peer modules.** The session module knows about the
-  SDK, the events module, the persist module (for the writer **type**),
-  the sinks module (for the :class:`~git_loopy.sinks.SinkFanout`
-  fan-out target), and the emit module (for the shared
-  :class:`~git_loopy.emit.EventEmitter` fan-out seam). It explicitly does
-  **not** import
+* **No coupling to orchestration modules.** The session module knows about the
+  SDK and the deep event, persistence, sink, emission, Skill-policy, and
+  Skill-exposure seams. It explicitly does **not** import
   ``git_loopy.gh`` / ``git_loopy.git`` / ``git_loopy.loop`` / ``git_loopy.cli``
   / ``git_loopy.config`` / ``git_loopy.wrapper`` / ``git_loopy.pricing``.
   Enforced by ``tests/test_session.py::test_session_module_imports_are_constrained``.
@@ -136,6 +135,12 @@ from git_loopy import events
 from git_loopy.emit import EventEmitter
 from git_loopy.persist import EventLogWriter
 from git_loopy.sinks import SinkFanout
+from git_loopy.skill_exposure import SkillExposure
+from git_loopy.skill_policy import (
+    EffectiveSkillPolicy,
+    SkillCatalog,
+    is_canonical_skill_name,
+)
 
 __all__ = [
     "IterationSession",
@@ -160,11 +165,13 @@ ASK_USER_TOOL_NAME: str = "ask_user"
 # skill-detection uses the same literal (``git_loopy.ui.renderer``).
 SKILL_TOOL_NAME: str = "skill"
 
-# Reasons attached to ``tool.permission_denied`` events so log
-# consumers can distinguish the two deny pathways without re-parsing
-# the deny lists.
+# Reasons attached to ``tool.permission_denied`` events.
 _REASON_TOOL_DENY: str = "tool_in_deny_list"
 _REASON_SKILL_DENY: str = "skill_in_deny_list"
+_REASON_SKILL_OUTSIDE_POLICY: str = "skill_outside_policy"
+_REASON_SKILL_UNKNOWN: str = "skill_unknown"
+_REASON_SKILL_INVALID: str = "skill_invalid_request"
+_REASON_SKILL_LEGACY_DENY: str = "skill_legacy_denied"
 
 
 def _skill_directories(working_directory: str | None) -> list[str]:
@@ -319,6 +326,8 @@ def build_permission_handler(
     *,
     deny_tools: frozenset[str] = frozenset(),
     deny_skills: frozenset[str] = frozenset(),
+    skill_policy: EffectiveSkillPolicy | None = None,
+    skill_catalog: SkillCatalog | None = None,
     record_event: Callable[[dict[str, Any]], None],
     run_id: str,
     iter_provider: Callable[[], int | None],
@@ -337,6 +346,9 @@ def build_permission_handler(
     Args:
         deny_tools: Tool names to reject. Empty set means "approve all".
         deny_skills: ``skill``-tool ``arguments.skill`` values to reject.
+        skill_policy: Frozen Effective Skill policy, or ``None`` for the
+            temporary legacy open-world caller path.
+        skill_catalog: Resolved catalog paired with ``skill_policy``.
         record_event: Callback invoked with the envelope for every
             permission decision. Recording failures are swallowed
             (see :func:`_safe_record`) so a bad writer cannot demote
@@ -352,6 +364,8 @@ def build_permission_handler(
         A sync permission handler conforming to
         :data:`PermissionHandlerFn`.
     """
+    if (skill_policy is None) != (skill_catalog is None):
+        raise ValueError("skill_policy and skill_catalog must be supplied together")
 
     def handler(
         req: PermissionRequest, _invocation: dict[str, str]
@@ -389,9 +403,70 @@ def build_permission_handler(
             _safe_record(record_event, envelope)
             return PermissionDecisionReject()
 
-        # 3) skill deny list — only applies when tool_name == "skill"
-        #    and the skill argument is in the deny set.
-        if tool_name == SKILL_TOOL_NAME and isinstance(tool_args, dict):
+        # 3) closed-world Skill policy and legacy deny guard.
+        if (
+            tool_name == SKILL_TOOL_NAME
+            and skill_policy is not None
+            and skill_catalog is not None
+        ):
+            skill_name = (
+                tool_args.get("skill") if isinstance(tool_args, dict) else None
+            )
+            if not is_canonical_skill_name(skill_name):
+                envelope = events.make_event(
+                    type=events.TOOL_PERMISSION_DENIED,
+                    run_id=run_id,
+                    iter=iter_num,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments={},
+                    reason=_REASON_SKILL_INVALID,
+                )
+                _safe_record(record_event, envelope)
+                return PermissionDecisionReject()
+            if skill_name in skill_policy.legacy_denied or skill_name in deny_skills:
+                envelope = events.make_event(
+                    type=events.TOOL_PERMISSION_DENIED,
+                    run_id=run_id,
+                    iter=iter_num,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=scrubbed_args,
+                    reason=_REASON_SKILL_LEGACY_DENY,
+                    skill=skill_name,
+                )
+                _safe_record(record_event, envelope)
+                return PermissionDecisionReject()
+            if skill_name not in skill_catalog.winners:
+                envelope = events.make_event(
+                    type=events.TOOL_PERMISSION_DENIED,
+                    run_id=run_id,
+                    iter=iter_num,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=scrubbed_args,
+                    reason=_REASON_SKILL_UNKNOWN,
+                    skill=skill_name,
+                )
+                _safe_record(record_event, envelope)
+                return PermissionDecisionReject()
+            if skill_name not in skill_policy.enabled:
+                envelope = events.make_event(
+                    type=events.TOOL_PERMISSION_DENIED,
+                    run_id=run_id,
+                    iter=iter_num,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=scrubbed_args,
+                    reason=_REASON_SKILL_OUTSIDE_POLICY,
+                    skill=skill_name,
+                )
+                _safe_record(record_event, envelope)
+                return PermissionDecisionReject()
+
+        # Legacy open-world callers keep their original deny-only behavior
+        # until Run preflight supplies a closed-world exposure.
+        elif tool_name == SKILL_TOOL_NAME and isinstance(tool_args, dict):
             skill_name = tool_args.get("skill")
             if isinstance(skill_name, str) and skill_name in deny_skills:
                 envelope = events.make_event(
@@ -499,6 +574,9 @@ class IterationSession:
             deterministic Lane-to-issue assignment makes redundant in Parallel
             mode. ``None`` (the serial default) stamps nothing, so the serial
             replay log and sink stream are byte-for-byte unchanged.
+        skill_exposure: Optional Run-scoped closed-world projection. When
+            supplied, the session exposes only its enabled catalog winners and
+            sends the exact disabled catalog complement to the SDK.
     """
 
     def __init__(
@@ -514,6 +592,7 @@ class IterationSession:
         reasoning_effort: str | None = None,
         working_directory: str | None = None,
         issue_ref: int | str | None = None,
+        skill_exposure: SkillExposure | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -525,6 +604,7 @@ class IterationSession:
         self._reasoning_effort = reasoning_effort
         self._working_directory = working_directory
         self._issue_ref = issue_ref
+        self._skill_exposure = skill_exposure
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -564,9 +644,29 @@ class IterationSession:
         handler = build_permission_handler(
             deny_tools=self._config.deny_tools,
             deny_skills=self._config.deny_skills,
+            skill_policy=(
+                self._skill_exposure.policy
+                if self._skill_exposure is not None
+                else None
+            ),
+            skill_catalog=(
+                self._skill_exposure.catalog
+                if self._skill_exposure is not None
+                else None
+            ),
             record_event=self._record,
             run_id=self._run_id,
             iter_provider=lambda: self._iter_num,
+        )
+        skill_directories = (
+            list(self._skill_exposure.skill_directories)
+            if self._skill_exposure is not None
+            else _skill_directories(self._working_directory)
+        )
+        disabled_skills = (
+            list(self._skill_exposure.disabled_skills)
+            if self._skill_exposure is not None
+            else None
         )
         session = await self._client.create_session(
             on_permission_request=handler,
@@ -574,9 +674,11 @@ class IterationSession:
             model=self._model,
             reasoning_effort=self._reasoning_effort,
             working_directory=self._working_directory,
-            # ADR-0014: load skills without opting into unrelated config discovery.
+            # ADR-0015: load only the explicit Skill exposure without broad
+            # config or plugin discovery.
             enable_skills=True,
-            skill_directories=_skill_directories(self._working_directory),
+            skill_directories=skill_directories,
+            disabled_skills=disabled_skills,
             # NB: on_user_input_request is intentionally NOT set.
             # Leaving it None tells the SDK to not enable ask_user; the
             # permission handler is the second line of defence.

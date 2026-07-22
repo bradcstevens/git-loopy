@@ -72,6 +72,13 @@ from git_loopy.session import (
     SessionConfig,
     build_permission_handler,
 )
+from git_loopy.skill_exposure import build_skill_exposure
+from git_loopy.skill_policy import (
+    EffectiveSkillPolicy,
+    SkillCatalog,
+    SkillCatalogWinner,
+    SkillPolicyScope,
+)
 from git_loopy.sinks import SinkFanout
 from git_loopy.ui import IterationSnapshot, Renderer, RunSummary  # noqa: F401
 
@@ -331,6 +338,192 @@ def test_build_permission_handler_denies_skill_in_deny_list() -> None:
     assert ev["type"] == TOOL_PERMISSION_DENIED
     assert ev["reason"] == "skill_in_deny_list"
     assert ev["skill"] == "caveman"
+
+
+def test_build_permission_handler_denies_catalog_skill_outside_effective_policy() -> None:
+    captured: list[dict[str, Any]] = []
+    policy = EffectiveSkillPolicy(
+        enabled=("tdd",),
+        required=(),
+        legacy_denied=(),
+        source_kinds={"tdd": "packaged"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    catalog = SkillCatalog(
+        winners={
+            "prototype": SkillCatalogWinner("prototype", "packaged"),
+            "tdd": SkillCatalogWinner("tdd", "packaged"),
+        }
+    )
+    handler = build_permission_handler(
+        skill_policy=policy,
+        skill_catalog=catalog,
+        record_event=captured.append,
+        run_id=_FIXED_RUN_ID,
+        iter_provider=_make_iter_provider(2),
+    )
+
+    result = handler(
+        _make_permission_request(
+            tool_name=SKILL_TOOL_NAME,
+            tool_args={"skill": "prototype"},
+        ),
+        {},
+    )
+
+    assert result.kind == "reject"
+    assert captured == [
+        {
+            "ts": captured[0]["ts"],
+            "run_id": _FIXED_RUN_ID,
+            "iter": 2,
+            "type": TOOL_PERMISSION_DENIED,
+            "tool_call_id": "call-1",
+            "tool_name": SKILL_TOOL_NAME,
+            "arguments": {"skill": "prototype"},
+            "reason": "skill_outside_policy",
+            "skill": "prototype",
+        }
+    ]
+
+
+def test_build_permission_handler_denies_unknown_skill_under_effective_policy() -> None:
+    captured: list[dict[str, Any]] = []
+    policy = EffectiveSkillPolicy(
+        enabled=("tdd",),
+        required=(),
+        legacy_denied=(),
+        source_kinds={"tdd": "packaged"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    handler = build_permission_handler(
+        skill_policy=policy,
+        skill_catalog=SkillCatalog(
+            winners={"tdd": SkillCatalogWinner("tdd", "packaged")}
+        ),
+        record_event=captured.append,
+        run_id=_FIXED_RUN_ID,
+        iter_provider=_make_iter_provider(2),
+    )
+
+    result = handler(
+        _make_permission_request(
+            tool_name=SKILL_TOOL_NAME,
+            tool_args={"skill": "not-catalogued"},
+        ),
+        {},
+    )
+
+    assert result.kind == "reject"
+    assert captured[0]["reason"] == "skill_unknown"
+    assert captured[0]["skill"] == "not-catalogued"
+
+
+def test_build_permission_handler_reports_legacy_skill_denial_distinctly() -> None:
+    captured: list[dict[str, Any]] = []
+    policy = EffectiveSkillPolicy(
+        enabled=("tdd",),
+        required=(),
+        legacy_denied=("prototype",),
+        source_kinds={"tdd": "packaged"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    handler = build_permission_handler(
+        skill_policy=policy,
+        skill_catalog=SkillCatalog(
+            winners={
+                "prototype": SkillCatalogWinner("prototype", "packaged"),
+                "tdd": SkillCatalogWinner("tdd", "packaged"),
+            }
+        ),
+        record_event=captured.append,
+        run_id=_FIXED_RUN_ID,
+        iter_provider=_make_iter_provider(2),
+    )
+
+    result = handler(
+        _make_permission_request(
+            tool_name=SKILL_TOOL_NAME,
+            tool_args={"skill": "prototype"},
+        ),
+        {},
+    )
+
+    assert result.kind == "reject"
+    assert captured[0]["reason"] == "skill_legacy_denied"
+    assert captured[0]["skill"] == "prototype"
+
+
+def test_build_permission_handler_approves_enabled_catalog_skill() -> None:
+    captured: list[dict[str, Any]] = []
+    policy = EffectiveSkillPolicy(
+        enabled=("tdd",),
+        required=(),
+        legacy_denied=(),
+        source_kinds={"tdd": "packaged"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    handler = build_permission_handler(
+        skill_policy=policy,
+        skill_catalog=SkillCatalog(
+            winners={"tdd": SkillCatalogWinner("tdd", "packaged")}
+        ),
+        record_event=captured.append,
+        run_id=_FIXED_RUN_ID,
+        iter_provider=_make_iter_provider(2),
+    )
+
+    result = handler(
+        _make_permission_request(
+            tool_name=SKILL_TOOL_NAME,
+            tool_args={"skill": "tdd"},
+        ),
+        {},
+    )
+
+    assert result.kind == "approve-once"
+    assert captured[0]["type"] == TOOL_PERMISSION_REQUESTED
+
+
+@pytest.mark.parametrize(
+    "tool_args",
+    [
+        pytest.param({}, id="missing-name"),
+        pytest.param({"skill": "/Users/operator/private"}, id="malformed-name"),
+        pytest.param("tdd", id="malformed-arguments"),
+    ],
+)
+def test_build_permission_handler_denies_invalid_skill_request_without_echoing_name(
+    tool_args: object,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    policy = EffectiveSkillPolicy(
+        enabled=("tdd",),
+        required=(),
+        legacy_denied=(),
+        source_kinds={"tdd": "packaged"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    handler = build_permission_handler(
+        skill_policy=policy,
+        skill_catalog=SkillCatalog(
+            winners={"tdd": SkillCatalogWinner("tdd", "packaged")}
+        ),
+        record_event=captured.append,
+        run_id=_FIXED_RUN_ID,
+        iter_provider=_make_iter_provider(2),
+    )
+
+    result = handler(
+        _make_permission_request(tool_name=SKILL_TOOL_NAME, tool_args=tool_args),
+        {},
+    )
+
+    assert result.kind == "reject"
+    assert captured[0]["reason"] == "skill_invalid_request"
+    assert captured[0]["arguments"] == {}
+    assert "skill" not in captured[0]
+    assert "/Users/operator/private" not in json.dumps(captured[0])
 
 
 def test_build_permission_handler_denies_ask_user_with_wrapper_event() -> None:
@@ -647,6 +840,81 @@ async def test_iteration_session_enables_project_and_user_skills(
         str(home / ".copilot" / "skills"),
     ]
     assert "enable_config_discovery" not in create_call
+
+
+async def test_iteration_session_uses_exact_closed_world_skill_exposure(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+    tmp_path: Path,
+) -> None:
+    renderer, _ = renderer_pair
+    plugin = tmp_path / "plugin"
+    chosen = plugin / "chosen"
+    sibling = plugin / "sibling"
+    chosen.mkdir(parents=True)
+    sibling.mkdir()
+    (chosen / "SKILL.md").write_text("---\nname: chosen\n---\nChosen.\n")
+    (sibling / "SKILL.md").write_text("---\nname: sibling\n---\nSibling.\n")
+    catalog = SkillCatalog(
+        winners={
+            "chosen": SkillCatalogWinner(
+                "chosen", "plugin", path=chosen / "SKILL.md"
+            ),
+            "sibling": SkillCatalogWinner(
+                "sibling", "plugin", path=sibling / "SKILL.md"
+            ),
+        }
+    )
+    policy = EffectiveSkillPolicy(
+        enabled=("chosen",),
+        required=(),
+        legacy_denied=(),
+        source_kinds={"chosen": "plugin"},
+        base_scope=SkillPolicyScope.PROJECT,
+    )
+    exposure = build_skill_exposure(
+        policy,
+        catalog,
+        directory=tmp_path / "exposure",
+    )
+    lane = tmp_path / "lane"
+
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+            working_directory=str(lane),
+            skill_exposure=exposure,
+        ) as sdk_session:
+            allowed = sdk_session.on_permission_request(
+                _make_permission_request(
+                    tool_name=SKILL_TOOL_NAME,
+                    tool_args={"skill": "chosen"},
+                ),
+                {},
+            )
+            denied = sdk_session.on_permission_request(
+                _make_permission_request(
+                    tool_name=SKILL_TOOL_NAME,
+                    tool_args={"skill": "sibling"},
+                ),
+                {},
+            )
+
+    create_call = fake_client.create_calls[0]
+    assert create_call["working_directory"] == str(lane)
+    assert create_call["enable_skills"] is True
+    assert create_call["skill_directories"] == [str(tmp_path / "exposure")]
+    assert create_call["disabled_skills"] == ["sibling"]
+    assert "enable_config_discovery" not in create_call
+    assert "plugin_directories" not in create_call
+    assert allowed.kind == "approve-once"
+    assert denied.kind == "reject"
 
 
 async def test_iteration_session_omits_working_directory_by_default(
@@ -1381,7 +1649,7 @@ def test_session_module_does_not_construct_copilot_client() -> None:
 
 def test_session_module_imports_are_constrained() -> None:
     """``session.py`` may import only stdlib + ``copilot.*`` + the deep peer
-    modules it integrates with (``events``, ``persist``, ``sinks``, ``emit``).
+    modules it integrates with.
 
     Catches accidental coupling to ``gh`` / ``git`` / ``loop`` / ``cli`` /
     ``config`` / ``wrapper`` / ``pricing`` — every one of those would
@@ -1409,6 +1677,8 @@ def test_session_module_imports_are_constrained() -> None:
         "git_loopy.events",
         "git_loopy.persist",
         "git_loopy.sinks",
+        "git_loopy.skill_exposure",
+        "git_loopy.skill_policy",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):
