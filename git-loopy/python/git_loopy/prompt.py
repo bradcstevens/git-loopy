@@ -20,6 +20,7 @@ __all__ = [
 _SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _YAML_NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
 _FRONTMATTER_KEY = re.compile(r"([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)")
+_EMPTY_YAML_SEQUENCE = re.compile(r"\[[ \t]*\]")
 
 
 class PromptMetadataFailure(str, Enum):
@@ -108,6 +109,7 @@ def parse_required_skills(prompt_text: str) -> tuple[str, ...] | None:
         if key_match is None:
             raise _malformed(f"invalid frontmatter line: {line!r}")
         key, inline_value = key_match.groups()
+        inline_value = inline_value.rstrip()
         index += 1
 
         if key != "required-skills":
@@ -119,7 +121,7 @@ def parse_required_skills(prompt_text: str) -> tuple[str, ...] | None:
         if required_key_seen:
             raise _malformed("required-skills may be declared only once")
         required_key_seen = True
-        if inline_value == "[]":
+        if _EMPTY_YAML_SEQUENCE.fullmatch(inline_value):
             required_skills = ()
             continue
         if inline_value:

@@ -51,13 +51,11 @@ owner: git-loopy
     assert parse_required_skills(prompt) == ("tdd",)
 
 
-def test_explicit_empty_required_skills_is_authoritative() -> None:
-    prompt = """\
----
-required-skills: []
----
-# Instructions
-"""
+@pytest.mark.parametrize("empty_sequence", ["[]  ", "[ ]"])
+def test_explicit_empty_required_skills_is_authoritative(
+    empty_sequence: str,
+) -> None:
+    prompt = f"---\nrequired-skills: {empty_sequence}\n---\n# Instructions\n"
 
     result = resolve_required_skills(
         prompt,
