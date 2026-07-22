@@ -80,6 +80,18 @@ The current set of unmet **Continuation actions** and explicit **Workstream outc
 across the project, together with their prerequisite relationships.
 _Avoid_: activity log, project journal, handoff.
 
+**Continuation contract**:
+The separately versioned, language-neutral interface governing shared completion
+requests, durable **Producer revisions**, **Dispatch evidence**, **Reconciliation**,
+capability declarations, and canonical human and automation results.
+_Avoid_: guidance schema, Wrapper contract, Event schema.
+
+**Continuation capability manifest**:
+A Runner-family member's machine-readable declaration of the Continuation-contract
+versions, tracker adapters, Instruction handlers, evaluators, and optional capabilities
+it supports. It describes capability but grants no execution authority.
+_Avoid_: Automation scope, Performer posture, feature flags.
+
 **Continuation view**:
 A **Consumer**-specific ordered projection of **Continuation guidance**. Its ordering
 helps select work but does not itself establish prerequisites.
@@ -147,6 +159,12 @@ _Avoid_: target, copied context, source of truth.
 The role that contributes or refreshes a **Continuation action** or
 **Workstream outcome** from a **Workflow** transition.
 
+**Producer carrier**:
+The durable artifact that records a Transition owner's transition evidence and hosts
+that Producer's revision lineage for one **Workstream**. It references the Anchor,
+Target, and Basis but is not a central guidance ledger.
+_Avoid_: Anchor, Target, continuation issue.
+
 **Transition owner**:
 The one **Producer** responsible for the semantic delta from a durable **Workflow**
 transition. Ownership follows the transition rather than the Skill, command, human, or
@@ -182,6 +200,11 @@ Whether a **Continuation action** has any **Blockers**: **Ready** when it has no
 One durable version of a **Producer** contribution at its carrier, based on one
 observed predecessor revision. Competing non-equivalent successors are a
 **Continuation conflict**, never a timestamp contest.
+
+**Publication receipt**:
+The typed result of attempting to publish one Producer revision, distinguishing a
+clean or idempotent commit from conflict, rejection, or an indeterminate write.
+_Avoid_: Producer revision, completion result.
 
 **Reconciliation**:
 The on-demand derivation of current **Continuation guidance** from durable Producer
@@ -239,6 +262,12 @@ eligibility when detected. A foreseeable normal human branch invalidates
 Evidence that an **AFK safety case** omitted or contradicted an inherent human
 boundary or safety requirement. It quarantines the smallest justified scope until the
 **Transition owner** revises or replaces the Action; a Performer cannot reclassify it.
+
+**Dispatch evidence**:
+A durable, non-Producer record that one **Continuation dispatch** exposed a
+**Safety-case violation** or left authorized effects in an uncertain, non-retry-safe
+state. It may quarantine an Action but cannot create or retire Actions or outcomes.
+_Avoid_: Producer revision, execution log, Event.
 
 **AFK-eligible**:
 A point-in-time, positively verified relationship between a **Ready**, **AFK-safe**
