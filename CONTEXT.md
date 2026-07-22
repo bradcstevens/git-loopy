@@ -230,6 +230,27 @@ action and a specific **Performer** that has the required capability, access, an
 policy permission. Missing, ambiguous, or stale evidence means the action is not
 AFK-eligible.
 
+**Eligibility requirement**:
+A versioned, machine-evaluable capability, access, policy, or completion-evaluation
+requirement an **AFK-safe** action declares for matching to a **Performer**.
+_Avoid_: prompt hint, inferred requirement.
+
+**Performer posture**:
+The positively observed capability, access, and policy facts used to decide whether
+one **Performer** satisfies an action's **Eligibility requirements**.
+_Avoid_: agent confidence, generic capability.
+
+**Continuation dispatch**:
+One Orchestrator authorization to perform exactly one selected, **AFK-eligible**
+**Action occurrence**. Its completion never authorizes a successor action.
+_Avoid_: autonomous chain, workflow run.
+
+**Orchestrator stop**:
+An explicit, typed result that ends a **Continuation dispatch** without authorizing
+another action and explains the human boundary, eligibility failure, waiting state,
+guidance uncertainty, or dispatch limit. It is not a **Workstream outcome**.
+_Avoid_: completion, no work.
+
 **Workstream outcome**:
 An affirmative, durably evidenced terminal disposition of a **Workstream**.
 **Complete** means its **Destination** was satisfied. **Rejected** means the authorized
