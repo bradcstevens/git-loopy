@@ -13,6 +13,10 @@ Precedence rules (ADR-0006), applied key by key:
   ``$XDG_CONFIG_HOME/git-loopy/config.toml`` then ``~/.config/...``).
 * CLI flags win over environment variables for scalar knobs (``GIT_LOOPY_MODEL``,
   ``GIT_LOOPY_ISSUE_SOURCE``, ``GIT_LOOPY_MAX_NMT_STRIKES``, verbosity, ``--no-reasoning``).
+* ``enabled_skills`` replacement is presence-aware: an explicit empty project
+  list replaces global Config, and even an empty ``GIT_LOOPY_ENABLED_SKILLS``
+  replaces the configured base. Repeatable ``--enable-skill`` and
+  ``--disable-skill`` values remain separate temporary Run overlays.
 * For the collection-valued denylists (``--deny-tool`` / ``--deny-skill``
   vs ``GIT_LOOPY_DENY_TOOLS`` / ``GIT_LOOPY_DENY_SKILLS`` and the config
   ``deny_tools`` / ``deny_skills`` keys), **all sources are ADDITIVE** — the
@@ -34,7 +38,7 @@ old bash launcher is retired):
 * ``-v`` / ``-vv`` / ``-vvv`` — verbosity ladder owned by the renderer.
 * ``--no-reasoning`` — suppresses assistant reasoning output.
 * ``--deny-tool TOOL`` — repeatable; permission-handler denylist.
-* ``--deny-skill SKILL`` — repeatable; permission-handler denylist
+* ``--deny-skill SKILL`` — deprecated, repeatable permission-handler deny guard
   applied to the ``skill`` meta-tool's ``arguments.skill`` field.
 
 Env vars:
@@ -54,9 +58,12 @@ Env vars:
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
+* ``GIT_LOOPY_ENABLED_SKILLS`` — presence-aware, comma-separated exact
+  replacement for the configured Skill-policy base; an empty value is an
+  explicit empty replacement.
 * ``GIT_LOOPY_DENY_TOOLS`` — comma-separated tool denylist (set-unioned
   with ``--deny-tool`` flags).
-* ``GIT_LOOPY_DENY_SKILLS`` — comma-separated skill denylist.
+* ``GIT_LOOPY_DENY_SKILLS`` — deprecated comma-separated Skill deny guard.
 * ``GIT_LOOPY_PRICING_FILE`` — explicit ``pricing.toml`` path (overrides
   the packaged default).
 * ``GIT_LOOPY_OTEL_ENABLED`` — truthy ``"1"`` enables OTel plumbing
@@ -84,6 +91,8 @@ from git_loopy.config import (
     SUPPORTED_MODELS,
     EffortGateWarning,
     RunConfig,
+    SkillPolicyInput,
+    SkillPolicyInputs,
     gate_reasoning_effort,
 )
 
@@ -225,8 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
             "setup command\n"
             "                              (default: auto-detect deps install; "
             "runs before each Lane).\n"
+            "  GIT_LOOPY_ENABLED_SKILLS         Exact Skill-policy replacement "
+            "(comma-separated; empty is explicit empty).\n"
             "  GIT_LOOPY_DENY_TOOLS            Comma-separated tool denylist.\n"
-            "  GIT_LOOPY_DENY_SKILLS           Comma-separated skill denylist.\n"
+            "  GIT_LOOPY_DENY_SKILLS           Deprecated comma-separated Skill "
+            "deny guard.\n"
             "  GIT_LOOPY_PRICING_FILE          Explicit pricing.toml path.\n"
             "  GIT_LOOPY_OTEL_ENABLED          Truthy '1' enables OTel.\n"
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
@@ -316,6 +328,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--enable-skill",
+        dest="enable_skills",
+        action="append",
+        default=[],
+        metavar="SKILL",
+        help="Temporarily enable a Skill for this Run. Repeatable.",
+    )
+    parser.add_argument(
+        "--disable-skill",
+        dest="disable_skills",
+        action="append",
+        default=[],
+        metavar="SKILL",
+        help=(
+            "Temporarily disable a Skill for this Run. Repeatable; disable wins "
+            "when both overlays name the same Skill."
+        ),
+    )
+    parser.add_argument(
         "--deny-tool",
         dest="deny_tools",
         action="append",
@@ -333,7 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="SKILL",
         help=(
-            "Reject the named skill (the `skill` meta-tool's "
+            "Deprecated: reject the named Skill (the `skill` meta-tool's "
             "arguments.skill value) at the permission gate. Repeatable. "
             "Unioned with GIT_LOOPY_DENY_SKILLS env var."
         ),
@@ -1183,11 +1214,12 @@ def resolve_config(
     Pure over its injected inputs (no ``os.environ`` / filesystem / TTY access),
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
-    ``include_prs``, ``deny_tools``, ``deny_skills``, ``otel_enabled``,
-    ``interactive``, ``send_timeout_seconds`` and the ``[routing]`` table. The
+    ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
+    ``otel_enabled``, ``interactive``, ``send_timeout_seconds`` and the
+    ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
-    ``parallel``, and the ``pricing_file`` override) are NEVER read from a config
-    file — they resolve from flags / env only.
+    ``parallel``, temporary Skill overlays, and the ``pricing_file`` override)
+    are NEVER read from a config file — they resolve from flags / env only.
 
     ``[routing]`` is a **config-file-only** tier: it merges project-over-global
     per task-type key, and any explicit ``--model`` / ``--reasoning-effort``
@@ -1204,6 +1236,28 @@ def resolve_config(
     )
     deny_skills = _resolve_denylist(
         args.deny_skills, "GIT_LOOPY_DENY_SKILLS", "deny_skills", env, project, global_
+    )
+    project_enabled = settings.table_optional_str_list(
+        project, "enabled_skills", scope="project"
+    )
+    global_enabled = settings.table_optional_str_list(
+        global_, "enabled_skills", scope="global"
+    )
+    skill_policy = SkillPolicyInputs(
+        project=SkillPolicyInput(
+            present=project_enabled is not None,
+            names=tuple(project_enabled or ()),
+        ),
+        global_=SkillPolicyInput(
+            present=global_enabled is not None,
+            names=tuple(global_enabled or ()),
+        ),
+        environment=SkillPolicyInput(
+            present="GIT_LOOPY_ENABLED_SKILLS" in env,
+            names=tuple(_parse_csv_env(env.get("GIT_LOOPY_ENABLED_SKILLS"))),
+        ),
+        enable_skills=frozenset(args.enable_skills),
+        disable_skills=frozenset(args.disable_skills),
     )
 
     verbosity = min(max(int(args.verbosity), 0), 3)
@@ -1244,6 +1298,7 @@ def resolve_config(
         parallel=_resolve_parallel(args, env),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
+        skill_policy=skill_policy,
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(run=run, interactive=interactive)

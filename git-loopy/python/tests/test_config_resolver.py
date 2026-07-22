@@ -73,6 +73,47 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     assert run.parallel == 1
     assert run.send_timeout_seconds == DEFAULT_SEND_TIMEOUT_SECONDS
     assert resolved.interactive is None
+    assert resolved.run.skill_policy.project.present is False
+    assert resolved.run.skill_policy.global_.present is False
+
+
+def test_enabled_skills_preserves_project_presence_and_explicit_empty() -> None:
+    absent = _resolve(global_={"enabled_skills": ["global-skill"]})
+    empty = _resolve(
+        project={"enabled_skills": []},
+        global_={"enabled_skills": ["global-skill"]},
+    )
+
+    assert absent.run.skill_policy.project.present is False
+    assert absent.run.skill_policy.global_.names == ("global-skill",)
+    assert empty.run.skill_policy.project.present is True
+    assert empty.run.skill_policy.project.names == ()
+
+
+def test_enabled_skills_environment_presence_is_exact_replacement_input() -> None:
+    populated = _resolve(env={"GIT_LOOPY_ENABLED_SKILLS": "beta, alpha, beta"})
+    empty = _resolve(env={"GIT_LOOPY_ENABLED_SKILLS": ""})
+
+    assert populated.run.skill_policy.environment.present is True
+    assert populated.run.skill_policy.environment.names == ("alpha", "beta")
+    assert empty.run.skill_policy.environment.present is True
+    assert empty.run.skill_policy.environment.names == ()
+
+
+def test_skill_enable_and_disable_flags_are_captured_separately() -> None:
+    resolved = _resolve(
+        [
+            "--enable-skill",
+            "alpha",
+            "--enable-skill",
+            "beta",
+            "--disable-skill",
+            "beta",
+        ]
+    )
+
+    assert resolved.run.skill_policy.enable_skills == frozenset({"alpha", "beta"})
+    assert resolved.run.skill_policy.disable_skills == frozenset({"beta"})
 
 
 # ---------------------------------------------------------------------------

@@ -217,6 +217,15 @@ def test_table_str_list_rejects_non_list_and_non_str_items() -> None:
         settings.table_str_list({"deny_tools": ["a", 2]}, "deny_tools", scope="g")
 
 
+def test_optional_string_list_distinguishes_absent_from_explicit_empty() -> None:
+    assert settings.table_optional_str_list(
+        {}, "enabled_skills", scope="project"
+    ) is None
+    assert settings.table_optional_str_list(
+        {"enabled_skills": []}, "enabled_skills", scope="project"
+    ) == []
+
+
 # ---------------------------------------------------------------------------
 # [routing] typed reader (issue #146): type -> (model, effort). Absent -> {};
 # malformed entries raise SettingsError naming the scope + offending key.
@@ -302,8 +311,12 @@ def test_dump_config_toml_round_trips_every_scalar_and_list_type() -> None:
         "send_timeout_seconds": 3600.5,
         "deny_tools": ["bash", "write"],
         "deny_skills": [],
+        "enabled_skills": ["unknown-skill", "alpha", "alpha"],
     }
-    assert tomllib.loads(settings.dump_config_toml(values)) == values
+    assert tomllib.loads(settings.dump_config_toml(values)) == {
+        **values,
+        "enabled_skills": ["alpha", "unknown-skill"],
+    }
 
 
 def test_dump_config_toml_escapes_backslashes_and_quotes() -> None:

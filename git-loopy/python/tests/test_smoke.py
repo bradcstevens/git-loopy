@@ -53,7 +53,10 @@ def test_git_loopy_help_exits_zero() -> None:
         "--no-reasoning",
         "--deny-tool",
         "--deny-skill",
+        "--enable-skill",
+        "--disable-skill",
         "GIT_LOOPY_MAX_NMT_STRIKES",
+        "GIT_LOOPY_ENABLED_SKILLS",
         "GIT_LOOPY_DENY_TOOLS",
         "GIT_LOOPY_PRICING_FILE",
     ):
@@ -61,6 +64,7 @@ def test_git_loopy_help_exits_zero() -> None:
             f"--help missing expected token {expected!r}; stdout was:\n"
             f"{stdout}"
         )
+    assert "Deprecated" in stdout
 
 
 def test_git_loopy_rejects_negative_iterations() -> None:

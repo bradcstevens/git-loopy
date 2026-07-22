@@ -77,6 +77,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "send_timeout_seconds",
         "deny_tools",
         "deny_skills",
+        "enabled_skills",
     }
 
 
@@ -116,6 +117,9 @@ def test_coerce_enum_keys_validate_choices() -> None:
 def test_coerce_csv_keys_split_into_string_lists() -> None:
     assert configcmd.coerce_value("deny_tools", "bash, write") == ["bash", "write"]
     assert configcmd.coerce_value("deny_skills", "") == []
+    assert configcmd.coerce_value(
+        "enabled_skills", "unknown-skill, alpha, alpha"
+    ) == ["alpha", "unknown-skill"]
 
 
 def test_coerce_unknown_key_raises() -> None:
@@ -152,6 +156,29 @@ def test_set_preserves_existing_keys(tmp_path: Path) -> None:
         "model": "gpt-5.4",
         "max_nmt_strikes": 5,
         "reasoning_effort": "high",
+    }
+
+
+def test_set_enabled_skills_round_trips_explicit_empty_and_preserves_siblings(
+    tmp_path: Path,
+) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(path, {"model": "gpt-5.4", "enabled_skills": ["alpha"]})
+
+    rc = configcmd.run_set(
+        "enabled_skills",
+        "",
+        scope="project",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=_Sink(),
+    )
+
+    assert rc == 0
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == {
+        "model": "gpt-5.4",
+        "enabled_skills": [],
     }
 
 
@@ -479,6 +506,23 @@ def test_get_denylist_is_union_across_sources(tmp_path: Path) -> None:
         err=_Sink(),
     )
     assert out.text == "bash,write"  # env ∪ project, sorted
+
+
+def test_get_enabled_skills_uses_presence_aware_replacement(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    settings.write_config(
+        settings.global_config_path(env), {"enabled_skills": ["global-skill"]}
+    )
+    settings.write_config(
+        settings.project_config_path(tmp_path), {"enabled_skills": []}
+    )
+    out = _Sink()
+
+    configcmd.run_get(
+        "enabled_skills", repo_root=tmp_path, env=env, out=out, err=_Sink()
+    )
+
+    assert out.text == ""
 
 
 def test_get_tri_state_none_renders_empty(tmp_path: Path) -> None:

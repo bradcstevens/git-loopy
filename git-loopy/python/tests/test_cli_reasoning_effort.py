@@ -42,6 +42,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GIT_LOOPY_MAX_NMT_STRIKES",
         "GIT_LOOPY_DENY_TOOLS",
         "GIT_LOOPY_DENY_SKILLS",
+        "GIT_LOOPY_ENABLED_SKILLS",
         "GIT_LOOPY_PRICING_FILE",
         "GIT_LOOPY_OTEL_ENABLED",
         "OTEL_EXPORTER_OTLP_ENDPOINT",

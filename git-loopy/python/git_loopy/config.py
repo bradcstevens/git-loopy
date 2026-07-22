@@ -38,6 +38,8 @@ from typing import Callable, Iterable, Literal, Mapping
 
 __all__ = [
     "RunConfig",
+    "SkillPolicyInput",
+    "SkillPolicyInputs",
     "REASONING_EFFORT_ORDER",
     "REASONING_EFFORTS",
     "MODEL_REASONING_EFFORTS",
@@ -174,6 +176,30 @@ RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
 #: :class:`RunConfig` knob (issue #51): the loop reads
 #: :attr:`RunConfig.send_timeout_seconds` rather than the env directly.
 DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
+
+
+@dataclass(frozen=True)
+class SkillPolicyInput:
+    """One Skill-policy source, preserving absent versus explicit empty."""
+
+    present: bool = False
+    names: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.present and self.names:
+            raise ValueError("an absent Skill-policy input cannot contain names")
+        object.__setattr__(self, "names", tuple(sorted(set(self.names))))
+
+
+@dataclass(frozen=True)
+class SkillPolicyInputs:
+    """Uncombined configured and invocation inputs for Skill-policy resolution."""
+
+    project: SkillPolicyInput = field(default_factory=SkillPolicyInput)
+    global_: SkillPolicyInput = field(default_factory=SkillPolicyInput)
+    environment: SkillPolicyInput = field(default_factory=SkillPolicyInput)
+    enable_skills: frozenset[str] = field(default_factory=frozenset)
+    disable_skills: frozenset[str] = field(default_factory=frozenset)
 
 
 class EffortGateWarning(Enum):
@@ -326,6 +352,10 @@ class RunConfig:
             dataclass stays genuinely immutable across Iterations. The per-issue
             resolver (#147) reads this map and gates each pair; nothing consumes
             it in this slice.
+        skill_policy: Presence-aware project/global Config values, optional exact
+            environment replacement, and temporary enable/disable overlays. These
+            remain uncombined until the Effective Skill policy resolver consumes
+            them at Run preflight.
     """
 
     model: str | None = None
@@ -343,6 +373,7 @@ class RunConfig:
     parallel: int = 1
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
+    skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):

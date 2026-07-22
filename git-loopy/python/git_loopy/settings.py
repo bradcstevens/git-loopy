@@ -53,6 +53,7 @@ __all__ = [
     "table_int",
     "table_float",
     "table_str_list",
+    "table_optional_str_list",
     "table_routing",
 ]
 
@@ -294,6 +295,12 @@ def dump_config_toml(
     scalars: list[tuple[str, object]] = []
     sections: list[tuple[str, Mapping[str, object]]] = []
     for key, value in values.items():
+        if key == "enabled_skills" and isinstance(value, list):
+            if any(not isinstance(item, str) for item in value):
+                raise SettingsError(
+                    "cannot serialize 'enabled_skills': only lists of strings are supported"
+                )
+            value = sorted(set(value))
         if isinstance(value, dict):
             sections.append((key, cast("Mapping[str, object]", value)))
         else:
@@ -404,6 +411,15 @@ def table_str_list(table: Mapping[str, object], key: str, *, scope: str) -> list
             raise _type_error(scope, key, "a list of strings", value)
         result.append(item)
     return result
+
+
+def table_optional_str_list(
+    table: Mapping[str, object], key: str, *, scope: str
+) -> list[str] | None:
+    """Read a list of strings while preserving key absence as ``None``."""
+    if key not in table:
+        return None
+    return table_str_list(table, key, scope=scope)
 
 
 #: The two keys every ``[routing]`` entry must carry (both required, no

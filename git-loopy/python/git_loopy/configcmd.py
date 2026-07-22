@@ -155,6 +155,10 @@ def _coerce_csv(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _coerce_enabled_skills(raw: str) -> list[str]:
+    return sorted(set(_coerce_csv(raw)))
+
+
 # ---------------------------------------------------------------------------
 # Key registry — the single source of truth mapping each persisted key to how a
 # `set` value is coerced and how a `get` / `list` effective value is read off a
@@ -167,6 +171,14 @@ class _Key:
     name: str
     coerce: Callable[[str], object]
     read: Callable[["ResolvedConfig"], object]
+
+
+def _read_enabled_skills(resolved: "ResolvedConfig") -> list[str]:
+    inputs = resolved.run.skill_policy
+    for source in (inputs.environment, inputs.project, inputs.global_):
+        if source.present:
+            return list(source.names)
+    return []
 
 
 _KEYS: dict[str, _Key] = {
@@ -186,6 +198,7 @@ _KEYS: dict[str, _Key] = {
         ),
         _Key("deny_tools", _coerce_csv, lambda rc: sorted(rc.run.deny_tools)),
         _Key("deny_skills", _coerce_csv, lambda rc: sorted(rc.run.deny_skills)),
+        _Key("enabled_skills", _coerce_enabled_skills, _read_enabled_skills),
     )
 }
 
