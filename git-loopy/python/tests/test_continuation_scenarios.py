@@ -473,6 +473,8 @@ def test_python_publish_keeps_ephemeral_advice_visibly_unpublished(
 @pytest.mark.parametrize(
     ("case", "expected_error"),
     [
+        ("unknown-contract-version", "unsupported Continuation contract version"),
+        ("unknown-record-format", "unsupported Continuation record format"),
         ("missing-disposition", "missing required field: disposition"),
         ("unsupported-disposition", "completion.disposition is unsupported"),
         ("mixed-content", "exactly one content branch"),
@@ -499,7 +501,11 @@ def test_python_publish_rejects_invalid_completion_atomically(
     request = _request()
     completion = request["completion"]
     action = completion["actions"][0]
-    if case == "missing-disposition":
+    if case == "unknown-contract-version":
+        completion["continuation_contract_version"] = "2.0"
+    elif case == "unknown-record-format":
+        completion["record_format"] = 2
+    elif case == "missing-disposition":
         del completion["disposition"]
     elif case == "unsupported-disposition":
         completion["disposition"] = "waiting"
