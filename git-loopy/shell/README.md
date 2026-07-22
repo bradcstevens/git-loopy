@@ -27,6 +27,7 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | --- | --- |
 | **Bash 4+** | The Orchestrator uses associative arrays. Run `bash --version` to check. |
 | **`jq`** | Required by the shell port for JSON. `brew install jq` / `apt-get install jq`. (The PowerShell port needs no `jq`.) |
+| **Perl 5** | The native Continuation command uses core `JSON::PP`, `Encode`, and `Unicode::Normalize` modules to enforce the portable JSON profile without Python. |
 | **`gh`**, authenticated | `gh auth login`. The default issue source is GitHub Issues. |
 | **`git`** | On `PATH`. |
 | **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |

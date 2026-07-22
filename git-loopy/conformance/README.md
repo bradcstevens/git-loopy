@@ -38,7 +38,9 @@ interaction-evidence, and condition schemas; exact Python native-publish stdout
 and stderr; raw-segment stress requests; and literal request templates with
 RFC 6902 `add`, `remove`, and `replace` patches for invalid completion cases.
 Adapters may materialize those generic fixture records but must not recreate the
-semantic dispatch they describe.
+semantic dispatch they describe. The shell adapter drives those same portable
+JSON, completion-envelope, vocabulary, fingerprint, receipt, and atomic-failure
+records through its public native `publish` command.
 
 A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references

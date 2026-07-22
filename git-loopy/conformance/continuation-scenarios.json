@@ -1030,7 +1030,7 @@
   "scenarios": [
     {
       "id": "capabilities-python",
-      "distributions": ["python"],
+      "distributions": ["python", "shell"],
       "arguments": ["continuation", "capabilities"],
       "request": null,
       "github_script": [],
@@ -1193,7 +1193,7 @@
       }
     },
     {
-      "id": "shell-publish-rejects-request-outside-tracer-contract",
+      "id": "shell-publish-rejects-invalid-completion-envelope",
       "distributions": ["shell"],
       "arguments": ["continuation", "publish"],
       "request": {
@@ -1208,10 +1208,10 @@
           "operation": "publish",
           "error": {
             "code": "invalid_request",
-            "message": "request is outside the supported trusted planning publication contract"
+            "message": "request is missing required field: completion"
           }
         },
-        "stderr_contains": "outside the supported trusted planning publication contract",
+        "stderr_contains": "request is missing required field: completion",
         "github_calls": []
       }
     },
@@ -1336,7 +1336,7 @@
     },
     {
       "id": "duplicate-object-key-is-rejected-before-publication",
-      "distributions": ["python"],
+      "distributions": ["python", "shell"],
       "arguments": ["continuation", "publish"],
       "request": {
         "source": "stdin",
@@ -1380,6 +1380,28 @@
       }
     },
     {
+      "id": "nesting-rejection-precedes-an-earlier-duplicate-key",
+      "distributions": ["python", "shell"],
+      "arguments": ["continuation", "publish"],
+      "request": {
+        "source": "stdin",
+        "raw_segments": [
+          {"text": "{\"duplicate\":1,\"duplicate\":2,\"deep\":"},
+          {"text": "[", "repeat": 17},
+          {"text": "0"},
+          {"text": "]", "repeat": 17},
+          {"text": "}"}
+        ]
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request exceeds maximum nesting depth 16\"}}\n",
+        "stderr_exact": "git-loopy continuation: request exceeds maximum nesting depth 16\n",
+        "github_calls": []
+      }
+    },
+    {
       "id": "request-must-be-utf8",
       "arguments": [
         "continuation",
@@ -1409,8 +1431,8 @@
       }
     },
     {
-      "id": "python-publish-rejects-utf8-bom",
-      "distributions": ["python"],
+      "id": "publish-rejects-utf8-bom",
+      "distributions": ["python", "shell"],
       "arguments": [
         "continuation",
         "publish",

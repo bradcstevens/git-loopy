@@ -187,7 +187,172 @@ run_github_failure_probes() {
 
 run_github_failure_probes
 
-run_tracer_scope_rejection_probes() {
+run_portable_json_profile_probes() {
+  local case
+  while IFS= read -r case; do
+    local id probe request github_script github_state github_log
+    id="$(jq -r '.id' <<<"$case")"
+    probe="$(jq -r '.probe' <<<"$case")"
+    request="$(
+      jq -c \
+        --arg probe "$probe" '
+        .completion_records.publish_request_templates["shared-continue"]
+        | if $probe == "float" then
+            .extra = 1.5
+          elif $probe == "integer" then
+            .extra = 9007199254740992
+          elif $probe == "nfc" then
+            .completion.producer.login = "e\u0301"
+          elif $probe == "depth" then
+            .extra = reduce range(0; 17) as $index ({}; {child: .})
+          elif $probe == "array" then
+            .extra = [range(0; 257) | 0]
+          elif $probe == "string" then
+            .extra = ("x" * 8193)
+          else
+            .completion.advisory_extensions = reduce range(0; 7) as $index (
+              {};
+              .["note_\($index)"] = ("x" * 8192)
+            )
+          end
+      ' "$fixture"
+    )"
+    github_script="$tmp/$id-profile-github-script.json"
+    github_state="$tmp/$id-profile-github-state"
+    github_log="$tmp/$id-profile-github-calls"
+    printf '[]\n' >"$github_script"
+    : >"$github_log"
+
+    local stdout_path="$tmp/$id-profile.stdout"
+    local stderr_path="$tmp/$id-profile.stderr"
+    local status
+    set +e
+    printf '%s' "$request" |
+      PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+      GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+      GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+      GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+      "$bash_bin" "$entrypoint" continuation publish \
+        >"$stdout_path" 2>"$stderr_path"
+    status="${PIPESTATUS[1]}"
+    set -e
+
+    [[ "$status" == "$(jq -r '.expected.exit_code' <<<"$case")" ]] ||
+      fail "$id portable JSON exit mismatch"
+    [[ "$(<"$stdout_path")" == "$(jq -r '.expected.stdout_exact' <<<"$case")" ]] ||
+      fail "$id portable JSON stdout mismatch"
+    [[ "$(<"$stderr_path")" == "$(jq -r '.expected.stderr_exact' <<<"$case")" ]] ||
+      fail "$id portable JSON stderr mismatch"
+    [[ ! -s "$github_log" ]] ||
+      fail "$id reached GitHub before portable JSON rejection"
+  done < <(jq -c '.completion_records.canonical_json_rejections[]' "$fixture")
+}
+
+run_portable_json_profile_probes
+
+run_producer_revision_bound_probe() {
+  local request completion_length padding
+  request="$(
+    jq -c '
+      .completion_records.publish_request_templates["shared-continue"]
+      | .completion.advisory_extensions = reduce range(0; 5) as $index (
+          {};
+          .["note_\($index)"] = ("x" * 8000)
+        )
+      | .completion.advisory_extensions.note_5 = ""
+    ' "$fixture"
+  )"
+  completion_length="$(
+    jq -cS '.completion' <<<"$request" |
+      LC_ALL=C wc -c |
+      tr -d ' '
+  )"
+  padding=$((49000 - completion_length + 1))
+  ((padding > 0 && padding <= 8192)) ||
+    fail "producer revision bound fixture padding is invalid"
+  request="$(
+    jq -c --argjson padding "$padding" \
+      '.completion.advisory_extensions.note_5 = ("x" * $padding)' \
+      <<<"$request"
+  )"
+
+  local github_script="$tmp/revision-bound-github-script.json"
+  local github_state="$tmp/revision-bound-github-state"
+  local github_log="$tmp/revision-bound-github-calls"
+  printf '[]\n' >"$github_script"
+  : >"$github_log"
+  local stdout_path="$tmp/revision-bound.stdout"
+  local stderr_path="$tmp/revision-bound.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 1 ]] ||
+    fail "producer revision bound exit: expected 1, got $status"
+  jq -e '
+    .error.code == "invalid_request"
+    and .error.message
+      == "Producer revision exceeds maximum record length 49152"
+  ' "$stdout_path" >/dev/null ||
+    fail "producer revision bound diagnostic mismatch"
+  [[ ! -s "$github_log" ]] ||
+    fail "oversized Producer revision reached GitHub"
+}
+
+run_producer_revision_bound_probe
+
+run_semantic_before_size_probe() {
+  local request
+  request="$(
+    jq -c '
+      .completion_records.publish_request_templates["shared-continue"]
+      | del(.completion.workstream)
+      | .completion.advisory_extensions = reduce range(0; 7) as $index (
+          {};
+          .["note_\($index)"] = ("x" * 8192)
+        )
+    ' "$fixture"
+  )"
+  local github_script="$tmp/semantic-before-size-github-script.json"
+  local github_state="$tmp/semantic-before-size-github-state"
+  local github_log="$tmp/semantic-before-size-github-calls"
+  printf '[]\n' >"$github_script"
+  : >"$github_log"
+  local stdout_path="$tmp/semantic-before-size.stdout"
+  local stderr_path="$tmp/semantic-before-size.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 1 ]] ||
+    fail "semantic-before-size exit: expected 1, got $status"
+  jq -e '
+    .error.message == "completion is missing required field: workstream"
+  ' "$stdout_path" >/dev/null ||
+    fail "completion size rejection preceded semantic validation"
+  [[ ! -s "$github_log" ]] ||
+    fail "malformed oversized completion reached GitHub"
+}
+
+run_semantic_before_size_probe
+
+run_completion_semantic_rejection_probes() {
   local case
   while IFS= read -r case; do
     local id request github_script github_state github_log
@@ -231,26 +396,352 @@ run_tracer_scope_rejection_probes() {
     set -e
 
     [[ "$status" == 1 ]] ||
-      fail "$id tracer-scope rejection exit: expected 1, got $status"
-    jq -e '
-      .ok == false
-      and .operation == "publish"
-      and .error.code == "invalid_request"
-    ' "$stdout_path" >/dev/null ||
-      fail "$id was not rejected as outside the shell tracer contract"
+      fail "$id completion rejection exit: expected 1, got $status"
+    [[ "$(<"$stdout_path")" == \
+      "$(jq -r '.expected.stdout_exact' <<<"$case")" ]] ||
+      fail "$id completion rejection stdout mismatch"
+    [[ "$(<"$stderr_path")" == \
+      "$(jq -r '.expected.stderr_exact' <<<"$case")" ]] ||
+      fail "$id completion rejection stderr mismatch"
     [[ ! -s "$github_log" ]] ||
-      fail "$id mutated GitHub before tracer-scope rejection"
+      fail "$id mutated GitHub before completion rejection"
   done < <(
-    jq -c '
-      .completion_records.semantic_rejections[]
-      | select(.id == "manual-afk"
-          or .id == "hard-hitl-afk"
-          or .id == "interaction-owner-mismatch")
-    ' "$fixture"
+    jq -c '.completion_records.semantic_rejections[]' "$fixture"
   )
 }
 
-run_tracer_scope_rejection_probes
+run_completion_semantic_rejection_probes
+
+run_ephemeral_publication_probe() {
+  local request
+  request="$(
+    jq -c '
+      .completion_records.publish_request_templates["shared-continue"]
+      | .completion.publication = "ephemeral"
+      | del(.completion.carrier, .completion.workstream.anchor)
+      | .completion.transition.evidence = []
+      | .trusted_producers = []
+    ' "$fixture"
+  )"
+  local github_script="$tmp/ephemeral-github-script.json"
+  local github_state="$tmp/ephemeral-github-state"
+  local github_log="$tmp/ephemeral-github-calls"
+  printf '[]\n' >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/ephemeral.stdout"
+  local stderr_path="$tmp/ephemeral.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 0 ]] ||
+    fail "ephemeral publication exit: expected 0, got $status"
+  jq -e '
+    .ok == true
+    and .operation == "publish"
+    and .receipt.status == "unpublished"
+    and .receipt.publication == "ephemeral"
+    and .receipt.disposition == "continue"
+    and (.receipt.semantic_fingerprints.action | test("^[0-9a-f]{64}$"))
+  ' "$stdout_path" >/dev/null ||
+    fail "ephemeral publication did not return its typed unpublished receipt"
+  [[ ! -s "$stderr_path" ]] ||
+    fail "ephemeral publication unexpectedly wrote stderr"
+  [[ ! -s "$github_log" ]] ||
+    fail "ephemeral publication reached GitHub"
+}
+
+run_ephemeral_publication_probe
+
+run_ephemeral_acceptance() {
+  local id="$1"
+  local request="$2"
+  local expected_keys="$3"
+  local github_script="$tmp/$id-acceptance-github-script.json"
+  local github_state="$tmp/$id-acceptance-github-state"
+  local github_log="$tmp/$id-acceptance-github-calls"
+  printf '[]\n' >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/$id-acceptance.stdout"
+  local stderr_path="$tmp/$id-acceptance.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 0 ]] ||
+    fail "$id acceptance exit: expected 0, got $status"
+  jq -e --argjson expected_keys "$expected_keys" '
+    .receipt.status == "unpublished"
+    and (.receipt.semantic_fingerprints | keys) == ($expected_keys | sort)
+    and all(
+      .receipt.semantic_fingerprints[];
+      test("^[0-9a-f]{64}$")
+    )
+  ' "$stdout_path" >/dev/null ||
+    fail "$id acceptance receipt mismatch"
+  [[ ! -s "$stderr_path" ]] ||
+    fail "$id acceptance unexpectedly wrote stderr"
+  [[ ! -s "$github_log" ]] ||
+    fail "$id ephemeral acceptance reached GitHub"
+}
+
+while IFS= read -r entry; do
+  action_kind="$(jq -r '.key' <<<"$entry")"
+  action_schema="$(jq -c '.value' <<<"$entry")"
+  action_request="$(
+    jq -c \
+      --arg kind "$action_kind" \
+      --argjson schema "$action_schema" '
+      .completion_records as $records
+      | $records.publish_request_templates["shared-continue"]
+      | .completion.publication = "ephemeral"
+      | del(.completion.carrier, .completion.workstream.anchor)
+      | .completion.transition.evidence = []
+      | .trusted_producers = []
+      | .completion.actions[0].kind = $kind
+      | .completion.actions[0].interaction =
+          $records.interaction_examples[
+            $schema.example_interaction
+          ]
+    ' "$fixture"
+  )"
+  run_ephemeral_acceptance \
+    "action-kind-$(jq -rn --arg value "$action_kind" '$value | @uri')" \
+    "$action_request" \
+    '["action"]'
+done < <(jq -c '.completion_records.action_kind_schemas | to_entries[]' "$fixture")
+
+while IFS= read -r entry; do
+  condition_kind="$(jq -r '.key' <<<"$entry")"
+  condition_schema="$(jq -c '.value' <<<"$entry")"
+  condition_request="$(
+    jq -c \
+      --argjson schema "$condition_schema" '
+      .completion_records.publish_request_templates["shared-continue"] as $template
+      | $template
+      | .completion.publication = "ephemeral"
+      | del(.completion.carrier, .completion.workstream.anchor)
+      | .completion.transition.evidence = []
+      | .trusted_producers = []
+      | .completion.actions[0] as $action
+      | .completion.actions = (
+          [
+            $schema.supporting_action_keys[] as $key
+            | $action + {key: $key}
+          ]
+          + [$action + {prerequisites: [$schema.example]}]
+        )
+    ' "$fixture"
+  )"
+  expected_condition_keys="$(
+    jq -cn --argjson schema "$condition_schema" \
+      '$schema.supporting_action_keys + ["action"] | sort'
+  )"
+  run_ephemeral_acceptance \
+    "condition-kind-$condition_kind" \
+    "$condition_request" \
+    "$expected_condition_keys"
+done < <(jq -c '.completion_records.condition_schemas | to_entries[]' "$fixture")
+
+run_shared_disposition_probe() {
+  local disposition="$1"
+  local request="$2"
+  local canonical_completion revision_id record body
+  canonical_completion="$(jq -cS '.completion' <<<"$request")"
+  revision_id="$(
+    printf '%s' "$canonical_completion" |
+      if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+      else
+        shasum -a 256 | awk '{print $1}'
+      fi
+  )"
+  record="$(
+    jq -cS \
+      --arg revision_id "$revision_id" '
+      .completion + {
+        revision_id: $revision_id,
+        semantic_fingerprints: {}
+      }
+    ' <<<"$request"
+  )"
+  body="<!-- git-loopy-continuation:1 -->"$'\n```json\n'"$record"$'\n```'
+
+  local github_script="$tmp/$disposition-github-script.json"
+  local github_state="$tmp/$disposition-github-state"
+  local github_log="$tmp/$disposition-github-calls"
+  jq -cn \
+    --arg body "$body" '
+    [
+      {
+        command: "api repos/octo/example/issues/comments/7001",
+        exit_code: 0,
+        stdout_json: {id: 7001, user: {login: "planner"}}
+      },
+      {
+        command: (
+          "label create git-loopy-continuation --repo octo/example "
+          + "--color 5319E7 --description Repairable discovery index for "
+          + "git-loopy Continuation records --force"
+        ),
+        exit_code: 0,
+        stdout: ""
+      },
+      {
+        command: (
+          "issue edit 237 --repo octo/example "
+          + "--add-label git-loopy-continuation"
+        ),
+        exit_code: 0,
+        stdout: ""
+      },
+      {
+        command: (
+          "api --method POST repos/octo/example/issues/237/comments --input -"
+        ),
+        exit_code: 0,
+        expected_stdin_json: {body: $body},
+        stdout_json: {
+          id: 9001,
+          html_url: (
+            "https://github.com/octo/example/issues/237#issuecomment-9001"
+          ),
+          user: {login: "planner"}
+        }
+      },
+      {
+        command: "api repos/octo/example/issues/comments/9001",
+        exit_code: 0,
+        stdout_json: {
+          id: 9001,
+          html_url: (
+            "https://github.com/octo/example/issues/237#issuecomment-9001"
+          ),
+          body: $body,
+          user: {login: "planner"}
+        }
+      }
+    ]
+  ' >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/$disposition.stdout"
+  local stderr_path="$tmp/$disposition.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 0 ]] ||
+    fail "$disposition shared publication exit: expected 0, got $status"
+  jq -e --arg revision_id "$revision_id" '
+    .receipt.status == "committed"
+    and .receipt.revision_id == $revision_id
+    and .receipt.semantic_fingerprints == {}
+  ' "$stdout_path" >/dev/null ||
+    fail "$disposition shared publication receipt mismatch"
+  [[ ! -s "$stderr_path" ]] ||
+    fail "$disposition shared publication unexpectedly wrote stderr"
+  [[ "$(wc -l <"$github_log" | tr -d ' ')" == 5 ]] ||
+    fail "$disposition shared publication GitHub boundary mismatch"
+}
+
+while IFS= read -r outcome_kind; do
+  terminal_request="$(
+    jq -c --arg kind "$outcome_kind" '
+      .completion_records.publish_request_templates["shared-continue"]
+      | del(.completion.actions)
+      | .completion.disposition = "terminal"
+      | .completion.outcome = {
+          kind: $kind,
+          destination_satisfied: ($kind == "complete"),
+          effective_at: "2026-07-22T18:00:00Z",
+          evidence: [
+            {kind: "issue", repository: "octo/example", number: 237}
+          ],
+          summary: "The Workstream reached a durable terminal outcome."
+        }
+      | if $kind == "superseded" then
+          .completion.outcome.successor = {
+            kind: "issue",
+            repository: "octo/example",
+            number: 240
+          }
+        else .
+        end
+    ' "$fixture"
+  )"
+  run_shared_disposition_probe \
+    "terminal-$outcome_kind" \
+    "$terminal_request"
+done < <(jq -r '.completion_records.outcome_kinds[]' "$fixture")
+
+no_guidance_request="$(
+  jq -c '
+    .completion_records.publish_request_templates["shared-continue"]
+    | del(.completion.actions)
+    | .completion.disposition = "no-guidance"
+    | .completion.no_guidance = {
+        reason: "no-successor-created",
+        summary: "No trusted successor exists.",
+        references: [
+          {kind: "issue", repository: "octo/example", number: 237}
+        ]
+      }
+  ' "$fixture"
+)"
+run_shared_disposition_probe "no-guidance" "$no_guidance_request"
+
+ephemeral_no_guidance_request="$(
+  jq -c '
+    .completion_records.publish_request_templates["shared-continue"]
+    | .completion.publication = "ephemeral"
+    | del(
+        .completion.actions,
+        .completion.carrier,
+        .completion.workstream.anchor
+      )
+    | .completion.transition.evidence = []
+    | .trusted_producers = []
+    | .completion.disposition = "no-guidance"
+    | .completion.no_guidance = {
+        reason: "ephemeral-only",
+        summary: "Advice remains outside shared Reconciliation.",
+        references: [
+          {kind: "issue", repository: "octo/example", number: 237}
+        ]
+      }
+  ' "$fixture"
+)"
+run_ephemeral_acceptance \
+  "ephemeral-no-guidance" \
+  "$ephemeral_no_guidance_request" \
+  '[]'
 
 while IFS= read -r scenario; do
   id="$(jq -r '.id' <<<"$scenario")"
@@ -260,6 +751,16 @@ while IFS= read -r scenario; do
   if [[ "$request_source" != "none" ]]; then
     if jq -e '.request | has("base64")' <<<"$scenario" >/dev/null; then
       request_content=""
+    elif jq -e '.request | has("raw_segments")' <<<"$scenario" >/dev/null; then
+      request_content="$(
+        while IFS= read -r segment; do
+          text="$(jq -r '.text' <<<"$segment")"
+          repeat="$(jq -r '.repeat // 1' <<<"$segment")"
+          for ((repeat_index = 0; repeat_index < repeat; repeat_index++)); do
+            printf '%s' "$text"
+          done
+        done < <(jq -c '.request.raw_segments[]' <<<"$scenario")
+      )"
     elif jq -e '.request | has("raw")' <<<"$scenario" >/dev/null; then
       request_content="$(jq -r '.request.raw' <<<"$scenario")"
     else
@@ -315,24 +816,38 @@ while IFS= read -r scenario; do
   [[ "$status" == "$expected_status" ]] ||
     fail "$id exit: expected $expected_status, got $status"
 
-  if jq -e '.expected.stdout == null' <<<"$scenario" >/dev/null; then
+  if jq -e '
+    .expected.stdout == null and (.expected | has("stdout_exact") | not)
+  ' <<<"$scenario" >/dev/null; then
     [[ ! -s "$stdout_path" ]] || fail "$id unexpectedly wrote stdout"
   else
-    expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
     actual_json="$(jq -c . "$stdout_path")" ||
       fail "$id stdout is not one JSON object"
-    [[ "$actual_json" == "$expected_json" ]] ||
-      fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
+    if jq -e '.expected | has("stdout_exact")' <<<"$scenario" >/dev/null; then
+      expected_stdout="$(jq -r '.expected.stdout_exact' <<<"$scenario")"
+      [[ "$(<"$stdout_path")" == "$expected_stdout" ]] ||
+        fail "$id exact stdout mismatch"
+    else
+      expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
+      [[ "$actual_json" == "$expected_json" ]] ||
+        fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
+    fi
     [[ "$(wc -l <"$stdout_path" | tr -d ' ')" == "1" ]] ||
       fail "$id stdout is not exactly one line"
   fi
 
-  stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$scenario")"
-  if [[ -z "$stderr_needle" ]]; then
-    [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+  if jq -e '.expected | has("stderr_exact")' <<<"$scenario" >/dev/null; then
+    expected_stderr="$(jq -r '.expected.stderr_exact' <<<"$scenario")"
+    [[ "$(<"$stderr_path")" == "$expected_stderr" ]] ||
+      fail "$id exact stderr mismatch"
   else
-    grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
-      fail "$id stderr does not contain: $stderr_needle"
+    stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$scenario")"
+    if [[ -z "$stderr_needle" ]]; then
+    [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+    else
+      grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
+        fail "$id stderr does not contain: $stderr_needle"
+    fi
   fi
   actual_github_calls="$(
     jq -Rsc 'split("\n") | map(select(length > 0))' <"$github_log"
