@@ -160,7 +160,7 @@ _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.0"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.1"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -178,7 +178,7 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
         == continuation_module.EVENT_SCHEMA_VERSION
     )
     assert (
-        _CONTINUATION_SCENARIOS["capability_manifest"]
+        _CONTINUATION_SCENARIOS["distribution_capability_manifests"]["python"]
         == continuation_module.CAPABILITY_MANIFEST
     )
 

@@ -83,6 +83,11 @@ __all__ = [
     "PullRequest",
     "GitHubClient",
     "SubprocessGitHubClient",
+    "ContinuationComment",
+    "ContinuationCarrier",
+    "ContinuationArtifact",
+    "ContinuationGitHubClient",
+    "SubprocessContinuationGitHubClient",
 ]
 
 _GH_BIN: Final[str] = "gh"
@@ -219,7 +224,41 @@ class PullRequest:
     comments: tuple[Comment, ...] = field(default=())
 
 
-def _run(args: Sequence[str], *, check: bool = True) -> str:
+@dataclass(frozen=True)
+class ContinuationComment:
+    """One GitHub comment carrying a possible Producer revision."""
+
+    id: int
+    url: str
+    body: str
+    author: str
+
+
+@dataclass(frozen=True)
+class ContinuationCarrier:
+    """One issue selected by the repairable Continuation discovery label."""
+
+    number: int
+    state: str
+    url: str
+    comments: tuple[ContinuationComment, ...]
+
+
+@dataclass(frozen=True)
+class ContinuationArtifact:
+    """Current durable state of one issue Target."""
+
+    number: int
+    state: str
+    url: str
+
+
+def _run(
+    args: Sequence[str],
+    *,
+    check: bool = True,
+    input_text: str | None = None,
+) -> str:
     """Invoke ``gh <args>`` and return stdout.
 
     Args:
@@ -242,6 +281,7 @@ def _run(args: Sequence[str], *, check: bool = True) -> str:
             encoding="utf-8",
             errors="replace",
             check=False,
+            input=input_text,
         )
     except FileNotFoundError as exc:
         raise GhError(cmd, 127, "gh not found on PATH") from exc
@@ -429,6 +469,217 @@ class GitHubClient(Protocol):
     def pr_view(self, number: int) -> PullRequest:
         """Fetch one pull request including its ``comments`` and head-ref fields."""
         ...
+
+
+@runtime_checkable
+class ContinuationGitHubClient(Protocol):
+    """GitHub mechanics used by the native Continuation module."""
+
+    def ensure_issue_label(self, repository: str, number: int, label: str) -> None:
+        """Establish the repairable discovery label before publication."""
+        ...
+
+    def append_issue_comment(
+        self, repository: str, number: int, body: str
+    ) -> ContinuationComment:
+        """Append one immutable Producer carrier comment."""
+        ...
+
+    def read_issue_comment(
+        self, repository: str, comment_id: int
+    ) -> ContinuationComment:
+        """Reread one comment by durable database identity."""
+        ...
+
+    def list_continuation_carriers(
+        self, repository: str, label: str
+    ) -> list[ContinuationCarrier]:
+        """Return every issue selected by the discovery label."""
+        ...
+
+    def read_issue(
+        self, repository: str, number: int
+    ) -> ContinuationArtifact:
+        """Read current durable state for one issue Target."""
+        ...
+
+
+def _parse_continuation_comment(
+    data: object,
+    cmd: Sequence[str],
+) -> ContinuationComment:
+    if not isinstance(data, dict):
+        raise GhError(
+            cmd,
+            0,
+            f"expected JSON object for comment, got {type(data).__name__}",
+        )
+    try:
+        raw_id = data["databaseId"] if "databaseId" in data else data["id"]
+        author = data.get("author", data.get("user"))
+        if not isinstance(author, dict):
+            raise TypeError("author")
+        return ContinuationComment(
+            id=int(raw_id),
+            url=str(data.get("url", data.get("html_url", ""))),
+            body=str(data.get("body", "")),
+            author=str(author["login"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GhError(cmd, 0, f"GitHub comment JSON is malformed: {exc}") from exc
+
+
+class SubprocessContinuationGitHubClient:
+    """Native Continuation GitHub Adapter using the authenticated ``gh`` CLI."""
+
+    def ensure_issue_label(self, repository: str, number: int, label: str) -> None:
+        _run(
+            [
+                "label",
+                "create",
+                label,
+                "--repo",
+                repository,
+                "--color",
+                "5319E7",
+                "--description",
+                "Repairable discovery index for git-loopy Continuation records",
+                "--force",
+            ]
+        )
+        _run(
+            [
+                "issue",
+                "edit",
+                str(number),
+                "--repo",
+                repository,
+                "--add-label",
+                label,
+            ]
+        )
+
+    def append_issue_comment(
+        self, repository: str, number: int, body: str
+    ) -> ContinuationComment:
+        cmd = [
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/issues/{number}/comments",
+            "--input",
+            "-",
+        ]
+        raw = _run(
+            cmd,
+            input_text=json.dumps(
+                {"body": body},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        return _parse_continuation_comment(
+            _parse_json(raw, [_GH_BIN, *cmd]),
+            [_GH_BIN, *cmd],
+        )
+
+    def read_issue_comment(
+        self, repository: str, comment_id: int
+    ) -> ContinuationComment:
+        cmd = ["api", f"repos/{repository}/issues/comments/{comment_id}"]
+        raw = _run(cmd)
+        return _parse_continuation_comment(
+            _parse_json(raw, [_GH_BIN, *cmd]),
+            [_GH_BIN, *cmd],
+        )
+
+    def list_continuation_carriers(
+        self, repository: str, label: str
+    ) -> list[ContinuationCarrier]:
+        cmd = [
+            "issue",
+            "list",
+            "--repo",
+            repository,
+            "--state",
+            "all",
+            "--label",
+            label,
+            "--limit",
+            "100",
+            "--json",
+            "number,state,url,comments",
+        ]
+        raw = _run(cmd)
+        parsed = _parse_json(raw, [_GH_BIN, *cmd])
+        if not isinstance(parsed, list):
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"expected JSON array for Continuation carriers, got "
+                f"{type(parsed).__name__}",
+            )
+        carriers: list[ContinuationCarrier] = []
+        for item in parsed:
+            if not isinstance(item, dict) or not isinstance(item.get("comments"), list):
+                raise GhError(
+                    [_GH_BIN, *cmd],
+                    0,
+                    "Continuation carrier JSON is malformed",
+                )
+            try:
+                carriers.append(
+                    ContinuationCarrier(
+                        number=int(item["number"]),
+                        state=str(item["state"]),
+                        url=str(item["url"]),
+                        comments=tuple(
+                            _parse_continuation_comment(comment, [_GH_BIN, *cmd])
+                            for comment in item["comments"]
+                        ),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise GhError(
+                    [_GH_BIN, *cmd],
+                    0,
+                    f"Continuation carrier JSON is malformed: {exc}",
+                ) from exc
+        return carriers
+
+    def read_issue(
+        self, repository: str, number: int
+    ) -> ContinuationArtifact:
+        cmd = [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repository,
+            "--json",
+            "number,state,url",
+        ]
+        parsed = _parse_json(_run(cmd), [_GH_BIN, *cmd])
+        if not isinstance(parsed, dict):
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"expected JSON object for Continuation Target, got "
+                f"{type(parsed).__name__}",
+            )
+        try:
+            return ContinuationArtifact(
+                number=int(parsed["number"]),
+                state=str(parsed["state"]),
+                url=str(parsed["url"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"Continuation Target JSON is malformed: {exc}",
+            ) from exc
 
 
 class SubprocessGitHubClient:
