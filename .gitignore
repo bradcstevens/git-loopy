@@ -51,6 +51,7 @@ issues/
 
 # Copilot CLI session state (per-session artifacts; never commit)
 .copilot/session-state/
+.mypy_cache/
 .pytest_cache/
 .ruff_cache/
 
