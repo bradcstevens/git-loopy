@@ -195,6 +195,11 @@ or retire declaration naming every affected head. When a damaged comment cannot 
 revision identity, Reconciliation supplies a deterministic comment-scoped affected-head identity
 so the recovery ceremony remains explicit and satisfiable.
 
+Callers select Python's immutable-revision capability with `revision_protocol: true` on
+`reconcile`, then pass its exact `observation` and ordered `parents` to `publish`. Omitting those
+fields selects only the family-wide atomic-root capability subset. Supplying `parents` or
+`reattestation` without an observation is invalid rather than silently ignored.
+
 Normal Reconciliation reports missing or stale index labels but never mutates them. Python
 `repair-index` is the only index mutation path: after authenticating the operator and every record
 author, it adds labels to trusted carriers and removes labels only from artifacts with no marked
