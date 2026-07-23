@@ -189,11 +189,16 @@ uv run --project git-loopy/python git-loopy --parallel 3
 
 # Use the legacy local-markdown mode (prds/<feature>/NNN-*.md).
 GIT_LOOPY_ISSUE_SOURCE=prds uv run --project git-loopy/python git-loopy
+
+# Report the distribution Release version without starting Run preflight.
+uv run --project git-loopy/python git-loopy --version
 ```
 
 `uv run --project git-loopy/python git-loopy --help` prints the full CLI
 surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
-`--no-reasoning`.
+`--no-reasoning`. `git-loopy --version` prints exactly
+`git-loopy <VERSION>` and does not require a repository, Config, GitHub,
+Copilot, network access, or the TUI.
 
 ---
 
@@ -228,7 +233,8 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker (see `GIT_LOOPY_INTERACTIVE`). Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. The picker is a TUI action: when requested on a non-interactive run (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent) the run warns and falls back to the configured model. |
 
-CLI flags (`--model ID`, `--reasoning-effort EFFORT`, `-v` / `-vv` / `-vvv`,
+CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
+`-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--deny-tool`, `--deny-skill`, `--interactive` /
 `--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`

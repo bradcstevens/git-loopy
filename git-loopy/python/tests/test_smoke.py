@@ -31,6 +31,14 @@ RELEASE_VERSION_FIXTURE = json.loads(
 )
 
 
+def _current_environment_console_script() -> str | None:
+    for name in ("git-loopy", "git-loopy.exe"):
+        candidate = Path(sys.executable).parent / name
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("git-loopy")
+
+
 def _git_loopy_command() -> list[str]:
     """Prefer the installed console script; fall back to ``python -m``.
 
@@ -40,9 +48,24 @@ def _git_loopy_command() -> list[str]:
     install), fall back to invoking the module directly so the smoke
     remains meaningful.
     """
-    if executable := shutil.which("git-loopy"):
+    if executable := _current_environment_console_script():
         return [executable]
     return [sys.executable, "-m", "git_loopy.cli"]
+
+
+def _installed_git_loopy_executable() -> str:
+    executable = _current_environment_console_script()
+    assert executable is not None, (
+        "the public-boundary smoke requires the installed git-loopy console script"
+    )
+    return executable
+
+
+def _path_snapshot(root: Path) -> dict[Path, bytes | None]:
+    return {
+        path.relative_to(root): path.read_bytes() if path.is_file() else None
+        for path in root.rglob("*")
+    }
 
 
 def _run_with_runtime_release_metadata(
@@ -71,9 +94,7 @@ def _run_with_runtime_release_metadata(
     env["PYTHONPATH"] = str(runtime_root)
     return subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "git_loopy.cli",
+            _installed_git_loopy_executable(),
             *(arguments or ["--version"]),
         ],
         cwd=outside_repository,
@@ -121,18 +142,49 @@ def test_git_loopy_help_exits_zero() -> None:
 def test_git_loopy_version_reports_shared_release_identity_outside_repository(
     tmp_path: Path,
 ) -> None:
+    outside_repository = tmp_path / "outside"
+    outside_repository.mkdir()
+
+    config_home = tmp_path / "config-home"
+    config_dir = config_home / "git-loopy"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text("invalid = [\n", encoding="utf-8")
+
+    blocked_imports = tmp_path / "blocked-imports"
+    blocked_imports.mkdir()
+    for module in ("copilot", "opentelemetry", "rich", "textual"):
+        (blocked_imports / f"{module}.py").write_text(
+            "raise ImportError('Run-only dependency is unavailable')\n",
+            encoding="utf-8",
+        )
+
+    before = _path_snapshot(tmp_path)
     env = os.environ.copy()
     env.update(
         {
             "PATH": "",
+            "PYTHONPATH": str(blocked_imports),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HOME": str(tmp_path / "missing-home"),
+            "XDG_CONFIG_HOME": str(config_home),
+            "GH_TOKEN": "",
+            "GITHUB_TOKEN": "",
             "GIT_LOOPY_ISSUE_SOURCE": "unavailable",
             "GIT_LOOPY_INTERACTIVE": "1",
             "GIT_LOOPY_ENABLED_SKILLS": "unavailable",
+            "GIT_LOOPY_MAX_NMT_STRIKES": "not-an-integer",
+            "GIT_LOOPY_MODEL_SELECT": "1",
+            "GIT_LOOPY_OTEL_ENABLED": "1",
+            "GIT_LOOPY_PRICING_FILE": str(tmp_path / "missing-pricing.toml"),
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
+            "HTTP_PROXY": "http://127.0.0.1:1",
+            "HTTPS_PROXY": "http://127.0.0.1:1",
+            "ALL_PROXY": "http://127.0.0.1:1",
         }
     )
     result = subprocess.run(
-        _git_loopy_command() + ["--version"],
-        cwd=tmp_path,
+        [_installed_git_loopy_executable(), "--version"],
+        cwd=outside_repository,
         env=env,
         capture_output=True,
         text=True,
@@ -146,7 +198,7 @@ def test_git_loopy_version_reports_shared_release_identity_outside_repository(
         == f"git-loopy {RELEASE_VERSION_FIXTURE['expected_release_version']}\n"
     )
     assert result.stderr == ""
-    assert list(tmp_path.iterdir()) == []
+    assert _path_snapshot(tmp_path) == before
 
 
 def test_git_loopy_version_rejects_malformed_shared_release_values(

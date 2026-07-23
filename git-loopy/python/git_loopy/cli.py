@@ -32,6 +32,8 @@ Precedence rules (ADR-0006), applied key by key:
 CLI surface — ``git-loopy`` is the single, canonical entrypoint (ADR-0007; the
 old bash launcher is retired):
 
+* ``--version`` — print the distribution Release version and exit before Run
+  discovery, configuration, dependencies, or services.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
