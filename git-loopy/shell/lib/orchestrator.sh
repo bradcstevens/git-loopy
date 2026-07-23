@@ -12,6 +12,7 @@ fi
 _git_loopy_orchestrator_dir="$(
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 )"
+_GIT_LOOPY_RELEASE_VERSION_PATH="$_git_loopy_orchestrator_dir/../../../VERSION"
 
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/events.sh"
@@ -42,8 +43,58 @@ Options:
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
   --send-timeout-seconds N
+  --version
   -h, --help
 EOF
+}
+
+git_loopy_read_release_version() {
+  local path="${1:?Release metadata path is required}"
+  if [[ ! -f "$path" || ! -r "$path" ]]; then
+    printf 'git-loopy: cannot read Release metadata %s\n' "$path" >&2
+    return 1
+  fi
+
+  local release_version=""
+  local extra_line=""
+  local first_status=0
+  local second_status=0
+  exec 3<"$path" || {
+    printf 'git-loopy: cannot read Release metadata %s\n' "$path" >&2
+    return 1
+  }
+  IFS= read -r release_version <&3 || first_status=$?
+  IFS= read -r extra_line <&3 || second_status=$?
+  exec 3<&-
+
+  if ((first_status > 1 || second_status == 0)) || [[ -n "$extra_line" ]]; then
+    printf 'git-loopy: Release metadata %s must contain exactly one Semantic Versioning value\n' \
+      "$path" >&2
+    return 1
+  fi
+  [[ "$release_version" != *$'\r' ]] || release_version="${release_version%$'\r'}"
+
+  local numeric_identifier='(0|[1-9][0-9]*)'
+  local prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  local semver_pattern
+  semver_pattern="^${numeric_identifier}\\.${numeric_identifier}\\.${numeric_identifier}"
+  semver_pattern+="(-${prerelease_identifier}(\\.${prerelease_identifier})*)?"
+  semver_pattern+='(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+  if [[ ! "$release_version" =~ $semver_pattern ]]; then
+    printf 'git-loopy: Release metadata %s must contain exactly one Semantic Versioning value\n' \
+      "$path" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$release_version"
+}
+
+git_loopy_print_release_version() {
+  local release_version
+  release_version="$(
+    git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
+  )" || return 1
+  printf 'git-loopy %s\n' "$release_version"
 }
 
 _git_loopy_config_error() {
@@ -1245,6 +1296,11 @@ git_loopy_ensure_gitignore_entry() {
 }
 
 git_loopy_run_discovery() {
+  local release_version
+  release_version="$(
+    git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
+  )" || return 1
+
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
   git_loopy_ensure_gitignore_entry "$GIT_LOOPY_REPO_ROOT" || return 1
 
@@ -1263,6 +1319,7 @@ git_loopy_run_discovery() {
       --arg issue_source "$GIT_LOOPY_ISSUE_SOURCE" \
       --arg model "$GIT_LOOPY_MODEL" \
       --arg reasoning_effort "$GIT_LOOPY_REASONING_EFFORT" \
+      --arg release_version "$release_version" \
       --arg prompt_path "$GIT_LOOPY_PROMPT_PATH" \
       --arg send_timeout "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" \
       --argjson deny_skills "$deny_skills_json" \
@@ -1280,6 +1337,7 @@ git_loopy_run_discovery() {
         max_nmt_strikes: $max_nmt_strikes,
         model: $model,
         prompt_path: $prompt_path,
+        release_version: $release_version,
         reasoning_effort: (
           if $reasoning_effort == ""
           then null
@@ -1484,6 +1542,15 @@ git_loopy_run_discovery() {
 git_loopy_main() {
   local packaged_prompt="$1"
   shift
+
+  if [[ "${1:-}" == "--version" ]]; then
+    (($# == 1)) || {
+      git_loopy_usage >&2
+      return 2
+    }
+    git_loopy_print_release_version
+    return $?
+  fi
 
   if [[ "${1:-}" == "continuation" ]]; then
     shift

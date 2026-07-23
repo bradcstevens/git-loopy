@@ -10,6 +10,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 entrypoint="$port_dir/git-loopy.sh"
+release_fixture="$port_dir/../conformance/release-version.json"
 real_jq="$(command -v jq)"
 real_jq_dir="$(dirname "$real_jq")"
 real_git="$(command -v git)"
@@ -112,6 +113,23 @@ run_entrypoint() {
       XDG_CONFIG_HOME="$repo/xdg" \
       FAKE_REPO_ROOT="$repo" \
       "$bash_bin" "$entrypoint" "$@"
+  ) >"$stdout_path" 2>"$stderr_path"
+}
+
+run_version_entrypoint() {
+  local stdout_path="$1"
+  local stderr_path="$2"
+  shift 2
+
+  (
+    cd "$version_outside"
+    PATH="$version_bin:/usr/bin:/bin" \
+      HOME="$temp_dir/missing-home" \
+      XDG_CONFIG_HOME="$temp_dir/version-config" \
+      GIT_LOOPY_ISSUE_SOURCE="unavailable" \
+      GIT_LOOPY_MAX_NMT_STRIKES="not-an-integer" \
+      VERSION_TOOL_LOG="$version_tool_log" \
+      "$bash_bin" "$version_runtime/git-loopy/shell/git-loopy.sh" "$@"
   ) >"$stdout_path" 2>"$stderr_path"
 }
 
@@ -295,6 +313,124 @@ fi
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 
+version_runtime="$temp_dir/version-runtime"
+mkdir -p "$version_runtime/git-loopy"
+cp -R "$port_dir" "$version_runtime/git-loopy/shell"
+expected_release_version="$(jq -r '.expected_release_version' "$release_fixture")"
+printf '%s\n' "$expected_release_version" >"$version_runtime/VERSION"
+
+version_outside="$temp_dir/version-outside"
+version_config="$temp_dir/version-config/git-loopy"
+version_bin="$temp_dir/version-bin"
+version_tool_log="$temp_dir/version-tools.log"
+mkdir -p "$version_outside" "$version_config" "$version_bin"
+printf 'invalid = [\n' >"$version_config/config.toml"
+for tool in git gh copilot jq; do
+  cat >"$version_bin/$tool" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$(basename "$0") $*" >>"$VERSION_TOOL_LOG"
+exit 97
+EOF
+  chmod +x "$version_bin/$tool"
+done
+
+set +e
+run_version_entrypoint "$temp_dir/version.stdout" "$temp_dir/version.stderr" --version
+status=$?
+set -e
+assert_equal "0" "$status" "Release version exit"
+assert_equal \
+  "git-loopy $expected_release_version" \
+  "$(<"$temp_dir/version.stdout")" \
+  "Release version stdout"
+[[ ! -s "$temp_dir/version.stderr" ]] || fail "Release version wrote to stderr"
+[[ ! -e "$version_tool_log" ]] || fail "Release version invoked a Run dependency"
+[[ -z "$(find "$version_outside" -mindepth 1 -print -quit)" ]] ||
+  fail "Release version created Run artifacts"
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  jq -jr '.value + "\n"' <<<"$case_json" >"$version_runtime/VERSION"
+  if ! run_version_entrypoint \
+    "$temp_dir/version-$case_id.stdout" \
+    "$temp_dir/version-$case_id.stderr" \
+    --version; then
+    fail "valid Release version was rejected: $case_id"
+  fi
+  assert_equal \
+    "git-loopy $(jq -r '.value' <<<"$case_json")" \
+    "$(<"$temp_dir/version-$case_id.stdout")" \
+    "valid Release version stdout: $case_id"
+  [[ ! -s "$temp_dir/version-$case_id.stderr" ]] ||
+    fail "valid Release version wrote stderr: $case_id"
+done < <(jq -c '.valid_versions[]' "$release_fixture")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  jq -j '.value' <<<"$case_json" >"$version_runtime/VERSION"
+  set +e
+  run_version_entrypoint \
+    "$temp_dir/version-$case_id.stdout" \
+    "$temp_dir/version-$case_id.stderr" \
+    --version
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "malformed Release version was accepted: $case_id"
+  [[ ! -s "$temp_dir/version-$case_id.stdout" ]] ||
+    fail "malformed Release version wrote stdout: $case_id"
+  [[ -s "$temp_dir/version-$case_id.stderr" ]] ||
+    fail "malformed Release version failed silently: $case_id"
+  [[ "$(<"$temp_dir/version-$case_id.stderr")" != *"unknown"* ]] ||
+    fail "malformed Release version reported unknown: $case_id"
+done < <(jq -c '.invalid_versions[]' "$release_fixture")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  kind="$(jq -r '.kind' <<<"$case_json")"
+  rm -rf "$version_runtime/VERSION"
+  case "$kind" in
+    missing) ;;
+    directory) mkdir "$version_runtime/VERSION" ;;
+    invalid_utf8) printf '\377\n' >"$version_runtime/VERSION" ;;
+    *) fail "unsupported invalid Release authority fixture kind: $kind" ;;
+  esac
+  set +e
+  run_version_entrypoint \
+    "$temp_dir/version-$case_id.stdout" \
+    "$temp_dir/version-$case_id.stderr" \
+    --version
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "invalid Release metadata was accepted: $case_id"
+  [[ ! -s "$temp_dir/version-$case_id.stdout" ]] ||
+    fail "invalid Release metadata wrote stdout: $case_id"
+  [[ -s "$temp_dir/version-$case_id.stderr" ]] ||
+    fail "invalid Release metadata failed silently: $case_id"
+  [[ "$(<"$temp_dir/version-$case_id.stderr")" != *"unknown"* ]] ||
+    fail "invalid Release metadata reported unknown: $case_id"
+done < <(jq -c '.invalid_authority_inputs[]' "$release_fixture")
+
+rm -rf "$version_runtime/VERSION"
+set +e
+run_version_entrypoint \
+  "$temp_dir/version-capabilities-missing.stdout" \
+  "$temp_dir/version-capabilities-missing.stderr" \
+  continuation capabilities
+status=$?
+set -e
+[[ "$status" -ne 0 ]] ||
+  fail "Continuation capabilities accepted missing Release metadata"
+[[ ! -s "$temp_dir/version-capabilities-missing.stdout" ]] ||
+  fail "Continuation capabilities wrote success output without Release metadata"
+assert_contains \
+  "$(<"$temp_dir/version-capabilities-missing.stderr")" \
+  "cannot read Release metadata" \
+  "Continuation capabilities missing Release metadata diagnostic"
+[[ "$(<"$temp_dir/version-capabilities-missing.stderr")" != *"unknown"* ]] ||
+  fail "Continuation capabilities reported an unknown Release version"
+
+printf '%s\n' "$expected_release_version" >"$version_runtime/VERSION"
+
 set +e
 "$bash_bin" "$entrypoint" --help \
   >"$temp_dir/help.stdout" 2>"$temp_dir/help.stderr"
@@ -331,8 +467,9 @@ expected_types="$(
 )"
 actual_types="$(jq -sc '[.[].type]' "$temp_dir/empty.stdout")"
 assert_equal "$expected_types" "$actual_types" "empty-Pool event sequence"
-jq -se '
+jq -se --arg release_version "$expected_release_version" '
   .[0].issue_source == "github"
+  and .[0].release_version == $release_version
   and .[0].schema_version == 1
   and .[0].insight_capabilities == {
     agent_output: false,

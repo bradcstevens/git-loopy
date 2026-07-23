@@ -23,9 +23,12 @@ EOF
 }
 
 git_loopy_continuation_capabilities() {
-  cat <<'EOF'
-{"ok":true,"capabilities":{"continuation_contract_versions":["1.0"],"record_formats":[1],"wrapper_contract_version":"1.2","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":false},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"terminal_rendering":false,"concurrent_dispatch":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}
-EOF
+  local release_version
+  release_version="$(
+    git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
+  )" || return 1
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0"],"record_formats":[1],"wrapper_contract_version":"1.2","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":false},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"terminal_rendering":false,"concurrent_dispatch":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+    "$release_version"
 }
 
 _git_loopy_continuation_error() {
@@ -1446,7 +1449,7 @@ git_loopy_continuation_main() {
       return 2
     }
     git_loopy_continuation_capabilities
-    return 0
+    return $?
   fi
 
   case "$operation" in

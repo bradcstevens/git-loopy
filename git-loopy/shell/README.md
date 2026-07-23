@@ -130,9 +130,14 @@ git-loopy --model gpt-5.6-sol --reasoning-effort high --max-nmt-strikes 5
 
 # Legacy local-markdown issues (prds/<feature>/NNN-*.md).
 git-loopy --issue-source prds
+
+# Report the distribution Release version without starting Run preflight.
+git-loopy --version
 ```
 
 (Without the PATH launcher, prefix each with `bash /path/to/git-loopy/shell/`.)
+`git-loopy --version` prints exactly `git-loopy <VERSION>` and does not require
+a repository, Config, GitHub, Copilot, network access, or an Event sink.
 
 ---
 
@@ -145,6 +150,7 @@ set **union** of their CLI and env values, not an override.
 
 | Env var | CLI flag | Default | Meaning |
 | --- | --- | --- | --- |
+| — | `--version` | — | Print the distribution Release version and exit before Run preflight. |
 | — | `<max-iterations>` (positional) | `0` (unlimited) | Cap the Run at N Iterations. Reaching it is a clean exit. |
 | `GIT_LOOPY_MODEL` | `--model ID` | `claude-opus-4.8` | Model id (bare base id). |
 | `GIT_LOOPY_REASONING_EFFORT` | `--reasoning-effort` | `max` for the built-in model | `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Choosing another model without an effort leaves it to the backend. |

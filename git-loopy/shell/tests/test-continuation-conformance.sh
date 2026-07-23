@@ -10,6 +10,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/continuation-scenarios.json"
+release_fixture="$port_dir/../conformance/release-version.json"
 entrypoint="$port_dir/git-loopy.sh"
 scripted_github="$script_dir/scripted-github.sh"
 real_jq_dir="$(dirname "$(command -v jq)")"
@@ -95,6 +96,16 @@ run_transport_probe() {
 }
 
 run_transport_probe
+
+jq -e \
+  --arg release_version "$(jq -r '.expected_release_version' "$release_fixture")" \
+  '
+    first(
+      .scenarios[]
+      | select(.id == "capabilities-shell")
+    ).expected.stdout.capabilities.release_version == $release_version
+  ' "$fixture" >/dev/null ||
+  fail "shell Continuation capabilities drifted from the shared Release version"
 
 run_github_failure_probes() {
   local workflow
