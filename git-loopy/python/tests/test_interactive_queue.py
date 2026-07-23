@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from git_loopy import events as events_module
+from git_loopy.interactive import state as state_module
 from git_loopy.interactive.state import (
     STATUS_ACTIVE,
     STATUS_ADVANCED,
@@ -197,9 +198,7 @@ def test_completed_group_includes_advanced_no_progress_and_gone() -> None:
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
     _collect(state, 43)
     state.stream_message("<working issue=43>")
-    state.render(
-        {"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3}
-    )
+    state.render({"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3})
     state.render({"type": events_module.WRAPPER_ITERATION_END})
 
     by_ref = {r.ref: r for r in queue_rows(state)}
@@ -323,6 +322,149 @@ def test_completed_row_timers_are_frozen() -> None:
     assert frozen.active_seconds == 10.0
     clock.advance(1000)
     assert queue_rows(state)[0].active_seconds == 10.0  # still frozen
+
+
+def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 42)
+    clock.advance(1)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:01.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    clock.advance(4)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "claude-opus-4.8",
+                        "tokens_in": 100,
+                        "tokens_out": 50,
+                    },
+                    "cost_usd": 0.0004,
+                    "peak_context_window": {
+                        "current_tokens": 12_000,
+                        "token_limit": 32_000,
+                        "effective_target_tokens": 20_000,
+                        "effective_ceiling_tokens": 28_000,
+                    },
+                }
+            ],
+        }
+    )
+
+    row = queue_rows(state)[0]
+    assert row.status == STATUS_CLOSED
+    assert row.closed_wall == datetime.fromisoformat("2026-05-16T00:00:05+00:00")
+    assert row.iteration_count == 1
+    assert row.usage == UsageTally(
+        model="claude-opus-4.8", tokens_in=100, tokens_out=50
+    )
+    assert row.cost_usd == 0.0004
+
+    detail = state_module.issue_detail(state, 42)
+    assert detail.issue_elapsed_seconds == 4.0
+    assert detail.contributions == (
+        state_module.IssueContribution(
+            kind="iteration",
+            iteration=1,
+            lane=None,
+            status="closed",
+            active_seconds=4.0,
+            usage=UsageTally(model="claude-opus-4.8", tokens_in=100, tokens_out=50),
+            cost_usd=0.0004,
+            peak_context_window=state_module.ContextWindowSnapshot(
+                current_tokens=12_000,
+                token_limit=32_000,
+                effective_target_tokens=20_000,
+                effective_ceiling_tokens=28_000,
+            ),
+        ),
+    )
+
+
+def test_repeated_normalized_contributions_drive_iters_and_closure_only_fields() -> (
+    None
+):
+    clock = _FakeClock()
+    state = _make_state(clock)
+    for iteration, payload in (
+        (
+            1,
+            {
+                "issue": 42,
+                "status": "advanced",
+                "first_started_at": "2026-05-16T00:00:01.000Z",
+                "closed_at": None,
+                "issue_elapsed_seconds": None,
+                "active_seconds": 2.0,
+                "cumulative_active_seconds": 2.0,
+                "consumption": {
+                    "model": "claude-opus-4.8",
+                    "tokens_in": 100,
+                    "tokens_out": 25,
+                },
+                "cost_usd": 0.001,
+                "peak_context_window": None,
+            },
+        ),
+        (
+            2,
+            {
+                "issue": 42,
+                "status": "closed",
+                "first_started_at": "2026-05-16T00:00:01.000Z",
+                "closed_at": "2026-05-16T00:00:11.000Z",
+                "issue_elapsed_seconds": 10.0,
+                "active_seconds": 3.0,
+                "cumulative_active_seconds": 5.0,
+                "consumption": {
+                    "model": "claude-opus-4.8",
+                    "tokens_in": 200,
+                    "tokens_out": 50,
+                },
+                "cost_usd": 0.002,
+                "peak_context_window": None,
+            },
+        ),
+    ):
+        state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": iteration})
+        state.render(
+            {
+                "type": events_module.WRAPPER_ITERATION_END,
+                "iter": iteration,
+                "issues": [payload],
+            }
+        )
+
+    row = queue_rows(state)[0]
+    assert row.status == STATUS_CLOSED
+    assert row.iteration_count == 2
+    assert row.active_seconds == 5.0
+    assert row.closed_wall == datetime.fromisoformat("2026-05-16T00:00:11+00:00")
+    assert row.usage.tokens_in == 300
+    assert row.usage.tokens_out == 75
+    assert row.cost_usd == 0.003
+
+    detail = state_module.issue_detail(state, 42)
+    assert detail.issue_elapsed_seconds == 10.0
+    assert [item.status for item in detail.contributions] == ["advanced", "closed"]
 
 
 # ---------------------------------------------------------------------------
@@ -558,9 +700,7 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
         (3, 101, 300, 50),
     ]
     for iter_num, issue, tin, tout in plan:
-        state.render(
-            {"type": events_module.WRAPPER_ITERATION_START, "iter": iter_num}
-        )
+        state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": iter_num})
         _collect(state, issue)
         state.stream_message(f"<working issue={issue}>")
         _usage(state, model="claude-opus-4.8", tin=tin, tout=tout)

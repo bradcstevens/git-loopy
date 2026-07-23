@@ -96,10 +96,18 @@ _ACTIVITY_BAND_HEIGHT = 9
 _ACTIVITY_PLACEHOLDER = "Waiting for the agent..."
 
 
-def _format_queue_cost(usage: UsageTally, pricing: Pricing | None) -> str:
-    """Render a Queue row's estimated **Cost** cell (issues #36/#42).
+def _format_queue_cost(
+    usage: UsageTally,
+    pricing: Pricing | None,
+    *,
+    normalized_cost: float | None = None,
+    has_contributions: bool = False,
+    has_open_contribution: bool = False,
+) -> str:
+    """Render a Queue row's normalized or live-estimated **Cost** cell.
 
-    Derives the figure from the row's shared
+    Finalized contributions carry the Orchestrator-owned normalized Cost. Before
+    finalization, derive the live figure from the row's shared
     :class:`~git_loopy.usage.UsageTally` via :meth:`UsageTally.cost`, which owns
     the one unknown-model guard every Cost figure shares: a model absent from
     the pricing table — or one no usage event has named yet (``model is None``)
@@ -109,6 +117,10 @@ def _format_queue_cost(usage: UsageTally, pricing: Pricing | None) -> str:
     :meth:`UsageTally.cost` requires a concrete pricing table. This is the same
     unknown-model treatment the Summary band / run-end table use.
     """
+    if has_open_contribution and has_contributions:
+        return "—"
+    if has_contributions:
+        return f"${normalized_cost:.4f}" if normalized_cost is not None else "—"
     if pricing is None:
         return "—"
     cost = usage.cost(pricing)
@@ -130,9 +142,11 @@ class _Dashboard(Vertical):
         table.add_column("Status", key="status")
         table.add_column("Started", key="started")
         table.add_column("Active", key="active")
+        table.add_column("Closed", key="closed")
+        table.add_column("Iters", key="iters")
         table.add_column("Tokens in", key="tokens_in")
         table.add_column("Tokens out", key="tokens_out")
-        table.add_column("Cost USD", key="cost")
+        table.add_column("Cost", key="cost")
 
 
 class _ActivityScroll(VerticalScroll):
@@ -220,14 +234,29 @@ class _LogScroll(VerticalScroll):
             self.post_message(self.AutoscrollChanged(at_bottom))
 
 
+class _IterationBreakdown(DataTable):
+    """Read-only finalized contribution rows above one issue's Log."""
+
+    can_focus = False
+
+    def on_mount(self) -> None:
+        self.add_column("Contribution", key="contribution")
+        self.add_column("Status", key="status")
+        self.add_column("Active", key="active")
+        self.add_column("Tokens in", key="tokens_in")
+        self.add_column("Tokens out", key="tokens_out")
+        self.add_column("Cost", key="cost")
+        self.add_column("Peak Context fill", key="peak_context")
+
+
 class _LogView(Vertical):
     """Level 2: one issue's full-region **Log** (the per-issue drill-down).
 
     Opened by ``enter`` on a Queue row and closed by ``escape``; it replaces the
     Dashboard while showing (their ``display`` is toggled). A fixed
-    ``#log-header`` sits above the scrollable :class:`_LogScroll`
-    (``#log-scroll``), which holds the ``#log-body``; a fixed ``#log-indicator``
-    bar below the scroll surfaces the "new lines below" hint while
+    ``#log-header`` and read-only Iteration breakdown sit above the scrollable
+    :class:`_LogScroll` (``#log-scroll``), which holds the ``#log-body``; a fixed
+    ``#log-indicator`` bar below the scroll surfaces the "new lines below" hint while
     sticky-with-release autoscroll is paused (issue #38). The body is the opened
     issue's **own** accumulating, bounded Log tail (reasoning dimmed + assistant
     message + key structured events), isolated per issue (issue #34): the
@@ -238,6 +267,9 @@ class _LogView(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(id="log-header")
+        yield _IterationBreakdown(
+            id="iteration-breakdown", cursor_type="none", zebra_stripes=True
+        )
         with _LogScroll(id="log-scroll"):
             yield Static(id="log-body")
         yield Static(id="log-indicator")
@@ -297,6 +329,10 @@ class GitLoopyApp(App[None]):
         padding: 0 1;
         background: $boost;
         color: $text;
+    }
+    #iteration-breakdown {
+        height: auto;
+        max-height: 8;
     }
     #log-scroll {
         height: 1fr;
@@ -528,9 +564,17 @@ class GitLoopyApp(App[None]):
                     row.status,
                     format_wall_clock(row.started_wall),
                     format_duration(row.active_seconds),
-                    f"{row.usage.tokens_in:,}",
-                    f"{row.usage.tokens_out:,}",
-                    _format_queue_cost(row.usage, pricing),
+                    format_wall_clock(row.closed_wall),
+                    str(row.iteration_count),
+                    f"{row.usage.tokens_in:,}" if row.usage_observed else "—",
+                    f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
+                    _format_queue_cost(
+                        row.usage,
+                        pricing,
+                        normalized_cost=row.cost_usd,
+                        has_contributions=row.iteration_count > 0,
+                        has_open_contribution=row.is_active,
+                    ),
                     key=str(row.ref),
                 )
             self._displayed_refs = new_refs
@@ -540,16 +584,30 @@ class GitLoopyApp(App[None]):
             for row in rows:
                 key = str(row.ref)
                 table.update_cell(key, "status", row.status)
-                table.update_cell(
-                    key, "started", format_wall_clock(row.started_wall)
-                )
+                table.update_cell(key, "started", format_wall_clock(row.started_wall))
                 table.update_cell(key, "active", format_duration(row.active_seconds))
-                table.update_cell(key, "tokens_in", f"{row.usage.tokens_in:,}")
-                table.update_cell(key, "tokens_out", f"{row.usage.tokens_out:,}")
+                table.update_cell(key, "closed", format_wall_clock(row.closed_wall))
+                table.update_cell(key, "iters", str(row.iteration_count))
+                table.update_cell(
+                    key,
+                    "tokens_in",
+                    f"{row.usage.tokens_in:,}" if row.usage_observed else "—",
+                )
+                table.update_cell(
+                    key,
+                    "tokens_out",
+                    f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
+                )
                 table.update_cell(
                     key,
                     "cost",
-                    _format_queue_cost(row.usage, pricing),
+                    _format_queue_cost(
+                        row.usage,
+                        pricing,
+                        normalized_cost=row.cost_usd,
+                        has_contributions=row.iteration_count > 0,
+                        has_open_contribution=row.is_active,
+                    ),
                 )
 
     def _sync_log(self) -> None:
@@ -568,6 +626,37 @@ class GitLoopyApp(App[None]):
             return
         detail = issue_detail(self._state, self._open_ref)
         self.query_one("#log-header", Static).update(format_detail_header(detail))
+        breakdown = self.query_one("#iteration-breakdown", DataTable)
+        breakdown.clear()
+        for contribution in detail.contributions:
+            identity = (
+                f"Lane {contribution.lane}"
+                if contribution.kind == "lane"
+                else f"Iteration {contribution.iteration}"
+            )
+            peak = contribution.peak_context_window
+            if peak is None:
+                peak_text = "—"
+            elif peak.token_limit is None:
+                peak_text = f"{peak.current_tokens:,}/—"
+            else:
+                peak_text = (
+                    f"{peak.current_tokens:,}/{peak.token_limit:,} "
+                    f"{peak.current_tokens / peak.token_limit:.0%}"
+                )
+            breakdown.add_row(
+                identity,
+                contribution.status,
+                format_duration(contribution.active_seconds),
+                f"{contribution.usage.tokens_in:,}",
+                f"{contribution.usage.tokens_out:,}",
+                (
+                    f"${contribution.cost_usd:.4f}"
+                    if contribution.cost_usd is not None
+                    else "—"
+                ),
+                peak_text,
+            )
         body = Text()
         views = log_line_views(self._state.log(self._open_ref))
         for view in views:
@@ -580,9 +669,7 @@ class GitLoopyApp(App[None]):
         else:
             if not views:
                 body.append("(no Log lines for this issue yet.)\n", style="dim")
-            body.append(
-                "— the full record is in the JSONL replay log.", style="dim"
-            )
+            body.append("— the full record is in the JSONL replay log.", style="dim")
         self.query_one("#log-body", Static).update(body)
         self._update_log_indicator()
 
@@ -603,9 +690,7 @@ class GitLoopyApp(App[None]):
             indicator.update(_LOG_NEW_LINES_BELOW)
 
     @on(_LogScroll.AutoscrollChanged)
-    def _on_log_autoscroll_changed(
-        self, event: _LogScroll.AutoscrollChanged
-    ) -> None:
+    def _on_log_autoscroll_changed(self, event: _LogScroll.AutoscrollChanged) -> None:
         """Repaint the indicator the instant auto-bottom engages or pauses."""
         self._update_log_indicator()
 

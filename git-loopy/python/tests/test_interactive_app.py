@@ -17,7 +17,7 @@ plus the unchanged exit model — **Stop** (``q`` / ``Ctrl+C``) and **Detach**
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -52,13 +52,9 @@ def _make_state() -> LiveRunState:
         model="claude-opus-4.8",
         reasoning_effort="max",
     )
-    state.render(
-        {"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3}
-    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 3})
-    state.render(
-        {"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3}
-    )
+    state.render({"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3})
     return state
 
 
@@ -224,8 +220,8 @@ async def test_dashboard_queue_lists_issues_active_first_and_cursor_moves() -> N
         assert table.cursor_row == 1
 
 
-async def test_dashboard_queue_columns_drop_waiting_add_started() -> None:
-    """The Queue is Issue | Status | Started | Active — no Waiting (issue #33).
+async def test_dashboard_queue_uses_canonical_contribution_columns() -> None:
+    """The Queue includes closure and contribution accounting from issue #178.
 
     Started is the 12-hour AM/PM wall clock of when the issue first became
     active; a still-queued issue shows the em-dash placeholder until it has been
@@ -258,19 +254,76 @@ async def test_dashboard_queue_columns_drop_waiting_add_started() -> None:
             "Status",
             "Started",
             "Active",
+            "Closed",
+            "Iters",
             "Tokens in",
             "Tokens out",
-            "Cost USD",
+            "Cost",
         ]
         assert "Waiting" not in labels
         # The active row (#26) shows its Started wall clock in 12h AM/PM.
         active_row = table.get_row_at(0)
         assert active_row[1] == "active"
         assert active_row[2] == "1:42:07 PM"
+        assert active_row[4] == "—"
+        assert active_row[5] == "0"
         # Still-queued rows (#27, #28) show the placeholder until first active.
         assert table.get_row_at(1)[1] == "queued"
         assert table.get_row_at(1)[2] == "—"
         assert table.get_row_at(2)[2] == "—"
+
+
+async def test_dashboard_queue_localizes_normalized_closure_and_accounting() -> None:
+    local_zone = timezone(timedelta(hours=-6))
+    state = LiveRunState(
+        run_id="01Q",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 0.0,
+        wall_clock=lambda: datetime(2026, 5, 15, 18, 0, tzinfo=local_zone),
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 100,
+                        "tokens_out": 50,
+                    },
+                    "cost_usd": 0.0004,
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test():
+        row = app.query_one("#queue", DataTable).get_row_at(0)
+
+    assert row == [
+        "#42",
+        "closed",
+        "6:00:01 PM",
+        "0:00:04",
+        "6:00:05 PM",
+        "1",
+        "100",
+        "50",
+        "$0.0004",
+    ]
 
 
 async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
@@ -306,24 +359,83 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
         }
     )
 
-    app = GitLoopyApp(
-        state, summary=RunSummary(pricing=pricing), refresh_interval=3600
-    )
+    app = GitLoopyApp(state, summary=RunSummary(pricing=pricing), refresh_interval=3600)
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
         # Columns: Issue | Status | Started | Active | Tokens in | out | Cost.
         active_row = table.get_row_at(0)
         assert active_row[0] == "#26"
-        assert active_row[4] == "1,000"
-        assert active_row[5] == "200"
+        assert active_row[6] == "1,000"
+        assert active_row[7] == "200"
         # 1000 * 15/1e6 + 200 * 75/1e6 = 0.015 + 0.015 = 0.0300.
-        assert active_row[6] == "$0.0300"
-        # The still-queued #27 has no usage: zero tokens, em-dash cost.
+        assert active_row[8] == "$0.0300"
+        # The still-queued #27 has no observed token sample or known cost.
         queued_row = table.get_row_at(1)
         assert queued_row[0] == "#27"
-        assert queued_row[4] == "0"
-        assert queued_row[5] == "0"
         assert queued_row[6] == "—"
+        assert queued_row[7] == "—"
+        assert queued_row[8] == "—"
+
+
+async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> None:
+    pricing = Pricing(
+        models={
+            "claude-opus-4.8": ModelPricing(
+                input_per_mtok=Decimal("15"),
+                output_per_mtok=Decimal("75"),
+                context_window=200_000,
+            )
+        }
+    )
+    state = LiveRunState(run_id="01U", model="claude-opus-4.8")
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "issues": [
+                {
+                    "issue": 26,
+                    "status": "advanced",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 2.0,
+                    "cumulative_active_seconds": 2.0,
+                    "consumption": {
+                        "model": "claude-opus-4.8",
+                        "tokens_in": 1_000,
+                        "tokens_out": 200,
+                    },
+                    "cost_usd": 0.03,
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 26,
+            "activated_at": "2026-05-16T00:00:10.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "claude-opus-4.8",
+            "input": 100,
+            "output": 20,
+        }
+    )
+
+    app = GitLoopyApp(state, summary=RunSummary(pricing=pricing), refresh_interval=3600)
+    async with app.run_test():
+        row = app.query_one("#queue", DataTable).get_row_at(0)
+
+    assert row[6:9] == ["1,100", "220", "—"]
 
 
 async def test_summary_band_renders_rollup() -> None:
@@ -385,9 +497,7 @@ def _state_with_history() -> LiveRunState:
 def _dimmed_text(text: Text) -> str:
     """The substring(s) carrying the ``dim`` style — i.e. the reasoning lines."""
     return "".join(
-        text.plain[span.start : span.end]
-        for span in text.spans
-        if span.style == "dim"
+        text.plain[span.start : span.end] for span in text.spans if span.style == "dim"
     )
 
 
@@ -503,6 +613,82 @@ async def test_enter_opens_historical_issue_log_shows_its_retained_tail() -> Non
         assert "twenty-six history" not in active_body.plain
 
 
+async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> None:
+    state = LiveRunState(
+        run_id="01D",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 4.0,
+        wall_clock=lambda: datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc),
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [42]})
+    state.stream_message("<working issue=42>\nretained line\n")
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 100,
+                        "tokens_out": 50,
+                    },
+                    "cost_usd": 0.0004,
+                    "peak_context_window": {
+                        "current_tokens": 12_000,
+                        "token_limit": 32_000,
+                        "effective_target_tokens": 20_000,
+                        "effective_ceiling_tokens": 28_000,
+                    },
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        header = str(app.query_one("#log-header", Static).renderable)
+        breakdown = app.query_one("#iteration-breakdown", DataTable)
+        body = app.query_one("#log-body", Static).renderable
+
+    assert "started 12:00:01 AM" in header
+    assert "closed 12:00:05 AM" in header
+    assert "issue elapsed 0:00:04" in header
+    assert "iters 1" in header
+    assert [str(column.label) for column in breakdown.columns.values()] == [
+        "Contribution",
+        "Status",
+        "Active",
+        "Tokens in",
+        "Tokens out",
+        "Cost",
+        "Peak Context fill",
+    ]
+    assert breakdown.get_row_at(0) == [
+        "Iteration 1",
+        "closed",
+        "0:00:04",
+        "100",
+        "50",
+        "$0.0004",
+        "12,000/32,000 38%",
+    ]
+    assert isinstance(body, Text)
+    assert "retained line" in body.plain
+
+
 async def test_log_view_stamps_lines_12h_and_opens_reasoning_with_marker() -> None:
     """The Log view renders 12h AM/PM stamps (collapsed per second) + ✻ Thinking:.
 
@@ -518,9 +704,7 @@ async def test_log_view_stamps_lines_12h_and_opens_reasoning_with_marker() -> No
     )
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
-    state.render(
-        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26]}
-    )
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26]})
     state.stream_message("<working issue=26>\n")
     state.stream_reasoning("weighing options\n")
 

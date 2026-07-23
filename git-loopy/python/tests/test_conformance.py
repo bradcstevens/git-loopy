@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
 from git_loopy.pricing import Pricing
 from git_loopy.sources import is_afk_ready
 from git_loopy.ui import RunSummary
@@ -305,8 +307,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         if fixture_case["id"] == "run-start-insight-capabilities"
     )
     assert (
-        case["events"][0]["release_version"]
-        == reference_run_start["release_version"]
+        case["events"][0]["release_version"] == reference_run_start["release_version"]
     )
     assert [event["type"] for event in case["events"]] == [
         "wrapper.run.start",
@@ -349,6 +350,111 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert queue_row["iteration_count"] == len(breakdown) == 1
     assert queue_row["closed_at"] == "2026-05-15T18:00:05-06:00"
     assert expected["drill_in"]["detail_header"]["issue_elapsed_seconds"] == 4.0
+
+
+def test_python_live_state_matches_dashboard_queue_and_drill_in_fixture() -> None:
+    case = _DASHBOARD_INSIGHTS["cases"][0]
+    offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
+    run_started = datetime.fromisoformat(case["events"][0]["ts"].replace("Z", "+00:00"))
+
+    class _Clock:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = _Clock()
+    state = LiveRunState(
+        run_id="",
+        model=case["inputs"]["model"],
+        reasoning_effort=case["inputs"]["reasoning_effort"],
+        monotonic=clock,
+        wall_clock=lambda: (run_started + timedelta(seconds=clock.value)).astimezone(
+            offset
+        ),
+    )
+
+    applied = 0
+    for snapshot in case["snapshots"]:
+        event_count = snapshot["after_event_count"]
+        for event in case["events"][applied:event_count]:
+            at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
+            clock.value = (at - run_started).total_seconds()
+            state.render(event)
+        applied = event_count
+
+        expected = snapshot["expected"]
+        actual_queue = []
+        for row in queue_rows(state):
+            actual_queue.append(
+                {
+                    "issue": row.ref,
+                    "status": row.status,
+                    "started_at": (
+                        row.started_wall.isoformat() if row.started_wall else None
+                    ),
+                    "active_seconds": row.active_seconds,
+                    "closed_at": (
+                        row.closed_wall.isoformat() if row.closed_wall else None
+                    ),
+                    "iteration_count": row.iteration_count,
+                    "tokens_in": (row.usage.tokens_in if row.usage_observed else None),
+                    "tokens_out": (
+                        row.usage.tokens_out if row.usage_observed else None
+                    ),
+                    "cost_usd": row.cost_usd,
+                }
+            )
+        assert actual_queue == expected["dashboard"]["queue"]["rows"]
+
+        detail = issue_detail(state, 42)
+        assert {
+            "issue": detail.ref,
+            "status": detail.status,
+            "started_at": (
+                detail.started_wall.isoformat() if detail.started_wall else None
+            ),
+            "closed_at": (
+                detail.closed_wall.isoformat() if detail.closed_wall else None
+            ),
+            "issue_elapsed_seconds": detail.issue_elapsed_seconds,
+            "active_seconds": detail.active_seconds,
+            "iteration_count": len(detail.contributions),
+        } == expected["drill_in"]["detail_header"]
+        assert [
+            {
+                "kind": contribution.kind,
+                "iteration": contribution.iteration,
+                "lane": contribution.lane,
+                "status": contribution.status,
+                "active_seconds": contribution.active_seconds,
+                "consumption": {
+                    "model": contribution.usage.model,
+                    "tokens_in": contribution.usage.tokens_in,
+                    "tokens_out": contribution.usage.tokens_out,
+                },
+                "cost_usd": contribution.cost_usd,
+                "peak_context_window": (
+                    {
+                        "current_tokens": contribution.peak_context_window.current_tokens,
+                        "token_limit": contribution.peak_context_window.token_limit,
+                        "effective_target_tokens": contribution.peak_context_window.effective_target_tokens,
+                        "effective_ceiling_tokens": contribution.peak_context_window.effective_ceiling_tokens,
+                    }
+                    if contribution.peak_context_window
+                    else None
+                ),
+            }
+            for contribution in detail.contributions
+        ] == expected["drill_in"]["iteration_breakdown"]["rows"]
+        assert [
+            {
+                "at": line.timestamp.isoformat() if line.timestamp else None,
+                "kind": line.kind,
+                "text": line.text,
+            }
+            for line in state.log(42)
+        ] == expected["drill_in"]["log"]["lines"]
 
 
 @pytest.mark.parametrize(

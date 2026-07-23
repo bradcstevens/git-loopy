@@ -32,6 +32,7 @@ from datetime import datetime
 from rich.console import Console
 
 from git_loopy.events import (
+    AGENT_OUTPUT,
     ASSISTANT_MESSAGE,
     TOOL_CALL,
     USAGE_TOKENS,
@@ -161,6 +162,18 @@ def test_each_lane_log_accumulates_without_interleaving() -> None:
     assert not any("grep" in ln for ln in log64)
 
 
+def test_lane_unclassified_output_stays_in_its_issue_log() -> None:
+    state = _make_state()
+    _open_wave(state, issues=[66, 64])
+
+    state.render(
+        _ev(AGENT_OUTPUT, text="plain lane output", kind="unclassified", lane_issue=66)
+    )
+
+    assert [line.text for line in state.log(66)] == ["plain lane output"]
+    assert state.log(64) == ()
+
+
 def test_open_lane_partials_do_not_interleave() -> None:
     state = _make_state()
     _open_wave(state, issues=[66, 64])
@@ -206,7 +219,9 @@ def test_wave_summary_aggregates_cost_and_progress_across_lanes() -> None:
     # iteration.start/end pair per Wave means every Lane's usage + commits fold
     # into the single per-Wave snapshot by construction.
     summary = RunSummary(pricing=Pricing(models={}))
-    console = Console(file=io.StringIO(), force_terminal=False, no_color=True, width=100)
+    console = Console(
+        file=io.StringIO(), force_terminal=False, no_color=True, width=100
+    )
     renderer = Renderer(console=console, summary=summary, verbosity=0)
 
     for event in (
@@ -239,7 +254,9 @@ def test_wave_end_reconciles_each_lane_independently() -> None:
     # Both Lanes run; only 66 lands a commit.
     state.render(_ev(TOOL_CALL, tool_name="grep", arguments={"q": "x"}, lane_issue=66))
     state.render(_ev(TOOL_CALL, tool_name="view", arguments={"p": "y"}, lane_issue=64))
-    state.render(_ev(WRAPPER_COMMIT_RECORDED, sha="c" * 40, subject="fix", lane_issue=66))
+    state.render(
+        _ev(WRAPPER_COMMIT_RECORDED, sha="c" * 40, subject="fix", lane_issue=66)
+    )
     clock.advance(7)
     state.render(_ev(WRAPPER_ITERATION_END))
 
@@ -253,6 +270,49 @@ def test_wave_end_reconciles_each_lane_independently() -> None:
     assert state.ledger[64].active_seconds(clock.value) == 7.0
 
 
+def test_normalized_lane_contribution_keeps_lane_identity_in_breakdown() -> None:
+    state = _make_state()
+    _open_wave(state, issues=[66])
+    state.render(
+        _ev(
+            WRAPPER_ISSUE_ACTIVATED,
+            issue=66,
+            lane_issue=66,
+            activated_at="2026-07-23T08:00:01.000Z",
+            binding_source="lane_pickup",
+        )
+    )
+    state.render(
+        _ev(
+            WRAPPER_ITERATION_END,
+            iter=1,
+            issues=[
+                {
+                    "issue": 66,
+                    "status": "closed",
+                    "first_started_at": "2026-07-23T08:00:01.000Z",
+                    "closed_at": "2026-07-23T08:00:03.000Z",
+                    "issue_elapsed_seconds": 2.0,
+                    "active_seconds": 2.0,
+                    "cumulative_active_seconds": 2.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 10,
+                        "tokens_out": 5,
+                    },
+                    "cost_usd": None,
+                    "peak_context_window": None,
+                }
+            ],
+        )
+    )
+
+    contribution = issue_detail(state, 66).contributions[0]
+    assert contribution.kind == "lane"
+    assert contribution.iteration is None
+    assert contribution.lane == 66
+
+
 def test_lane_auto_close_marks_issue_closed_and_folds_timer() -> None:
     clock = _FakeClock()
     state = _make_state(clock)
@@ -260,9 +320,7 @@ def test_lane_auto_close_marks_issue_closed_and_folds_timer() -> None:
 
     state.render(_ev(TOOL_CALL, tool_name="grep", arguments={"q": "x"}, lane_issue=66))
     clock.advance(3)
-    state.render(
-        _ev(WRAPPER_AUTO_CLOSE, issue=66, sha="d" * 40, lane_issue=66)
-    )
+    state.render(_ev(WRAPPER_AUTO_CLOSE, issue=66, sha="d" * 40, lane_issue=66))
 
     entry = state.ledger[66]
     assert entry.status == STATUS_CLOSED
@@ -320,6 +378,9 @@ def test_lane_activation_event_binds_before_agent_output() -> None:
 
     assert state.active_ref is None
     assert state.ledger[66].status == STATUS_ACTIVE
+    assert state.ledger[66].started_wall == datetime.fromisoformat(
+        "2026-07-23T08:00:01+00:00"
+    )
 
 
 def test_lane_message_does_not_scan_the_working_marker() -> None:
@@ -349,7 +410,9 @@ def test_serial_dispatch_is_unchanged_by_multi_active() -> None:
     state.render(_ev(WRAPPER_AFK_READY_COLLECTED, issues=[42]))
 
     # Serial deltas (no ``issue`` stamp) still attribute via the working marker.
-    state.stream_message("<working issue=42>", )
+    state.stream_message(
+        "<working issue=42>",
+    )
     assert state.active_ref == 42
 
     state.stream_reasoning("serial thinking\n")

@@ -143,9 +143,7 @@ def test_strike_updates_count_and_max() -> None:
 def test_run_end_sets_terminal_status_from_outcome() -> None:
     state = _make_state()
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
-    state.render(
-        {"type": events_module.WRAPPER_RUN_END, "outcome": "empty_pool"}
-    )
+    state.render({"type": events_module.WRAPPER_RUN_END, "outcome": "empty_pool"})
     assert state.status == "empty_pool"
     assert state.ended is True
 
@@ -153,7 +151,9 @@ def test_run_end_sets_terminal_status_from_outcome() -> None:
 def test_run_id_is_learned_from_first_event_when_not_preset() -> None:
     state = _make_state()
     assert state.run_id == ""
-    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1, "run_id": "01ABC"})
+    state.render(
+        {"type": events_module.WRAPPER_ITERATION_START, "iter": 1, "run_id": "01ABC"}
+    )
     assert state.run_id == "01ABC"
 
 
@@ -229,9 +229,7 @@ def test_format_header_contains_all_fields() -> None:
     )
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
-    state.render(
-        {"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3}
-    )
+    state.render({"type": events_module.WRAPPER_STRIKE, "strikes": 1, "max_strikes": 3})
     clock.advance(3661)  # 1h 1m 1s
     header = format_header(state)
     assert "01RUN" in header
@@ -336,18 +334,17 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._STRIKE == events_module.WRAPPER_STRIKE
     # Ledger-driving literals (issue #25).
     assert (
-        state_module._AFK_READY_COLLECTED
-        == events_module.WRAPPER_AFK_READY_COLLECTED
+        state_module._AFK_READY_COLLECTED == events_module.WRAPPER_AFK_READY_COLLECTED
     )
     assert state_module._COMMIT_RECORDED == events_module.WRAPPER_COMMIT_RECORDED
     assert (
-        state_module._CHECKPOINT_RECORDED
-        == events_module.WRAPPER_CHECKPOINT_RECORDED
+        state_module._CHECKPOINT_RECORDED == events_module.WRAPPER_CHECKPOINT_RECORDED
     )
     assert state_module._AUTO_CLOSE == events_module.WRAPPER_AUTO_CLOSE
     assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
     assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
+    assert state_module._AGENT_OUTPUT == events_module.AGENT_OUTPUT
     # Log-driving literals (issue #34).
     assert state_module._ASSISTANT_REASONING == events_module.ASSISTANT_REASONING
     assert state_module._USAGE_CONTEXT_WINDOW == events_module.USAGE_CONTEXT_WINDOW

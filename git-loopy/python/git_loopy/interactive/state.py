@@ -65,6 +65,7 @@ from git_loopy.usage import UsageTally
 __all__ = [
     "LiveRunState",
     "IssueLedgerEntry",
+    "IssueContribution",
     "ContextWindowSnapshot",
     "QueueRow",
     "LogLine",
@@ -88,6 +89,7 @@ __all__ = [
     "LOG_REASONING",
     "LOG_MESSAGE",
     "LOG_EVENT",
+    "LOG_UNCLASSIFIED",
 ]
 
 # Event-type string literals this model reacts to. Re-declared locally (rather
@@ -114,6 +116,7 @@ _ITERATION_END = "wrapper.iteration.end"
 # The agent's final assistant message — a fallback marker source for when
 # streaming deltas are unavailable (the live path taps ``stream_message``).
 _ASSISTANT_MESSAGE = "assistant.message"
+_AGENT_OUTPUT = "agent.output"
 # Log-driving event literals (issue #34): the agent's reasoning blocks and tool
 # calls join the streamed deltas + commit/closure events in the per-issue Log
 # tail. Re-declared locally (importing ``git_loopy.events`` would pull the SDK)
@@ -152,6 +155,7 @@ _LANE_EVENTS = frozenset(
         _PR_ADVANCED,
         _ASSISTANT_REASONING,
         _ASSISTANT_MESSAGE,
+        _AGENT_OUTPUT,
         _USAGE_TOKENS,
     }
 )
@@ -186,6 +190,7 @@ STATUS_GONE = "gone"
 LOG_REASONING = "reasoning"
 LOG_MESSAGE = "message"
 LOG_EVENT = "event"
+LOG_UNCLASSIFIED = "unclassified"
 #: Opens each reasoning block in the Log (issue #37), mirroring the line
 #: printer's ``✻ Thinking:`` prefix. Re-declared locally (state.py stays
 #: SDK/rich-free, like the event-type literals) and kept in lockstep by a parity
@@ -239,6 +244,11 @@ class IssueLedgerEntry:
     usage: UsageTally = field(default_factory=UsageTally)
     ended_at: float | None = None
     active_since: float | None = None
+    usage_observed: bool = False
+    closed_wall: datetime | None = None
+    issue_elapsed_seconds: float | None = None
+    contributions: list[IssueContribution] = field(default_factory=list)
+    normalized_cost_usd: float | None = None
 
     def active_seconds(self, now: float) -> float:
         """Total active time, live-ticking against ``now`` while active."""
@@ -284,9 +294,23 @@ class ContextWindowSnapshot:
     effective_ceiling_tokens: int | None
 
 
+@dataclass(frozen=True)
+class IssueContribution:
+    """One finalized Iteration or Lane contribution for an Active issue."""
+
+    kind: str
+    iteration: int | None
+    lane: int | str | None
+    status: str
+    active_seconds: float
+    usage: UsageTally
+    cost_usd: float | None
+    peak_context_window: ContextWindowSnapshot | None
+
+
 def _default_wall_clock() -> datetime:
     """Local wall-clock time, used for the human-readable run-start stamp."""
-    return datetime.now()
+    return datetime.now().astimezone()
 
 
 @dataclass
@@ -393,6 +417,7 @@ class LiveRunState:
         #: iteration that never names an active issue discards it, the same
         #: orphan treatment as ``_pending``.
         self._pending_usage = UsageTally()
+        self._pending_usage_observed = False
         #: Serial streaming-assembly scratch (issue #34): the single active
         #: attribution's in-flight streamed line + streamed-block flags. In
         #: **Parallel mode** (issue #66) each Lane instead assembles into its own
@@ -404,6 +429,7 @@ class LiveRunState:
         #: ref. Reset per Wave alongside :attr:`_stream` (the Logs themselves,
         #: in :attr:`_logs`, accumulate across iterations and are *not* reset).
         self._lane_streams: dict[int | str, _StreamState] = {}
+        self._iter_lane_refs: set[int | str] = set()
         #: Per-Lane commit tally for the current Wave (issue #66): a Lane's
         #: ``commit.recorded`` count, kept apart from the serial
         #: :attr:`_iter_commits` so a Lane's advanced/no-progress reconciliation
@@ -449,7 +475,11 @@ class LiveRunState:
                 return
             self._authoritative_binding = True
             if lane_issue is not None:
-                self._lane_touch(self._normalize_ref(ref), now)
+                self._lane_touch(
+                    self._normalize_ref(ref),
+                    now,
+                    started_wall=self._local_timestamp(event.get("activated_at")),
+                )
             elif self.active_ref is None:
                 source = event.get("binding_source")
                 since = (
@@ -461,7 +491,7 @@ class LiveRunState:
                 self._activate(
                     ref,
                     since=since,
-                    started_wall=_parse_utc_timestamp(event.get("activated_at")),
+                    started_wall=self._local_timestamp(event.get("activated_at")),
                 )
             return
         if lane_issue is not None and etype in _LANE_EVENTS:
@@ -502,17 +532,18 @@ class LiveRunState:
             self._record_event_line(_log_pr_advanced_text(event))
         elif etype == _STRIKE:
             self.strikes = _coerce_int(event.get("strikes"), self.strikes)
-            self.max_strikes = _coerce_int(
-                event.get("max_strikes"), self.max_strikes
-            )
+            self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
             self._iter_strike = True
         elif etype == _ITERATION_END:
             self._finalize_iteration(now)
+            self._record_normalized_contributions(event)
         elif etype == _ASSISTANT_REASONING:
             self._finalize_reasoning(event.get("content"))
         elif etype == _ASSISTANT_MESSAGE:
             self._finalize_message(event.get("content"))
             self._scan_for_marker(event.get("content"))
+        elif etype == _AGENT_OUTPUT:
+            self._append_block(LOG_UNCLASSIFIED, event.get("text"))
         elif etype == _USAGE_TOKENS:
             self._record_usage(
                 event.get("model"),
@@ -526,8 +557,7 @@ class LiveRunState:
                 self.context_window = snapshot
                 if (
                     self.peak_context_window is None
-                    or snapshot.current_tokens
-                    > self.peak_context_window.current_tokens
+                    or snapshot.current_tokens > self.peak_context_window.current_tokens
                 ):
                     self.peak_context_window = snapshot
         elif etype == _RUN_END:
@@ -646,6 +676,14 @@ class LiveRunState:
             return None
         return self.started_wall + timedelta(seconds=instant - self._started_monotonic)
 
+    def _local_timestamp(self, value: Any) -> datetime | None:
+        """Parse one UTC Event timestamp into the Run's sampled local zone."""
+        parsed = _parse_utc_timestamp(value)
+        zone = self.started_wall.tzinfo if self.started_wall is not None else None
+        if parsed is not None and zone is not None:
+            return parsed.astimezone(zone)
+        return parsed
+
     # -- per-issue Log (issue #34, ADR-0003) -------------------------------
 
     def log(self, ref: int | str | None = None) -> tuple[LogLine, ...]:
@@ -704,15 +742,11 @@ class LiveRunState:
         """
         if self.active_ref is None:
             return self._pending
-        return self._logs.setdefault(
-            self.active_ref, deque(maxlen=_LOG_TAIL_LINES)
-        )
+        return self._logs.setdefault(self.active_ref, deque(maxlen=_LOG_TAIL_LINES))
 
     # -- per-issue consumption (issue #36) ---------------------------------
 
-    def _record_usage(
-        self, model: Any, tokens_in: Any, tokens_out: Any
-    ) -> None:
+    def _record_usage(self, model: Any, tokens_in: Any, tokens_out: Any) -> None:
         """Attribute one ``usage.tokens`` event to the Active issue's tally.
 
         While an issue is active the tokens accrue to its own entry (summing
@@ -729,9 +763,11 @@ class LiveRunState:
             entry = self.ledger.get(self.active_ref)
             if entry is not None:
                 self._accrue_usage(entry, name, tin, tout)
+                entry.usage_observed = True
             return
         # Pre-marker: hold until the active issue is known (flushed in _activate).
         self._pending_usage.add(name, tin, tout)
+        self._pending_usage_observed = True
 
     @staticmethod
     def _accrue_usage(
@@ -756,14 +792,14 @@ class LiveRunState:
         pre-marker usage with the first one.
         """
         entry.usage.merge(self._pending_usage)
+        entry.usage_observed = entry.usage_observed or self._pending_usage_observed
         self._pending_usage = UsageTally()
+        self._pending_usage_observed = False
 
     # -- streaming-assembly cores (parametrized on a stream state + a Log
     #    buffer provider so serial and each Lane reuse one implementation) -----
 
-    def _flush(
-        self, st: _StreamState, provider: Callable[[], deque[LogLine]]
-    ) -> None:
+    def _flush(self, st: _StreamState, provider: Callable[[], deque[LogLine]]) -> None:
         """Commit ``st``'s open (newline-less) streamed line, if any, and reset."""
         if st.partial_kind is None:
             return
@@ -845,9 +881,7 @@ class LiveRunState:
             LogLine(kind=LOG_EVENT, text=text, timestamp=self._wall_clock())
         )
 
-    def _emit_reasoning_marker(
-        self, provider: Callable[[], deque[LogLine]]
-    ) -> None:
+    def _emit_reasoning_marker(self, provider: Callable[[], deque[LogLine]]) -> None:
         """Open a reasoning block with a stamped ``✻ Thinking:`` marker (#37)."""
         provider().append(
             LogLine(
@@ -936,14 +970,18 @@ class LiveRunState:
         """A Lane's own streaming-assembly scratch (get-or-create)."""
         return self._lane_streams.setdefault(key, _StreamState())
 
-    def _lane_provider(
-        self, key: int | str
-    ) -> Callable[[], deque[LogLine]]:
+    def _lane_provider(self, key: int | str) -> Callable[[], deque[LogLine]]:
         """A zero-arg provider of a Lane's stable Log buffer for the cores."""
         buf = self._lane_buffer(key)
         return lambda: buf
 
-    def _lane_touch(self, key: int | str, now: float) -> None:
+    def _lane_touch(
+        self,
+        key: int | str,
+        now: float,
+        *,
+        started_wall: datetime | None = None,
+    ) -> None:
         """Activate a Lane's ledger entry **without** disturbing sibling Lanes.
 
         Unlike :meth:`_activate` (one-active-per-iteration, which parks the
@@ -955,6 +993,7 @@ class LiveRunState:
         terminal status this run is left untouched (a late delta never
         resurrects a closed Lane).
         """
+        self._iter_lane_refs.add(key)
         entry = self.ledger.get(key)
         if entry is None:
             entry = IssueLedgerEntry(
@@ -970,15 +1009,13 @@ class LiveRunState:
             return
         if entry.started_at is None:
             entry.started_at = now
-            entry.started_wall = self._wall_at(now)
+            entry.started_wall = started_wall or self._wall_at(now)
             entry.waiting_duration = max(0.0, now - entry.first_seen_at)
         if entry.active_since is None:
             entry.active_since = now
         entry.status = STATUS_ACTIVE
 
-    def _lane_stream_delta(
-        self, ref: int | str, kind: str, delta: str
-    ) -> None:
+    def _lane_stream_delta(self, ref: int | str, kind: str, delta: str) -> None:
         """Assemble a Lane's streamed reasoning/message delta into its own Log."""
         if not delta:
             return
@@ -995,9 +1032,7 @@ class LiveRunState:
             st.streamed_message = True
         self._stream_delta(st, provider, kind, delta)
 
-    def _lane_close(
-        self, key: int | str, now: float, *, status: str
-    ) -> None:
+    def _lane_close(self, key: int | str, now: float, *, status: str) -> None:
         """Record a Lane's terminal closure (closed / advanced), folding its timer."""
         entry = self.ledger.get(key)
         if entry is None:
@@ -1043,6 +1078,8 @@ class LiveRunState:
             self._finalize_reasoning_into(st, provider, event.get("content"))
         elif etype == _ASSISTANT_MESSAGE:
             self._finalize_message_into(st, provider, event.get("content"))
+        elif etype == _AGENT_OUTPUT:
+            self._emit_block(provider, LOG_UNCLASSIFIED, event.get("text"))
         elif etype == _USAGE_TOKENS:
             entry = self.ledger.get(key)
             if entry is not None:
@@ -1053,6 +1090,7 @@ class LiveRunState:
                     max(0, _coerce_int(event.get("input"), 0)),
                     max(0, _coerce_int(event.get("output"), 0)),
                 )
+                entry.usage_observed = True
 
     # -- internals ----------------------------------------------------------
 
@@ -1108,9 +1146,11 @@ class LiveRunState:
         # replay log / the run-level Summary).
         self._pending.clear()
         self._pending_usage = UsageTally()
+        self._pending_usage_observed = False
         self._stream = _StreamState()
         self._lane_streams = {}
         self._lane_commits = {}
+        self._iter_lane_refs = set()
 
     def _record_pool(self, issues: Any, now: float) -> None:
         """Fold one ``afk_ready.collected`` pool into the ledger.
@@ -1143,7 +1183,7 @@ class LiveRunState:
         match = _WORKING_MARKER_RE.search(self._msg_buffer)
         if match is None:
             return
-        self._msg_buffer = self._msg_buffer[match.end():]
+        self._msg_buffer = self._msg_buffer[match.end() :]
         self._activate(int(match.group(1)), since=self._monotonic())
 
     def _activate(
@@ -1290,6 +1330,81 @@ class LiveRunState:
         self._iter_commits = 0
         self._iter_strike = False
 
+    def _record_normalized_contributions(self, event: Mapping[str, Any]) -> None:
+        """Project authoritative finalized issue rows from Iteration end."""
+        issues = event.get("issues")
+        if not isinstance(issues, list):
+            return
+        iter_num = _optional_nonnegative_int(event.get("iter"))
+        for payload in issues:
+            if not isinstance(payload, Mapping) or payload.get("issue") is None:
+                continue
+            key = self._normalize_ref(payload["issue"])
+            entry = self.ledger.get(key)
+            if entry is None:
+                entry = IssueLedgerEntry(
+                    ref=key,
+                    first_seen_at=self._monotonic(),
+                    first_seen_iter=iter_num or self.iteration,
+                )
+                self.ledger[key] = entry
+            consumption = payload.get("consumption")
+            usage = UsageTally()
+            if isinstance(consumption, Mapping):
+                model = consumption.get("model")
+                usage.add(
+                    str(model) if isinstance(model, str) and model else None,
+                    max(0, _coerce_int(consumption.get("tokens_in"), 0)),
+                    max(0, _coerce_int(consumption.get("tokens_out"), 0)),
+                )
+            cost = payload.get("cost_usd")
+            cost_usd = float(cost) if isinstance(cost, (int, float)) else None
+            is_lane = key in self._iter_lane_refs
+            contribution = IssueContribution(
+                kind="lane" if is_lane else "iteration",
+                iteration=None if is_lane else iter_num,
+                lane=key if is_lane else None,
+                status=str(payload.get("status") or STATUS_NO_PROGRESS),
+                active_seconds=max(
+                    0.0, _coerce_float(payload.get("active_seconds"), 0.0)
+                ),
+                usage=usage,
+                cost_usd=cost_usd,
+                peak_context_window=_context_window_snapshot(
+                    payload.get("peak_context_window")
+                ),
+            )
+            entry.contributions.append(contribution)
+            entry.usage_observed = True
+            entry.status = contribution.status
+            entry.active_duration = max(
+                0.0,
+                _coerce_float(
+                    payload.get("cumulative_active_seconds"),
+                    entry.active_duration,
+                ),
+            )
+            started = self._local_timestamp(payload.get("first_started_at"))
+            if started is not None:
+                entry.started_wall = started
+            entry.closed_wall = self._local_timestamp(payload.get("closed_at"))
+            elapsed = payload.get("issue_elapsed_seconds")
+            entry.issue_elapsed_seconds = (
+                max(0.0, float(elapsed)) if isinstance(elapsed, (int, float)) else None
+            )
+            entry.usage = UsageTally()
+            for item in entry.contributions:
+                entry.usage.merge(item.usage)
+            entry.normalized_cost_usd = (
+                sum(
+                    item.cost_usd
+                    for item in entry.contributions
+                    if item.cost_usd is not None
+                )
+                if all(item.cost_usd is not None for item in entry.contributions)
+                else None
+            )
+
     def _normalize_ref(self, ref: Any) -> int | str:
         """Resolve a ref to its existing ledger key, tolerating int/str skew.
 
@@ -1312,8 +1427,10 @@ class LiveRunState:
 
 
 def _context_window_snapshot(
-    event: Mapping[str, Any],
+    event: Any,
 ) -> ContextWindowSnapshot | None:
+    if not isinstance(event, Mapping):
+        return None
     current = _optional_nonnegative_int(event.get("current_tokens"))
     if current is None:
         return None
@@ -1344,6 +1461,15 @@ def _coerce_int(value: Any, fallback: int) -> int:
         return fallback
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_float(value: Any, fallback: float) -> float:
+    if value is None or isinstance(value, bool):
+        return fallback
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return fallback
 
@@ -1626,19 +1752,13 @@ class QueueRow:
     """One projected Queue row: a ledger entry ready for the Dashboard list.
 
     A pure, Textual-free snapshot (mirrors :func:`format_header`) so the live
-    Queue's *content + ordering* is unit-testable without a TTY. The columns are
-    **Issue | Status | Started | Active | Tokens in | Tokens out | Cost**
-    (issues #33 / #36, ADR-0003): ``started_wall`` is the **wall-clock** time the
-    issue first became active (the widget formats it via :func:`format_wall_clock`;
-    ``None`` until it has been active), ``active_seconds`` is the live ``H:MM:SS``
-    duration that sums across every iteration that worked the issue (the widget
-    formats it via :func:`format_duration`, ticking against the caller's ``now`` —
-    see :func:`queue_rows`), and ``usage`` is the issue's accumulated
-    **Consumption** as the shared :class:`~git_loopy.usage.UsageTally` (issue
-    #42) carried straight through from the ledger entry — the widget renders
-    ``usage.tokens_in`` / ``usage.tokens_out`` and derives the per-issue **Cost**
-    via :meth:`UsageTally.cost`, which owns the unknown-model em-dash guard
-    (a ``None`` / unpriced model → the em dash). There is no Waiting column.
+    Queue's content and ordering are unit-testable without a TTY. The canonical
+    columns are **Issue | Status | Started | Active | Closed | Iters | Tokens in |
+    Tokens out | Cost**. ``Closed`` and Issue elapsed exist only for authoritative
+    source closure, and ``Iters`` is the exact number of finalized Iteration or
+    Lane contribution rows retained for the drill-in. Live timers and Consumption
+    remain responsive before finalization; normalized Iteration-end issue rows
+    become the authority once present.
     """
 
     ref: int | str
@@ -1647,6 +1767,10 @@ class QueueRow:
     active_seconds: float
     is_active: bool
     usage: UsageTally
+    usage_observed: bool
+    closed_wall: datetime | None
+    iteration_count: int
+    cost_usd: float | None
 
     @property
     def label(self) -> str:
@@ -1667,12 +1791,9 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
     **Active** duration (``active_seconds``), which ticks against ``now``
     (defaulting to the injected monotonic clock, the same basis as the header)
     while the issue is being worked and freezes once it ends / the run stops,
-    summing across every iteration that worked it. It also carries the issue's
-    accumulated **Consumption** (issues #36/#42) as the ledger entry's shared
-    :class:`~git_loopy.usage.UsageTally` passed straight through (``usage``) —
-    tokens + the model they were billed against, summed across every iteration
-    that worked it — the basis for the per-issue Cost the widget derives via
-    :meth:`UsageTally.cost`.
+    summing across every iteration that worked it.     It also carries the issue's accumulated **Consumption** and normalized Cost
+    across the same contribution rows. Before the first finalized contribution,
+    live observed usage remains available while an absent sample stays unknown.
     """
     base = now if now is not None else state._monotonic()
     rows: list[QueueRow] = []
@@ -1690,6 +1811,10 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 active_seconds=entry.active_seconds(base),
                 is_active=is_active,
                 usage=entry.usage,
+                usage_observed=entry.usage_observed,
+                closed_wall=entry.closed_wall,
+                iteration_count=len(entry.contributions),
+                cost_usd=entry.normalized_cost_usd,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))
@@ -1716,6 +1841,10 @@ class IssueDetail:
     active_seconds: float
     waiting_seconds: float
     first_seen_iter: int
+    started_wall: datetime | None
+    closed_wall: datetime | None
+    issue_elapsed_seconds: float | None
+    contributions: tuple[IssueContribution, ...]
 
     @property
     def label(self) -> str:
@@ -1751,6 +1880,10 @@ def issue_detail(
             active_seconds=0.0,
             waiting_seconds=0.0,
             first_seen_iter=0,
+            started_wall=None,
+            closed_wall=None,
+            issue_elapsed_seconds=None,
+            contributions=(),
         )
     if entry.waiting_duration is not None:
         waiting = entry.waiting_duration
@@ -1763,6 +1896,10 @@ def issue_detail(
         active_seconds=entry.active_seconds(base),
         waiting_seconds=waiting,
         first_seen_iter=entry.first_seen_iter,
+        started_wall=entry.started_wall,
+        closed_wall=entry.closed_wall,
+        issue_elapsed_seconds=entry.issue_elapsed_seconds,
+        contributions=tuple(entry.contributions),
     )
 
 
@@ -1770,13 +1907,17 @@ def format_detail_header(detail: IssueDetail) -> str:
     """Compose the single-line drill-in header from an :class:`IssueDetail`.
 
     Pure and Textual-free (mirrors :func:`format_header`) so the detail header's
-    *content* is unit-testable without a TTY: identity, status, the active and
-    waiting timers, and the iteration the issue was first seen in.
+    closure-only timing and contribution count are testable without a TTY.
     """
     return (
         f"{detail.label}"
         f"  •  status {detail.status}"
+        f"  •  started {format_wall_clock(detail.started_wall)}"
         f"  •  active {format_duration(detail.active_seconds)}"
+        f"  •  closed {format_wall_clock(detail.closed_wall)}"
+        f"  •  issue elapsed "
+        f"{format_duration(detail.issue_elapsed_seconds) if detail.issue_elapsed_seconds is not None else '—'}"
+        f"  •  iters {len(detail.contributions)}"
         f"  •  waiting {format_duration(detail.waiting_seconds)}"
         f"  •  first seen iter {detail.first_seen_iter}"
     )
