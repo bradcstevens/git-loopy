@@ -956,6 +956,7 @@ _git_loopy_publish_active_binding() {
   local observed_at="$4"
   [[ -z "$_GIT_LOOPY_ACTIVE_REF" ]] || return 1
   _GIT_LOOPY_ACTIVE_REF="$ref"
+  _git_loopy_record_active_binding "$ref" "$source" "$observed_at"
 
   local issue_arg payload
   if [[ "$ref" =~ ^[0-9]+$ ]]; then
@@ -1012,6 +1013,8 @@ _git_loopy_bind_active_issue() {
   fi
 
   printf '%s' "$ref" >"$active_path"
+  printf '%s' "$observed_at" >"$state_dir/active-at"
+  git_loopy_monotonic_seconds >"$state_dir/active-monotonic"
   _git_loopy_publish_active_binding \
     "$iteration" "$ref" "$source" "$observed_at"
 }
@@ -1150,6 +1153,11 @@ git_loopy_run_bounded_turn() {
     _GIT_LOOPY_ACTIVE_REF=""
     [[ -f "$flag_dir/active-ref" ]] &&
       _GIT_LOOPY_ACTIVE_REF="$(<"$flag_dir/active-ref")"
+    if [[ -n "$_GIT_LOOPY_ACTIVE_REF" ]]; then
+      _GIT_LOOPY_ACTIVE_STARTED_AT="$(<"$flag_dir/active-at")"
+      _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$(<"$flag_dir/active-monotonic")"
+      _git_loopy_remember_issue_start
+    fi
   fi
   rm -rf "$flag_dir"
   return "$result"
@@ -1181,11 +1189,203 @@ git_loopy_run_agent_turn() {
 _GIT_LOOPY_AUTO_CLOSURES=0
 _GIT_LOOPY_ACTIVE_REF=""
 _GIT_LOOPY_ITERATION_STARTED_AT=""
+_GIT_LOOPY_ITERATION_STARTED_MONOTONIC=0
+_GIT_LOOPY_ACTIVE_STARTED_AT=""
+_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=0
+_GIT_LOOPY_ACTIVE_CLOSED_AT=""
+_GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
+GIT_LOOPY_ITERATION_ROLLUP_JSON=""
+_GIT_LOOPY_MONOTONIC_CLOCK_DIR=""
+_GIT_LOOPY_MONOTONIC_CLOCK_PID=""
+declare -A _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
+declare -A _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
+declare -A _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
 # The first Pool issue this Iteration actually closed (OPEN -> closed), in
 # encounter order. It is the strongest Checkpoint-attribution signal — the
 # equivalent of the Python reference's `completions[0].ref` — so `infer_active_ref`
 # consults it first. Empty when nothing closed this Iteration.
 _GIT_LOOPY_FIRST_CLOSED_REF=""
+
+git_loopy_monotonic_seconds() {
+  local ticks
+  [[ -n "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR" ]] || return 1
+  [[ -n "$_GIT_LOOPY_MONOTONIC_CLOCK_PID" ]] &&
+    kill -0 "$_GIT_LOOPY_MONOTONIC_CLOCK_PID" 2>/dev/null || return 1
+  ticks="$(<"$_GIT_LOOPY_MONOTONIC_CLOCK_DIR/ticks")" || return 1
+  [[ "$ticks" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$ticks"
+}
+
+git_loopy_monotonic_clock_start() {
+  _GIT_LOOPY_MONOTONIC_CLOCK_DIR="$(mktemp -d)" || return 1
+  printf '0\n' >"$_GIT_LOOPY_MONOTONIC_CLOCK_DIR/ticks" || {
+    rm -rf "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR"
+    _GIT_LOOPY_MONOTONIC_CLOCK_DIR=""
+    return 1
+  }
+  # Relative sleep is independent of wall-clock correction, giving Bash 4 a
+  # native monotonic elapsed clock without adding a Python/runtime dependency.
+  (
+    trap 'exit 0' TERM INT
+    local ticks=0
+    while sleep 1; do
+      ticks=$((ticks + 1))
+      printf '%s\n' "$ticks" >"$_GIT_LOOPY_MONOTONIC_CLOCK_DIR/ticks.next" ||
+        exit 1
+      mv -f \
+        "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR/ticks.next" \
+        "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR/ticks" || exit 1
+    done
+  ) &
+  _GIT_LOOPY_MONOTONIC_CLOCK_PID=$!
+}
+
+git_loopy_monotonic_clock_stop() {
+  if [[ -n "$_GIT_LOOPY_MONOTONIC_CLOCK_PID" ]]; then
+    kill -TERM "$_GIT_LOOPY_MONOTONIC_CLOCK_PID" 2>/dev/null || true
+    wait "$_GIT_LOOPY_MONOTONIC_CLOCK_PID" 2>/dev/null || true
+  fi
+  [[ -z "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR" ]] ||
+    rm -rf "$_GIT_LOOPY_MONOTONIC_CLOCK_DIR"
+  _GIT_LOOPY_MONOTONIC_CLOCK_PID=""
+  _GIT_LOOPY_MONOTONIC_CLOCK_DIR=""
+}
+
+_git_loopy_remember_issue_start() {
+  local ref="$_GIT_LOOPY_ACTIVE_REF"
+  [[ -n "$ref" ]] || return 0
+  if [[ -z "${_GIT_LOOPY_ISSUE_FIRST_STARTED_AT[$ref]+present}" ]]; then
+    _GIT_LOOPY_ISSUE_FIRST_STARTED_AT["$ref"]="$_GIT_LOOPY_ACTIVE_STARTED_AT"
+    _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC["$ref"]="$(
+      printf '%s' "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC"
+    )"
+  fi
+}
+
+_git_loopy_record_active_binding() {
+  local ref="$1"
+  local source="$2"
+  local observed_at="$3"
+  local activated_monotonic
+  if [[ "$source" == "working_marker" ]]; then
+    activated_monotonic="$(git_loopy_monotonic_seconds)" || return 1
+  else
+    activated_monotonic="$_GIT_LOOPY_ITERATION_STARTED_MONOTONIC"
+  fi
+  _GIT_LOOPY_ACTIVE_STARTED_AT="$observed_at"
+  _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$activated_monotonic"
+  _git_loopy_remember_issue_start
+}
+
+git_loopy_build_iteration_rollup() {
+  local commits="$1"
+  local auto_closures="$2"
+  local pr_advances="$3"
+  local strikes="$4"
+  local terminal_outcome="${5:-}"
+  local finished_monotonic duration issues outcome="no_progress"
+  finished_monotonic="$(git_loopy_monotonic_seconds)" || return 1
+  duration=$((finished_monotonic - _GIT_LOOPY_ITERATION_STARTED_MONOTONIC))
+  ((duration >= 0)) || duration=0
+
+  issues='[]'
+  if [[ -n "$_GIT_LOOPY_ACTIVE_REF" ]]; then
+    local ended_monotonic active_seconds cumulative_active status
+    ended_monotonic="$finished_monotonic"
+    status="no-progress"
+    if [[ -n "$_GIT_LOOPY_ACTIVE_CLOSED_AT" ]]; then
+      ended_monotonic="$_GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC"
+      status="closed"
+    elif [[ "$terminal_outcome" == "aborted" || "$terminal_outcome" == "gone" ]]; then
+      status="$terminal_outcome"
+    elif ((commits > 0 || pr_advances > 0)); then
+      status="advanced"
+    fi
+    active_seconds=$((ended_monotonic - _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC))
+    ((active_seconds >= 0)) || active_seconds=0
+    cumulative_active="$(
+      printf '%s' "${_GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE[$_GIT_LOOPY_ACTIVE_REF]:-0}"
+    )"
+    cumulative_active=$((cumulative_active + active_seconds))
+    _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE["$_GIT_LOOPY_ACTIVE_REF"]="$cumulative_active"
+    outcome="$status"
+
+    local issue_arg issue_elapsed='null' closed_at='null'
+    if [[ "$_GIT_LOOPY_ACTIVE_REF" =~ ^[0-9]+$ ]]; then
+      issue_arg="$_GIT_LOOPY_ACTIVE_REF"
+    else
+      issue_arg="$(
+        jq -cn --arg issue "$_GIT_LOOPY_ACTIVE_REF" '$issue'
+      )" || return 1
+    fi
+    if [[ -n "$_GIT_LOOPY_ACTIVE_CLOSED_AT" ]]; then
+      closed_at="$(
+        jq -cn --arg closed_at "$_GIT_LOOPY_ACTIVE_CLOSED_AT" '$closed_at'
+      )" || return 1
+      issue_elapsed=$((
+        _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC -
+          _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC[$_GIT_LOOPY_ACTIVE_REF]
+      ))
+      ((issue_elapsed >= 0)) || issue_elapsed=0
+    fi
+    issues="$(
+      jq -cn \
+        --argjson issue "$issue_arg" \
+        --arg status "$status" \
+        --arg first_started_at \
+        "${_GIT_LOOPY_ISSUE_FIRST_STARTED_AT[$_GIT_LOOPY_ACTIVE_REF]}" \
+        --argjson closed_at "$closed_at" \
+        --argjson issue_elapsed_seconds "$issue_elapsed" \
+        --argjson active_seconds "$active_seconds" \
+        --argjson cumulative_active_seconds "$cumulative_active" \
+        '[{
+          issue: $issue,
+          status: $status,
+          first_started_at: $first_started_at,
+          closed_at: $closed_at,
+          issue_elapsed_seconds: $issue_elapsed_seconds,
+          active_seconds: $active_seconds,
+          cumulative_active_seconds: $cumulative_active_seconds,
+          consumption: {model: null, tokens_in: null, tokens_out: null},
+          cost_usd: null,
+          peak_context_window: null
+        }]'
+    )" || return 1
+  fi
+
+  GIT_LOOPY_ITERATION_ROLLUP_JSON="$(
+    jq -cn \
+    --argjson duration_seconds "$duration" \
+    --argjson commits "$commits" \
+    --argjson auto_closures "$auto_closures" \
+    --argjson pr_advances "$pr_advances" \
+    --argjson strikes "$strikes" \
+    --arg outcome "$outcome" \
+    --argjson issues "$issues" \
+    '{
+      outcome: (
+        if $outcome == "no-progress" then "no_progress" else $outcome end
+      ),
+      duration_seconds: $duration_seconds,
+      summary: {
+        model: null,
+        tokens_in: null,
+        tokens_out: null,
+        observed_tokens: null,
+        cost_usd: null,
+        tool_count: null,
+        skill_call_count: null,
+        skills_consulted: null,
+        commits: $commits,
+        auto_closures: $auto_closures,
+        pr_advances: $pr_advances,
+        strikes: $strikes,
+        peak_context_window: null
+      },
+      issues: $issues
+    }'
+  )" || return 1
+}
 
 git_loopy_close_one_issue() {
   # Re-verify one Pool issue is still OPEN and close it via `gh issue close`,
@@ -1251,7 +1451,13 @@ git_loopy_close_one_issue() {
     "$iteration" "$issue" "closure" "$_GIT_LOOPY_ITERATION_STARTED_AT" ||
     true
 
-  local shas_json payload
+  local closed_at closed_monotonic shas_json payload
+  closed_at="$(git_loopy_iso_timestamp)" || return 1
+  closed_monotonic="$(git_loopy_monotonic_seconds)" || return 1
+  if [[ "$_GIT_LOOPY_ACTIVE_REF" == "$issue" ]]; then
+    _GIT_LOOPY_ACTIVE_CLOSED_AT="$closed_at"
+    _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC="$closed_monotonic"
+  fi
   shas_json="$(_git_loopy_string_array_json "${ref_shas[@]}")" || return 1
   payload="$(
     jq -cn \
@@ -1263,7 +1469,8 @@ git_loopy_close_one_issue() {
   git_loopy_emit_event \
     "${GIT_LOOPY_EVENT_TYPES[WRAPPER_AUTO_CLOSE]}" \
     "$iteration" \
-    "$payload" || return 1
+    "$payload" \
+    "$closed_at" || return 1
   _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
 }
 
@@ -1478,6 +1685,9 @@ git_loopy_run_discovery() {
 
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
   git_loopy_ensure_gitignore_entry "$GIT_LOOPY_REPO_ROOT" || return 1
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
+  _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
 
   local deny_tools_json deny_skills_json
   deny_tools_json="$(
@@ -1543,6 +1753,14 @@ git_loopy_run_discovery() {
     iteration="$next_iteration"
 
     _GIT_LOOPY_ITERATION_STARTED_AT="$(git_loopy_iso_timestamp)" || return 1
+    _GIT_LOOPY_ITERATION_STARTED_MONOTONIC="$(
+      git_loopy_monotonic_seconds
+    )" || return 1
+    _GIT_LOOPY_ACTIVE_REF=""
+    _GIT_LOOPY_ACTIVE_STARTED_AT=""
+    _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=0
+    _GIT_LOOPY_ACTIVE_CLOSED_AT=""
+    _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
     git_loopy_emit_event \
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_START]}" \
       "$iteration" \
@@ -1569,9 +1787,13 @@ git_loopy_run_discovery() {
     local pool_length
     pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
     if [[ "$pool_length" == "0" ]]; then
+      local iteration_end_payload
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" || return 1
+      iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
       git_loopy_emit_event \
         "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
-        "$iteration" || return 1
+        "$iteration" \
+        "$iteration_end_payload" || return 1
       iterations_run="$iteration"
       outcome="empty_pool"
       break
@@ -1589,7 +1811,6 @@ git_loopy_run_discovery() {
     pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1
 
     local agent_status=0
-    _GIT_LOOPY_ACTIVE_REF=""
     git_loopy_run_agent_turn "$iteration" "$prompt" || agent_status=$?
     if ((agent_status != 0)); then
       printf 'git-loopy: copilot turn exited with status %s; continuing.\n' \
@@ -1694,9 +1915,17 @@ git_loopy_run_discovery() {
         "$strike_payload" || return 1
     fi
 
+    local iteration_end_payload
+    local terminal_outcome=""
+    [[ "$strike_outcome" == "aborted" ]] && terminal_outcome="aborted"
+    git_loopy_build_iteration_rollup \
+      "$agent_commits" "$auto_closures" 0 "$strikes" "$terminal_outcome" ||
+      return 1
+    iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
     git_loopy_emit_event \
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
-      "$iteration" || return 1
+      "$iteration" \
+      "$iteration_end_payload" || return 1
     iterations_run="$iteration"
     if [[ "$strike_outcome" == "aborted" ]]; then
       outcome="stuck"
@@ -1762,5 +1991,9 @@ git_loopy_main() {
 
   git_loopy_preflight "$packaged_prompt" || return 1
 
-  git_loopy_run_discovery
+  git_loopy_monotonic_clock_start || return 1
+  local run_status=0
+  git_loopy_run_discovery || run_status=$?
+  git_loopy_monotonic_clock_stop
+  return "$run_status"
 }

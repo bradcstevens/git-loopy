@@ -487,6 +487,24 @@ jq -se --arg release_version "$expected_release_version" '
     cost: false
   }
   and .[2].issues == []
+  and .[3].outcome == "no_progress"
+  and (.[3].duration_seconds | type == "number" and . >= 0)
+  and .[3].summary == {
+    model: null,
+    tokens_in: null,
+    tokens_out: null,
+    observed_tokens: null,
+    cost_usd: null,
+    tool_count: null,
+    skill_call_count: null,
+    skills_consulted: null,
+    commits: 0,
+    auto_closures: 0,
+    pr_advances: 0,
+    strikes: 0,
+    peak_context_window: null
+  }
+  and .[3].issues == []
   and .[4].outcome == "empty_pool"
   and .[4].iterations_run == 1
 ' "$temp_dir/empty.stdout" >/dev/null ||
@@ -756,6 +774,37 @@ jq -se '
     | length == 1
       and .[0].issue == 41
       and .[0].binding_source == "single_member_pool")
+  and (([.[] | select(.type == "wrapper.issue.activated")][0]) as $activation
+    | ([.[] | select(.type == "wrapper.iteration.end")][0]
+      | .outcome == "advanced"
+      and (.duration_seconds | type == "number" and . >= 0)
+      and .summary == {
+        model: null,
+        tokens_in: null,
+        tokens_out: null,
+        observed_tokens: null,
+        cost_usd: null,
+        tool_count: null,
+        skill_call_count: null,
+        skills_consulted: null,
+        commits: 2,
+        auto_closures: 0,
+        pr_advances: 0,
+        strikes: 0,
+        peak_context_window: null
+      }
+      and (.issues | length == 1)
+      and .issues[0].issue == 41
+      and .issues[0].status == "advanced"
+      and .issues[0].first_started_at == $activation.activated_at
+      and .issues[0].closed_at == null
+      and .issues[0].issue_elapsed_seconds == null
+      and (.issues[0].active_seconds | type == "number" and . >= 0)
+      and .issues[0].cumulative_active_seconds == .issues[0].active_seconds
+      and .issues[0].consumption
+        == {model: null, tokens_in: null, tokens_out: null}
+      and .issues[0].cost_usd == null
+      and .issues[0].peak_context_window == null))
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-commits.stdout" >/dev/null ||
   fail "new agent commits were not recorded as contract commit events"
@@ -1129,6 +1178,21 @@ jq -se '
     ([.[] | .type] | index("wrapper.issue.activated"))
     < ([.[] | .type] | index("wrapper.auto_close"))
   )
+  and (([.[] | select(.type == "wrapper.issue.activated")][0]) as $activation
+    | ([.[] | select(.type == "wrapper.auto_close")][0]) as $closure
+    | ([.[] | select(.type == "wrapper.iteration.end")][0]
+      | .outcome == "closed"
+      and .summary.commits == 2
+      and .summary.auto_closures == 1
+      and .summary.strikes == 0
+      and (.issues | length == 1)
+      and .issues[0].issue == 41
+      and .issues[0].status == "closed"
+      and .issues[0].first_started_at == $activation.activated_at
+      and .issues[0].closed_at == $closure.ts
+      and (.issues[0].issue_elapsed_seconds | type == "number" and . >= 0)
+      and (.issues[0].active_seconds | type == "number" and . >= 0)
+      and .issues[0].cumulative_active_seconds == .issues[0].active_seconds))
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/auto-close.stdout" >/dev/null ||
@@ -1172,6 +1236,21 @@ jq -se '
   and ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
     == ["agent: real work"])
   and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
+    == ["no_progress", "advanced", "no_progress"])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .summary.strikes]
+    == [1, 0, 1])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .summary.commits]
+    == [0, 1, 0])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .issues[0].status]
+    == ["no-progress", "advanced", "no-progress"])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .issues[0]]
+    | all(.closed_at == null and .issue_elapsed_seconds == null))
+  and ([.[] | select(.type == "wrapper.iteration.end")
+      | .issues[0].first_started_at] | unique | length == 1)
+  and ([.[] | select(.type == "wrapper.iteration.end")
+      | .issues[0].cumulative_active_seconds] as $active
+    | $active == ($active | sort))
   and .[-1].outcome == "iteration_cap"
   and .[-1].iterations_run == 3
 ' "$temp_dir/strike-reset.stdout" >/dev/null ||
@@ -1210,6 +1289,12 @@ jq -se '
     ])
   and ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
   and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
+    == ["no_progress", "no_progress", "aborted"])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .issues[0]]
+    | .[-1].status == "aborted"
+      and .[-1].closed_at == null
+      and .[-1].issue_elapsed_seconds == null)
   and .[-1].type == "wrapper.run.end"
   and .[-1].outcome == "stuck"
   and .[-1].iterations_run == 3
@@ -1515,5 +1600,43 @@ jq -se '
   and (.[-1].iterations_run == 1)
 ' "$temp_dir/send-timeout.stdout" >/dev/null ||
   fail "a bounded slow turn was not accounted as a failed, no-progress Iteration"
+
+# The native rollup seam measures lifecycle duration from Bash's monotonic
+# SECONDS clock, never by subtracting wall timestamps. Simulate a wall-clock
+# adjustment that places authoritative closure before activation in UTC while
+# monotonic time continues forward.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+  git_loopy_monotonic_clock_start
+  trap git_loopy_monotonic_clock_stop EXIT
+  _GIT_LOOPY_ITERATION_STARTED_MONOTONIC="$(
+    git_loopy_monotonic_seconds
+  )"
+  _GIT_LOOPY_ACTIVE_REF=41
+  _GIT_LOOPY_ACTIVE_STARTED_AT="2026-05-16T00:00:10.000Z"
+  _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$_GIT_LOOPY_ITERATION_STARTED_MONOTONIC"
+  _GIT_LOOPY_ACTIVE_CLOSED_AT="2026-05-16T00:00:01.000Z"
+  while :; do
+    _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC="$(git_loopy_monotonic_seconds)"
+    ((_GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC >
+      _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC)) && break
+    sleep 0.1
+  done
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT[41]="2026-05-16T00:00:10.000Z"
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC[41]="$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC"
+  while [[ "$(git_loopy_monotonic_seconds)" == "$_GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC" ]]; do
+    sleep 0.1
+  done
+  git_loopy_build_iteration_rollup 0 1 0 0
+  jq -e '
+    .outcome == "closed"
+    and .duration_seconds >= 2
+    and .issues[0].active_seconds >= 1
+    and .issues[0].issue_elapsed_seconds == .issues[0].active_seconds
+    and .issues[0].first_started_at == "2026-05-16T00:00:10.000Z"
+    and .issues[0].closed_at == "2026-05-16T00:00:01.000Z"
+  ' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON" >/dev/null
+) || fail "wall-clock adjustment changed monotonic shell lifecycle durations"
 
 printf 'shell Orchestrator boundary: ok\n'

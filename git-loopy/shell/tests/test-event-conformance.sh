@@ -13,7 +13,7 @@ fixture="$port_dir/../conformance/event-schema.json"
 release_fixture="$port_dir/../conformance/release-version.json"
 
 # shellcheck disable=SC1091
-source "$port_dir/lib/events.sh"
+source "$port_dir/lib/orchestrator.sh"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -61,6 +61,44 @@ while IFS= read -r case_json; do
   actual="$(git_loopy_to_jsonl_line "$event_json")"
   assert_equal "$expected" "$actual" "serialization fixture: $case_id"
 done < <(jq -c '.serialization_cases[]' "$fixture")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  TEST_MONOTONIC_NOW="$(jq -r '.input.finished_monotonic' <<<"$case_json")"
+  git_loopy_monotonic_seconds() {
+    printf '%s\n' "$TEST_MONOTONIC_NOW"
+  }
+  _GIT_LOOPY_ITERATION_STARTED_MONOTONIC="$(
+    jq -r '.input.iteration_started_monotonic' <<<"$case_json"
+  )"
+  _GIT_LOOPY_ACTIVE_REF="$(jq -r '.input.active_issue' <<<"$case_json")"
+  _GIT_LOOPY_ACTIVE_STARTED_AT="$(
+    jq -r '.input.active_started_at' <<<"$case_json"
+  )"
+  _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$(
+    jq -r '.input.active_started_monotonic' <<<"$case_json"
+  )"
+  _GIT_LOOPY_ACTIVE_CLOSED_AT=""
+  _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
+  _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT["$_GIT_LOOPY_ACTIVE_REF"]="$_GIT_LOOPY_ACTIVE_STARTED_AT"
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC["$_GIT_LOOPY_ACTIVE_REF"]="$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC"
+  _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE["$_GIT_LOOPY_ACTIVE_REF"]="$(
+    jq -r '.input.previous_cumulative_active_seconds' <<<"$case_json"
+  )"
+  git_loopy_build_iteration_rollup \
+    "$(jq -r '.input.commits' <<<"$case_json")" \
+    "$(jq -r '.input.auto_closures' <<<"$case_json")" \
+    "$(jq -r '.input.pr_advances' <<<"$case_json")" \
+    "$(jq -r '.input.strikes' <<<"$case_json")"
+  jq -e --argjson actual "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
+    '.expected == $actual' <<<"$case_json" >/dev/null ||
+    fail "normalized rollup fixture: $case_id"
+done < <(
+  jq -c '.normalized_rollup_cases[] | select(.orchestrator == "shell")' "$fixture"
+)
 
 set +e
 invalid_output="$(git_loopy_to_jsonl_line '{}' 2>/dev/null)"

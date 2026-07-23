@@ -13,7 +13,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
-| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `dashboard-insights.json` | Baseline renderer-neutral Dashboard seam: normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue columns and scopes, placeholders, and expected semantic view models for future renderer #143 |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
@@ -75,11 +75,11 @@ and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
 and
 [`powershell/tests/test-orchestrator-conformance.ps1`](../powershell/tests/test-orchestrator-conformance.ps1).
-Their Event-schema adapters call the production serialization and replay seams
-from
+Their Event-schema adapters call the production serialization and replay seams from
 [`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
+The shell adapter also drives its native normalized Iteration-rollup seam from the shared case.
 The native Continuation adapters invoke each real public entrypoint from
 [`python/tests/test_continuation_scenarios.py`](../python/tests/test_continuation_scenarios.py),
 [`shell/tests/test-continuation-conformance.sh`](../shell/tests/test-continuation-conformance.sh),

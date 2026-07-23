@@ -264,6 +264,14 @@ closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_secon
 `consumption` (`model`, `tokens_in`, `tokens_out`), nullable `cost_usd`, and nullable
 `peak_context_window`. Only authoritative source closure populates closure-only fields.
 
+The shell Orchestrator emits this normalized payload from its native observable boundary.
+Iteration, Active-issue, and cumulative Active durations come from its monotonic clock; agent
+commits, successful wrapper closures, PR advances, and Strikes remain observed counts. Model and
+token Consumption, structured tool and Skill activity, Context fill, model pricing, and Cost remain
+`null` because native Copilot CLI output does not expose those measurements. The configured model
+is not a substitute for observed Consumption, and unavailable counters or collections MUST NOT be
+reported as `0` or `[]`.
+
 Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.

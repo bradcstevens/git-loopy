@@ -131,6 +131,61 @@
     "USAGE_TOKENS": "usage.tokens",
     "USAGE_CONTEXT_WINDOW": "usage.context_window"
   },
+  "normalized_rollup_cases": [
+    {
+      "id": "shell-unavailable-telemetry",
+      "orchestrator": "shell",
+      "input": {
+        "iteration_started_monotonic": 10,
+        "finished_monotonic": 15,
+        "active_issue": 42,
+        "active_started_at": "2026-05-16T00:00:01.000Z",
+        "active_started_monotonic": 10,
+        "previous_cumulative_active_seconds": 2,
+        "commits": 1,
+        "auto_closures": 0,
+        "pr_advances": 0,
+        "strikes": 0
+      },
+      "expected": {
+        "outcome": "advanced",
+        "duration_seconds": 5,
+        "summary": {
+          "model": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "tool_count": null,
+          "skill_call_count": null,
+          "skills_consulted": null,
+          "commits": 1,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "advanced",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 5,
+            "cumulative_active_seconds": 7,
+            "consumption": {
+              "model": null,
+              "tokens_in": null,
+              "tokens_out": null
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      }
+    }
+  ],
   "serialization_cases": [
     {
       "id": "envelope-before-sorted-payload",
