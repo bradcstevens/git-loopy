@@ -1536,25 +1536,25 @@ class _ParallelLoop:
         #     Lanes so base stays green. Operates on branch names in the main
         #     worktree, so it runs after the Lane worktrees are gone and before
         #     the round's single Strike tick.
-        integrated_issues = await self._integrate_wave(iter_num, lanes)
+        published_issues = await self._integrate_wave(iter_num, lanes)
 
         # 4) Strike tick — once per round. A successful Integration is the round's
         #    progress signal (ADR-0009): Lane commits count only once they LAND on
         #    base, so a round that lands nothing adds a strike even if the agents
         #    committed inside their worktrees.
         outcome = self._tick_round(
-            iter_num, commits=0, closures=len(integrated_issues)
+            iter_num, commits=0, closures=len(published_issues)
         )
 
         self._serial._finish_iteration(
             iter_num,
             outcome="aborted" if outcome == "aborted" else "parallel",
-            advanced_issues=integrated_issues,
+            advanced_issues=published_issues,
         )
 
         if outcome == "aborted":
-            return ("aborted", total_commits, len(integrated_issues))
-        return ("continue", total_commits, len(integrated_issues))
+            return ("aborted", total_commits, len(published_issues))
+        return ("continue", total_commits, len(published_issues))
 
     def _setup_lane_worktree(self, lane: _Lane) -> None:
         """Prepare a Lane's freshly created worktree before its session (#65).
@@ -1747,16 +1747,16 @@ class _ParallelLoop:
            success; after K failures the issue falls back to a serial Iteration
            with exactly one breadcrumb comment and its Lane branch is kept.
 
-        Returns the issues whose Lanes landed green — via the happy path or
-        auto-resolution. Their count is the round's Strike progress, while their
-        identities distinguish published-but-unclosed work from failed Lanes in
-        the normalized Iteration rollup.
+        Returns the issues whose Lane contributions reached green publication —
+        via the happy path or auto-resolution. Their count is the Wave's Strike
+        progress, while their identities distinguish published-but-unclosed work
+        from unpublished contributions in the normalized Iteration rollup.
         """
-        integrated: set[int | str] = set()
+        published: set[int | str] = set()
         for lane in sorted(lanes, key=_lane_sort_key):
             if await self._integrate_lane(iter_num, lane):
-                integrated.add(lane.item.ref)
-        return integrated
+                published.add(lane.item.ref)
+        return published
 
     async def _integrate_lane(self, iter_num: int, lane: _Lane) -> int:
         """Integrate one Lane; return ``1`` if it landed green, else ``0``.
@@ -1790,6 +1790,8 @@ class _ParallelLoop:
 
         # 2) Merge landed cleanly — gate it from the runner side.
         if self._gate_green(ref, "post-merge"):
+            if not self._base_advanced(pre_base, ref):
+                return 0
             self._land_lane(iter_num, lane, pre_base)
             return 1
 
@@ -1797,6 +1799,26 @@ class _ParallelLoop:
         #    green, then auto-resolve.
         self._revert_merge_safely(ref)
         return await self._auto_resolve_lane(iter_num, lane)
+
+    def _base_advanced(self, pre_base: str, ref: int | str) -> bool:
+        """Return whether Integration published a new base head."""
+        try:
+            advanced = self._git.head_sha() != pre_base
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "integration #%s: post-merge head_sha failed: %s; "
+                "publication remains unverified",
+                ref,
+                exc,
+            )
+            return False
+        if not advanced:
+            self._diag.warning(
+                "integration #%s: merge produced no base advancement; "
+                "not counting publication",
+                ref,
+            )
+        return advanced
 
     def _gate_green(
         self, ref: int | str, phase: str, worktree: Path | None = None
@@ -1960,6 +1982,8 @@ class _ParallelLoop:
                         "retrying",
                         ref, int_branch, exc,
                     )
+                    continue
+                if not self._base_advanced(pre_base, ref):
                     continue
                 self._close_landed(iter_num, lane.item, pre_base)
                 self._delete_branch_safely(ref, lane.branch)

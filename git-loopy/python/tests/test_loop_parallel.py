@@ -842,10 +842,18 @@ def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
     assert fake_git.active_worktrees == []
 
 
-def test_published_lane_is_advanced_when_source_closure_fails(
+def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions(
     tmp_path, monkeypatch
 ) -> None:
     fake_git = _wire_repo(tmp_path)
+    merge = fake_git.merge
+
+    def merge_with_noop(branch: str) -> None:
+        if branch.endswith("/issue-43"):
+            return
+        merge(branch)
+
+    monkeypatch.setattr(fake_git, "merge", merge_with_noop)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
@@ -892,7 +900,7 @@ def test_published_lane_is_advanced_when_source_closure_fails(
     )
     assert [issue["status"] for issue in iteration_end["issues"]] == [
         "advanced",
-        "closed",
+        "no-progress",
     ]
 
 

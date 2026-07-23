@@ -29,7 +29,7 @@ class _IssueContribution:
     first_started_at: str
     first_started_monotonic: float
     activated_monotonic: float
-    is_lane: bool
+    is_lane_contribution: bool
     usage: UsageTally = field(default_factory=UsageTally)
     commits: int = 0
     closed_at: str | None = None
@@ -104,7 +104,7 @@ class IterationRollupAccumulator:
                     first_started_at=first_started_at,
                     first_started_monotonic=first_started_monotonic,
                     activated_monotonic=activated_monotonic,
-                    is_lane=event.get("lane_issue") is not None,
+                    is_lane_contribution=event.get("lane_issue") is not None,
                 ),
             )
             contribution.usage.merge(current.pending_usage)
@@ -270,7 +270,10 @@ class IterationRollupAccumulator:
                 if closed
                 else "advanced"
                 if contribution.advanced
-                or (contribution.commits > 0 and not contribution.is_lane)
+                or (
+                    contribution.commits > 0
+                    and not contribution.is_lane_contribution
+                )
                 else "no-progress"
             ),
             "first_started_at": contribution.first_started_at,
