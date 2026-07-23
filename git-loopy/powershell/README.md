@@ -138,8 +138,8 @@ passing the same arguments after the file path.)
 
 ### Native Continuation tracer
 
-The public `continuation` command currently supports the trusted one-Action
-`publish` and read-only `reconcile` tracer:
+The public `continuation` command supports contract-identical completion-envelope
+`publish` and read-only `reconcile`:
 
 ```powershell
 git-loopy continuation capabilities

@@ -1348,6 +1348,28 @@
         }
       },
       {
+        "id": "shared-continuation-line-separators",
+        "template": "shared-continue",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/completion/producer/advisory_extensions",
+            "value": {"continuation_marker": "\u0085\u2028\u2029"}
+          }
+        ],
+        "expected": {
+          "exit_code": 0,
+          "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"2fab2c97d8eacdc36cb7eb6cec03f09b98cd24a4997057223135cfe447dfcbd1\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9001,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9001\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"}}}\n",
+          "stderr_exact": "",
+          "github_calls": [
+            "read-comment:7001",
+            "label:237:git-loopy-continuation",
+            "append:237",
+            "read-comment:9001"
+          ]
+        }
+      },
+      {
         "id": "ephemeral-continue",
         "template": "shared-continue",
         "patch": [

@@ -108,10 +108,9 @@ its native implementation lands.
 
 ## 7. Native atomic completion records
 
-Python and shell `publish` accept one version-identifiable completion envelope for one Workstream
-and one planning Producer transition. PowerShell currently accepts the trusted shared tracer subset:
-one `continue` completion carrying one planning Producer's `Publish spec` Action. Publication is
-`shared` or `ephemeral`, and the disposition is exactly one of:
+Python, shell, and PowerShell `publish` accept one version-identifiable completion envelope for one
+Workstream and one planning Producer transition. Publication is `shared` or `ephemeral`, and the
+disposition is exactly one of:
 
 - `continue`: one or more complete Actions and no outcome or no-guidance branch;
 - `terminal`: one shared, durably evidenced `complete`, `rejected`, `abandoned`, or `superseded`
