@@ -1003,7 +1003,7 @@ function Get-GitLoopyCommits {
 
     $Commits = [Collections.Generic.List[object]]::new()
     $Shas = @(
-        & git -C $RepoRoot log @RevisionArguments --format=%H 2>$null
+        & git -C $RepoRoot rev-list @RevisionArguments 2>$null
     )
     if ($LASTEXITCODE -ne 0 -or $Shas.Count -eq 0) {
         return , $Commits.ToArray()
@@ -1013,30 +1013,38 @@ function Get-GitLoopyCommits {
         if ([string]::IsNullOrEmpty([string]$Sha)) {
             continue
         }
-        $Subject = @(
-            & git -C $RepoRoot show -s --format=%s ([string]$Sha) 2>$null
-        )
+        $Raw = @(& git -C $RepoRoot cat-file commit ([string]$Sha) 2>$null)
         if ($LASTEXITCODE -ne 0) {
             continue
         }
-        $Date = @(
-            & git -C $RepoRoot show -s --format=%ad --date=short ([string]$Sha) 2>$null
-        )
-        if ($LASTEXITCODE -ne 0) {
+        $MessageStart = [Array]::IndexOf($Raw, "")
+        $AuthorLine = @(
+            $Raw | Where-Object { $_.StartsWith("author ", [StringComparison]::Ordinal) }
+        ) | Select-Object -First 1
+        if ($MessageStart -lt 0 -or $null -eq $AuthorLine) {
             continue
         }
-        $Body = @(
-            & git -C $RepoRoot show -s --format=%b ([string]$Sha) 2>$null
-        )
-        if ($LASTEXITCODE -ne 0) {
+        $AuthorMatched = $AuthorLine -cmatch ' ([0-9]+) [+-][0-9]{4}$'
+        if (-not $AuthorMatched) {
             continue
         }
+        $Message = @($Raw | Select-Object -Skip ($MessageStart + 1))
+        $Subject = if ($Message.Count -gt 0) { [string]$Message[0] } else { "" }
+        $Body = if ($Message.Count -gt 1) {
+            @($Message | Select-Object -Skip 1) -join "`n"
+        }
+        else {
+            ""
+        }
+        $Date = [DateTimeOffset]::FromUnixTimeSeconds(
+            [long]$Matches[1]
+        ).ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
 
         $Commits.Add([ordered]@{
             sha = [string]$Sha
-            subject = $Subject -join "`n"
-            date = $Date -join "`n"
-            body = ($Body -join "`n").TrimEnd("`n", "`r")
+            subject = $Subject
+            date = $Date
+            body = $Body.TrimEnd("`n", "`r")
         })
     }
 
@@ -1164,7 +1172,7 @@ function Get-GitLoopyRecentCommitsBlock {
 
     $Commits = Get-GitLoopyCommits `
         -RepoRoot $RepoRoot `
-        -RevisionArguments @("-n5")
+        -RevisionArguments @("--max-count=5", "HEAD")
     if ($Commits.Count -eq 0) {
         return "No commits found"
     }
