@@ -1983,6 +1983,24 @@ def _union_provenance(contributed: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [seen[key] for key in sorted(seen)]
 
 
+_READINESS_RANK = {"Ready": 0, "Blocked": 1}
+
+
+def _frontier_order_key(action: dict[str, Any]) -> tuple[int, str, str]:
+    """Deterministic prospective-frontier order for verified guidance.
+
+    Orders Ready Actions ahead of Blocked ones, then breaks ties by canonical
+    Workstream Anchor and canonical Action identity. Identity already fixes a
+    total order, so the same durable facts always yield the same human-facing
+    frontier rather than the incidental identity-hash order.
+    """
+    return (
+        _READINESS_RANK[action["readiness"]],
+        _canonical_json(action["workstream_anchor"]),
+        action["identity"],
+    )
+
+
 def _derive_actions(
     guidance_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
     *,
@@ -2076,7 +2094,7 @@ def _derive_actions(
             # preserving the exact existing Ready-only command framing.
             item["unsatisfied_prerequisites"] = canonical["unsatisfied"]
         actions.append(item)
-    actions.sort(key=lambda action: action["identity"])
+    actions.sort(key=_frontier_order_key)
     return actions, diagnostics
 
 

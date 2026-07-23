@@ -2003,6 +2003,89 @@ def test_python_reconcile_derives_ready_and_blocked_from_unsatisfied_prerequisit
     assert stderr == ""
 
 
+def test_python_reconcile_orders_ready_before_blocked_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verified guidance is a deterministic prospective frontier.
+
+    Reconciliation orders every Ready Action ahead of every Blocked one and
+    breaks ties by canonical Workstream Anchor then Action identity, so the
+    same durable facts always yield the same human-facing order rather than
+    the incidental identity-hash order.
+    """
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+
+    def _variant(
+        key: str, summary: str, target: int, prerequisite: int | None
+    ) -> dict[str, Any]:
+        variant = copy.deepcopy(actions[0])
+        variant["key"] = key
+        variant["summary"] = summary
+        variant["target"] = _issue(target)
+        variant["completion_condition"] = {
+            "kind": "issue-closed",
+            "target": _issue(target),
+        }
+        variant["prerequisites"] = (
+            []
+            if prerequisite is None
+            else [{"kind": "issue-open", "target": _issue(prerequisite)}]
+        )
+        return variant
+
+    # actions[0] stays Ready (target 239, no prerequisites). Add one more Ready
+    # plus two Blocked Actions whose issue-open prerequisites read CLOSED.
+    actions.append(_variant("ready_second", "Ready second action", 240, None))
+    actions.append(_variant("blocked_first", "Blocked first action", 241, 501))
+    actions.append(_variant("blocked_second", "Blocked second action", 242, 502))
+
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    github.issues[502] = "CLOSED"
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    reconciled = result["result"]["actions"]
+    assert [action["readiness"] for action in reconciled] == [
+        "Ready",
+        "Ready",
+        "Blocked",
+        "Blocked",
+    ]
+    # Every Action shares one Workstream Anchor here, so the final tie within
+    # each readiness band is the canonical Action identity, ascending.
+    ready_ids = [action["identity"] for action in reconciled[:2]]
+    blocked_ids = [action["identity"] for action in reconciled[2:]]
+    assert ready_ids == sorted(ready_ids)
+    assert blocked_ids == sorted(blocked_ids)
+    assert stderr == ""
+
+    # Re-reconciling the same durable facts reproduces the identical order.
+    _repeat_exit, repeat, _repeat_stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert [action["identity"] for action in repeat["result"]["actions"]] == [
+        action["identity"] for action in reconciled
+    ]
+
+
 def test_python_reconcile_dedups_matching_claims_and_unions_provenance(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
