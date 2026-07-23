@@ -14,7 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, per-Orchestrator Insight capabilities, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
+| `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |

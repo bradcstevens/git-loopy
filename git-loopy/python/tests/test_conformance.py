@@ -237,15 +237,12 @@ _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.3"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.4"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
     )
-    assert (
-        _CONTINUATION_SCENARIOS["record_format"]
-        == continuation_module.RECORD_FORMAT
-    )
+    assert _CONTINUATION_SCENARIOS["record_format"] == continuation_module.RECORD_FORMAT
     assert (
         _CONTINUATION_SCENARIOS["wrapper_contract_version"]
         == continuation_module.WRAPPER_CONTRACT_VERSION
@@ -285,8 +282,7 @@ def test_continuation_fixture_pins_completion_vocabularies() -> None:
     assert set(records["condition_kinds"]) == continuation_module.CONDITION_KINDS
     assert set(records["outcome_kinds"]) == continuation_module.OUTCOME_KINDS
     assert (
-        set(records["no_guidance_reasons"])
-        == continuation_module.NO_GUIDANCE_REASONS
+        set(records["no_guidance_reasons"]) == continuation_module.NO_GUIDANCE_REASONS
     )
     assert records["canonical_json"] == continuation_module.CANONICAL_JSON_PROFILE
 
@@ -305,10 +301,7 @@ def test_continuation_fixture_pins_completion_vocabularies() -> None:
         }
         for kind, schema in records["interaction_evidence_schemas"].items()
     }
-    assert (
-        fixture_evidence_schemas
-        == continuation_module.INTERACTION_EVIDENCE_SCHEMAS
-    )
+    assert fixture_evidence_schemas == continuation_module.INTERACTION_EVIDENCE_SCHEMAS
     fixture_condition_schemas = {
         kind: {
             "required_fields": frozenset(schema["required_fields"]),
@@ -342,7 +335,9 @@ def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
 
     assert snap.skill_count == case["expected_skill_calls"]
     assert sorted(snap.skills_consulted) == case["expected_consulted"]
-    assert case["expected_render"] in summary.build_iteration_panel(snap).renderable.plain
+    assert (
+        case["expected_render"] in summary.build_iteration_panel(snap).renderable.plain
+    )
 
 
 def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
@@ -359,8 +354,7 @@ def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
 
     table = summary.build_run_table()
     assert table.caption == (
-        "Skill adoption: 2/3 iterations • "
-        "Skills: domain-modeling, prototype, tdd"
+        "Skill adoption: 2/3 iterations • Skills: domain-modeling, prototype, tdd"
     )
 
 

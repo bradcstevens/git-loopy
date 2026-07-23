@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import io
 import json
 import os
@@ -20,6 +21,8 @@ from git_loopy.gh import (
     ContinuationArtifact,
     ContinuationCarrier,
     ContinuationComment,
+    GhError,
+    SubprocessContinuationGitHubClient,
 )
 
 
@@ -28,6 +31,22 @@ SCRIPTED_GITHUB = Path(__file__).with_name("scripted_github.py")
 FIXTURE = json.loads(
     (CONFORMANCE_DIR / "continuation-scenarios.json").read_text(encoding="utf-8")
 )
+
+
+def test_python_revision_protocol_vocabulary_matches_shared_fixture() -> None:
+    protocol = FIXTURE["revision_protocol"]
+
+    assert continuation.CAPABILITY_MANIFEST["operations"]["repair-index"] is True
+    assert protocol["observation_token"] == "sha256"
+    assert protocol["human_write_permissions"] == ["ADMIN", "MAINTAIN", "WRITE"]
+    assert protocol["receipt_statuses"] == [
+        "committed",
+        "conflict",
+        "idempotent",
+        "unpublished",
+    ]
+    assert protocol["reattestation_modes"] == ["copy", "replace", "retire"]
+    assert protocol["index_label"] == "git-loopy-continuation"
 
 
 def _install_scripted_github(
@@ -47,7 +66,7 @@ def _install_scripted_github(
     fake_gh = fake_bin / "gh"
     fake_gh.write_text(
         "#!/bin/sh\nexec "
-        f"{shlex.quote(sys.executable)} {shlex.quote(str(SCRIPTED_GITHUB))} \"$@\"\n",
+        f'{shlex.quote(sys.executable)} {shlex.quote(str(SCRIPTED_GITHUB))} "$@"\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -64,8 +83,7 @@ def _consumed_steps(state_path: Path) -> int:
 
 def _materialize_raw_segments(segments: list[dict[str, Any]]) -> str:
     return "".join(
-        segment["text"] * int(segment.get("repeat", 1))
-        for segment in segments
+        segment["text"] * int(segment.get("repeat", 1)) for segment in segments
     )
 
 
@@ -126,8 +144,103 @@ def test_python_scripted_github_transport(
         assert expected["stderr_contains"].lower() in completed.stderr.lower()
 
     assert _consumed_steps(state_path) == len(probe["github_script"])
-    assert log_path.read_text(encoding="utf-8").splitlines() == probe[
-        "expected_github_calls"
+    assert (
+        log_path.read_text(encoding="utf-8").splitlines()
+        == probe["expected_github_calls"]
+    )
+
+
+def test_python_all_carrier_scan_hydrates_comment_authority_and_edit_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    list_command = (
+        "issue list --repo octo/example --state all --limit 1000 "
+        "--json number,state,url,comments,labels"
+    )
+    state_path, log_path, _fake_gh = _install_scripted_github(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "command": list_command,
+                "exit_code": 0,
+                "stdout_json": [
+                    {
+                        "number": 237,
+                        "state": "OPEN",
+                        "url": "https://github.com/octo/example/issues/237",
+                        "labels": [{"name": "git-loopy-continuation"}],
+                        "comments": [
+                            {
+                                "id": 9000,
+                                "url": (
+                                    "https://github.com/octo/example/issues/237"
+                                    "#issuecomment-9000"
+                                ),
+                                "body": "Ordinary issue discussion.",
+                                "author": {"login": "maintainer"},
+                                "createdAt": "2026-07-22T19:59:00Z",
+                            },
+                            {
+                                "id": 9001,
+                                "url": (
+                                    "https://github.com/octo/example/issues/237"
+                                    "#issuecomment-9001"
+                                ),
+                                "body": (
+                                    "<!-- git-loopy-continuation:1 -->\nlisted body"
+                                ),
+                                "author": {"login": "planner-bot"},
+                                "createdAt": "2026-07-22T20:00:00Z",
+                            },
+                        ],
+                    }
+                ],
+            },
+            {
+                "command": "api repos/octo/example/issues/comments/9001",
+                "exit_code": 0,
+                "stdout_json": {
+                    "id": 9001,
+                    "html_url": (
+                        "https://github.com/octo/example/issues/237#issuecomment-9001"
+                    ),
+                    "body": ("<!-- git-loopy-continuation:1 -->\nauthoritative body"),
+                    "user": {"login": "planner-bot", "type": "Bot"},
+                    "created_at": "2026-07-22T20:00:00Z",
+                    "updated_at": "2026-07-22T20:01:00Z",
+                },
+            },
+        ],
+    )
+
+    carriers = SubprocessContinuationGitHubClient().list_all_continuation_carriers(
+        "octo/example"
+    )
+
+    assert carriers[0].comments == (
+        ContinuationComment(
+            id=9000,
+            url="https://github.com/octo/example/issues/237#issuecomment-9000",
+            body="Ordinary issue discussion.",
+            author="maintainer",
+            created_at="2026-07-22T19:59:00Z",
+        ),
+        ContinuationComment(
+            id=9001,
+            url="https://github.com/octo/example/issues/237#issuecomment-9001",
+            body=("<!-- git-loopy-continuation:1 -->\nauthoritative body"),
+            author="planner-bot",
+            author_type="Bot",
+            created_at="2026-07-22T20:00:00Z",
+            updated_at="2026-07-22T20:01:00Z",
+        ),
+    )
+    assert _consumed_steps(state_path) == 2
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        list_command,
+        "api repos/octo/example/issues/comments/9001",
     ]
 
 
@@ -243,15 +356,25 @@ def test_python_native_continuation_workflow(
         )
 
     assert _consumed_steps(state_path) == len(workflow["github_script"])
-    assert github_log.read_text(encoding="utf-8").splitlines() == workflow[
-        "expected_github_calls"
-    ]
+    assert (
+        github_log.read_text(encoding="utf-8").splitlines()
+        == workflow["expected_github_calls"]
+    )
 
 
 class _RecordingGitHub:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.body = ""
+        self.labels: set[str] = set()
+        self.comment_author = "planner"
+        self.comment_author_type = "User"
+        self.permission = "WRITE"
+        self.comments: list[ContinuationComment] = []
+        self.next_comment_id = 9001
+        self.actor_login = "planner"
+        self.actor_type = "User"
+        self.fail_append = False
 
     def read_issue_comment(
         self,
@@ -264,14 +387,10 @@ class _RecordingGitHub:
                 id=7001,
                 url="https://github.com/octo/example/issues/237#issuecomment-7001",
                 body="Durable transition evidence.",
-                author="planner",
+                author=self.comment_author,
+                author_type=self.comment_author_type,
             )
-        return ContinuationComment(
-            id=comment_id,
-            url=f"https://github.com/octo/example/issues/237#issuecomment-{comment_id}",
-            body=self.body,
-            author="planner",
-        )
+        return next(comment for comment in self.comments if comment.id == comment_id)
 
     def ensure_issue_label(
         self,
@@ -280,6 +399,24 @@ class _RecordingGitHub:
         label: str,
     ) -> None:
         self.calls.append(f"label:{number}:{label}")
+        self.labels.add(label)
+
+    def remove_issue_label(
+        self,
+        repository: str,
+        number: int,
+        label: str,
+    ) -> None:
+        self.calls.append(f"unlabel:{number}:{label}")
+        self.labels.discard(label)
+
+    def authenticated_actor(self) -> tuple[str, str]:
+        self.calls.append("authenticated-actor")
+        return self.actor_login, self.actor_type
+
+    def repository_permission(self, repository: str, login: str) -> str:
+        self.calls.append(f"permission:{login}")
+        return self.permission
 
     def append_issue_comment(
         self,
@@ -288,12 +425,43 @@ class _RecordingGitHub:
         body: str,
     ) -> ContinuationComment:
         self.calls.append(f"append:{number}")
+        if self.fail_append:
+            raise GhError(["gh", "api"], 1, "append failed")
         self.body = body
-        return ContinuationComment(
-            id=9001,
-            url="https://github.com/octo/example/issues/237#issuecomment-9001",
-            body="",
-            author="planner",
+        comment = ContinuationComment(
+            id=self.next_comment_id,
+            url=(
+                "https://github.com/octo/example/issues/237"
+                f"#issuecomment-{self.next_comment_id}"
+            ),
+            body=body,
+            author=self.comment_author,
+            author_type=self.comment_author_type,
+        )
+        self.next_comment_id += 1
+        self.comments.append(comment)
+        return comment
+
+    def _carrier(self) -> ContinuationCarrier:
+        comments = tuple(self.comments)
+        if not comments and self.body:
+            comments = (
+                ContinuationComment(
+                    id=9001,
+                    url=(
+                        "https://github.com/octo/example/issues/237#issuecomment-9001"
+                    ),
+                    body=self.body,
+                    author=self.comment_author,
+                    author_type=self.comment_author_type,
+                ),
+            )
+        return ContinuationCarrier(
+            number=237,
+            state="OPEN",
+            url="https://github.com/octo/example/issues/237",
+            comments=comments,
+            labels=tuple(sorted(self.labels)),
         )
 
     def list_continuation_carriers(
@@ -304,24 +472,16 @@ class _RecordingGitHub:
         self.calls.append("list-carriers")
         if not self.body:
             return []
-        return [
-            ContinuationCarrier(
-                number=237,
-                state="OPEN",
-                url="https://github.com/octo/example/issues/237",
-                comments=(
-                    ContinuationComment(
-                        id=9001,
-                        url=(
-                            "https://github.com/octo/example/issues/237"
-                            "#issuecomment-9001"
-                        ),
-                        body=self.body,
-                        author="planner",
-                    ),
-                ),
-            )
-        ]
+        return [self._carrier()]
+
+    def list_all_continuation_carriers(
+        self,
+        repository: str,
+    ) -> list[ContinuationCarrier]:
+        self.calls.append("list-all-carriers")
+        if not self.body:
+            return []
+        return [self._carrier()]
 
     def read_issue(
         self,
@@ -376,6 +536,1025 @@ def _publish_result(
     return exit_code, json.loads(stdout), stderr
 
 
+def _command_result(
+    operation: str,
+    request: dict[str, Any],
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, dict[str, Any], str]:
+    monkeypatch.setattr(continuation, "_make_github_client", lambda: github)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(request, ensure_ascii=False, separators=(",", ":"))),
+    )
+    exit_code = cli.main(["continuation", operation])
+    captured = capsys.readouterr()
+    return exit_code, json.loads(captured.out), captured.err
+
+
+def test_python_reconcile_mints_empty_trusted_revision_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["observation"] == {
+        "heads": [],
+        "token": (
+            "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142"
+        ),
+        "validators": [],
+    }
+    assert result["result"]["diagnostics"] == []
+    assert github.calls == ["list-all-carriers"]
+    assert stderr == ""
+
+
+def test_python_publish_commits_first_trusted_revision_from_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    _exit, reconciled, _stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    github.calls.clear()
+    request = _valid_publish_request("shared-continue")
+    request.update(
+        {
+            "trusted_apps": [],
+            "observation": reconciled["result"]["observation"],
+            "parents": [],
+        }
+    )
+
+    exit_code, result, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["receipt"]["status"] == "committed"
+    assert result["receipt"]["parents"] == []
+    assert github.calls == [
+        "authenticated-actor",
+        "permission:planner",
+        "list-all-carriers",
+        "read-comment:7001",
+        "label:237:git-loopy-continuation",
+        "append:237",
+        "read-comment:9001",
+    ]
+    assert '"parents":[]' in github.body
+    assert stderr == ""
+
+
+def test_python_reconcile_observes_trusted_live_revision_head(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    request = _valid_publish_request("shared-continue")
+    request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _exit, published, _stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    github.calls.clear()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    observation = result["result"]["observation"]
+    assert exit_code == 0
+    assert observation["heads"] == [
+        {
+            "carrier": 237,
+            "producer": "planner",
+            "revision_id": published["receipt"]["revision_id"],
+            "workstream_anchor": request["completion"]["workstream"]["anchor"],
+        }
+    ]
+    assert observation["validators"] == [
+        {
+            "comment_id": 9001,
+            "sha256": hashlib.sha256(github.body.encode("utf-8")).hexdigest(),
+        }
+    ]
+    assert observation["token"].startswith("sha256:")
+    assert result["result"]["diagnostics"] == []
+    assert github.calls == [
+        "list-all-carriers",
+        "permission:planner",
+        "read-issue:239",
+    ]
+    assert stderr == ""
+
+
+def test_python_reconcile_authenticates_marker_author_before_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.body = "<!-- git-loopy-continuation:1 -->\n```json\n{not-json}\n```"
+    github.comment_author = "attacker"
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["status"] == "waiting"
+    assert result["result"]["diagnostics"] == [
+        {
+            "author": "attacker",
+            "carrier": 237,
+            "code": "untrusted_marker_ignored",
+            "comment_id": 9001,
+        }
+    ]
+    assert github.calls == ["list-all-carriers"]
+    assert stderr == ""
+
+
+def test_python_reconcile_rejects_edited_carrier_comment(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    request = _valid_publish_request("shared-continue")
+    _publish_result(request, github, monkeypatch, capsys)
+    original = github.comments[0]
+    github.comments[0] = ContinuationComment(
+        id=original.id,
+        url=original.url,
+        body=original.body,
+        author=original.author,
+        created_at="2026-07-22T20:00:00Z",
+        updated_at="2026-07-22T20:01:00Z",
+    )
+    github.calls.clear()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert {
+        "carrier": 237,
+        "code": "mutated_revision",
+        "comment_id": 9001,
+    } in result["result"]["diagnostics"]
+    assert stderr == ""
+
+
+def test_python_publish_retry_finds_same_deterministic_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    request = _valid_publish_request("shared-continue")
+    request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _exit, first, _stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    github.calls.clear()
+
+    exit_code, retry, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert retry["receipt"]["status"] == "idempotent"
+    assert retry["receipt"]["revision_id"] == first["receipt"]["revision_id"]
+    assert retry["receipt"]["comment"]["id"] == 9001
+    assert github.calls == [
+        "authenticated-actor",
+        "permission:planner",
+        "list-all-carriers",
+    ]
+    assert len(github.comments) == 1
+    assert stderr == ""
+
+
+def test_python_stale_non_equivalent_publish_creates_visible_fork(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    first_request = _valid_publish_request("shared-continue")
+    first_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _exit, first, _stderr = _publish_result(
+        first_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    second_request = copy.deepcopy(first_request)
+    second_request["completion"]["actions"][0]["instruction"]["value"] = (
+        "/implement issue 239 with the alternate accepted semantics"
+    )
+
+    exit_code, second, stderr = _publish_result(
+        second_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    _exit, reconciled, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert second["receipt"]["status"] == "conflict"
+    assert second["receipt"]["conflicting_heads"] == sorted(
+        [first["receipt"]["revision_id"], second["receipt"]["revision_id"]]
+    )
+    assert reconciled["result"]["actions"] == []
+    assert {
+        diagnostic["code"] for diagnostic in reconciled["result"]["diagnostics"]
+    } == {"revision_fork"}
+    assert len(reconciled["result"]["observation"]["heads"]) == 2
+    assert len(github.comments) == 2
+    assert stderr == ""
+
+
+def test_python_equivalent_concurrent_heads_deduplicate_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    first_request = _valid_publish_request("shared-continue")
+    first_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(first_request, github, monkeypatch, capsys)
+    equivalent = copy.deepcopy(first_request)
+    equivalent["completion"]["actions"][0]["summary"] = (
+        "Equivalent wording from a concurrent Producer read"
+    )
+
+    exit_code, receipt, stderr = _publish_result(
+        equivalent,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    _exit, reconciled, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert receipt["receipt"]["status"] == "committed"
+    assert len(reconciled["result"]["observation"]["heads"]) == 2
+    assert len(reconciled["result"]["actions"]) == 1
+    assert not any(
+        diagnostic["code"] == "revision_fork"
+        for diagnostic in reconciled["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_fork_resolution_names_every_current_head(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    first_request = _valid_publish_request("shared-continue")
+    first_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(first_request, github, monkeypatch, capsys)
+    stale_request = copy.deepcopy(first_request)
+    stale_request["completion"]["actions"][0]["instruction"]["value"] += " safely"
+    _publish_result(stale_request, github, monkeypatch, capsys)
+    _exit, fork, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    resolution_request = copy.deepcopy(stale_request)
+    resolution_request["completion"]["actions"][0]["instruction"]["value"] += (
+        " using the resolved fork"
+    )
+    resolution_request["observation"] = fork["result"]["observation"]
+    resolution_request["parents"] = [
+        head["revision_id"] for head in fork["result"]["observation"]["heads"]
+    ]
+
+    exit_code, resolution, stderr = _publish_result(
+        resolution_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    _exit, reconciled, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert resolution["receipt"]["status"] == "committed"
+    assert resolution["receipt"]["parents"] == resolution_request["parents"]
+    assert reconciled["result"]["observation"]["heads"] == [
+        {
+            "carrier": 237,
+            "producer": "planner",
+            "revision_id": resolution["receipt"]["revision_id"],
+            "workstream_anchor": resolution_request["completion"]["workstream"][
+                "anchor"
+            ],
+        }
+    ]
+    assert len(reconciled["result"]["actions"]) == 1
+    assert not any(
+        diagnostic["code"] == "revision_fork"
+        for diagnostic in reconciled["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_publish_detects_mutated_observation_before_append(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    root_request = _valid_publish_request("shared-continue")
+    root_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(root_request, github, monkeypatch, capsys)
+    _exit, observed, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    original = github.comments[0]
+    github.comments[0] = ContinuationComment(
+        id=original.id,
+        url=original.url,
+        body=original.body + " ",
+        author=original.author,
+        author_type=original.author_type,
+    )
+    successor = copy.deepcopy(root_request)
+    successor["completion"]["actions"][0]["instruction"]["value"] += " next"
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [
+        head["revision_id"] for head in observed["result"]["observation"]["heads"]
+    ]
+    github.calls.clear()
+
+    exit_code, result, stderr = _publish_result(
+        successor,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "repair_required"
+    assert "mutated" in result["error"]["message"]
+    assert github.calls == [
+        "authenticated-actor",
+        "permission:planner",
+        "list-all-carriers",
+    ]
+    assert len(github.comments) == 1
+    assert "repair required" in stderr.lower()
+
+
+def test_python_reconcile_quarantines_lineage_with_deleted_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    root_request = _valid_publish_request("shared-continue")
+    root_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(root_request, github, monkeypatch, capsys)
+    _exit, observed, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    successor = copy.deepcopy(root_request)
+    successor["completion"]["actions"][0]["instruction"]["value"] += " next"
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [
+        head["revision_id"] for head in observed["result"]["observation"]["heads"]
+    ]
+    _publish_result(successor, github, monkeypatch, capsys)
+    del github.comments[0]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["observation"]["heads"] == []
+    assert any(
+        diagnostic["code"] == "missing_predecessor"
+        and diagnostic["missing"] == successor["parents"]
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_authorized_reattestation_recovers_tainted_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    root_request = _valid_publish_request("shared-continue")
+    root_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(root_request, github, monkeypatch, capsys)
+    _exit, root_observed, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    tainted_request = copy.deepcopy(root_request)
+    tainted_request["completion"]["actions"][0]["instruction"]["value"] += " next"
+    tainted_request["observation"] = root_observed["result"]["observation"]
+    tainted_request["parents"] = [
+        head["revision_id"] for head in root_observed["result"]["observation"]["heads"]
+    ]
+    _exit, tainted, _stderr = _publish_result(
+        tainted_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    del github.comments[0]
+    _exit, quarantined, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    repair_request = copy.deepcopy(tainted_request)
+    repair_request["completion"]["actions"][0]["instruction"]["value"] += " repaired"
+    repair_request["observation"] = quarantined["result"]["observation"]
+    repair_request["parents"] = []
+
+    bypass_exit, bypass, bypass_stderr = _publish_result(
+        repair_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert bypass_exit == 1
+    assert bypass["error"]["code"] == "repair_required"
+    assert "re-attestation" in bypass["error"]["message"]
+    assert len(github.comments) == 1
+    assert "repair required" in bypass_stderr.lower()
+
+    repair_request["trusted_reattesters"] = ["planner"]
+    repair_request["reattestation"] = {
+        "affected_heads": [tainted["receipt"]["revision_id"]],
+        "authorized_by": "planner",
+        "mode": "replace",
+    }
+
+    exit_code, repaired, stderr = _publish_result(
+        repair_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    _exit, reconciled, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0, (repaired, stderr)
+    assert repaired["receipt"]["status"] == "committed"
+    assert repaired["receipt"]["reattestation"] == repair_request["reattestation"]
+    assert len(reconciled["result"]["actions"]) == 1
+    assert (
+        reconciled["result"]["observation"]["heads"][0]["revision_id"]
+        == (repaired["receipt"]["revision_id"])
+    )
+    assert '"reattestation":' in github.body
+    assert stderr == ""
+
+
+def test_python_reattestation_can_name_unparseable_producer_comment(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.body = "<!-- git-loopy-continuation:1 -->\n```json\n{not-json}\n```"
+    github.labels.add("git-loopy-continuation")
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+
+    _exit, quarantined, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    invalid = next(
+        diagnostic
+        for diagnostic in quarantined["result"]["diagnostics"]
+        if diagnostic["code"] == "invalid_revision"
+    )
+    repair_request = _valid_publish_request("shared-continue")
+    repair_request.update(
+        {
+            "trusted_apps": [],
+            "trusted_reattesters": ["planner"],
+            "observation": quarantined["result"]["observation"],
+            "parents": [],
+            "reattestation": {
+                "affected_heads": [invalid["affected_head"]],
+                "authorized_by": "planner",
+                "mode": "replace",
+            },
+        }
+    )
+
+    exit_code, repaired, stderr = _publish_result(
+        repair_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert repaired["receipt"]["status"] == "committed"
+    assert repaired["receipt"]["reattestation"] == repair_request["reattestation"]
+    assert stderr == ""
+
+
+def test_python_index_diagnostics_do_not_hide_records_and_repair_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    _exit, empty, _stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+    publish_request = _valid_publish_request("shared-continue")
+    publish_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    _publish_result(publish_request, github, monkeypatch, capsys)
+    github.labels.clear()
+    github.calls.clear()
+
+    exit_code, reconciled, stderr = _command_result(
+        "reconcile",
+        reconcile_request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert len(reconciled["result"]["actions"]) == 1
+    assert {"code": "index_label_missing", "carrier": 237} in reconciled["result"][
+        "diagnostics"
+    ]
+    assert "label:237:git-loopy-continuation" not in github.calls
+    github.calls.clear()
+
+    repair_exit, repaired, repair_stderr = _command_result(
+        "repair-index",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert repair_exit == 0
+    assert repaired["result"] == {
+        "added": [237],
+        "index_label": "git-loopy-continuation",
+        "removed": [],
+        "status": "repaired",
+    }
+    assert github.calls == [
+        "authenticated-actor",
+        "permission:planner",
+        "list-all-carriers",
+        "permission:planner",
+        "label:237:git-loopy-continuation",
+    ]
+    assert stderr == ""
+    assert repair_stderr == ""
+
+
+def test_python_publish_rechecks_human_write_permission_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.permission = "READ"
+    request = _valid_publish_request("shared-continue")
+    request.update(
+        {
+            "trusted_apps": [],
+            "observation": {
+                "heads": [],
+                "token": (
+                    "sha256:"
+                    "b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142"
+                ),
+                "validators": [],
+            },
+            "parents": [],
+        }
+    )
+
+    exit_code, result, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "current write permission" in result["error"]["message"]
+    assert github.calls == ["authenticated-actor", "permission:planner"]
+    assert "current write permission" in stderr
+
+
+def test_python_reconcile_quarantines_producer_after_permission_revocation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    request = _valid_publish_request("shared-continue")
+    _publish_result(request, github, monkeypatch, capsys)
+    github.permission = "READ"
+    github.calls.clear()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["diagnostics"] == [
+        {
+            "author": "planner",
+            "carrier": 237,
+            "code": "producer_permission_revoked",
+            "comment_id": 9001,
+        }
+    ]
+    assert github.calls == ["list-all-carriers", "permission:planner"]
+    assert stderr == ""
+
+
+def test_python_publish_accepts_explicitly_allowlisted_app_without_human_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.actor_login = "planner-bot"
+    github.actor_type = "Bot"
+    github.comment_author = "planner-bot"
+    github.comment_author_type = "Bot"
+    request = _valid_publish_request("shared-continue")
+    request["completion"]["producer"]["login"] = "planner-bot"
+    request["trusted_producers"] = []
+    request.update(
+        {
+            "trusted_apps": ["planner-bot"],
+            "observation": {
+                "heads": [],
+                "token": (
+                    "sha256:"
+                    "b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142"
+                ),
+                "validators": [],
+            },
+            "parents": [],
+        }
+    )
+
+    exit_code, result, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["receipt"]["status"] == "committed"
+    assert not any(call.startswith("permission:") for call in github.calls)
+    assert stderr == ""
+
+
+def test_python_operational_publish_failure_is_repair_required(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.fail_append = True
+    request = _valid_publish_request("shared-continue")
+    request.update(
+        {
+            "trusted_apps": [],
+            "observation": {
+                "heads": [],
+                "token": (
+                    "sha256:"
+                    "b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142"
+                ),
+                "validators": [],
+            },
+            "parents": [],
+        }
+    )
+
+    exit_code, result, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "repair_required"
+    assert "append failed" in result["error"]["message"]
+    assert result["ok"] is False
+    assert "repair required" in stderr.lower()
+
+
 @pytest.mark.parametrize(
     "case",
     FIXTURE["completion_records"]["valid_publish_cases"],
@@ -406,8 +1585,7 @@ def test_python_publish_accepts_fixture_completion_modes(
 def _json_pointer_tokens(path: str) -> list[str]:
     assert path.startswith("/")
     return [
-        token.replace("~1", "/").replace("~0", "~")
-        for token in path[1:].split("/")
+        token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")
     ]
 
 
@@ -448,9 +1626,7 @@ def _materialize_publish_case(case: dict[str, Any]) -> dict[str, Any]:
         )
         request = _materialize_publish_case(base_case)
     else:
-        request = copy.deepcopy(
-            records["publish_request_templates"][case["template"]]
-        )
+        request = copy.deepcopy(records["publish_request_templates"][case["template"]])
     _apply_fixture_patch(request, case["patch"])
     return request
 
@@ -518,9 +1694,7 @@ def test_python_reconcile_reports_unsupported_valid_target_without_crashing(
     monkeypatch.setattr(
         sys,
         "stdin",
-        io.StringIO(
-            '{"repository":"octo/example","trusted_producers":["planner"]}'
-        ),
+        io.StringIO('{"repository":"octo/example","trusted_producers":["planner"]}'),
     )
     reconcile_exit = cli.main(["continuation", "reconcile"])
     captured = capsys.readouterr()

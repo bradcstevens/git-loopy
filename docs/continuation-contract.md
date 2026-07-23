@@ -66,8 +66,9 @@ At the 1.0 foundation gate, every family member advertised the GitHub Adapter bu
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. `record-dispatch-result`,
-`repair-index`, terminal rendering, report mode, execute-frontier, and concurrent Dispatch remain
-unsupported. Mode is `off`.
+terminal rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported.
+Python additionally advertises its trusted immutable-revision protocol and explicit `repair-index`;
+shell and PowerShell remain on their atomic-record capability subset. Mode is `off`.
 
 ## 5. Event observations
 
@@ -79,7 +80,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.3,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.4,
 Continuation contract 1.0, record format 1, Wrapper contract 1.2, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -162,17 +163,41 @@ only object and array containers, so a populated value at container depth 16 is 
 is rejected. The command also checks the live carrier body limit before establishing the discovery
 label.
 
-The revision identity is the SHA-256 digest of the canonical completion envelope. Each Action also
+An atomic root's revision identity is the SHA-256 digest of the canonical completion envelope.
+Python immutable successors bind the completion and sorted observed parents; an audited
+re-attestation additionally binds its affected heads, authorized actor, and copy, replace, or retire
+mode. Each Action also
 gets a SHA-256 semantic fingerprint over only its Instruction, Prerequisites, interaction
 classification and evidence, completion condition, effects, requirements, and triggers. Summary,
 Basis, Producer provenance, carrier, timestamps, Readiness, and display order do not alter that
 fingerprint.
 
-Each native `reconcile` performs a fresh all-state read of labeled carriers for its supported
-publication scope, parses marked comments, requires the comment author and embedded Producer to
-match the explicit trusted policy, validates the revision digest and semantic fingerprints, and
-reads current Action Targets. Supported open Targets are returned with their identity, semantic
+Each native `reconcile` performs a fresh all-state read for its supported publication scope,
+authenticates a marked comment before semantic parsing, requires the comment author and embedded
+Producer to match explicit trust, validates the revision digest and semantic fingerprints, and
+reads current Action Targets. Human Producers require current write, maintain, or admin permission;
+bot and App identities require explicit allowlisting. Untrusted marker lookalikes are security
+diagnostics, not records and not reasons to quarantine trusted guidance. Supported open Targets are
+returned with their identity, semantic
 fingerprint, Instruction, Target, Basis, Producer provenance, interaction classification,
 Prerequisites, and completion condition. Terminal and no-guidance records contribute no Action.
 The discovery label is an index only: the Producer comment and current GitHub facts are authority,
 and no queue, journal, snapshot, or local cache is created.
+
+Python Reconciliation returns an opaque `sha256:` observation token over the repository, current
+Producer heads, and inspected comment validators. Immutable publication names exactly those
+observed heads. The append is deterministic and idempotent: an indeterminate retry finds the same
+revision. Equivalent concurrent heads deduplicate in guidance; non-equivalent stale appends remain
+visible as a fork until one fresh revision names every current head. Edited comments, missing
+predecessors, revoked authority, and unauthorized ancestry quarantine only their lineage. Recovery
+from a tainted lineage requires a separately allowlisted re-attester and an audited copy, replace,
+or retire declaration naming every affected head. When a damaged comment cannot yield a valid
+revision identity, Reconciliation supplies a deterministic comment-scoped affected-head identity
+so the recovery ceremony remains explicit and satisfiable.
+
+Normal Reconciliation reports missing or stale index labels but never mutates them. Python
+`repair-index` is the only index mutation path: after authenticating the operator and every record
+author, it adds labels to trusted carriers and removes labels only from artifacts with no marked
+record. Publication still establishes the label before append and rereads the exact comment before
+commit. Any operational failure after the durable workflow transition returns `repair_required`;
+it never falls back to ephemeral guidance or a success-shaped receipt.

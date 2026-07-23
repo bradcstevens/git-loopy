@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from git_loopy.gh import (
+    ContinuationCarrier,
     ContinuationComment,
     ContinuationGitHubClient,
     GhError,
@@ -28,19 +29,22 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     "record_formats": [RECORD_FORMAT],
     "wrapper_contract_version": WRAPPER_CONTRACT_VERSION,
     "event_schema_version": EVENT_SCHEMA_VERSION,
-    "tracker_adapters": {"github": {"operations": ["publish", "reconcile"]}},
+    "tracker_adapters": {
+        "github": {"operations": ["publish", "reconcile", "repair-index"]}
+    },
     "operations": {
         "capabilities": True,
         "publish": True,
         "reconcile": True,
         "record-dispatch-result": False,
-        "repair-index": False,
+        "repair-index": True,
     },
     "instruction_handlers": [],
     "instruction_modes": [],
     "evaluators": [],
     "effect_scopes": [],
     "optional_capabilities": {
+        "immutable_producer_revisions": True,
         "terminal_rendering": False,
         "concurrent_dispatch": False,
     },
@@ -269,10 +273,19 @@ _REQUIREMENT_KINDS = frozenset(
 )
 _TRIGGER_KINDS = HUMAN_BOUNDARY_REASONS
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_WRITE_PERMISSIONS = frozenset({"ADMIN", "MAINTAIN", "WRITE"})
+_RECORD_METADATA_FIELDS = frozenset(
+    {"revision_id", "semantic_fingerprints", "parents", "reattestation"}
+)
 
 
 class ContinuationError(ValueError):
     """A typed semantic rejection at the Continuation boundary."""
+
+
+class PublicationRepairRequired(ContinuationError):
+    """A durable transition exists but its Producer revision needs repair."""
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -472,6 +485,243 @@ def _trusted_producers(
     return frozenset(producers)
 
 
+def _trusted_apps(request: dict[str, Any]) -> frozenset[str]:
+    raw = request.get("trusted_apps", [])
+    if not isinstance(raw, list):
+        raise ContinuationError("trusted_apps must be an array")
+    apps = [_string(item, "trusted_apps item") for item in raw]
+    if len(set(apps)) != len(apps):
+        raise ContinuationError("trusted_apps must not contain duplicates")
+    return frozenset(apps)
+
+
+def _trusted_reattesters(request: dict[str, Any]) -> frozenset[str]:
+    raw = request.get("trusted_reattesters", [])
+    if not isinstance(raw, list):
+        raise ContinuationError("trusted_reattesters must be an array")
+    reattesters = [_string(item, "trusted_reattesters item") for item in raw]
+    if len(set(reattesters)) != len(reattesters):
+        raise ContinuationError("trusted_reattesters must not contain duplicates")
+    return frozenset(reattesters)
+
+
+def _validate_reattestation(
+    request: dict[str, Any],
+    producer: str,
+) -> dict[str, Any] | None:
+    raw = request.get("reattestation")
+    if raw is None:
+        return None
+    reattestation = _object(raw, "reattestation")
+    _fields(
+        reattestation,
+        "reattestation",
+        required=frozenset({"affected_heads", "authorized_by", "mode"}),
+    )
+    affected = _array(
+        reattestation["affected_heads"],
+        "reattestation.affected_heads",
+        nonempty=True,
+    )
+    for revision_id in affected:
+        if (
+            not isinstance(revision_id, str)
+            or _DIGEST_RE.fullmatch(revision_id) is None
+        ):
+            raise ContinuationError(
+                "reattestation.affected_heads must contain lowercase SHA-256 digests"
+            )
+    if len(set(affected)) != len(affected):
+        raise ContinuationError(
+            "reattestation.affected_heads must not contain duplicates"
+        )
+    authorized_by = _string(
+        reattestation["authorized_by"], "reattestation.authorized_by"
+    )
+    if authorized_by != producer:
+        raise ContinuationError(
+            "reattestation.authorized_by must match the authenticated producer"
+        )
+    if authorized_by not in _trusted_reattesters(request):
+        raise ContinuationError("reattestation actor is not separately authorized")
+    if reattestation["mode"] not in {"copy", "replace", "retire"}:
+        raise ContinuationError("reattestation.mode is unsupported")
+    return reattestation
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _validate_observation(
+    request: dict[str, Any],
+    repository: str,
+) -> tuple[dict[str, Any], list[str]]:
+    observation = _object(request.get("observation"), "observation")
+    _fields(
+        observation,
+        "observation",
+        required=frozenset({"heads", "token", "validators"}),
+    )
+    heads = _array(observation["heads"], "observation.heads")
+    validators = _array(observation["validators"], "observation.validators")
+    parent_ids: list[str] = []
+    for item in heads:
+        head = _object(item, "observation.heads item")
+        _fields(
+            head,
+            "observation.heads item",
+            required=frozenset(
+                {"carrier", "producer", "revision_id", "workstream_anchor"}
+            ),
+        )
+        _positive_int(head["carrier"], "observation.heads item.carrier")
+        _string(head["producer"], "observation.heads item.producer")
+        revision_id = _string(head["revision_id"], "observation.heads item.revision_id")
+        if _DIGEST_RE.fullmatch(revision_id) is None:
+            raise ContinuationError(
+                "observation.heads item.revision_id must be a lowercase SHA-256 digest"
+            )
+        _durable_reference(
+            head["workstream_anchor"],
+            "observation.heads item.workstream_anchor",
+            repository,
+        )
+        parent_ids.append(revision_id)
+    for item in validators:
+        validator = _object(item, "observation.validators item")
+        _fields(
+            validator,
+            "observation.validators item",
+            required=frozenset({"comment_id", "sha256"}),
+        )
+        _positive_int(validator["comment_id"], "observation.validators item.comment_id")
+        digest = _string(validator["sha256"], "observation.validators item.sha256")
+        if _DIGEST_RE.fullmatch(digest) is None:
+            raise ContinuationError(
+                "observation.validators item.sha256 must be a lowercase SHA-256 digest"
+            )
+    if len(set(parent_ids)) != len(parent_ids):
+        raise ContinuationError("observation.heads must not contain duplicates")
+    expected_token = "sha256:" + _digest(
+        {
+            "repository": repository,
+            "heads": heads,
+            "validators": validators,
+        }
+    )
+    if observation["token"] != expected_token:
+        raise ContinuationError("observation token does not match its bound state")
+    parents = _array(request.get("parents"), "parents")
+    if parents != parent_ids:
+        raise ContinuationError("parents must name the observed heads in order")
+    return observation, parent_ids
+
+
+def _authorize_actor(
+    request: dict[str, Any],
+    repository: str,
+    producer: str,
+    github: ContinuationGitHubClient,
+) -> None:
+    login, account_type = github.authenticated_actor()
+    if login != producer:
+        raise ContinuationError(
+            "authenticated actor does not match completion producer"
+        )
+    if account_type in {"Bot", "App"}:
+        if login not in _trusted_apps(request):
+            raise ContinuationError("authenticated App producer is not allowlisted")
+        return
+    if login not in _trusted_producers(request):
+        raise ContinuationError("authenticated human producer is not trusted")
+    permission = github.repository_permission(repository, login)
+    if permission not in _WRITE_PERMISSIONS:
+        raise ContinuationError(
+            "authenticated human producer lacks current write permission"
+        )
+
+
+def _authorize_policy_actor(
+    request: dict[str, Any],
+    repository: str,
+    github: ContinuationGitHubClient,
+) -> tuple[str, str]:
+    login, account_type = github.authenticated_actor()
+    if account_type in {"Bot", "App"}:
+        if login not in _trusted_apps(request):
+            raise ContinuationError("authenticated App actor is not allowlisted")
+        return login, account_type
+    if login not in _trusted_producers(request):
+        raise ContinuationError("authenticated human actor is not trusted")
+    if github.repository_permission(repository, login) not in _WRITE_PERMISSIONS:
+        raise ContinuationError(
+            "authenticated human actor lacks current write permission"
+        )
+    return login, account_type
+
+
+def _verify_observation_validators(
+    observation: dict[str, Any],
+    carriers: list[ContinuationCarrier],
+) -> None:
+    comments = {
+        comment.id: comment for carrier in carriers for comment in carrier.comments
+    }
+    for validator in observation["validators"]:
+        comment_id = int(validator["comment_id"])
+        comment = comments.get(comment_id)
+        if comment is None:
+            raise PublicationRepairRequired(
+                "observed Producer revision was deleted; repair required"
+            )
+        actual = hashlib.sha256(comment.body.encode("utf-8")).hexdigest()
+        if actual != validator["sha256"]:
+            raise PublicationRepairRequired(
+                "observed Producer revision was mutated; repair required"
+            )
+
+
+def _verify_observed_heads(
+    observation: dict[str, Any],
+    completion: dict[str, Any],
+    carriers: list[ContinuationCarrier],
+) -> None:
+    carrier_number = int(completion["carrier"]["number"])
+    producer = str(completion["producer"]["login"])
+    anchor = completion["workstream"]["anchor"]
+    comments = [
+        comment
+        for carrier in carriers
+        if carrier.number == carrier_number
+        for comment in carrier.comments
+        if comment.author == producer
+    ]
+    for head in observation["heads"]:
+        if (
+            head["carrier"] != carrier_number
+            or head["producer"] != producer
+            or head["workstream_anchor"] != anchor
+        ):
+            raise ContinuationError(
+                "observed heads must belong to the completion Producer lineage"
+            )
+        matched = False
+        for comment in comments:
+            try:
+                record = _parse_record(comment)
+            except ContinuationError:
+                continue
+            if record is not None and record["revision_id"] == head["revision_id"]:
+                matched = True
+                break
+        if not matched:
+            raise PublicationRepairRequired(
+                "observed Producer predecessor is missing or unauthorized; "
+                "repair required"
+            )
+
+
 def _durable_reference(
     value: Any,
     name: str,
@@ -578,9 +828,7 @@ def _interaction(
     evidence_name = f"{name}.evidence"
     evidence = _object(interaction.get("evidence"), evidence_name)
     if "kind" not in evidence:
-        raise ContinuationError(
-            f"{evidence_name} is missing required field: kind"
-        )
+        raise ContinuationError(f"{evidence_name} is missing required field: kind")
     evidence_kind = _string(evidence.get("kind"), f"{evidence_name}.kind")
     schema = INTERACTION_EVIDENCE_SCHEMAS.get(evidence_kind)
     if schema is None:
@@ -613,9 +861,7 @@ def _interaction(
         else:
             raise AssertionError(f"unsupported interaction evidence binding: {binding}")
         if evidence.get(field) != expected:
-            raise ContinuationError(
-                f"{evidence_name}.{field} must match {binding}"
-            )
+            raise ContinuationError(f"{evidence_name}.{field} must match {binding}")
     return classification
 
 
@@ -724,9 +970,7 @@ def _validate_action(
         instruction,
         "completion.actions item.instruction",
         required=frozenset({"mode", "value"}),
-        optional=frozenset(
-            {"behavior_version", "variant", "advisory_extensions"}
-        ),
+        optional=frozenset({"behavior_version", "variant", "advisory_extensions"}),
     )
     if instruction.get("mode") not in {"skill", "command", "manual"}:
         raise ContinuationError(
@@ -830,6 +1074,15 @@ def _validate_completion(
         request,
         "request",
         required=frozenset({"repository", "trusted_producers", "completion"}),
+        optional=frozenset(
+            {
+                "trusted_apps",
+                "trusted_reattesters",
+                "observation",
+                "parents",
+                "reattestation",
+            }
+        ),
     )
     repository = _repository(request)
     completion = _object(request.get("completion"), "completion")
@@ -870,10 +1123,12 @@ def _validate_completion(
     trusted_raw = request.get("trusted_producers")
     if not isinstance(trusted_raw, list):
         raise ContinuationError("trusted_producers must be an array")
+    trusted_apps = _trusted_apps(request)
     trusted = _trusted_producers(
         request,
-        allow_empty=publication == "ephemeral",
+        allow_empty=publication == "ephemeral" or bool(trusted_apps),
     )
+    trusted_identities = trusted | trusted_apps
     workstream = _object(completion.get("workstream"), "completion.workstream")
     _fields(
         workstream,
@@ -932,7 +1187,7 @@ def _validate_completion(
     login = _string(producer.get("login"), "completion.producer.login")
     if producer.get("role") != "planning":
         raise ContinuationError("completion.producer.role must be planning")
-    if publication == "shared" and login not in trusted:
+    if publication == "shared" and login not in trusted_identities:
         raise ContinuationError("completion producer is not trusted")
     if publication == "shared":
         _durable_reference(
@@ -1098,7 +1353,7 @@ def _validate_completion(
         raise ContinuationError(
             f"completion canonical JSON exceeds maximum record length {_MAX_RECORD_BYTES}"
         )
-    return repository, trusted, completion, publication
+    return repository, trusted_identities, completion, publication
 
 
 def _without_advisory_extensions(value: Any) -> Any:
@@ -1137,14 +1392,24 @@ def _semantic_fingerprints(completion: dict[str, Any]) -> dict[str, str]:
 
 def _record_body(
     completion: dict[str, Any],
+    *,
+    parents: list[str] | None = None,
+    reattestation: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, str], str]:
-    revision_id = hashlib.sha256(
-        _canonical_json(completion).encode("utf-8")
-    ).hexdigest()
+    identity_source: Any = completion
+    if parents or reattestation is not None:
+        identity_source = {
+            "completion": completion,
+            "parents": parents or [],
+            **({"reattestation": reattestation} if reattestation is not None else {}),
+        }
+    revision_id = _digest(identity_source)
     fingerprints = _semantic_fingerprints(completion)
     record = {
         "revision_id": revision_id,
         "semantic_fingerprints": fingerprints,
+        **({"parents": parents} if parents is not None else {}),
+        **({"reattestation": reattestation} if reattestation is not None else {}),
         **completion,
     }
     canonical_record = _canonical_json(record)
@@ -1193,11 +1458,18 @@ def _parse_record(comment: ContinuationComment) -> dict[str, Any] | None:
     completion = {
         key: value
         for key, value in record.items()
-        if key not in {"revision_id", "semantic_fingerprints"}
+        if key not in _RECORD_METADATA_FIELDS
     }
-    expected_id = hashlib.sha256(
-        _canonical_json(completion).encode("utf-8")
-    ).hexdigest()
+    parents = record.get("parents", [])
+    reattestation = record.get("reattestation")
+    identity_source: Any = completion
+    if parents or reattestation is not None:
+        identity_source = {
+            "completion": completion,
+            "parents": parents,
+            **({"reattestation": reattestation} if reattestation is not None else {}),
+        }
+    expected_id = _digest(identity_source)
     if revision_id != expected_id:
         raise ContinuationError(
             f"Producer revision comment {comment.id} has an invalid revision identity"
@@ -1217,6 +1489,404 @@ def _action_identity(record: dict[str, Any], action: dict[str, Any]) -> str:
         "occurrence": action["occurrence"],
     }
     return hashlib.sha256(_canonical_json(source).encode("utf-8")).hexdigest()
+
+
+def _record_completion(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in _RECORD_METADATA_FIELDS
+    }
+
+
+def _lineage_key(
+    carrier_number: int,
+    record: dict[str, Any],
+) -> tuple[int, str, str]:
+    return (
+        carrier_number,
+        str(record["producer"]["login"]),
+        _canonical_json(record["workstream"]["anchor"]),
+    )
+
+
+def _revision_semantics(record: dict[str, Any]) -> str:
+    return _canonical_json(
+        {
+            "disposition": record["disposition"],
+            "actions": sorted(record["semantic_fingerprints"].items()),
+            "outcome": record.get("outcome"),
+            "no_guidance": record.get("no_guidance"),
+        }
+    )
+
+
+def _live_revision_entries(
+    entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]]:
+    referenced = {
+        parent
+        for _carrier, _comment, record in entries
+        for parent in record.get("parents", [])
+    }
+    return [entry for entry in entries if entry[2]["revision_id"] not in referenced]
+
+
+def _comment_taint_identity(carrier_number: int, comment_id: int) -> str:
+    return _digest(
+        {
+            "carrier": carrier_number,
+            "comment_id": comment_id,
+            "kind": "invalid-producer-comment",
+        }
+    )
+
+
+def _tainted_lineage_heads(
+    completion: dict[str, Any],
+    carriers: list[ContinuationCarrier],
+) -> set[str]:
+    carrier_number = int(completion["carrier"]["number"])
+    producer = str(completion["producer"]["login"])
+    lineage = (
+        carrier_number,
+        producer,
+        _canonical_json(completion["workstream"]["anchor"]),
+    )
+    records: dict[str, dict[str, Any]] = {}
+    tainted: set[str] = set()
+    for carrier in carriers:
+        if carrier.number != carrier_number:
+            continue
+        for comment in carrier.comments:
+            if comment.author != producer or _RECORD_MARKER not in comment.body:
+                continue
+            try:
+                record = _parse_record(comment)
+            except ContinuationError:
+                tainted.add(_comment_taint_identity(carrier_number, comment.id))
+                continue
+            if record is None or _lineage_key(carrier_number, record) != lineage:
+                continue
+            revision_id = str(record["revision_id"])
+            records[revision_id] = record
+            if (
+                comment.created_at is not None
+                and comment.updated_at is not None
+                and comment.created_at != comment.updated_at
+            ):
+                tainted.add(revision_id)
+            try:
+                _validate_completion(
+                    {
+                        "repository": completion["carrier"]["repository"],
+                        "trusted_producers": [producer],
+                        "completion": _record_completion(record),
+                    }
+                )
+            except ContinuationError:
+                tainted.add(revision_id)
+    for revision_id, record in records.items():
+        if any(parent not in records for parent in record.get("parents", [])):
+            tainted.add(revision_id)
+    changed = True
+    while changed:
+        changed = False
+        for revision_id, record in records.items():
+            if revision_id not in tainted and any(
+                parent in tainted for parent in record.get("parents", [])
+            ):
+                tainted.add(revision_id)
+                changed = True
+    referenced_tainted = {
+        parent
+        for revision_id, record in records.items()
+        if revision_id in tainted
+        for parent in record.get("parents", [])
+        if parent in tainted
+    }
+    return tainted - referenced_tainted
+
+
+def _authorized_comment(
+    comment: ContinuationComment,
+    *,
+    repository: str,
+    trusted_humans: frozenset[str],
+    trusted_apps: frozenset[str],
+    github: ContinuationGitHubClient,
+    permissions: dict[str, str],
+) -> tuple[bool, str | None]:
+    if comment.author_type in {"Bot", "App"}:
+        if comment.author in trusted_apps:
+            return True, None
+        return False, "untrusted_marker_ignored"
+    if comment.author not in trusted_humans:
+        return False, "untrusted_marker_ignored"
+    if comment.author not in permissions:
+        permissions[comment.author] = github.repository_permission(
+            repository, comment.author
+        )
+    if permissions[comment.author] not in _WRITE_PERMISSIONS:
+        return False, "producer_permission_revoked"
+    return True, None
+
+
+def _reconcile_revision_protocol(
+    request: dict[str, Any],
+    github: ContinuationGitHubClient,
+) -> dict[str, Any]:
+    repository = _repository(request)
+    trusted_humans = _trusted_producers(request)
+    trusted_apps = _trusted_apps(request)
+    carriers = github.list_all_continuation_carriers(repository)
+    permissions: dict[str, str] = {}
+    diagnostics: list[dict[str, Any]] = []
+    entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]] = []
+    carriers_with_records: set[int] = set()
+    carriers_with_trusted_markers: set[int] = set()
+
+    for carrier in carriers:
+        for comment in carrier.comments:
+            if _RECORD_MARKER in comment.body and (
+                comment.author in trusted_humans or comment.author in trusted_apps
+            ):
+                carriers_with_trusted_markers.add(carrier.number)
+            authorized, rejection = _authorized_comment(
+                comment,
+                repository=repository,
+                trusted_humans=trusted_humans,
+                trusted_apps=trusted_apps,
+                github=github,
+                permissions=permissions,
+            )
+            if not authorized:
+                if _RECORD_MARKER in comment.body:
+                    diagnostics.append(
+                        {
+                            "code": rejection,
+                            "carrier": carrier.number,
+                            "comment_id": comment.id,
+                            "author": comment.author,
+                        }
+                    )
+                continue
+            if (
+                comment.created_at is not None
+                and comment.updated_at is not None
+                and comment.created_at != comment.updated_at
+            ):
+                diagnostics.append(
+                    {
+                        "code": "mutated_revision",
+                        "carrier": carrier.number,
+                        "comment_id": comment.id,
+                    }
+                )
+                continue
+            try:
+                record = _parse_record(comment)
+                if record is None:
+                    continue
+                producer = _object(record.get("producer"), "producer")
+                if producer.get("login") != comment.author:
+                    raise ContinuationError(
+                        "embedded Producer does not match authenticated comment author"
+                    )
+                _validate_completion(
+                    {
+                        "repository": repository,
+                        "trusted_producers": sorted(trusted_humans | trusted_apps),
+                        "completion": _record_completion(record),
+                    }
+                )
+                parents = record.get("parents", [])
+                if not isinstance(parents, list) or any(
+                    not isinstance(parent, str) or _DIGEST_RE.fullmatch(parent) is None
+                    for parent in parents
+                ):
+                    raise ContinuationError("revision parents are malformed")
+                if len(set(parents)) != len(parents):
+                    raise ContinuationError("revision parents contain duplicates")
+            except ContinuationError as exc:
+                diagnostics.append(
+                    {
+                        "code": "invalid_revision",
+                        "carrier": carrier.number,
+                        "comment_id": comment.id,
+                        "affected_head": _comment_taint_identity(
+                            carrier.number, comment.id
+                        ),
+                        "message": str(exc),
+                    }
+                )
+                continue
+            entries.append((carrier, comment, record))
+            carriers_with_records.add(carrier.number)
+
+    indexed_numbers = {
+        carrier.number for carrier in carriers if _INDEX_LABEL in carrier.labels
+    }
+    for number in sorted(carriers_with_records - indexed_numbers):
+        diagnostics.append({"code": "index_label_missing", "carrier": number})
+    for number in sorted(indexed_numbers - carriers_with_trusted_markers):
+        diagnostics.append({"code": "index_label_stale", "carrier": number})
+
+    lineages: dict[
+        tuple[int, str, str],
+        list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+    ] = {}
+    for entry in entries:
+        carrier, _comment, record = entry
+        lineage = _lineage_key(carrier.number, record)
+        lineages.setdefault(lineage, []).append(entry)
+
+    observed_head_entries: list[
+        tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
+    ] = []
+    guidance_entries: list[
+        tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
+    ] = []
+    for lineage_entries in lineages.values():
+        by_id = {entry[2]["revision_id"]: entry for entry in lineage_entries}
+        tainted: set[str] = set()
+        for _carrier, comment, record in lineage_entries:
+            missing = [
+                parent for parent in record.get("parents", []) if parent not in by_id
+            ]
+            if missing:
+                tainted.add(str(record["revision_id"]))
+                diagnostics.append(
+                    {
+                        "code": "missing_predecessor",
+                        "comment_id": comment.id,
+                        "revision_id": record["revision_id"],
+                        "missing": sorted(missing),
+                    }
+                )
+        changed = True
+        while changed:
+            changed = False
+            for _carrier, _comment, record in lineage_entries:
+                revision_id = str(record["revision_id"])
+                if revision_id not in tainted and any(
+                    parent in tainted for parent in record.get("parents", [])
+                ):
+                    tainted.add(revision_id)
+                    changed = True
+        usable_entries = [
+            entry for entry in lineage_entries if entry[2]["revision_id"] not in tainted
+        ]
+        live_entries = _live_revision_entries(usable_entries)
+        observed_head_entries.extend(live_entries)
+        semantics = {_revision_semantics(entry[2]) for entry in live_entries}
+        if len(semantics) > 1:
+            diagnostics.append(
+                {
+                    "code": "revision_fork",
+                    "carrier": live_entries[0][0].number,
+                    "heads": sorted(entry[2]["revision_id"] for entry in live_entries),
+                }
+            )
+        elif live_entries:
+            guidance_entries.append(
+                min(live_entries, key=lambda entry: entry[2]["revision_id"])
+            )
+
+    observed_head_entries.sort(
+        key=lambda entry: (entry[0].number, entry[2]["revision_id"])
+    )
+    actions: list[dict[str, Any]] = []
+    for carrier, comment, record in guidance_entries:
+        producer = record["producer"]
+        for action in record.get("actions", []):
+            if (
+                action["target"]["kind"] != "issue"
+                or action["prerequisites"]
+                or action["completion_condition"]["kind"] != "issue-closed"
+                or action["completion_condition"]["target"]["kind"] != "issue"
+            ):
+                diagnostics.append(
+                    {
+                        "code": "unsupported_reconciliation_semantics",
+                        "revision_id": record["revision_id"],
+                        "action_key": action["key"],
+                    }
+                )
+                continue
+            target = github.read_issue(
+                repository,
+                int(action["target"]["number"]),
+            )
+            if target.state != "OPEN":
+                continue
+            actions.append(
+                {
+                    "identity": _action_identity(record, action),
+                    "semantic_fingerprint": record["semantic_fingerprints"][
+                        action["key"]
+                    ],
+                    "workstream_anchor": record["workstream"]["anchor"],
+                    "summary": action["summary"],
+                    "kind": action["kind"],
+                    "readiness": "Ready",
+                    "instruction": action["instruction"],
+                    "target": action["target"],
+                    "basis": action["basis"],
+                    "producer": {
+                        **producer,
+                        "carrier": record["carrier"],
+                        "revision_id": record["revision_id"],
+                        "comment_id": comment.id,
+                        "comment_url": comment.url,
+                    },
+                    "prerequisites": action["prerequisites"],
+                    "interaction": action["interaction"],
+                    "completion_condition": action["completion_condition"],
+                }
+            )
+    actions.sort(key=lambda action: action["identity"])
+
+    heads = [
+        {
+            "carrier": carrier.number,
+            "producer": record["producer"]["login"],
+            "revision_id": record["revision_id"],
+            "workstream_anchor": record["workstream"]["anchor"],
+        }
+        for carrier, _comment, record in observed_head_entries
+    ]
+    validators = [
+        {
+            "comment_id": comment.id,
+            "sha256": hashlib.sha256(comment.body.encode("utf-8")).hexdigest(),
+        }
+        for _carrier, comment, _record in sorted(entries, key=lambda entry: entry[1].id)
+    ]
+    observation_source = {
+        "repository": repository,
+        "heads": heads,
+        "validators": validators,
+    }
+    return {
+        "ok": True,
+        "operation": "reconcile",
+        "result": {
+            "status": "guidance" if actions else "waiting",
+            "observed": {
+                "repository": repository,
+                "indexed_carriers": len(indexed_numbers),
+                "producer_revisions": len(entries),
+            },
+            "actions": actions,
+            "diagnostics": diagnostics,
+            "observation": {
+                "heads": heads,
+                "token": "sha256:" + _digest(observation_source),
+                "validators": validators,
+            },
+        },
+    }
 
 
 def _publish(
@@ -1239,7 +1909,81 @@ def _publish(
     carrier = completion["carrier"]
     carrier_number = int(carrier["number"])
     producer = completion["producer"]
-    revision_id, fingerprints, body = _record_body(completion)
+    protocol = "observation" in request
+    parents: list[str] | None = None
+    reattestation: dict[str, Any] | None = None
+    protocol_carriers: list[ContinuationCarrier] = []
+    if protocol:
+        observation, parents = _validate_observation(request, repository)
+        _authorize_actor(
+            request,
+            repository,
+            str(producer["login"]),
+            github,
+        )
+        reattestation = _validate_reattestation(
+            request,
+            str(producer["login"]),
+        )
+        protocol_carriers = github.list_all_continuation_carriers(repository)
+        _verify_observation_validators(observation, protocol_carriers)
+        _verify_observed_heads(observation, completion, protocol_carriers)
+        tainted_heads = _tainted_lineage_heads(completion, protocol_carriers)
+        if tainted_heads:
+            if reattestation is None:
+                raise PublicationRepairRequired(
+                    "tainted Producer lineage requires authorized re-attestation; "
+                    "repair required"
+                )
+            if tainted_heads != set(reattestation["affected_heads"]):
+                raise ContinuationError(
+                    "reattestation.affected_heads must name every tainted lineage head"
+                )
+    revision_id, fingerprints, body = _record_body(
+        completion,
+        parents=parents,
+        reattestation=reattestation,
+    )
+    if protocol:
+        for observed_carrier in protocol_carriers:
+            if observed_carrier.number != carrier_number:
+                continue
+            for comment in observed_carrier.comments:
+                if comment.author != producer["login"] or (
+                    comment.author_type in {"Bot", "App"}
+                    and comment.author not in _trusted_apps(request)
+                ):
+                    continue
+                try:
+                    existing = _parse_record(comment)
+                except ContinuationError:
+                    continue
+                if (
+                    existing is not None
+                    and existing["revision_id"] == revision_id
+                    and comment.body == body
+                ):
+                    return {
+                        "ok": True,
+                        "operation": "publish",
+                        "receipt": {
+                            "status": "idempotent",
+                            "revision_id": revision_id,
+                            "carrier": carrier,
+                            "comment": {
+                                "id": comment.id,
+                                "url": comment.url,
+                            },
+                            "index_label": _INDEX_LABEL,
+                            "semantic_fingerprints": fingerprints,
+                            "parents": parents,
+                            **(
+                                {"reattestation": reattestation}
+                                if reattestation is not None
+                                else {}
+                            ),
+                        },
+                    }
     for evidence in completion["transition"]["evidence"]:
         github.read_issue_comment(repository, int(evidence["comment_id"]))
     github.ensure_issue_label(repository, carrier_number, _INDEX_LABEL)
@@ -1251,16 +1995,65 @@ def _publish(
     committed = github.read_issue_comment(repository, appended.id)
     if committed.body != body or committed.author != producer["login"]:
         raise ContinuationError("Producer revision reread did not match the append")
+    status = "committed"
+    conflicting_heads: list[str] = []
+    if protocol:
+        committed_record = _parse_record(committed)
+        assert committed_record is not None
+        lineage_entries: list[
+            tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
+        ] = [
+            (
+                ContinuationCarrier(
+                    number=carrier_number,
+                    state="OPEN",
+                    url=str(carrier.get("url", "")),
+                    comments=(committed,),
+                ),
+                committed,
+                committed_record,
+            )
+        ]
+        for observed_carrier in protocol_carriers:
+            if observed_carrier.number != carrier_number:
+                continue
+            for comment in observed_carrier.comments:
+                if comment.author != producer["login"]:
+                    continue
+                try:
+                    record = _parse_record(comment)
+                except ContinuationError:
+                    continue
+                if record is not None and _lineage_key(
+                    carrier_number, record
+                ) == _lineage_key(carrier_number, committed_record):
+                    lineage_entries.append((observed_carrier, comment, record))
+        if reattestation is not None:
+            affected_heads = set(reattestation["affected_heads"])
+            lineage_entries = [
+                entry
+                for entry in lineage_entries
+                if entry[2]["revision_id"] not in affected_heads
+            ]
+        live_entries = _live_revision_entries(lineage_entries)
+        if len({_revision_semantics(entry[2]) for entry in live_entries}) > 1:
+            status = "conflict"
+            conflicting_heads = sorted(
+                entry[2]["revision_id"] for entry in live_entries
+            )
     return {
         "ok": True,
         "operation": "publish",
         "receipt": {
-            "status": "committed",
+            "status": status,
             "revision_id": revision_id,
             "carrier": carrier,
             "comment": {"id": committed.id, "url": committed.url},
             "index_label": _INDEX_LABEL,
             "semantic_fingerprints": fingerprints,
+            **({"parents": parents} if parents is not None else {}),
+            **({"reattestation": reattestation} if reattestation is not None else {}),
+            **({"conflicting_heads": conflicting_heads} if conflicting_heads else {}),
         },
     }
 
@@ -1271,7 +2064,17 @@ def _reconcile(
 ) -> dict[str, Any]:
     repository = _repository(request)
     trusted = _trusted_producers(request)
-    carriers = github.list_continuation_carriers(repository, _INDEX_LABEL)
+    revision_protocol = request.get("revision_protocol", False)
+    if not isinstance(revision_protocol, bool):
+        raise ContinuationError("revision_protocol must be a boolean")
+    if revision_protocol:
+        return _reconcile_revision_protocol(request, github)
+    _trusted_apps(request)
+    carriers = (
+        github.list_all_continuation_carriers(repository)
+        if revision_protocol
+        else github.list_continuation_carriers(repository, _INDEX_LABEL)
+    )
     actions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     revision_count = 0
@@ -1291,7 +2094,7 @@ def _reconcile(
                 "completion": {
                     key: value
                     for key, value in record.items()
-                    if key not in {"revision_id", "semantic_fingerprints"}
+                    if key not in _RECORD_METADATA_FIELDS
                 },
             }
             _validate_completion(completion_request)
@@ -1343,18 +2146,91 @@ def _reconcile(
                     }
                 )
     actions.sort(key=lambda action: action["identity"])
+    result = {
+        "status": "guidance" if actions else "waiting",
+        "observed": {
+            "repository": repository,
+            "indexed_carriers": len(carriers),
+            "producer_revisions": revision_count,
+        },
+        "actions": actions,
+        "diagnostics": diagnostics,
+    }
     return {
         "ok": True,
         "operation": "reconcile",
+        "result": result,
+    }
+
+
+def _repair_index(
+    request: dict[str, Any],
+    github: ContinuationGitHubClient,
+) -> dict[str, Any]:
+    _fields(
+        request,
+        "request",
+        required=frozenset({"repository", "trusted_producers"}),
+        optional=frozenset({"trusted_apps"}),
+    )
+    repository = _repository(request)
+    trusted_humans = _trusted_producers(request)
+    trusted_apps = _trusted_apps(request)
+    _authorize_policy_actor(request, repository, github)
+    carriers = github.list_all_continuation_carriers(repository)
+    permissions: dict[str, str] = {}
+    added: list[int] = []
+    removed: list[int] = []
+    for carrier in carriers:
+        has_record = False
+        has_trusted_marker = False
+        for comment in carrier.comments:
+            authorized, _rejection = _authorized_comment(
+                comment,
+                repository=repository,
+                trusted_humans=trusted_humans,
+                trusted_apps=trusted_apps,
+                github=github,
+                permissions=permissions,
+            )
+            if not authorized:
+                continue
+            if _RECORD_MARKER in comment.body:
+                has_trusted_marker = True
+            try:
+                record = _parse_record(comment)
+            except ContinuationError:
+                continue
+            if record is not None:
+                producer = _object(record.get("producer"), "producer")
+                if producer.get("login") != comment.author:
+                    continue
+                try:
+                    _validate_completion(
+                        {
+                            "repository": repository,
+                            "trusted_producers": sorted(trusted_humans | trusted_apps),
+                            "completion": _record_completion(record),
+                        }
+                    )
+                except ContinuationError:
+                    continue
+                has_record = True
+        indexed = _INDEX_LABEL in carrier.labels
+        if has_record and not indexed:
+            github.ensure_issue_label(repository, carrier.number, _INDEX_LABEL)
+            added.append(carrier.number)
+        elif indexed and not has_trusted_marker:
+            github.remove_issue_label(repository, carrier.number, _INDEX_LABEL)
+            removed.append(carrier.number)
+    return {
+        "ok": True,
+        "operation": "repair-index",
         "result": {
-            "status": "guidance" if actions else "waiting",
-            "observed": {
-                "repository": repository,
-                "indexed_carriers": len(carriers),
-                "producer_revisions": revision_count,
-            },
-            "actions": actions,
-            "diagnostics": diagnostics,
+            "status": "repaired",
+            "index_label": _INDEX_LABEL,
+            "added": sorted(added),
+            "removed": sorted(removed),
         },
     }
 
@@ -1400,8 +2276,22 @@ def run_command(
             result = _publish(request, _make_github_client())
         elif operation == "reconcile":
             result = _reconcile(request, _make_github_client())
+        elif operation == "repair-index":
+            result = _repair_index(request, _make_github_client())
         else:
             result = None
+    except PublicationRepairRequired as exc:
+        message = str(exc)
+        _emit_json(
+            {
+                "ok": False,
+                "operation": operation,
+                "error": {"code": "repair_required", "message": message},
+            },
+            stdout,
+        )
+        print(f"git-loopy continuation: {message}", file=stderr)
+        return 1
     except (ValueError, ContinuationError) as exc:
         message = str(exc)
         _emit_json(
@@ -1416,6 +2306,24 @@ def run_command(
         return 1
     except GhError as exc:
         message = exc.stderr_tail
+        if operation == "publish" and "observation" in request:
+            message = (
+                f"publication failed after durable transition: {message}; "
+                "repair required"
+            )
+            _emit_json(
+                {
+                    "ok": False,
+                    "operation": operation,
+                    "error": {
+                        "code": "repair_required",
+                        "message": message,
+                    },
+                },
+                stdout,
+            )
+            print(f"git-loopy continuation: {message}", file=stderr)
+            return 1
         _emit_json(
             {
                 "ok": False,
@@ -1424,7 +2332,9 @@ def run_command(
             },
             stdout,
         )
-        print(f"git-loopy continuation: GitHub operation failed: {message}", file=stderr)
+        print(
+            f"git-loopy continuation: GitHub operation failed: {message}", file=stderr
+        )
         return 1
 
     if result is not None:
