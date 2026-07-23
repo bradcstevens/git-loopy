@@ -992,35 +992,51 @@ function Get-GitLoopyPool {
     return @(Get-GitLoopyPrdsPool -RepoRoot $RepoRoot)
 }
 
-function ConvertFrom-GitLoopyLogOutput {
+function Get-GitLoopyCommits {
     [CmdletBinding()]
     param(
-        [AllowNull()]
-        [string[]]$Lines
+        [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [AllowEmptyCollection()]
+        [string[]]$RevisionArguments
     )
 
     $Commits = [Collections.Generic.List[object]]::new()
-    if ($null -eq $Lines -or $Lines.Count -eq 0) {
+    $Shas = @(
+        & git -C $RepoRoot log @RevisionArguments --format=%H 2>$null
+    )
+    if ($LASTEXITCODE -ne 0 -or $Shas.Count -eq 0) {
         return , $Commits.ToArray()
     }
 
-    $RecordSeparator = [char]0x1e
-    $UnitSeparator = [char]0x1f
-    $Raw = ($Lines -join "`n")
-    foreach ($Record in ($Raw -split ([regex]::Escape($RecordSeparator)))) {
-        $Trimmed = $Record.TrimStart("`n", "`r")
-        if ([string]::IsNullOrEmpty($Trimmed)) {
+    foreach ($Sha in $Shas) {
+        if ([string]::IsNullOrEmpty([string]$Sha)) {
             continue
         }
-        $Fields = $Trimmed -split ([regex]::Escape($UnitSeparator)), 4
-        while ($Fields.Count -lt 4) {
-            $Fields += ""
+        $Subject = @(
+            & git -C $RepoRoot show -s --format=%s ([string]$Sha) 2>$null
+        )
+        if ($LASTEXITCODE -ne 0) {
+            continue
         }
+        $Date = @(
+            & git -C $RepoRoot show -s --format=%ad --date=short ([string]$Sha) 2>$null
+        )
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+        $Body = @(
+            & git -C $RepoRoot show -s --format=%b ([string]$Sha) 2>$null
+        )
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+
         $Commits.Add([ordered]@{
-            sha = $Fields[0]
-            subject = $Fields[1]
-            date = $Fields[2]
-            body = $Fields[3].TrimEnd("`n", "`r")
+            sha = [string]$Sha
+            subject = $Subject -join "`n"
+            date = $Date -join "`n"
+            body = ($Body -join "`n").TrimEnd("`n", "`r")
         })
     }
 
@@ -1055,12 +1071,11 @@ function Get-GitLoopyCommitsInRange {
     if ($Pre -ceq $Head) {
         return @()
     }
-    $LogFormat = "--format=%H%x1f%s%x1f%ad%x1f%b%x1e"
-    $Lines = @(
-        & git -C $RepoRoot log `
-            $LogFormat --date=short "$Pre..$Head" 2>$null
+    return (
+        Get-GitLoopyCommits `
+            -RepoRoot $RepoRoot `
+            -RevisionArguments @("$Pre..$Head")
     )
-    return (ConvertFrom-GitLoopyLogOutput -Lines $Lines)
 }
 
 function Test-GitLoopyWorktreeDirty {
@@ -1147,12 +1162,9 @@ function Get-GitLoopyRecentCommitsBlock {
         [string]$RepoRoot
     )
 
-    $LogFormat = "--format=%H%x1f%s%x1f%ad%x1f%b%x1e"
-    $Lines = @(
-        & git -C $RepoRoot log `
-            -n5 $LogFormat --date=short 2>$null
-    )
-    $Commits = ConvertFrom-GitLoopyLogOutput -Lines $Lines
+    $Commits = Get-GitLoopyCommits `
+        -RepoRoot $RepoRoot `
+        -RevisionArguments @("-n5")
     if ($Commits.Count -eq 0) {
         return "No commits found"
     }
