@@ -19,6 +19,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
+| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, unavailable-authority scenarios, and source/package/publication drift cases |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -43,6 +44,18 @@ JSON, completion-envelope, vocabulary, fingerprint, receipt, and atomic-failure
 records through its public native `publish` command. The PowerShell adapter
 drives the shared trusted publish-to-Reconciliation workflow through its public
 native command and deterministic scripted GitHub transport.
+
+`release-version.json` is independent of the Wrapper, Event, and Continuation
+compatibility versions. `expected_release_version` mirrors the repository-root
+`VERSION` authority for family adapters; `expected_python_distribution_version`
+records only the normalized Python packaging representation of that same value.
+The Python repository validator reads the authority plus the source and package
+metadata copies without importing the Orchestrator:
+
+```bash
+uv run --project git-loopy/python --all-extras \
+  python -m git_loopy.release_version --repository-root .
+```
 
 A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references
@@ -79,6 +92,7 @@ Run them from the repository root:
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_continuation_scenarios.py
+uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_release_version.py
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
 bash git-loopy/shell/tests/test-continuation-conformance.sh

@@ -1,6 +1,6 @@
 [project]
 name = "git-loopy"
-version = "0.0.1"
+version = "0.1.0-dev.0"
 description = "git-loopy — an autonomous Ralph loop runner on the GitHub Copilot Python SDK."
 readme = "README.md"
 license = { text = "MIT" }
