@@ -163,7 +163,7 @@
         "run_id": "01HXR0000000000000000000CC",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.1.0",
+        "release_version": "0.1.0-dev.0",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": false,
@@ -174,7 +174,7 @@
           "cost": false
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"release_version\": \"0.1.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"release_version\": \"0.1.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "authoritative-issue-activation",

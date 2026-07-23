@@ -275,8 +275,8 @@ function Write-GitLoopyContinuationJson {
         [Parameter(Mandatory)]
         [Collections.IDictionary]$Value
     )
-    [Console]::Out.WriteLine(
-        ($Value | ConvertTo-Json -Compress -Depth 50)
+    [Console]::Out.Write(
+        ($Value | ConvertTo-Json -Compress -Depth 50) + "`n"
     )
 }
 

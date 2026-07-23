@@ -30,6 +30,30 @@ function Assert-True {
     }
 }
 
+function Remove-TestDirectory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $Deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ([IO.Directory]::Exists($Path)) {
+        try {
+            [IO.Directory]::Delete($Path, $true)
+            return
+        }
+        catch [Management.Automation.MethodInvocationException] {
+            if (
+                $_.Exception.InnerException -isnot [IO.IOException] -and
+                $_.Exception.InnerException -isnot [UnauthorizedAccessException]
+            ) {
+                throw
+            }
+            if ([DateTime]::UtcNow -ge $Deadline) {
+                throw
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
 function Assert-Equal {
     param(
         [AllowNull()]
@@ -2049,7 +2073,7 @@ finally {
         [Environment]::SetEnvironmentVariable($Name, $null)
     }
     if ([IO.Directory]::Exists($TempDir)) {
-        [IO.Directory]::Delete($TempDir, $true)
+        Remove-TestDirectory -Path $TempDir
     }
 }
 
