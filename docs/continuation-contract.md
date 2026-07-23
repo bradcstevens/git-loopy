@@ -63,11 +63,10 @@ The manifest describes capability only. It is not Automation scope, Performer po
 flag, or authority to publish or Dispatch.
 
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
-tracker operation. The Python distribution now advertises the first capability-gated
-`publish`/`reconcile` tracer bullet described below. Shell and PowerShell retain the foundation
-manifest until their native tracer bullets land. `record-dispatch-result`, `repair-index`, terminal
-rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported. Mode is
-`off`.
+tracker operation. The Python and shell distributions now advertise their capability-gated
+`publish`/`reconcile` implementations described below. Each family member's native manifest remains
+the declaration of its other capabilities. `record-dispatch-result`, `repair-index`, terminal
+rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported. Mode is `off`.
 
 ## 5. Event observations
 
@@ -99,18 +98,18 @@ oracles.
 
 Fixture schema 1.3 permits distribution selectors, literal distribution-specific capability
 scenarios, workflows, pinned completion-record vocabularies and physical bounds, complete
-Action/interaction/condition schemas, raw-segment stress requests, and exact Python `publish`
+Action/interaction/condition schemas, raw-segment stress requests, and exact native `publish`
 stdout/stderr. Invalid completion cases derive from literal valid request templates through
 data-only RFC 6902 `add`, `remove`, and `replace` patches. A workflow executes multiple fresh
 native commands against one ordered scripted-GitHub transport. Family adapters run only scenarios
 and workflows naming their distribution, so a member advertises and proves a capability only when
 its native implementation lands.
 
-## 7. Python atomic completion records
+## 7. Native atomic completion records
 
-Python `publish` accepts one version-identifiable completion envelope for one Workstream and one
-planning Producer transition. Publication is `shared` or `ephemeral`, and the disposition is
-exactly one of:
+Python and shell `publish` accept one version-identifiable completion envelope for one Workstream
+and one planning Producer transition. Publication is `shared` or `ephemeral`, and the disposition
+is exactly one of:
 
 - `continue`: one or more complete Actions and no outcome or no-guidance branch;
 - `terminal`: one shared, durably evidenced `complete`, `rejected`, `abandoned`, or `superseded`
@@ -157,7 +156,7 @@ Validation and canonicalization finish before the first GitHub call. The portabl
 without BOM, NFC-normalized strings, duplicate-key rejection, lexically sorted object keys, compact
 JSON, no floats, interoperable signed 53-bit integers, maximum depth 16, maximum array length 256,
 maximum individual string length 8 KiB UTF-8, and maximum canonical record length 48 KiB. The
-command iteratively checks raw JSON nesting before invoking Python's recursive decoder. Depth counts
+command iteratively checks raw JSON nesting before invoking its host JSON decoder. Depth counts
 only object and array containers, so a populated value at container depth 16 is valid and depth 17
 is rejected. The command also checks the live carrier body limit before establishing the discovery
 label.

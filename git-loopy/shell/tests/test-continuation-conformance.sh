@@ -593,7 +593,7 @@ run_shared_disposition_probe() {
   local disposition="$1"
   local request="$2"
   local expected_stdout_json="${3:-null}"
-  local canonical_completion revision_id record body
+  local canonical_completion revision_id expected_fingerprints record body
   canonical_completion="$(jq -cS '.completion' <<<"$request")"
   revision_id="$(
     printf '%s' "$canonical_completion" |
@@ -603,12 +603,20 @@ run_shared_disposition_probe() {
         shasum -a 256 | awk '{print $1}'
       fi
   )"
+  expected_fingerprints="{}"
+  if [[ "$expected_stdout_json" != "null" ]]; then
+    expected_fingerprints="$(
+      jq -c 'fromjson | .receipt.semantic_fingerprints' \
+        <<<"$expected_stdout_json"
+    )"
+  fi
   record="$(
     jq -cS \
-      --arg revision_id "$revision_id" '
+      --arg revision_id "$revision_id" \
+      --argjson fingerprints "$expected_fingerprints" '
       .completion + {
         revision_id: $revision_id,
-        semantic_fingerprints: {}
+        semantic_fingerprints: $fingerprints
       }
     ' <<<"$request"
   )"
@@ -688,10 +696,12 @@ run_shared_disposition_probe() {
 
   [[ "$status" == 0 ]] ||
     fail "$disposition shared publication exit: expected 0, got $status"
-  jq -e --arg revision_id "$revision_id" '
+  jq -e \
+    --arg revision_id "$revision_id" \
+    --argjson fingerprints "$expected_fingerprints" '
     .receipt.status == "committed"
     and .receipt.revision_id == $revision_id
-    and .receipt.semantic_fingerprints == {}
+    and .receipt.semantic_fingerprints == $fingerprints
   ' "$stdout_path" >/dev/null ||
     fail "$disposition shared publication receipt mismatch"
   if [[ "$expected_stdout_json" != "null" ]]; then
@@ -705,6 +715,48 @@ run_shared_disposition_probe() {
   [[ "$(wc -l <"$github_log" | tr -d ' ')" == 5 ]] ||
     fail "$disposition shared publication GitHub boundary mismatch"
 }
+
+run_literal_publish_case() {
+  local group="$1"
+  local case="$2"
+  local id request expected_stdout_json expected_keys
+  id="$(jq -r '.id' <<<"$case")"
+  request="$(materialize_publish_case "$case")"
+  jq -e '.expected.stdout_exact | type == "string"' <<<"$case" >/dev/null ||
+    fail "$group-$id is missing literal expected stdout"
+  expected_stdout_json="$(jq -c '.expected.stdout_exact' <<<"$case")"
+
+  case "$(jq -r '.completion.publication' <<<"$request")" in
+    ephemeral)
+      expected_keys="$(
+        jq -c 'fromjson | .receipt.semantic_fingerprints | keys' \
+          <<<"$expected_stdout_json"
+      )"
+      run_ephemeral_acceptance \
+        "$group-$id" \
+        "$request" \
+        "$expected_keys" \
+        "$expected_stdout_json"
+      ;;
+    shared)
+      run_shared_disposition_probe \
+        "$group-$id" \
+        "$request" \
+        "$expected_stdout_json"
+      ;;
+    *)
+      fail "$group-$id has unsupported fixture publication"
+      ;;
+  esac
+}
+
+while IFS= read -r publish_case; do
+  run_literal_publish_case "valid-publish" "$publish_case"
+done < <(jq -c '.completion_records.valid_publish_cases[]' "$fixture")
+
+while IFS= read -r fingerprint_case; do
+  run_literal_publish_case "fingerprint" "$fingerprint_case"
+done < <(jq -c '.completion_records.fingerprint_cases[]' "$fixture")
 
 while IFS= read -r terminal_case; do
   outcome_kind="$(jq -r '.id' <<<"$terminal_case")"
