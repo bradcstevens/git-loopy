@@ -157,7 +157,12 @@ exit 90
 '@
     Write-FakeCommand -BinDir $BinDir -Name "copilot" -DirectPowerShell -Body @'
 [Console]::Error.WriteLine("copilot must not run in the discovery slice")
-exit 91
+$Status = 91
+if ($IsWindows) {
+    $global:LASTEXITCODE = $Status
+    return
+}
+exit $Status
 '@
     Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
 $ErrorActionPreference = "Stop"
@@ -294,7 +299,12 @@ if ($env:FAKE_COPILOT_PLAN_DIR) {
         & git commit -q --allow-empty -m "agent: work $($i + 1)"
     }
 }
-exit $(if ($env:FAKE_COPILOT_EXIT) { [int]$env:FAKE_COPILOT_EXIT } else { 0 })
+$Status = if ($env:FAKE_COPILOT_EXIT) { [int]$env:FAKE_COPILOT_EXIT } else { 0 }
+if ($IsWindows) {
+    $global:LASTEXITCODE = $Status
+    return
+}
+exit $Status
 '@
     Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
 $ErrorActionPreference = "Stop"
