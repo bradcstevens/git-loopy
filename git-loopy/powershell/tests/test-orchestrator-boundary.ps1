@@ -16,7 +16,6 @@ $Pwsh = (
     Get-Command pwsh -CommandType Application |
         Select-Object -First 1
 ).Source
-$FakeCommandLauncher = $null
 
 function Assert-True {
     param(
@@ -98,48 +97,32 @@ function Write-FakeCommand {
         [Parameter(Mandatory)]
         [string]$Name,
         [Parameter(Mandatory)]
-        [string]$Body
+        [string]$Body,
+        [switch]$DirectPowerShell
     )
 
     if ($IsWindows) {
         $ScriptPath = Join-Path $BinDir "$Name-fake.ps1"
-        $LauncherPath = Join-Path $BinDir "$Name.exe"
         [IO.File]::WriteAllText(
             $ScriptPath,
             $Body,
             [Text.UTF8Encoding]::new($false)
         )
-        if ($null -eq $script:FakeCommandLauncher) {
-            $script:FakeCommandLauncher = Join-Path $TempDir "fake-command.exe"
-            Add-Type -TypeDefinition @'
-using System;
-using System.Diagnostics;
-using System.IO;
-
-public static class FakeCommandLauncher
-{
-    public static int Main(string[] args)
-    {
-        string name = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
-        string script = Path.Combine(AppContext.BaseDirectory, name + "-fake.ps1");
-        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false };
-        start.ArgumentList.Add("-NoLogo");
-        start.ArgumentList.Add("-NoProfile");
-        start.ArgumentList.Add("-File");
-        start.ArgumentList.Add(script);
-        foreach (string argument in args)
-        {
-            start.ArgumentList.Add(argument);
+        if ($DirectPowerShell) {
+            [IO.File]::Move(
+                $ScriptPath,
+                (Join-Path $BinDir "$Name.ps1"),
+                $true
+            )
+            return
         }
-        using Process process = Process.Start(start)
-            ?? throw new InvalidOperationException("Could not start fake command.");
-        process.WaitForExit();
-        return process.ExitCode;
-    }
-}
-'@ -OutputAssembly $script:FakeCommandLauncher -OutputType ConsoleApplication
-        }
-        [IO.File]::Copy($script:FakeCommandLauncher, $LauncherPath, $true)
+        $LauncherPath = Join-Path $BinDir "$Name.cmd"
+        $Launcher = "@pwsh -NoLogo -NoProfile -File `"%~dp0$Name-fake.ps1`" %*`r`n"
+        [IO.File]::WriteAllText(
+            $LauncherPath,
+            $Launcher,
+            [Text.ASCIIEncoding]::new()
+        )
         return
     }
 
@@ -172,7 +155,7 @@ if (($args -join " ") -ceq "rev-parse --show-toplevel") {
 [Console]::Error.WriteLine("unexpected git invocation: " + ($args -join " "))
 exit 90
 '@
-    Write-FakeCommand -BinDir $BinDir -Name "copilot" -Body @'
+    Write-FakeCommand -BinDir $BinDir -Name "copilot" -DirectPowerShell -Body @'
 [Console]::Error.WriteLine("copilot must not run in the discovery slice")
 exit 91
 '@
@@ -254,7 +237,7 @@ function Write-TurnTools {
     )
 
     [IO.Directory]::CreateDirectory($BinDir) | Out-Null
-    Write-FakeCommand -BinDir $BinDir -Name "copilot" -Body @'
+    Write-FakeCommand -BinDir $BinDir -Name "copilot" -DirectPowerShell -Body @'
 $ErrorActionPreference = "Stop"
 $Prompt = ""
 $Capture = $false
@@ -2015,7 +1998,11 @@ Read outside the worktree.
     # TerminateProcess on Windows), so — unlike the shell port — the fake needs no
     # SIGTERM trap; the "finished unbounded" line only prints if it was never
     # bounded (the pre-fix bug), making that regression loud.
-    Write-FakeCommand -BinDir $SendTimeoutBin -Name "copilot" -Body @'
+    Write-FakeCommand `
+        -BinDir $SendTimeoutBin `
+        -Name "copilot" `
+        -DirectPowerShell `
+        -Body @'
 $ErrorActionPreference = "Stop"
 [Console]::Out.WriteLine("copilot agent stream marker")
 $Sleep = if ($env:FAKE_COPILOT_SLEEP) { [int]$env:FAKE_COPILOT_SLEEP } else { 60 }
