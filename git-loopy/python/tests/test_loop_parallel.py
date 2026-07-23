@@ -919,6 +919,14 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     assert strikes[0]["outcome"] == "warn"
     assert strikes[0]["strikes"] == 1
     assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
+    iteration_end = next(
+        event for event in events if event["type"] == "wrapper.iteration.end"
+    )
+    assert iteration_end["summary"]["commits"] == 2
+    assert [issue["status"] for issue in iteration_end["issues"]] == [
+        "no-progress",
+        "no-progress",
+    ]
 
 
 def test_parallel_integration_auto_resolves_red_lane_then_lands(

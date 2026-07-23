@@ -284,7 +284,7 @@ def test_parallel_wave_produces_one_contribution_per_lane() -> None:
     assert [issue["issue"] for issue in payload["issues"]] == [42, 43]
     assert [issue["status"] for issue in payload["issues"]] == [
         "closed",
-        "advanced",
+        "no-progress",
     ]
     assert payload["issues"][0]["consumption"]["tokens_in"] == 42
     assert payload["issues"][1]["consumption"]["tokens_in"] == 43
