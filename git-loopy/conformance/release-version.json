@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "expected_release_version": "0.1.0-dev.0",
+  "expected_python_distribution_version": "0.1.0.dev0",
+  "valid_versions": [
+    {
+      "id": "stable",
+      "value": "1.2.3"
+    },
+    {
+      "id": "development",
+      "value": "1.2.3-dev.0"
+    },
+    {
+      "id": "release-candidate",
+      "value": "1.2.3-rc.1"
+    }
+  ],
+  "invalid_versions": [
+    {
+      "id": "empty",
+      "value": ""
+    },
+    {
+      "id": "missing-patch",
+      "value": "1.2"
+    },
+    {
+      "id": "leading-v",
+      "value": "v1.2.3"
+    },
+    {
+      "id": "leading-zero",
+      "value": "01.2.3"
+    },
+    {
+      "id": "numeric-prerelease-leading-zero",
+      "value": "1.2.3-rc.01"
+    },
+    {
+      "id": "non-ascii-digit",
+      "value": "1\u0661.2.3"
+    },
+    {
+      "id": "surrounding-whitespace",
+      "value": " 1.2.3 "
+    },
+    {
+      "id": "extra-content",
+      "value": "1.2.3\nunexpected"
+    }
+  ],
+  "invalid_authority_inputs": [
+    {
+      "id": "missing",
+      "kind": "missing"
+    },
+    {
+      "id": "inaccessible",
+      "kind": "directory"
+    },
+    {
+      "id": "invalid-utf8",
+      "kind": "invalid_utf8"
+    }
+  ],
+  "metadata_drift_cases": [
+    {
+      "id": "source-drift",
+      "authority_version": "1.2.3",
+      "source_version": "1.2.4",
+      "package_version": "1.2.3",
+      "publication_version": "1.2.3",
+      "drift_input": "source"
+    },
+    {
+      "id": "package-drift",
+      "authority_version": "1.2.3",
+      "source_version": "1.2.3",
+      "package_version": "1.2.4",
+      "publication_version": "1.2.3",
+      "drift_input": "package"
+    },
+    {
+      "id": "publication-drift",
+      "authority_version": "1.2.3",
+      "source_version": "1.2.3",
+      "package_version": "1.2.3",
+      "publication_version": "1.2.4",
+      "drift_input": "publication"
+    }
+  ],
+  "matching_metadata": {
+    "authority_version": "1.2.3-rc.1",
+    "source_version": "1.2.3-rc.1",
+    "package_version": "1.2.3-rc.1",
+    "publication_version": "1.2.3-rc.1"
+  }
+}
