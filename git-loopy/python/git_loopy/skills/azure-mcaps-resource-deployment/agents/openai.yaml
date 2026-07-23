@@ -1,0 +1,3 @@
+interface:
+  display_name: "Azure MCAPS Resource Deployment"
+  short_description: "Guide to setting the right tagging and API authentication settings with a Microsoft internal MCAPS subscription."

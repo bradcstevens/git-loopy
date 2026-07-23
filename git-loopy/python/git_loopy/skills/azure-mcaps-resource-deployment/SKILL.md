@@ -11,7 +11,7 @@ When deploying ANY resource to Azure (via Azure CLI, Bicep, ARM, Terraform, azd,
 
 - Run the following Azure skills:
   1. Prepare project: `/azure-prepare`
-  2. Before deploying: `/azure-validate` 
+  2. Before deploying: `/azure-validate`
   3. Deployment execution: `/azure-deploy`
 - **Always include the tag `SecurityControl=Ignore`** on every resource and resource group you create or update.
 - This tag exempts the resource from the tenant-level MCAPS governance policies (notably `CognitiveServices_LocalAuth_Modify` and `CosmosDB_LocalAuth_Modify`) which otherwise force `disableLocalAuth: true`.

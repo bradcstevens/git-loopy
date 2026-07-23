@@ -59,7 +59,7 @@ Rank ready actions before blocked actions. Within each group, prefer:
 3. The oldest GitHub issue number, then the lexical target name, as stable
    tie-breakers.
 
-Return at most three actions. A blocked action must name the condition that makes
+Return at most one action. A blocked action must name the condition that makes
 it ready.
 
 This step is complete when the ordering follows all three rules and every
@@ -69,13 +69,21 @@ blocked action carries a checkable readiness condition.
 
 Use this shape:
 
-```markdown
+````markdown
 1. **<concrete action>** - `/<skill>` - <HITL | AFK-safe>
-   Target: <linked issue, PR, map, spec, branch, or document>
-   State: <Ready | Blocked by ...>
-   Prompt: "<copy-pasteable prompt naming the target and desired outcome>"
-   Why now: <one sentence grounded in live state>
+Target: <linked issue, PR, map, spec, branch, or document>
+State: <Ready | Blocked by ...>
+Why now: <one sentence grounded in live state>
+
+Prompt:
+```text
+/<skill> "<concise imperative naming the target and desired outcome>"
 ```
+````
+
+Write the prompt as one physical line beginning with the exact skill invocation.
+Use straight ASCII quotes and spaces, and keep all labels and explanation outside
+the code fence so the command can be copied directly into a new terminal session.
 
 Mark an action `AFK-safe` only when its target is fully specified and requires no
 new human judgment. Otherwise mark it `HITL`. For a terminal workstream, return:
@@ -85,5 +93,5 @@ new human judgment. Otherwise mark it `HITL`. For a terminal workstream, return:
 ```
 
 Routing is complete when every active candidate has been classified and every
-recommendation names a live target, an exact skill, a copy-pasteable prompt, and
-any blocker.
+recommendation names a live target, an exact skill, a one-line terminal command
+in its own code fence, and any blocker.

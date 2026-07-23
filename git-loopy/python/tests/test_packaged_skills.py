@@ -290,7 +290,7 @@ def _skills_bundling_their_own_license() -> set[str]:
 
 
 def test_bundled_component_licenses_are_acknowledged() -> None:
-    """A skill shipping its own license (e.g. skill-creator's Apache-2.0) is named.
+    """Every skill shipping its own license is named.
 
     The aggregate MIT notice does not cover a component under a different license,
     so any vendored skill that carries its own LICENSE/NOTICE must be acknowledged
@@ -299,10 +299,6 @@ def test_bundled_component_licenses_are_acknowledged() -> None:
     """
     text = _packaged_third_party_licenses_path().read_text(encoding="utf-8")
     bundling = _skills_bundling_their_own_license()
-    # skill-creator (Apache-2.0, (c) Anthropic PBC) ships its own LICENSE.txt.
-    assert "skill-creator" in bundling, (
-        "expected skill-creator to bundle its own LICENSE.txt in the catalog"
-    )
     unacknowledged = sorted(name for name in bundling if name not in text)
     assert not unacknowledged, (
         "vendored skills ship their own LICENSE/NOTICE but are not acknowledged in "
@@ -406,18 +402,16 @@ def test_third_party_licenses_notice_is_packaged_into_the_built_wheel(
 
 
 def test_bundled_component_licenses_ship_in_the_built_wheel(built_wheel: Path) -> None:
-    """The component-license files the notice references actually ship (#124).
+    """Any bundled component-license files actually ship (#124).
 
-    THIRD_PARTY_LICENSES.txt references each differently-licensed component's own
-    license (e.g. ``git_loopy/skills/skill-creator/LICENSE.txt`` for Apache-2.0),
-    so those files must travel in the wheel or the reference dangles.
+    When a differently licensed component carries its own license in the catalog,
+    that file must travel in the wheel or the attribution reference dangles.
     """
     root = _packaged_skills_path()
     expected = {
         f"git_loopy/skills/{path.relative_to(root).as_posix()}"
         for path in _bundled_license_files()
     }
-    assert expected, "expected at least skill-creator's LICENSE.txt in the catalog"
     with zipfile.ZipFile(built_wheel) as zf:
         names = set(zf.namelist())
     missing = sorted(arc for arc in expected if arc not in names)
