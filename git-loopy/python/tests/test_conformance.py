@@ -129,6 +129,7 @@ def test_exit_code_fixture(case: dict[str, Any]) -> None:
 
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
+_DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -226,6 +227,128 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         "duration_source": "monotonic clock",
         "duration_unit": "seconds",
     }
+
+
+def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.0"
+    assert (
+        _DASHBOARD_INSIGHTS["wrapper_contract_version"]
+        == _EVENT_SCHEMA["contract_version"]
+    )
+    assert (
+        _DASHBOARD_INSIGHTS["event_schema_version"]
+        == _EVENT_SCHEMA["event_schema_version"]
+    )
+
+    contract = _DASHBOARD_INSIGHTS["semantic_contract"]
+    assert contract["dashboard_band_order"] == [
+        "header",
+        "queue",
+        "activity",
+        "summary",
+    ]
+    assert contract["drill_in_band_order"] == [
+        "detail_header",
+        "iteration_breakdown",
+        "log",
+    ]
+    assert [column["label"] for column in contract["queue_columns"]] == [
+        "Issue",
+        "Status",
+        "Started",
+        "Active",
+        "Closed",
+        "Iters",
+        "Tokens in",
+        "Tokens out",
+        "Cost",
+    ]
+    assert [column["key"] for column in contract["queue_columns"]] == [
+        "issue",
+        "status",
+        "started_at",
+        "active_seconds",
+        "closed_at",
+        "iteration_count",
+        "tokens_in",
+        "tokens_out",
+        "cost_usd",
+    ]
+    assert contract["placeholders"] == {
+        "unknown": "\u2014",
+        "observed_zero": 0,
+        "observed_empty": [],
+    }
+    assert contract["scopes"] == {
+        "context_fill": "current_iteration",
+        "queue_accounting": "issue_across_contributions",
+        "summary_row": "iteration_or_lane_contribution",
+        "iteration_breakdown": "issue_contributions",
+        "activity": "current_active_issue",
+        "log": "issue_across_contributions",
+    }
+    assert contract["presentation_exclusions"] == [
+        "glyphs",
+        "colors",
+        "widths",
+        "responsive_truncation",
+        "keybindings",
+        "toolkit_widgets",
+    ]
+
+    case = _DASHBOARD_INSIGHTS["cases"][0]
+    assert case["id"] == "baseline-closed-iteration"
+    assert case["inputs"]["local_utc_offset_minutes"] == -360
+    reference_run_start = next(
+        fixture_case["event"]
+        for fixture_case in _EVENT_SCHEMA["serialization_cases"]
+        if fixture_case["id"] == "run-start-insight-capabilities"
+    )
+    assert (
+        case["events"][0]["release_version"]
+        == reference_run_start["release_version"]
+    )
+    assert [event["type"] for event in case["events"]] == [
+        "wrapper.run.start",
+        "wrapper.iteration.start",
+        "wrapper.afk_ready.collected",
+        "wrapper.issue.activated",
+        "agent.output",
+        "usage.context_window",
+        "wrapper.iteration.end",
+    ]
+
+    live, closed = case["snapshots"]
+    assert live["after_event_count"] == 6
+    assert live["expected"]["dashboard"]["header"]["context_fill"] == {
+        "availability": "available",
+        "current_tokens": 12000,
+        "token_limit": 32000,
+        "percentage": 37.5,
+        "effective_target_tokens": 20000,
+        "effective_ceiling_tokens": 28000,
+    }
+    assert live["expected"]["dashboard"]["queue"]["rows"][0] == {
+        "issue": 42,
+        "status": "active",
+        "started_at": "2026-05-15T18:00:01-06:00",
+        "active_seconds": 2.0,
+        "closed_at": None,
+        "iteration_count": 0,
+        "tokens_in": None,
+        "tokens_out": None,
+        "cost_usd": None,
+    }
+
+    assert closed["after_event_count"] == len(case["events"])
+    expected = closed["expected"]
+    assert list(expected["dashboard"]) == contract["dashboard_band_order"]
+    assert list(expected["drill_in"]) == contract["drill_in_band_order"]
+    queue_row = expected["dashboard"]["queue"]["rows"][0]
+    breakdown = expected["drill_in"]["iteration_breakdown"]["rows"]
+    assert queue_row["iteration_count"] == len(breakdown) == 1
+    assert queue_row["closed_at"] == "2026-05-15T18:00:05-06:00"
+    assert expected["drill_in"]["detail_header"]["issue_elapsed_seconds"] == 4.0
 
 
 @pytest.mark.parametrize(

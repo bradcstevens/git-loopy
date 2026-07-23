@@ -264,6 +264,27 @@ Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Duration
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.
 
+### Renderer-neutral Dashboard seam
+
+The language-neutral
+[`dashboard-insights.json`](../git-loopy/conformance/dashboard-insights.json) fixture is the
+semantic boundary between Orchestrators and live-interface implementations. It supplies normalized
+Event prefixes plus injected render time, local UTC offset, and configured Run facts, then pins the
+expected toolkit-neutral Dashboard and per-issue drill-in model.
+
+The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
+`detail header -> Iteration breakdown -> Log`. Queue columns are ordered `Issue | Status | Started
+| Active | Closed | Iters | Tokens in | Tokens out | Cost`. Context fill is current-Iteration
+scoped; Queue accounting and the Log aggregate one issue across contributions; each Summary row is
+one Iteration or Lane contribution; and the Iteration breakdown is the same ordered contribution
+set counted by `Iters`.
+
+An unavailable value projects to an em dash, while observed none remains `0` or `[]`. Renderers
+localize UTC timestamps from the supplied display-zone input but preserve monotonic durations.
+Glyphs, colors, widths, responsive truncation, keybindings, and toolkit widget structure are not
+contractual. Future renderer issue #143 MUST consume this seam rather than redefine its inventory
+or semantic meaning.
+
 ## 13. Conformance (phase 1, MUST)
 
 Each Orchestrator MUST pass the language-neutral fixtures in the
@@ -278,6 +299,9 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
   close-keyword freedom, and its detectability (§7).
 - **Exit-code table** — the input → exit-code matrix of §10.
 - **Event schema** — exact type literals and envelope-first, sorted-payload JSON serialization
+  (§12).
+- **Dashboard Insights** — normalized Event prefixes and expected renderer-neutral Dashboard and
+  drill-in projections, including inventory, Queue order, scopes, placeholders, and localization
   (§12).
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A

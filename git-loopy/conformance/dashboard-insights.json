@@ -1,0 +1,441 @@
+{
+  "fixture_schema_version": "1.0",
+  "wrapper_contract_version": "1.3",
+  "event_schema_version": "1.1",
+  "semantic_contract": {
+    "dashboard_band_order": [
+      "header",
+      "queue",
+      "activity",
+      "summary"
+    ],
+    "drill_in_band_order": [
+      "detail_header",
+      "iteration_breakdown",
+      "log"
+    ],
+    "queue_columns": [
+      {
+        "key": "issue",
+        "label": "Issue",
+        "scope": "issue"
+      },
+      {
+        "key": "status",
+        "label": "Status",
+        "scope": "issue"
+      },
+      {
+        "key": "started_at",
+        "label": "Started",
+        "scope": "issue_first_activation"
+      },
+      {
+        "key": "active_seconds",
+        "label": "Active",
+        "scope": "issue_across_contributions"
+      },
+      {
+        "key": "closed_at",
+        "label": "Closed",
+        "scope": "authoritative_source_closure"
+      },
+      {
+        "key": "iteration_count",
+        "label": "Iters",
+        "scope": "issue_contributions"
+      },
+      {
+        "key": "tokens_in",
+        "label": "Tokens in",
+        "scope": "issue_across_contributions"
+      },
+      {
+        "key": "tokens_out",
+        "label": "Tokens out",
+        "scope": "issue_across_contributions"
+      },
+      {
+        "key": "cost_usd",
+        "label": "Cost",
+        "scope": "issue_across_contributions"
+      }
+    ],
+    "placeholders": {
+      "unknown": "—",
+      "observed_zero": 0,
+      "observed_empty": []
+    },
+    "scopes": {
+      "context_fill": "current_iteration",
+      "queue_accounting": "issue_across_contributions",
+      "summary_row": "iteration_or_lane_contribution",
+      "iteration_breakdown": "issue_contributions",
+      "activity": "current_active_issue",
+      "log": "issue_across_contributions"
+    },
+    "presentation_exclusions": [
+      "glyphs",
+      "colors",
+      "widths",
+      "responsive_truncation",
+      "keybindings",
+      "toolkit_widgets"
+    ]
+  },
+  "cases": [
+    {
+      "id": "baseline-closed-iteration",
+      "inputs": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.2.0-dev.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:00.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:00.600Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            42
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 42,
+          "activated_at": "2026-05-16T00:00:01.000Z",
+          "binding_source": "working_marker"
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "agent.output",
+          "text": "Working on #42",
+          "kind": "unclassified"
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "usage.context_window",
+          "current_tokens": 12000,
+          "token_limit": 32000,
+          "effective_target_tokens": 20000,
+          "effective_ceiling_tokens": 28000
+        },
+        {
+          "ts": "2026-05-16T00:00:05.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "closed",
+          "duration_seconds": 4.0,
+          "summary": {
+            "model": "gpt-5.6-sol",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "observed_tokens": 150,
+            "cost_usd": 0.0004,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            }
+          },
+          "issues": [
+            {
+              "issue": 42,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": "2026-05-16T00:00:05.000Z",
+              "issue_elapsed_seconds": 4.0,
+              "active_seconds": 4.0,
+              "cumulative_active_seconds": 4.0,
+              "consumption": {
+                "model": "gpt-5.6-sol",
+                "tokens_in": 100,
+                "tokens_out": 50
+              },
+              "cost_usd": 0.0004,
+              "peak_context_window": {
+                "current_tokens": 12000,
+                "token_limit": 32000,
+                "effective_target_tokens": 20000,
+                "effective_ceiling_tokens": 28000
+              }
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 6,
+          "render_at_utc": "2026-05-16T00:00:03.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 3.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": 42,
+                "active_seconds": 2.0,
+                "context_fill": {
+                  "availability": "available",
+                  "current_tokens": 12000,
+                  "token_limit": 32000,
+                  "percentage": 37.5,
+                  "effective_target_tokens": 20000,
+                  "effective_ceiling_tokens": 28000
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "cost_usd"
+                ],
+                "rows": [
+                  {
+                    "issue": 42,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 2.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "cost_usd": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Working on #42"
+                  }
+                ]
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 2.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Working on #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 7,
+          "render_at_utc": "2026-05-16T00:00:05.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 5.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "cost_usd"
+                ],
+                "rows": [
+                  {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 4.0,
+                    "closed_at": "2026-05-15T18:00:05-06:00",
+                    "iteration_count": 1,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "cost_usd": 0.0004
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "gpt-5.6-sol",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "cost_usd": 0.0004,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": {
+                      "current_tokens": 12000,
+                      "token_limit": 32000,
+                      "effective_target_tokens": 20000,
+                      "effective_ceiling_tokens": 28000
+                    }
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": "2026-05-15T18:00:05-06:00",
+                "issue_elapsed_seconds": 4.0,
+                "active_seconds": 4.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "status": "closed",
+                    "active_seconds": 4.0,
+                    "consumption": {
+                      "model": "gpt-5.6-sol",
+                      "tokens_in": 100,
+                      "tokens_out": 50
+                    },
+                    "cost_usd": 0.0004,
+                    "peak_context_window": {
+                      "current_tokens": 12000,
+                      "token_limit": 32000,
+                      "effective_target_tokens": 20000,
+                      "effective_ceiling_tokens": 28000
+                    }
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Working on #42"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "future_consumer": {
+    "issue": 143,
+    "requirement": "Consume this semantic contract without re-deciding Dashboard inventory or presentation-independent meaning."
+  }
+}

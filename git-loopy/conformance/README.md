@@ -14,6 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `dashboard-insights.json` | Baseline renderer-neutral Dashboard seam: normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue columns and scopes, placeholders, and expected semantic view models for future renderer #143 |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
@@ -67,6 +68,8 @@ catalog globs that do not identify a concrete `<name>` do not count.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
+adapter pins the Dashboard fixture's public semantic shape; producer and
+production-reducer rollout remains in the downstream Dashboard issues. The
 native discovery adapters call their production discriminator, Checkpoint-message,
 and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
