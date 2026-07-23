@@ -97,12 +97,20 @@ def test_first_seen_is_pinned_to_first_pool_appearance() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_working_marker_activates_issue_with_started_and_waiting() -> None:
+def test_authoritative_activation_event_binds_issue_immutably() -> None:
     clock = _FakeClock()
     state = _make_state(clock)
     _start_iteration(state, iteration=1, issues=[12])
     clock.advance(5)
-    state.stream_message("<working issue=12>")
+    state.render(
+        _ev(
+            events_module.WRAPPER_ISSUE_ACTIVATED,
+            issue=12,
+            activated_at="2026-07-23T08:00:01.000Z",
+            binding_source="working_marker",
+        )
+    )
+    state.stream_message("<working issue=99>")
 
     assert state.active_ref == 12
     entry = state.ledger[12]
@@ -195,13 +203,21 @@ def test_active_duration_sums_across_revisits() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_auto_close_without_marker_infers_active_and_closes() -> None:
+def test_published_closure_fallback_uses_iteration_start() -> None:
     clock = _FakeClock()
     state = _make_state(clock)
     state.render(_ev(events_module.WRAPPER_ITERATION_START, iter=1))
     state.render(_ev(events_module.WRAPPER_AFK_READY_COLLECTED, issues=[12, 99]))
     state.render(_ev(events_module.WRAPPER_COMMIT_RECORDED, sha="abc", subject="x"))
     clock.advance(50)
+    state.render(
+        _ev(
+            events_module.WRAPPER_ISSUE_ACTIVATED,
+            issue=12,
+            activated_at="2026-07-23T08:00:00.000Z",
+            binding_source="closure",
+        )
+    )
     state.render(_ev(events_module.WRAPPER_AUTO_CLOSE, issue=12, sha="abc", shas=["abc"]))
     state.render(_ev(events_module.WRAPPER_ITERATION_END, iter=1))
 

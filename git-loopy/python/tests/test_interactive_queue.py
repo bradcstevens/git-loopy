@@ -446,16 +446,22 @@ def test_usage_sums_across_iterations_for_one_issue() -> None:
     assert row.usage.tokens_out == 200 + 50 + 100
 
 
-def test_pre_marker_usage_is_attributed_to_the_active_issue() -> None:
-    """Usage produced before the working marker lands is held pending and
-    flushed onto the active issue once it is known (mirrors the Log)."""
+def test_pre_activation_usage_is_attributed_by_authoritative_event() -> None:
+    """Usage before activation is held pending and flushed once it is known."""
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
     _collect(state, 50)
-    # Tokens arrive BEFORE the marker (no active issue yet).
+    # Tokens arrive before activation (no Active issue yet).
     _usage(state, model="claude-opus-4.8", tin=700, tout=90)
-    state.stream_message("<working issue=50>")
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 50,
+            "activated_at": "2026-07-23T08:00:01.000Z",
+            "binding_source": "working_marker",
+        }
+    )
     # And more after activation.
     _usage(state, model="claude-opus-4.8", tin=100, tout=10)
 
@@ -466,15 +472,22 @@ def test_pre_marker_usage_is_attributed_to_the_active_issue() -> None:
     assert row.usage.model == "claude-opus-4.8"
 
 
-def test_usage_attributed_via_closure_backstop_when_no_marker() -> None:
-    """With no working marker, the ``Closes #N`` backstop activates the issue at
-    closure time; pre-activation usage is still attributed to it (issue #36)."""
+def test_usage_attributed_via_published_closure_fallback() -> None:
+    """The Orchestrator's closure fallback attributes pending Consumption."""
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
     _collect(state, 61)
     # All usage arrives before the (late) activation — no marker this iteration.
     _usage(state, model="claude-opus-4.8", tin=1200, tout=300)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 61,
+            "activated_at": "2026-07-23T08:00:01.000Z",
+            "binding_source": "closure",
+        }
+    )
     state.render({"type": events_module.WRAPPER_COMMIT_RECORDED})
     state.render({"type": events_module.WRAPPER_AUTO_CLOSE, "issue": 61})
     state.render({"type": events_module.WRAPPER_ITERATION_END})

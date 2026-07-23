@@ -53,6 +53,7 @@ from rich.console import Console
 
 from git_loopy import events as events_module
 from git_loopy import session as session_module
+from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.emit import EventEmitter
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
@@ -1088,6 +1089,61 @@ def test_lane_session_forwards_issue_on_streaming_deltas(
     assert seen == [
         ("reason", "lane-thinking", 66),
         ("message", "lane-answer", 66),
+    ]
+
+
+def test_serial_session_observes_streamed_and_final_working_markers(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    published: list[tuple[int | str, str, datetime]] = []
+    warnings: list[str] = []
+    binding = ActiveIssueBinding(
+        publish=lambda ref, source, at: published.append((ref, source, at)),
+        warn=warnings.append,
+    )
+    iter_session = IterationSession(
+        fake_client,  # type: ignore[arg-type]
+        config=_StubConfig(),
+        event_log=event_log,
+        sinks=SinkFanout(),
+        run_id=_FIXED_RUN_ID,
+        iter_num=1,
+        issue_binding=binding,
+    )
+    observed_at = datetime(2026, 7, 23, 8, 0, 1, tzinfo=timezone.utc)
+
+    iter_session._on_sdk_event(
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE_DELTA,
+            AssistantMessageDeltaData(
+                delta_content="<working issue=42>", message_id="m1"
+            ),
+            ts=observed_at,
+        )
+    )
+    iter_session._on_sdk_event(
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE_DELTA,
+            AssistantMessageDeltaData(
+                delta_content="<working issue=43>", message_id="m2"
+            ),
+            ts=observed_at,
+        )
+    )
+    iter_session._on_sdk_event(
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="<working issue=43>", message_id="m1"
+            ),
+            ts=observed_at,
+        )
+    )
+
+    assert published == [(42, "working_marker", observed_at)]
+    assert warnings == [
+        "conflicting Active-issue marker for #43 ignored; Iteration is already bound to #42"
     ]
 
 

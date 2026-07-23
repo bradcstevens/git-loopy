@@ -448,8 +448,10 @@ _Avoid_: container, jail, VM.
 
 **Active issue**:
 The single issue the agent is working during the current iteration, self-selected
-from the pool. In **Parallel mode** each **Lane** has its own Active issue, assigned by
-the runner rather than self-selected.
+from the pool and bound immutably by the first valid **Working marker** or the
+runner's closure, commit, or single-member-**Pool** fallback. In **Parallel mode**
+each **Lane** has its own Active issue, assigned by the runner at pickup rather than
+self-selected.
 _Avoid_: current task, current ticket.
 
 **Working marker**:
@@ -518,7 +520,7 @@ the run-end table. A band of the **Dashboard**, not a separate screen.
 
 **Activity**:
 The **Dashboard** band that renders the live current tail — the **Active issue**'s
-**Log**, or the pre-marker pending output — always visible below the **Queue** (between
+**Log**, or the pre-activation pending output — always visible below the **Queue** (between
 it and the **Summary**). An active-only, auto-scrolling glance at what the agent is
 doing right now, so a run reads as active instead of appearing stuck while issues sit
 **queued**; it complements, and does not replace, the per-issue **Log** that enter opens
@@ -829,9 +831,11 @@ _Avoid_: independent, parallelizable (as the label name).
 - An **Iteration** is offered one **Pool** and produces at most one **Active issue**.
 - A **Queue** belongs to exactly one **Run** and aggregates every issue seen across
   its serial **Iterations** and parallel **Lane contributions**, keyed by issue.
-- An **Active issue** is the **Pool** member named by the current **Working marker**.
+- An **Active issue** is the **Pool** member bound by the Orchestrator's authoritative
+  activation record.
 - A serial **Iteration** binds to at most one **Active issue**; its first valid
-  **Working marker** is authoritative for the rest of that Iteration.
+  **Working marker** wins, with closure, commit, then single-member-**Pool** as
+  ordered fallbacks only when no marker bound it. A parallel **Lane** binds at pickup.
 - The **Dashboard** shows the **Queue**; selecting a row opens that issue's **Log**.
   Each issue has its own **Log**, which accumulates across every serial **Iteration**
   and parallel **Lane contribution** that worked it.

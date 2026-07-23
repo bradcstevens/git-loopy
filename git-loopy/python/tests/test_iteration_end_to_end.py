@@ -389,12 +389,14 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     )
     log_lines = jsonl_files[0].read_text(encoding="utf-8").splitlines()
     assert log_lines, "JSONL log must not be empty"
+    events_seen: list[dict[str, Any]] = []
     types_seen: list[str] = []
     for raw in log_lines:
         evt = json.loads(raw)
         assert set(evt.keys()) >= {"ts", "run_id", "iter", "type"}, (
             f"event missing envelope keys: {evt!r}"
         )
+        events_seen.append(evt)
         types_seen.append(evt["type"])
     # Must have seen at minimum: run.start, iteration.start, afk_ready,
     # iteration.end, commit.recorded, auto_close, run.end.
@@ -403,6 +405,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "wrapper.run.start",
         "wrapper.iteration.start",
         "wrapper.afk_ready.collected",
+        "wrapper.issue.activated",
         "wrapper.commit.recorded",
         "wrapper.auto_close",
         "wrapper.iteration.end",
@@ -414,6 +417,23 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         )
     assert types_seen.index("wrapper.skill_policy.resolved") < types_seen.index(
         "wrapper.run.start"
+    )
+    activation = next(
+        event
+        for event in events_seen
+        if event["type"] == "wrapper.issue.activated"
+    )
+    assert activation["issue"] == 42
+    assert activation["binding_source"] == "closure"
+    assert activation["activated_at"] == activation["ts"]
+    iteration_start = next(
+        event
+        for event in events_seen
+        if event["type"] == "wrapper.iteration.start"
+    )
+    assert activation["activated_at"] == iteration_start["ts"]
+    assert types_seen.index("wrapper.issue.activated") < types_seen.index(
+        "wrapper.commit.recorded"
     )
     run_start = next(
         json.loads(raw)
@@ -630,6 +650,13 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
     assert "wrapper.checkpoint.recorded" in types_seen
     assert "wrapper.commit.recorded" not in types_seen
     assert "wrapper.stale_worktree.aborted" not in types_seen
+    activation = next(
+        json.loads(raw)
+        for raw in log_lines
+        if json.loads(raw)["type"] == "wrapper.issue.activated"
+    )
+    assert activation["issue"] == 42
+    assert activation["binding_source"] == "single_member_pool"
 
     # The persisted iteration counts no agent commits for the Checkpoint.
     runs_dir = tmp_path / ".git-loopy" / "runs"
@@ -1182,12 +1209,20 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     # JSONL should still contain commit.recorded for the one commit, but
     # NO auto_close events.
     log_files = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
-    types_seen = [
-        json.loads(line)["type"]
+    events_seen = [
+        json.loads(line)
         for line in log_files[0].read_text(encoding="utf-8").splitlines()
     ]
+    types_seen = [event["type"] for event in events_seen]
     assert "wrapper.commit.recorded" in types_seen
     assert "wrapper.auto_close" not in types_seen
+    activation = next(
+        event
+        for event in events_seen
+        if event["type"] == "wrapper.issue.activated"
+    )
+    assert activation["issue"] == 42
+    assert activation["binding_source"] == "commit"
 
 
 def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> None:
@@ -1520,7 +1555,17 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
         ),
         _sdk_event(
             SessionEventType.ASSISTANT_MESSAGE,
-            AssistantMessageData(content="Advancing PR #7.", message_id="m1"),
+            AssistantMessageData(
+                content="<working issue=7>\nAdvancing PR #7.",
+                message_id="m1",
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="<working issue=8>\nThis must not rebind.",
+                message_id="m2",
+            ),
         ),
         _sdk_event(
             SessionEventType.ASSISTANT_USAGE,
@@ -1565,17 +1610,31 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     assert len(jsonl_files) == 1
     types_seen: list[str] = []
     pr_advanced_payloads: list[dict[str, Any]] = []
+    activations: list[dict[str, Any]] = []
     for raw in jsonl_files[0].read_text(encoding="utf-8").splitlines():
         evt = json.loads(raw)
         types_seen.append(evt["type"])
         if evt["type"] == "wrapper.pr.advanced":
             pr_advanced_payloads.append(evt)
+        if evt["type"] == "wrapper.issue.activated":
+            activations.append(evt)
     assert "wrapper.pr.advanced" in types_seen, f"saw: {types_seen}"
     assert "wrapper.auto_close" not in types_seen, f"saw: {types_seen}"
     assert "wrapper.commit.recorded" not in types_seen, (
         "no base-branch commit landed this iteration"
     )
     assert pr_advanced_payloads[0].get("pr") == 7
+    assert len(activations) == 1
+    assert activations[0]["issue"] == 7
+    assert activations[0]["binding_source"] == "working_marker"
+    assert activations[0]["ts"] == "2026-05-16T00:00:00.000Z"
+    diagnostics = next(
+        (tmp_path / ".git-loopy" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8")
+    assert (
+        "conflicting Active-issue marker for #8 ignored; "
+        "Iteration is already bound to #7"
+    ) in diagnostics
 
     # Run-summary: the advance counts as progress (auto_closure), 0 commits, 0 strikes.
     json_files = list((tmp_path / ".git-loopy" / "runs").glob("*.json"))

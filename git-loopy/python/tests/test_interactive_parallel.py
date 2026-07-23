@@ -38,6 +38,7 @@ from git_loopy.events import (
     WRAPPER_AFK_READY_COLLECTED,
     WRAPPER_AUTO_CLOSE,
     WRAPPER_COMMIT_RECORDED,
+    WRAPPER_ISSUE_ACTIVATED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_RUN_START,
@@ -301,6 +302,24 @@ def test_format_header_single_lane_shows_its_timer() -> None:
 # ---------------------------------------------------------------------------
 # Deterministic attribution: the working marker is redundant in Parallel mode
 # ---------------------------------------------------------------------------
+
+
+def test_lane_activation_event_binds_before_agent_output() -> None:
+    state = _make_state()
+    _open_wave(state, issues=[66])
+
+    state.render(
+        _ev(
+            WRAPPER_ISSUE_ACTIVATED,
+            issue=66,
+            lane_issue=66,
+            activated_at="2026-07-23T08:00:01.000Z",
+            binding_source="lane_pickup",
+        )
+    )
+
+    assert state.active_ref is None
+    assert state.ledger[66].status == STATUS_ACTIVE
 
 
 def test_lane_message_does_not_scan_the_working_marker() -> None:

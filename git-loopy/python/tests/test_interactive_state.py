@@ -229,6 +229,7 @@ def test_state_event_type_constants_match_events() -> None:
     """The locally re-declared literals must equal the events.py contract."""
     assert state_module._RUN_START == events_module.WRAPPER_RUN_START
     assert state_module._RUN_END == events_module.WRAPPER_RUN_END
+    assert state_module._ISSUE_ACTIVATED == events_module.WRAPPER_ISSUE_ACTIVATED
     assert state_module._ITERATION_START == events_module.WRAPPER_ITERATION_START
     assert state_module._STRIKE == events_module.WRAPPER_STRIKE
     # Ledger-driving literals (issue #25).

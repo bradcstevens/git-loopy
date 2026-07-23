@@ -110,6 +110,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -123,6 +124,7 @@ from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import worktree as worktree_module
+from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, resolve_iteration_model
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
@@ -567,6 +569,36 @@ class _Loop:
             **self._skill_preflight.event_payload,
         )
 
+    def _new_active_issue_binding(
+        self,
+        iter_num: int,
+        *,
+        allowed_refs: Iterable[int | str],
+        lane_issue: int | str | None = None,
+    ) -> ActiveIssueBinding:
+        """Create the immutable Active-issue publisher for one Iteration or Lane."""
+
+        def publish(ref: int | str, source: str, at: datetime) -> None:
+            envelope = events_module.make_event(
+                events_module.WRAPPER_ISSUE_ACTIVATED,
+                run_id=self._writers.run_id,
+                iter=iter_num,
+                ts=at,
+                issue=ref,
+                activated_at="",
+                binding_source=source,
+            )
+            envelope["activated_at"] = envelope["ts"]
+            if lane_issue is not None:
+                envelope["lane_issue"] = lane_issue
+            self._emitter.dispatch(envelope)
+
+        return ActiveIssueBinding(
+            publish=publish,
+            warn=lambda message: self._diag.warning("%s", message),
+            allowed_refs=allowed_refs,
+        )
+
     # -- iteration body ----------------------------------------------------
 
     async def _run_one_iteration(
@@ -595,9 +627,11 @@ class _Loop:
         with telemetry.span(
             "git_loopy.iteration", iter=iter_num
         ) as iteration_span:
+            iteration_started_at = datetime.now(timezone.utc)
             self._emit(
                 events_module.WRAPPER_ITERATION_START,
                 iter_num=iter_num,
+                ts=iteration_started_at,
             )
 
             # 1) PR branch hygiene. A prior PR iteration may have run
@@ -658,6 +692,9 @@ class _Loop:
                 )
                 self._record_counters(iter_num)
                 return ("empty_pool", 0, 0)
+            issue_binding = self._new_active_issue_binding(
+                iter_num, allowed_refs=(item.ref for item in pool)
+            )
 
             # 3) Build prompt (last-5 commits + AFK-ready item blocks + prompt body).
             try:
@@ -696,6 +733,7 @@ class _Loop:
                         iter_num=iter_num,
                         model=self._config.model,
                         reasoning_effort=self._config.reasoning_effort,
+                        issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                     ) as sdk_session:
                         try:
@@ -740,6 +778,24 @@ class _Loop:
                 )
                 new_commits = []
 
+            # 7) Completion backstop — source-specific. The GitHub backend
+            #    closes the issue via gh; the PRDs backend always returns
+            #    [] (the agent owns the `git mv ... done/` step).
+            with telemetry.span("git_loopy.enforce_closures"):
+                completions = self._handle_completions_safely(pool, new_commits)
+
+            if issue_binding.active_ref is None:
+                fallback = self._infer_active_binding(
+                    pool, completions, new_commits
+                )
+                if fallback is not None:
+                    ref, source = fallback
+                    issue_binding.bind(
+                        ref,
+                        source=source,
+                        at=iteration_started_at,
+                    )
+
             for c in new_commits:
                 self._emit(
                     events_module.WRAPPER_COMMIT_RECORDED,
@@ -749,11 +805,6 @@ class _Loop:
                     date=c.date,
                 )
 
-            # 7) Completion backstop — source-specific. The GitHub backend
-            #    closes the issue via gh; the PRDs backend always returns
-            #    [] (the agent owns the `git mv ... done/` step).
-            with telemetry.span("git_loopy.enforce_closures"):
-                completions = self._handle_completions_safely(pool, new_commits)
             for completion in completions:
                 if getattr(completion, "kind", "issue") == "pr":
                     # A PR advance (head SHA moved). Different event so the
@@ -793,7 +844,7 @@ class _Loop:
             #    and it never resets a Strike. Non-fatal — a failure warns and
             #    the loop carries on (a local-only repo still completes).
             checkpoint_sha = self._maybe_checkpoint(
-                iter_num, pool, completions, new_commits
+                iter_num, issue_binding.active_ref
             )
 
             # 9) Auto-push (ADR-0004, second half). Whenever this iteration
@@ -843,9 +894,7 @@ class _Loop:
     def _maybe_checkpoint(
         self,
         iter_num: int,
-        pool: list[AfkReadyItem],
-        completions: list[Any],
-        new_commits: list[git_module.Commit],
+        active_ref: int | str | None,
     ) -> str | None:
         """Capture a dirty / untracked worktree in one Checkpoint commit.
 
@@ -877,7 +926,6 @@ class _Loop:
         if not (dirty or untracked):
             return None
 
-        active_ref = self._infer_active_ref(pool, completions, new_commits)
         try:
             self._git.add_all()
             sha = self._git.commit(checkpoint_message(active_ref))
@@ -898,38 +946,23 @@ class _Loop:
         )
         return sha
 
-    def _infer_active_ref(
+    def _infer_active_binding(
         self,
         pool: list[AfkReadyItem],
         completions: list[Any],
         new_commits: list[git_module.Commit],
-    ) -> int | str | None:
-        """Best-effort guess of the iteration's Active issue for a Checkpoint.
-
-        The non-interactive loop has no ``<working issue=N>`` marker tap (that
-        lives in the interactive state), so it infers attribution from what it
-        does know, in priority order:
-
-        1. The first completion's ref (an issue we just auto-closed / a PR we
-           advanced) — the strongest signal of what was worked.
-        2. The first AFK-ready pool member referenced by a closing keyword in
-           this iteration's agent commits — the agent named it even if the
-           closure didn't fire.
-        3. A single-member pool — the only candidate.
-
-        Falls back to ``None`` (an *unattributed* Checkpoint) when the pool has
-        several issues and nothing above disambiguates them.
-        """
+    ) -> tuple[int | str, str] | None:
+        """Select the strongest post-session Active-issue fallback."""
         if completions:
-            return completions[0].ref
+            return completions[0].ref, "closure"
         pool_ints = {item.ref for item in pool if isinstance(item.ref, int)}
         if pool_ints:
             joined = "\n".join(c.message for c in new_commits)
             refs = filter_to_pool(extract_close_refs(joined), pool_ints)
             if refs:
-                return refs[0]
+                return refs[0], "commit"
         if len(pool) == 1:
-            return pool[0].ref
+            return pool[0].ref, "single_member_pool"
         return None
 
     def _maybe_push(
@@ -1458,6 +1491,14 @@ class _ParallelLoop:
                 )
             lanes.append(lane)
             self._worked.add(ref)
+            lane_binding = self._serial._new_active_issue_binding(
+                iter_num, allowed_refs=(ref,), lane_issue=ref
+            )
+            lane_binding.bind(
+                ref,
+                source="lane_pickup",
+                at=datetime.now(timezone.utc),
+            )
             # Prepare the freshly created worktree before its agent session
             # starts (#65): run GIT_LOOPY_WORKTREE_SETUP, or a best-effort
             # auto-detected install, so the feedback loops can run in the Lane.

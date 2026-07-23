@@ -244,6 +244,10 @@ Orchestrator rollout tickets own enabling those producers.
 
 - `wrapper.issue.activated`: `issue`, UTC RFC3339 `activated_at`, and `binding_source`. Once
   produced, one event authoritatively and immutably binds an Iteration to its Active issue.
+  Python serial bindings use `working_marker`, `closure`, `commit`, or `single_member_pool`;
+  Parallel Lane pickup uses `lane_pickup`. A later marker or fallback never replaces the first
+  binding. Output and Consumption observed before the event remain pending and are attributed
+  when the event arrives.
 - `agent.output`: `text` and `kind`, where the only schema-1 kind is `unclassified`. Once produced,
   native CLI text MUST NOT be relabeled as SDK reasoning, assistant, tool-call, or tool-result
   data.

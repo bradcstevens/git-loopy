@@ -24,9 +24,9 @@ reasoning effort, run-start wall clock, live-ticking elapsed timer, iteration
 number, run status, strike count ``x/N``) and, from issue #25, the **per-run
 ledger**: a record keyed by issue ref of every issue seen in any pool this run,
 with its status (queued / active / closed / advanced / no-progress / gone) and
-its waiting + active timing. The active issue is attributed from the agent's
-**working marker** (``<working issue=N>``, tapped off the message stream) with a
-commit-time ``Closes #N`` backstop.
+its waiting + active timing. The active issue is attributed from the
+Orchestrator's immutable ``wrapper.issue.activated`` event; marker and fallback
+selection stay producer-owned.
 
 From issue #36 (ADR-0003) each ledger entry also carries **per-issue
 consumption**: the input/output tokens of every ``usage.tokens`` event observed
@@ -43,8 +43,8 @@ bounded ring-buffer tail *per issue*, keyed by ref, of interleaved reasoning
 commits, closures) in time order. Each issue's Log **accumulates across every
 iteration** that worked it (it is *not* reset at iteration boundaries) and is
 bounded per issue, so opening any Queue row's Log shows that issue's own record.
-Output produced before the iteration's **working marker** is held in a pending
-buffer and attributed to the active issue once it is known. The *full* record
+Output produced before the Iteration's activation event is held in a pending
+buffer and attributed to the Active issue once it is known. The *full* record
 stays in the always-on JSONL replay log on disk, so each per-issue tail can stay
 bounded over a long (up to ~2-hour) run. (This supersedes issue #27's single
 iteration-scoped, active-only transcript; the term "transcript" is retired in
@@ -93,6 +93,7 @@ __all__ = [
 # lockstep by ``test_state_event_type_constants_match_events``.
 _RUN_START = "wrapper.run.start"
 _RUN_END = "wrapper.run.end"
+_ISSUE_ACTIVATED = "wrapper.issue.activated"
 _ITERATION_START = "wrapper.iteration.start"
 _STRIKE = "wrapper.strike"
 # Iteration-scope events that drive the per-run ledger (issue #25). The agent's
@@ -123,6 +124,14 @@ _TOOL_CALL = "tool.call"
 #: worked it. Re-declared locally (importing ``git_loopy.events`` would pull the
 #: SDK) and kept in lockstep by the parity test.
 _USAGE_TOKENS = "usage.tokens"
+
+# Historical schema-1 traces predate ``wrapper.issue.activated``. Keep their
+# marker projection readable, but disable it as soon as the authoritative event
+# appears for the current Iteration.
+_WORKING_MARKER_RE = re.compile(
+    r"<\s*working\s+issue\s*=\s*\"?#?(\d+)\"?\s*>", re.IGNORECASE
+)
+_MARKER_BUFFER_CHARS = 256
 
 #: Event types that, when carrying a runner-stamped ``lane_issue`` (issue #66,
 #: ADR-0008), route to the **multi-active** per-Lane handler instead of the
@@ -164,15 +173,6 @@ STATUS_CLOSED = "closed"
 STATUS_ADVANCED = "advanced"
 STATUS_NO_PROGRESS = "no-progress"
 STATUS_GONE = "gone"
-
-#: The agent's up-front working marker (``<working issue=N>``; see PROMPT.md).
-#: Tolerant of surrounding whitespace, a leading ``#``, quotes, and case.
-_WORKING_MARKER_RE = re.compile(
-    r"<\s*working\s+issue\s*=\s*\"?#?(\d+)\"?\s*>", re.IGNORECASE
-)
-#: Rolling message-buffer cap for marker detection — large enough to span a
-#: marker split across streaming deltas, small enough to stay O(1) per delta.
-_MARKER_BUFFER_CHARS = 256
 
 # ---------------------------------------------------------------------------
 # Per-issue Log buffers (issue #34, ADR-0003)
@@ -354,6 +354,7 @@ class LiveRunState:
         self._iter_pool: list[int | str] = []
         self._iter_commits = 0
         self._iter_strike = False
+        self._authoritative_binding = False
         self._msg_buffer = ""
 
         # -- per-issue Log buffers (issue #34, ADR-0003) --------------------
@@ -426,6 +427,27 @@ class LiveRunState:
         # timer / Log / Consumption, bypassing the serial single-active
         # inference. Absent stamp = serial path below, byte-for-byte unchanged.
         lane_issue = event.get("lane_issue")
+        if etype == _ISSUE_ACTIVATED:
+            ref = event.get("issue")
+            if ref is None:
+                return
+            self._authoritative_binding = True
+            if lane_issue is not None:
+                self._lane_touch(self._normalize_ref(ref), now)
+            elif self.active_ref is None:
+                source = event.get("binding_source")
+                since = (
+                    self._iter_started_monotonic
+                    if source in {"closure", "commit", "single_member_pool"}
+                    and self._iter_started_monotonic is not None
+                    else now
+                )
+                self._activate(
+                    ref,
+                    since=since,
+                    started_wall=_parse_utc_timestamp(event.get("activated_at")),
+                )
+            return
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
@@ -491,7 +513,7 @@ class LiveRunState:
         printer's prefix. The matching final ``assistant.reasoning`` event then
         finalises the block without re-adding it (see :meth:`_finalize_reasoning`).
 
-        Serial path (``issue is None``): before the working marker is known the
+        Serial path (``issue is None``): before activation is known the
         delta lands in the pending buffer (attributed on activation). Parallel
         mode (``issue`` set, issue #66): the delta is assembled into that Lane's
         own :class:`_StreamState` and Log directly — deterministic attribution,
@@ -512,10 +534,8 @@ class LiveRunState:
         """Fold a message delta into the Log and tap the working marker.
 
         Serial path (``issue is None``): two jobs (issue #25 + #34) — the delta
-        builds the assistant-message lines of the per-issue Log, and — because
-        streaming can split ``<working issue=N>`` across chunks — the same text
-        is scanned over a small rolling buffer to light up the active issue in
-        the ledger (which also flushes any pending pre-marker output to it).
+        builds the assistant-message lines of the per-issue Log. Active-issue
+        attribution arrives separately as ``wrapper.issue.activated``.
 
         Parallel mode (``issue`` set, issue #66): the delta is assembled into
         that Lane's own Log with **no** marker scan — the runner's deterministic
@@ -1042,13 +1062,14 @@ class LiveRunState:
         self._iter_pool = []
         self._iter_commits = 0
         self._iter_strike = False
+        self._authoritative_binding = False
         self._msg_buffer = ""
         # Per-issue Logs (and per-issue token tallies) ACCUMULATE across
         # iterations (issues #34 / #36), so they are never cleared here. Only the
-        # per-iteration streaming scratch resets: the pending pre-marker buffer,
-        # the pending pre-marker token usage, the serial open streamed line, and
+        # per-iteration streaming scratch resets: the pending pre-activation
+        # buffer and token usage, the serial open streamed line, and
         # (issue #66) the per-Lane streaming scratch + per-Lane commit tally. Any
-        # orphan pre-marker output / usage from an iteration that never
+        # orphan pre-activation output / usage from an iteration that never
         # identified an active issue is discarded here (it lives on in the JSONL
         # replay log / the run-level Summary).
         self._pending.clear()
@@ -1081,13 +1102,8 @@ class LiveRunState:
                 entry.status = STATUS_GONE
 
     def _scan_for_marker(self, text: Any) -> None:
-        """Scan agent message text for ``<working issue=N>`` and light it up.
-
-        A small rolling buffer lets a marker split across streaming deltas be
-        detected; once matched, the buffer is trimmed past it so the same
-        marker is not re-fired.
-        """
-        if not text:
+        """Project legacy traces that lack an authoritative activation event."""
+        if self._authoritative_binding or not text:
             return
         self._msg_buffer = (self._msg_buffer + str(text))[-_MARKER_BUFFER_CHARS:]
         match = _WORKING_MARKER_RE.search(self._msg_buffer)
@@ -1096,7 +1112,13 @@ class LiveRunState:
         self._msg_buffer = self._msg_buffer[match.end():]
         self._activate(int(match.group(1)), since=self._monotonic())
 
-    def _activate(self, ref: int | str, *, since: float) -> None:
+    def _activate(
+        self,
+        ref: int | str,
+        *,
+        since: float,
+        started_wall: datetime | None = None,
+    ) -> None:
         """Make ``ref`` the active issue, starting its active stint at ``since``.
 
         ``started_at`` / ``waiting_duration`` are set once (first activation);
@@ -1111,33 +1133,32 @@ class LiveRunState:
             )
             self.ledger[ref] = entry
         if self.active_ref is not None and self.active_ref != ref:
-            # One active issue per iteration: park the previous one.
+            if self._authoritative_binding:
+                return
             self._deactivate(self.active_ref, at=since, status=STATUS_QUEUED)
         if entry.started_at is None:
             entry.started_at = since
-            entry.started_wall = self._wall_at(since)
+            entry.started_wall = started_wall or self._wall_at(since)
             entry.waiting_duration = max(0.0, since - entry.first_seen_at)
         if entry.active_since is None:
             entry.active_since = since
         entry.status = STATUS_ACTIVE
         self.active_ref = ref
-        # Attribute this iteration's pre-marker output (issue #34): flush the
+        # Attribute this iteration's pre-activation output (issue #34): flush the
         # pending buffer into the now-active issue's own accumulating Log, then
         # clear it so subsequent output lands directly in the issue's buffer.
         buf = self._logs.setdefault(ref, deque(maxlen=_LOG_TAIL_LINES))
         if self._pending:
             buf.extend(self._pending)
             self._pending.clear()
-        # Likewise attribute this iteration's pre-marker token usage (issue #36)
+        # Likewise attribute this iteration's pre-activation token usage (issue #36)
         # to the now-active issue, then reset the pending buckets.
         self._flush_pending_usage(entry)
 
     def _record_closure(self, ref: Any, now: float, *, status: str) -> None:
         """Record an authoritative commit-time outcome (closed / advanced).
 
-        When no working marker arrived this iteration, the closure is also the
-        active-issue attribution: the iteration's active time falls back to the
-        iteration-start baseline (decision D1b — the ``Closes #N`` backstop).
+        Active-issue attribution is owned by ``wrapper.issue.activated``.
         """
         if ref is None:
             return
@@ -1151,7 +1172,7 @@ class LiveRunState:
                 first_seen_iter=self.iteration,
             )
             self.ledger[ref] = entry
-        if self.active_ref is None:
+        if self.active_ref is None and not self._authoritative_binding:
             baseline = self._iter_started_monotonic
             self._activate(ref, since=baseline if baseline is not None else now)
         entry.status = status
@@ -1177,8 +1198,7 @@ class LiveRunState:
 
         Serial (issue #25): a closure already set ``closed`` / ``advanced``;
         otherwise the single active issue with commits is ``advanced`` and one
-        without is ``no-progress`` (a strike). With no marker and no closure, a
-        single-member pool is inferred as the active issue.
+        without is ``no-progress`` (a strike).
 
         Parallel Wave (issue #66): each concurrently-active **Lane** that never
         reached a terminal closure is reconciled independently — ``advanced`` if
@@ -1195,6 +1215,7 @@ class LiveRunState:
         ref = self.active_ref
         if (
             ref is None
+            and not self._authoritative_binding
             and len(self._iter_pool) == 1
             and (self._iter_commits > 0 or self._iter_strike)
         ):
@@ -1253,6 +1274,15 @@ class LiveRunState:
         if as_str in self.ledger:
             return as_str
         return as_int if as_int is not None else ref
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _coerce_int(value: Any, fallback: int) -> int:

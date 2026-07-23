@@ -300,8 +300,8 @@ def test_per_issue_logs_are_isolated() -> None:
     assert "seven only" not in eight
 
 
-def test_pre_marker_output_is_attributed_to_active_issue_once_known() -> None:
-    """Output before the working marker lands in the active issue when known."""
+def test_pre_activation_output_is_attributed_by_authoritative_event() -> None:
+    """Output before activation lands in the Active issue when it is published."""
     state = _make_state()
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
     state.render(
@@ -313,8 +313,14 @@ def test_pre_marker_output_is_attributed_to_active_issue_once_known() -> None:
     # No issue is active yet, so nothing is attributed to #9.
     assert state.log(9) == ()
 
-    # The working marker arrives mid-iteration.
-    state.stream_message("<working issue=9>\n")
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 9,
+            "activated_at": "2026-07-23T08:00:01.000Z",
+            "binding_source": "working_marker",
+        }
+    )
 
     # The earlier pre-marker output is now attributed to #9, in time order.
     texts = _texts(state, 9)

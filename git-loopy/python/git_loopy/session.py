@@ -224,6 +224,10 @@ class SessionConfig(Protocol):
     render_reasoning: bool
 
 
+class _IssueBinding(Protocol):
+    def observe_message(self, text: str, *, at: Any) -> object: ...
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -574,6 +578,10 @@ class IterationSession:
             deterministic Lane-to-issue assignment makes redundant in Parallel
             mode. ``None`` (the serial default) stamps nothing, so the serial
             replay log and sink stream are byte-for-byte unchanged.
+        issue_binding: Optional serial Iteration binding owner. Assistant message
+            deltas and final messages are offered to it before sink/event
+            dispatch so the first Working marker publishes the authoritative
+            Active issue.
         skill_exposure: Optional Run-scoped closed-world projection. When
             supplied, the session exposes only its enabled catalog winners and
             sends the exact disabled catalog complement to the SDK.
@@ -592,6 +600,7 @@ class IterationSession:
         reasoning_effort: str | None = None,
         working_directory: str | None = None,
         issue_ref: int | str | None = None,
+        issue_binding: _IssueBinding | None = None,
         skill_exposure: SkillExposure | None = None,
     ) -> None:
         self._client = client
@@ -604,6 +613,7 @@ class IterationSession:
         self._reasoning_effort = reasoning_effort
         self._working_directory = working_directory
         self._issue_ref = issue_ref
+        self._issue_binding = issue_binding
         self._skill_exposure = skill_exposure
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
@@ -771,6 +781,10 @@ class IterationSession:
         if sdk_event.type is SessionEventType.ASSISTANT_MESSAGE_DELTA:
             try:
                 delta = getattr(sdk_event.data, "delta_content", "") or ""
+                if self._issue_binding is not None:
+                    self._issue_binding.observe_message(
+                        delta, at=sdk_event.timestamp
+                    )
                 self._sinks.stream_message(delta, issue=self._issue_ref)
             except Exception:
                 pass
@@ -790,6 +804,13 @@ class IterationSession:
             )
             self._record(envelope)
             return
+
+        if (
+            sdk_event.type is SessionEventType.ASSISTANT_MESSAGE
+            and self._issue_binding is not None
+        ):
+            content = getattr(sdk_event.data, "content", "") or ""
+            self._issue_binding.observe_message(content, at=sdk_event.timestamp)
 
         payload = events.map_sdk_event(sdk_event)
         if payload is None:

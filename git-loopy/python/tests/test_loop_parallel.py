@@ -645,6 +645,14 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
 
     events = _logged_events(tmp_path)
 
+    activations = [
+        e for e in events if e["type"] == "wrapper.issue.activated"
+    ]
+    assert {e["issue"] for e in activations} == {42, 43}
+    assert {e["binding_source"] for e in activations} == {"lane_pickup"}
+    assert all(e["lane_issue"] == e["issue"] for e in activations)
+    assert all(e["activated_at"] == e["ts"] for e in activations)
+
     # Each Lane's per-turn usage is session-stamped with its own issue (proving
     # the Lane session was created with ``issue_ref``).
     usage_events = [e for e in events if e["type"] == "usage.tokens"]
