@@ -31,6 +31,24 @@ def test_source_release_is_tag_only_and_requires_family_conformance() -> None:
     assert jobs["publish"]["permissions"] == {"contents": "write"}
 
 
+def test_tag_jobs_restore_the_annotated_tag_after_checkout() -> None:
+    workflow = _load_workflow()
+
+    for job_name in ("tag-preflight", "publish"):
+        steps = workflow["jobs"][job_name]["steps"]
+        restore_steps = [
+            step
+            for step in steps
+            if step.get("name") == "Restore annotated publication tag"
+        ]
+        assert restore_steps == [
+            {
+                "name": "Restore annotated publication tag",
+                "run": 'git fetch --force --no-tags origin "$GITHUB_REF:$GITHUB_REF"',
+            }
+        ]
+
+
 def test_publication_verifies_archive_identity_and_uses_edited_notes_only() -> None:
     workflow = _load_workflow()
     steps = workflow["jobs"]["publish"]["steps"]

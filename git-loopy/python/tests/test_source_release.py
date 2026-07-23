@@ -184,7 +184,7 @@ def test_source_tree_identity_rejects_distribution_drift(
         package = root / "git-loopy/python/pyproject.toml"
         package.write_text(
             package.read_text(encoding="utf-8").replace(
-                'version = "0.1.0"',
+                'version = "0.1.0-dev.0"',
                 'version = "9.9.9"',
                 1,
             ),
