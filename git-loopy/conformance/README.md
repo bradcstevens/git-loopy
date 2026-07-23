@@ -51,9 +51,9 @@ compatibility versions. `expected_release_version` mirrors the repository-root
 records only the normalized Python packaging representation of that same value.
 The Python repository validator reads the authority plus the source, packaged
 runtime, and package metadata copies without importing the Orchestrator. The
-Python runtime copy and the shell distribution's root authority are the
-fail-closed inputs for each Orchestrator's `git-loopy --version`, Run-start
-Events, and native Continuation capability manifest:
+Python runtime copy and the shell and PowerShell distributions' root authority
+are the fail-closed inputs for each Orchestrator's `git-loopy --version`,
+Run-start Events, and native Continuation capability manifest:
 
 ```bash
 uv run --project git-loopy/python --all-extras \

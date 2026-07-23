@@ -1925,9 +1925,15 @@ function Invoke-GitLoopyContinuationMain {
             [Console]::Error.WriteLine((Get-GitLoopyContinuationUsage))
             return 2
         }
+        $Capabilities = [ordered]@{
+            release_version = Get-GitLoopyReleaseVersion
+        }
+        foreach ($Name in $Script:CapabilityManifest.Keys) {
+            $Capabilities[$Name] = $Script:CapabilityManifest[$Name]
+        }
         Write-GitLoopyContinuationJson ([ordered]@{
             ok = $true
-            capabilities = $Script:CapabilityManifest
+            capabilities = $Capabilities
         })
         return 0
     }

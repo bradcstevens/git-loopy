@@ -11,7 +11,12 @@ $ScriptedGitHubPath = Join-Path $PSScriptRoot "ScriptedGitHub.ps1"
 $FixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/continuation-scenarios.json"
+$ReleaseFixturePath = Join-Path (
+    Split-Path -Parent $PortDir
+) "conformance/release-version.json"
 $Fixture = Get-Content -LiteralPath $FixturePath -Raw |
+    ConvertFrom-Json -AsHashtable -DateKind String
+$ReleaseFixture = Get-Content -LiteralPath $ReleaseFixturePath -Raw |
     ConvertFrom-Json -AsHashtable -DateKind String
 $Pwsh = (
     Get-Command pwsh -CommandType Application |
@@ -1060,6 +1065,17 @@ function Test-NoGuidanceDispositions {
 
 try {
     Test-ScriptedGitHubTransport
+    $CapabilityScenario = @(
+        $Fixture["scenarios"] |
+            Where-Object { $_["id"] -ceq "capabilities-powershell" }
+    )
+    Assert-True ($CapabilityScenario.Count -eq 1) (
+        "PowerShell Continuation capabilities scenario is unique"
+    )
+    Assert-True (
+        $CapabilityScenario[0]["expected"]["stdout"]["capabilities"]["release_version"] -ceq
+            $ReleaseFixture["expected_release_version"]
+    ) "PowerShell Continuation capabilities match the shared Release version"
     Test-GitHubFailureBoundaries
     Test-CompletionSemanticRejections
     Test-CanonicalJsonRejections

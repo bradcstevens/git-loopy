@@ -38,6 +38,10 @@ catch [System.Management.Automation.ParseException] {
     [Console]::Error.WriteLine((Get-GitLoopyUsage))
     $ExitCode = Get-GitLoopyExitCode -Reason "usage_error"
 }
+catch [IO.InvalidDataException] {
+    [Console]::Error.WriteLine("git-loopy: $($_.Exception.Message)")
+    $ExitCode = 1
+}
 catch {
     [Console]::Error.WriteLine(
         "git-loopy: discovery Run failed: $($_.Exception.Message)"

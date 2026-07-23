@@ -2237,6 +2237,7 @@
         "stdout": {
           "ok": true,
           "capabilities": {
+            "release_version": "0.1.0-dev.0",
             "continuation_contract_versions": ["1.0"],
             "record_formats": [1],
             "wrapper_contract_version": "1.2",

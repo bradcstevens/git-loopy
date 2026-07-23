@@ -7,6 +7,11 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+$ReleaseFixturePath = Join-Path (
+    Split-Path -Parent $PortDir
+) "conformance/release-version.json"
+$ReleaseFixture = Get-Content -LiteralPath $ReleaseFixturePath -Raw |
+    ConvertFrom-Json -AsHashtable -DateKind String
 $Pwsh = (
     Get-Command pwsh -CommandType Application |
         Select-Object -First 1
@@ -422,6 +427,60 @@ function Invoke-Entrypoint {
     }
 }
 
+function Invoke-VersionEntrypoint {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RuntimeEntrypoint,
+        [Parameter(Mandatory)]
+        [string]$WorkingDirectory,
+        [Parameter(Mandatory)]
+        [string]$FakeBin,
+        [Parameter(Mandatory)]
+        [string]$ToolLog,
+        [Parameter(Mandatory)]
+        [string]$StdoutPath,
+        [Parameter(Mandatory)]
+        [string]$StderrPath,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]]$Arguments
+    )
+
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = $Pwsh
+    $StartInfo.WorkingDirectory = $WorkingDirectory
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+    $StartInfo.Environment["PATH"] = (
+        $FakeBin + [IO.Path]::PathSeparator + $env:PATH
+    )
+    $ScratchRoot = Split-Path -Parent $WorkingDirectory
+    $StartInfo.Environment["HOME"] = Join-Path $ScratchRoot "version-home"
+    $StartInfo.Environment["XDG_CONFIG_HOME"] = Join-Path $ScratchRoot "version-config"
+    $StartInfo.Environment["GIT_LOOPY_ISSUE_SOURCE"] = "unavailable"
+    $StartInfo.Environment["GIT_LOOPY_MAX_NMT_STRIKES"] = "not-an-integer"
+    $StartInfo.Environment["VERSION_TOOL_LOG"] = $ToolLog
+    foreach ($Argument in @(
+        "-NoLogo", "-NoProfile", "-File", $RuntimeEntrypoint
+    )) {
+        $StartInfo.ArgumentList.Add($Argument)
+    }
+    foreach ($Argument in $Arguments) {
+        $StartInfo.ArgumentList.Add($Argument)
+    }
+
+    $Process = [Diagnostics.Process]::new()
+    $Process.StartInfo = $StartInfo
+    Assert-True ($Process.Start()) "Release version process starts"
+    $Stdout = $Process.StandardOutput.ReadToEnd()
+    $Stderr = $Process.StandardError.ReadToEnd()
+    $Process.WaitForExit()
+    [IO.File]::WriteAllText($StdoutPath, $Stdout)
+    [IO.File]::WriteAllText($StderrPath, $Stderr)
+    return $Process.ExitCode
+}
+
 function Read-Events {
     param(
         [Parameter(Mandatory)]
@@ -441,6 +500,198 @@ $TempDir = Join-Path ([IO.Path]::GetTempPath()) (
 [IO.Directory]::CreateDirectory($TempDir) | Out-Null
 
 try {
+    $VersionRuntime = Join-Path $TempDir "version-runtime"
+    $VersionPort = Join-Path $VersionRuntime "git-loopy/powershell"
+    $VersionOutside = Join-Path $TempDir "version-outside"
+    $VersionBin = Join-Path $TempDir "version-bin"
+    $VersionToolLog = Join-Path $TempDir "version-tools.log"
+    [IO.Directory]::CreateDirectory(
+        (Split-Path -Parent $VersionPort)
+    ) | Out-Null
+    Copy-Item -LiteralPath $PortDir -Destination $VersionPort -Recurse
+    [IO.Directory]::CreateDirectory($VersionOutside) | Out-Null
+    [IO.Directory]::CreateDirectory($VersionBin) | Out-Null
+    foreach ($Tool in @("git", "gh", "copilot")) {
+        Write-FakeCommand -BinDir $VersionBin -Name $Tool -Body @'
+[IO.File]::AppendAllText(
+    $env:VERSION_TOOL_LOG,
+    [IO.Path]::GetFileNameWithoutExtension($PSCommandPath) + [Environment]::NewLine
+)
+exit 97
+'@
+    }
+    $VersionEntrypoint = Join-Path $VersionPort "git-loopy.ps1"
+    $VersionPath = Join-Path $VersionRuntime "VERSION"
+    $ExpectedReleaseVersion = [string]$ReleaseFixture["expected_release_version"]
+    [IO.File]::WriteAllText(
+        $VersionPath,
+        "$ExpectedReleaseVersion`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+
+    $VersionStdout = Join-Path $TempDir "version.stdout"
+    $VersionStderr = Join-Path $TempDir "version.stderr"
+    $Status = Invoke-VersionEntrypoint `
+        -RuntimeEntrypoint $VersionEntrypoint `
+        -WorkingDirectory $VersionOutside `
+        -FakeBin $VersionBin `
+        -ToolLog $VersionToolLog `
+        -StdoutPath $VersionStdout `
+        -StderrPath $VersionStderr `
+        -Arguments @("--version")
+    Assert-Equal 0 $Status "Release version exit"
+    Assert-Equal (
+        "git-loopy $ExpectedReleaseVersion$([Environment]::NewLine)"
+    ) ([IO.File]::ReadAllText($VersionStdout)) "Release version stdout"
+    Assert-Equal 0 (
+        [IO.File]::ReadAllText($VersionStderr).Length
+    ) "Release version wrote to stderr"
+    Assert-True (-not [IO.File]::Exists($VersionToolLog)) (
+        "Release version invoked no Run dependency"
+    )
+    Assert-Equal 0 (
+        @(Get-ChildItem -LiteralPath $VersionOutside -Force).Count
+    ) "Release version created no Run artifacts"
+
+    foreach ($Case in $ReleaseFixture["valid_versions"]) {
+        [IO.File]::WriteAllText(
+            $VersionPath,
+            "$($Case["value"])`n",
+            [Text.UTF8Encoding]::new($false)
+        )
+        $CaseStdout = Join-Path $TempDir "version-$($Case["id"]).stdout"
+        $CaseStderr = Join-Path $TempDir "version-$($Case["id"]).stderr"
+        $Status = Invoke-VersionEntrypoint `
+            -RuntimeEntrypoint $VersionEntrypoint `
+            -WorkingDirectory $VersionOutside `
+            -FakeBin $VersionBin `
+            -ToolLog $VersionToolLog `
+            -StdoutPath $CaseStdout `
+            -StderrPath $CaseStderr `
+            -Arguments @("--version")
+        Assert-Equal 0 $Status "valid Release version exit: $($Case["id"])"
+        Assert-Equal (
+            "git-loopy $($Case["value"])$([Environment]::NewLine)"
+        ) ([IO.File]::ReadAllText($CaseStdout)) (
+            "valid Release version stdout: $($Case["id"])"
+        )
+        Assert-Equal 0 ([IO.File]::ReadAllText($CaseStderr).Length) (
+            "valid Release version wrote no stderr: $($Case["id"])"
+        )
+    }
+
+    foreach ($Case in $ReleaseFixture["invalid_versions"]) {
+        [IO.File]::WriteAllText(
+            $VersionPath,
+            [string]$Case["value"],
+            [Text.UTF8Encoding]::new($false)
+        )
+        $CaseStdout = Join-Path $TempDir "version-$($Case["id"]).stdout"
+        $CaseStderr = Join-Path $TempDir "version-$($Case["id"]).stderr"
+        $Status = Invoke-VersionEntrypoint `
+            -RuntimeEntrypoint $VersionEntrypoint `
+            -WorkingDirectory $VersionOutside `
+            -FakeBin $VersionBin `
+            -ToolLog $VersionToolLog `
+            -StdoutPath $CaseStdout `
+            -StderrPath $CaseStderr `
+            -Arguments @("--version")
+        Assert-True ($Status -ne 0) (
+            "malformed Release version was rejected: $($Case["id"])"
+        )
+        Assert-Equal 0 ([IO.File]::ReadAllText($CaseStdout).Length) (
+            "malformed Release version wrote no stdout: $($Case["id"])"
+        )
+        $Diagnostic = [IO.File]::ReadAllText($CaseStderr)
+        Assert-True ($Diagnostic.Length -gt 0) (
+            "malformed Release version failed visibly: $($Case["id"])"
+        )
+        Assert-True (-not $Diagnostic.Contains("unknown")) (
+            "malformed Release version did not report unknown: $($Case["id"])"
+        )
+    }
+
+    $InvalidAuthorityCases = @(
+        $ReleaseFixture["invalid_authority_inputs"]
+        [ordered]@{
+            id = "utf16-bom"
+            kind = "utf16_bom"
+        }
+    )
+    foreach ($Case in $InvalidAuthorityCases) {
+        Remove-Item -LiteralPath $VersionPath -Recurse -Force -ErrorAction SilentlyContinue
+        switch -CaseSensitive ($Case["kind"]) {
+            "missing" {}
+            "directory" {
+                [IO.Directory]::CreateDirectory($VersionPath) | Out-Null
+            }
+            "invalid_utf8" {
+                [IO.File]::WriteAllBytes($VersionPath, [byte[]]@(0xff, 0x0a))
+            }
+            "utf16_bom" {
+                [IO.File]::WriteAllBytes(
+                    $VersionPath,
+                    [byte[]]@(
+                        0xff, 0xfe, 0x31, 0x00, 0x2e, 0x00, 0x32, 0x00,
+                        0x2e, 0x00, 0x33, 0x00, 0x0a, 0x00
+                    )
+                )
+            }
+            default {
+                throw "Unsupported Release authority fixture kind: $($Case["kind"])"
+            }
+        }
+        $CaseStdout = Join-Path $TempDir "authority-$($Case["id"]).stdout"
+        $CaseStderr = Join-Path $TempDir "authority-$($Case["id"]).stderr"
+        $Status = Invoke-VersionEntrypoint `
+            -RuntimeEntrypoint $VersionEntrypoint `
+            -WorkingDirectory $VersionOutside `
+            -FakeBin $VersionBin `
+            -ToolLog $VersionToolLog `
+            -StdoutPath $CaseStdout `
+            -StderrPath $CaseStderr `
+            -Arguments @("--version")
+        Assert-True ($Status -ne 0) (
+            "invalid Release metadata was rejected: $($Case["id"])"
+        )
+        Assert-Equal 0 ([IO.File]::ReadAllText($CaseStdout).Length) (
+            "invalid Release metadata wrote no stdout: $($Case["id"])"
+        )
+        $Diagnostic = [IO.File]::ReadAllText($CaseStderr)
+        Assert-True ($Diagnostic.Length -gt 0) (
+            "invalid Release metadata failed visibly: $($Case["id"])"
+        )
+        Assert-True (-not $Diagnostic.Contains("unknown")) (
+            "invalid Release metadata did not report unknown: $($Case["id"])"
+        )
+    }
+
+    Remove-Item -LiteralPath $VersionPath -Recurse -Force -ErrorAction SilentlyContinue
+    $CapabilitiesStdout = Join-Path $TempDir "capabilities-missing.stdout"
+    $CapabilitiesStderr = Join-Path $TempDir "capabilities-missing.stderr"
+    $Status = Invoke-VersionEntrypoint `
+        -RuntimeEntrypoint $VersionEntrypoint `
+        -WorkingDirectory $VersionOutside `
+        -FakeBin $VersionBin `
+        -ToolLog $VersionToolLog `
+        -StdoutPath $CapabilitiesStdout `
+        -StderrPath $CapabilitiesStderr `
+        -Arguments @("continuation", "capabilities")
+    Assert-True ($Status -ne 0) (
+        "Continuation capabilities rejected missing Release metadata"
+    )
+    Assert-Equal 0 ([IO.File]::ReadAllText($CapabilitiesStdout).Length) (
+        "Continuation capabilities wrote no success without Release metadata"
+    )
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapabilitiesStderr)
+    ) "cannot read Release" "Continuation Release metadata diagnostic"
+    [IO.File]::WriteAllText(
+        $VersionPath,
+        "$ExpectedReleaseVersion`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+
     $HelpStdout = Join-Path $TempDir "help.stdout"
     $HelpStderr = Join-Path $TempDir "help.stderr"
     & $Pwsh `
@@ -486,6 +737,9 @@ try {
         "empty-Pool event sequence"
     )
     Assert-Equal "github" $Events[0]["issue_source"] "Run issue source"
+    Assert-Equal (
+        $ExpectedReleaseVersion
+    ) $Events[0]["release_version"] "Run Release version"
     Assert-Equal 1 $Events[0]["schema_version"] "Run Event-schema version"
     $ExpectedInsightCapabilities = [ordered]@{
         agent_output = $false

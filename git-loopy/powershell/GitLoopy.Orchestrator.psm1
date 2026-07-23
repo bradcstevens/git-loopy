@@ -2,6 +2,57 @@ Set-StrictMode -Version Latest
 
 $EventsModule = Join-Path $PSScriptRoot "GitLoopy.Events.psm1"
 Import-Module $EventsModule -Force
+$Script:ReleaseVersionPath = [IO.Path]::GetFullPath(
+    (Join-Path $PSScriptRoot "../../VERSION")
+)
+
+function Get-GitLoopyReleaseVersion {
+    [CmdletBinding()]
+    param(
+        [string]$Path = $Script:ReleaseVersionPath
+    )
+
+    try {
+        $Content = [Text.UTF8Encoding]::new($false, $true).GetString(
+            [IO.File]::ReadAllBytes($Path)
+        )
+    }
+    catch {
+        throw [IO.InvalidDataException]::new(
+            "cannot read Release version authority ${Path}: $($_.Exception.Message)",
+            $_.Exception
+        )
+    }
+
+    $Value = if ($Content.EndsWith("`r`n", [StringComparison]::Ordinal)) {
+        $Content.Substring(0, $Content.Length - 2)
+    }
+    elseif ($Content.EndsWith("`n", [StringComparison]::Ordinal)) {
+        $Content.Substring(0, $Content.Length - 1)
+    }
+    else {
+        $Content
+    }
+    $Identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+    $Pattern = (
+        "\A(?:0|[1-9][0-9]*)\." +
+        "(?:0|[1-9][0-9]*)\." +
+        "(?:0|[1-9][0-9]*)" +
+        "(?:-$Identifier(?:\.$Identifier)*)?" +
+        "(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z"
+    )
+    if (-not [regex]::IsMatch(
+        $Value,
+        $Pattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )) {
+        throw [IO.InvalidDataException]::new(
+            "Release version authority $Path must contain exactly one " +
+                "Semantic Versioning value"
+        )
+    }
+    return $Value
+}
 
 function New-GitLoopyParseException {
     param(
@@ -1661,6 +1712,7 @@ function Invoke-GitLoopyDiscovery {
         [psobject]$Preflight
     )
 
+    $ReleaseVersion = Get-GitLoopyReleaseVersion
     $Context = New-GitLoopyEventContext -RepoRoot $Preflight.RepoRoot
     $EventTypes = Get-GitLoopyEventTypes
     Set-GitLoopyGitignoreEntry -RepoRoot $Preflight.RepoRoot
@@ -1676,6 +1728,7 @@ function Invoke-GitLoopyDiscovery {
             max_nmt_strikes = $Config.MaxNmtStrikes
             model = $Config.Model
             prompt_path = $Preflight.PromptPath
+            release_version = $ReleaseVersion
             reasoning_effort = $Config.ReasoningEffort
             schema_version = Get-GitLoopyEventSchemaVersion
             send_timeout_seconds = $Config.SendTimeoutSeconds
@@ -1909,6 +1962,7 @@ Options:
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
   --send-timeout-seconds N
+  --version
   -h, --help
 "@
 }
@@ -1923,6 +1977,16 @@ function Invoke-GitLoopyMain {
         [string]$PackagedPrompt,
         [Collections.IDictionary]$Environment = (Get-GitLoopyEnvironment)
     )
+
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -ceq "--version") {
+        if ($Arguments.Count -ne 1) {
+            throw (New-GitLoopyParseException "--version accepts no arguments")
+        }
+        [Console]::Out.WriteLine(
+            "git-loopy $(Get-GitLoopyReleaseVersion)"
+        )
+        return 0
+    }
 
     $Config = Resolve-GitLoopyConfig `
         -Arguments $Arguments `
@@ -1944,6 +2008,7 @@ function Invoke-GitLoopyMain {
 }
 
 Export-ModuleMember -Function @(
+    "Get-GitLoopyReleaseVersion",
     "Get-GitLoopyEnvironment",
     "Resolve-GitLoopyConfig",
     "Test-GitLoopyAfkReady",
