@@ -7,6 +7,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $FixturePath = Join-Path (Split-Path -Parent $PortDir) "conformance/event-schema.json"
+$ReleaseFixturePath = Join-Path (
+    Split-Path -Parent $PortDir
+) "conformance/release-version.json"
 $ModulePath = Join-Path $PortDir "GitLoopy.Events.psm1"
 
 Import-Module $ModulePath -Force
@@ -47,6 +50,8 @@ function Assert-Equal {
 
 $Fixture = Get-Content -LiteralPath $FixturePath -Raw |
     ConvertFrom-Json -AsHashtable
+$ReleaseFixture = Get-Content -LiteralPath $ReleaseFixturePath -Raw |
+    ConvertFrom-Json -AsHashtable
 $ExpectedTypes = $Fixture["event_types"]
 $ActualTypes = Get-GitLoopyEventTypes
 
@@ -69,6 +74,16 @@ foreach ($Name in $ExpectedCapabilities.Keys) {
         "Insight capability $Name"
     )
 }
+$RunStartCase = @(
+    $Fixture["serialization_cases"] |
+        Where-Object { $_["id"] -ceq "run-start-insight-capabilities" }
+)
+Assert-Equal 1 $RunStartCase.Count "Run-start serialization case count"
+Assert-Equal (
+    $ReleaseFixture["expected_release_version"]
+) $RunStartCase[0]["event"]["release_version"] (
+    "Run-start Event Release version"
+)
 
 foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]

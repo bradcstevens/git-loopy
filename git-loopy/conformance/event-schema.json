@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.2",
+  "contract_version": "1.3",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -40,7 +40,7 @@
   },
   "payload_contracts": {
     "wrapper.run.start": {
-      "required": ["schema_version", "insight_capabilities"]
+      "required": ["release_version", "schema_version", "insight_capabilities"]
     },
     "wrapper.issue.activated": {
       "required_when_present": ["issue", "activated_at", "binding_source"]
@@ -163,6 +163,7 @@
         "run_id": "01HXR0000000000000000000CC",
         "iter": null,
         "type": "wrapper.run.start",
+        "release_version": "0.1.0-dev.0",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": false,
@@ -173,7 +174,7 @@
           "cost": false
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"release_version\": \"0.1.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "authoritative-issue-activation",

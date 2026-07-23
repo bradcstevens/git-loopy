@@ -53,6 +53,7 @@ POWERSHELL_CONFORMANCE = "test-orchestrator-conformance.ps1"
 POWERSHELL_CONTINUATION = "test-continuation-conformance.ps1"
 POWERSHELL_BOUNDARY = "test-orchestrator-boundary.ps1"
 PYTHON_CONFORMANCE = "test_conformance.py"
+FAMILY_RELEASE_CONFORMANCE = "test_release_identity_conformance.py"
 PYTHON_CONTINUATION = "test_continuation_scenarios.py"
 PYTHON_TEST_TREE = "git-loopy/python/tests"
 
@@ -164,6 +165,7 @@ def _is_python_gate(job: _Job) -> bool:
         "pytest" in text
         and PYTHON_TEST_TREE in text
         and PYTHON_CONFORMANCE in text
+        and FAMILY_RELEASE_CONFORMANCE in text
         and PYTHON_CONTINUATION in text
     )
 

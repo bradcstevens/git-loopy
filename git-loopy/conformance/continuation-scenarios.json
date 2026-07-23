@@ -2,7 +2,7 @@
   "fixture_schema_version": "1.4",
   "continuation_contract_version": "1.0",
   "record_format": 1,
-  "wrapper_contract_version": "1.2",
+  "wrapper_contract_version": "1.3",
   "event_schema_version": "1.1",
   "revision_protocol": {
     "observation_token": "sha256",
@@ -2191,7 +2191,7 @@
             "release_version": "0.1.0-dev.0",
             "continuation_contract_versions": ["1.0"],
             "record_formats": [1],
-            "wrapper_contract_version": "1.2",
+            "wrapper_contract_version": "1.3",
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
@@ -2240,7 +2240,7 @@
             "release_version": "0.1.0-dev.0",
             "continuation_contract_versions": ["1.0"],
             "record_formats": [1],
-            "wrapper_contract_version": "1.2",
+            "wrapper_contract_version": "1.3",
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
@@ -2288,7 +2288,7 @@
             "release_version": "0.1.0-dev.0",
             "continuation_contract_versions": ["1.0"],
             "record_formats": [1],
-            "wrapper_contract_version": "1.2",
+            "wrapper_contract_version": "1.3",
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {

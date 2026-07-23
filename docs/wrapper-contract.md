@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.2 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.3 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -21,6 +21,14 @@ TUI, config, OTel, and parallel-mode phases land.
 ---
 
 ## 1. Preflight (phase 1, MUST)
+
+Every Orchestrator MUST expose top-level `git-loopy --version` as an earlier public identity seam.
+`--version` accepts no additional arguments, reads the distribution's shared **Release version** as
+strict UTF-8 Semantic Versioning, writes exactly `git-loopy <Release version>` plus one newline to
+stdout, writes nothing to stderr, and exits `0`. It MUST complete before configuration parsing,
+repository discovery, dependency checks, Run preflight, Event initialization, or artifact creation.
+Unavailable or invalid Release metadata MUST fail nonzero with no stdout and an explicit stderr
+diagnostic; an Orchestrator MUST NOT substitute an `unknown` or compatibility version.
 
 Before the first **Iteration**, an Orchestrator MUST verify its preconditions and, on failure,
 exit `1` **before** doing any work:
@@ -208,7 +216,8 @@ SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.me
 MUST copy these literals verbatim from `git_loopy.events`; a drifted literal (e.g. an underscore
 where a dot belongs) is a conformance failure.
 
-Every `wrapper.run.start` MUST carry numeric `schema_version: 1` and an
+Every `wrapper.run.start` MUST carry the exact distribution `release_version`, numeric
+`schema_version: 1`, and an
 `insight_capabilities` object with exactly these boolean keys:
 
 ```json
@@ -321,7 +330,7 @@ constant equals `model-roster.json`. Native-port implementation of routing is fu
 
 The separately versioned [Continuation contract](continuation-contract.md) governs Producer
 publication, Reconciliation, Dispatch evidence, capability declarations, and future Automation.
-Wrapper contract 1.2 requires every supported Orchestrator distribution to expose the same public
+Wrapper contract 1.3 requires every supported Orchestrator distribution to expose the same public
 namespace without making Continuation part of the Run loop:
 
 ```text
@@ -333,7 +342,9 @@ git-loopy continuation repair-index
 ```
 
 `capabilities` MUST return the native distribution's truthful **Continuation capability
-manifest**. Capability never grants authority. Every other operation MUST consume exactly one
+manifest**, including the exact distribution `release_version` and separately declared Wrapper,
+Event, Continuation, and record-format compatibility versions. Capability never grants authority.
+Every other operation MUST consume exactly one
 UTF-8 JSON object from stdin or an explicitly selected input file. Machine responses emit exactly
 one JSON object on stdout; diagnostics use stderr. Terminal rendering is available only through
 an explicit `reconcile --terminal` selection.
@@ -346,7 +357,20 @@ boundary MUST never perform a **Continuation action**.
 Continuation mode remains `off` by default. This foundation does not authorize report mode,
 execute-frontier, or concurrent Dispatch.
 
-## 16. Changing this contract
+## 16. Release and compatibility identity (MUST)
+
+The **Release version** is product identity, not a compatibility shortcut. `--version`,
+`wrapper.run.start`, and Continuation `capabilities` MUST report the same exact Release version for
+one distribution. No other Event is required to repeat it, and advancing the Wrapper contract does
+not advance the Event schema, Continuation contract, or record format.
+
+Components selected as artifacts of one packaged distribution MUST have exact Release-version
+equality and fail closed on drift. An externally discovered TUI helper from another Release MAY
+remain usable when Event-schema and capability negotiation prove compatibility, but the
+Orchestrator MUST warn that the Release versions differ. Release equality alone MUST NOT establish
+cross-release compatibility.
+
+## 17. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).

@@ -10,6 +10,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/event-schema.json"
+release_fixture="$port_dir/../conformance/release-version.json"
 
 # shellcheck disable=SC1091
 source "$port_dir/lib/events.sh"
@@ -43,6 +44,15 @@ jq -e \
     and .insight_capabilities.orchestrators.shell == $capabilities
   ' "$fixture" >/dev/null ||
   fail "shell Insight capability manifest drifted from event-schema.json"
+jq -e \
+  --arg release_version "$(jq -r '.expected_release_version' "$release_fixture")" \
+  '
+    first(
+      .serialization_cases[]
+      | select(.id == "run-start-insight-capabilities")
+    ).event.release_version == $release_version
+  ' "$fixture" >/dev/null ||
+  fail "Run-start Event drifted from the shared Release version"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

@@ -34,6 +34,7 @@ jobs:
         run: >-
           uv run --project git-loopy/python --all-extras
           python -m pytest -q git-loopy/python/tests/test_conformance.py
+          git-loopy/python/tests/test_release_identity_conformance.py
           git-loopy/python/tests/test_continuation_scenarios.py
 
       - name: Python test suite

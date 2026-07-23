@@ -7,7 +7,7 @@
 
 **Record format:** 1
 
-The Continuation contract is independent of Wrapper contract 1.2, Event schema 1.1, and the
+The Continuation contract is independent of Wrapper contract 1.3, Event schema 1.1, and the
 Conformance fixture schema. A change to one version does not imply a change to another.
 
 ## 1. Scope
@@ -81,7 +81,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
 language-neutral, data-only public-command harness. It independently declares fixture schema 1.4,
-Continuation contract 1.0, record format 1, Wrapper contract 1.2, and Event schema 1.1.
+Continuation contract 1.0, record format 1, Wrapper contract 1.3, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
 objects are supplied through the declared stdin or file source. `$INPUT_FILE` is the fixture

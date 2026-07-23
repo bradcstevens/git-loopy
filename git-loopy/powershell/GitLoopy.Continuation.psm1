@@ -17,7 +17,7 @@ class GitLoopyContinuationGitHubException : System.Exception {
 
 $Script:ContinuationContractVersion = "1.0"
 $Script:RecordFormat = 1
-$Script:WrapperContractVersion = "1.2"
+$Script:WrapperContractVersion = "1.3"
 $Script:EventSchemaVersion = "1.1"
 
 $Script:IndexLabel = "git-loopy-continuation"

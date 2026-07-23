@@ -144,7 +144,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.2"
+    assert _EVENT_SCHEMA["contract_version"] == "1.3"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -161,7 +161,11 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
 
     assert _EVENT_SCHEMA["payload_contracts"] == {
         "wrapper.run.start": {
-            "required": ["schema_version", "insight_capabilities"],
+            "required": [
+                "release_version",
+                "schema_version",
+                "insight_capabilities",
+            ],
         },
         "wrapper.issue.activated": {
             "required_when_present": ["issue", "activated_at", "binding_source"],
@@ -235,6 +239,18 @@ def test_event_serialization_fixture(case: dict[str, Any]) -> None:
 
 _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
 _RELEASE_VERSION = _load_fixture("release-version.json")
+
+
+def test_run_start_fixture_pins_exact_release_identity() -> None:
+    run_start = next(
+        case
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["id"] == "run-start-insight-capabilities"
+    )
+    assert (
+        run_start["event"]["release_version"]
+        == _RELEASE_VERSION["expected_release_version"]
+    )
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:

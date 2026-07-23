@@ -13,7 +13,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
-| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, per-Orchestrator Insight capabilities, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
@@ -90,12 +90,20 @@ decisions (Wrapper contract §14): it drives `routing-resolution.json` and
 `model-roster.json`. Native ports do not implement routing yet, so these three
 fixtures are Python-adapter-only.
 
+The family-level terminal Release adapter
+[`python/tests/test_release_identity_conformance.py`](../python/tests/test_release_identity_conformance.py)
+invokes the real Python, shell, and PowerShell entrypoints in one seam. It proves exact early
+`--version` output, no Run-preflight calls or artifacts, and explicit failure for malformed,
+non-UTF-8, or unavailable Release metadata.
+
 Run them from the repository root:
 
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_continuation_scenarios.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_release_version.py
+uv run --project git-loopy/python --all-extras \
+  pytest -q git-loopy/python/tests/test_release_identity_conformance.py
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
 bash git-loopy/shell/tests/test-continuation-conformance.sh

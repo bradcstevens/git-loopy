@@ -22,7 +22,7 @@ from git_loopy.release_version import read_runtime_release_version
 
 CONTINUATION_CONTRACT_VERSION = "1.0"
 RECORD_FORMAT = 1
-WRAPPER_CONTRACT_VERSION = "1.2"
+WRAPPER_CONTRACT_VERSION = "1.3"
 EVENT_SCHEMA_VERSION = "1.1"
 
 CAPABILITY_MANIFEST: dict[str, Any] = {
