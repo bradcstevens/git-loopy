@@ -234,6 +234,7 @@ def test_event_serialization_fixture(case: dict[str, Any]) -> None:
 
 
 _CONTINUATION_SCENARIOS = _load_fixture("continuation-scenarios.json")
+_RELEASE_VERSION = _load_fixture("release-version.json")
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
@@ -256,10 +257,16 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
         for scenario in _CONTINUATION_SCENARIOS["scenarios"]
         if scenario["id"] == "capabilities-python"
     )
+    expected_capabilities = python_capabilities["expected"]["stdout"]["capabilities"]
     assert (
-        python_capabilities["expected"]["stdout"]["capabilities"]
-        == continuation_module.CAPABILITY_MANIFEST
+        expected_capabilities["release_version"]
+        == _RELEASE_VERSION["expected_release_version"]
     )
+    assert {
+        key: value
+        for key, value in expected_capabilities.items()
+        if key != "release_version"
+    } == continuation_module.CAPABILITY_MANIFEST
 
 
 def test_continuation_fixture_pins_completion_vocabularies() -> None:
