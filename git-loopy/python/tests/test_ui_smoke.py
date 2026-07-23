@@ -763,7 +763,7 @@ def test_iteration_end_freezes_snapshot_and_appends_to_completed() -> None:
 
 
 def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
-    renderer, summary, _buf = _make_renderer()
+    renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1})
     renderer.render(
         {"type": USAGE_TOKENS, "model": "stale", "input": 1, "output": 1}
@@ -788,8 +788,8 @@ def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
                 "pr_advances": 1,
                 "strikes": 0,
                 "peak_context_window": {
-                    "current_tokens": 120,
-                    "token_limit": None,
+                    "current_tokens": 12_000,
+                    "token_limit": 32_000,
                     "effective_target_tokens": None,
                     "effective_ceiling_tokens": None,
                 },
@@ -810,12 +810,15 @@ def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
     assert snap.pr_advances == 1
     assert snap.outcome == "advanced"
     assert snap.peak_context_window == {
-        "current_tokens": 120,
-        "token_limit": None,
+        "current_tokens": 12_000,
+        "token_limit": 32_000,
         "effective_target_tokens": None,
         "effective_ceiling_tokens": None,
     }
     assert snap.issues == ({"issue": 42, "status": "advanced"},)
+    out = buf.getvalue()
+    assert "Observed tokens: 120" in out
+    assert "Peak Context fill: 12,000 / 32,000  (38%)" in out
 
 
 def test_iteration_end_without_start_does_not_crash() -> None:

@@ -160,6 +160,25 @@ def test_rollup_extracts_skills_before_tool_arguments_are_scrubbed() -> None:
     assert payload["summary"]["skills_consulted"] == ["code-review", "tdd"]
 
 
+def test_rollup_extracts_skills_from_deep_tool_arguments_without_recursion() -> None:
+    arguments: object = "/repo/.copilot/skills/tdd/SKILL.md"
+    for _ in range(1_500):
+        arguments = [arguments]
+    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+
+    rollup.observe(
+        {
+            "type": "tool.call",
+            "tool_name": "view",
+            "arguments": arguments,
+        }
+    )
+
+    payload = rollup.finish(iter_num=1, strikes=0)
+    assert payload["summary"]["skills_consulted"] == ["tdd"]
+
+
 def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> None:
     clock = _Clock()
     rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
@@ -302,29 +321,30 @@ def test_pr_advance_is_progress_without_authoritative_closure_fields() -> None:
     assert payload["issues"][0]["issue_elapsed_seconds"] is None
 
 
-def test_empty_null_rollup_defaults_to_no_progress() -> None:
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
-    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+def test_empty_rollup_normalizes_to_no_progress() -> None:
+    for outcome in (None, "empty_pool"):
+        rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
+        rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
 
-    payload = rollup.finish(iter_num=1, strikes=1)
+        payload = rollup.finish(iter_num=1, strikes=1, outcome=outcome)
 
-    assert payload["outcome"] == "no_progress"
-    assert payload["issues"] == []
-    assert payload["summary"] == {
-        "model": None,
-        "tokens_in": 0,
-        "tokens_out": 0,
-        "observed_tokens": 0,
-        "cost_usd": None,
-        "tool_count": 0,
-        "skill_call_count": 0,
-        "skills_consulted": [],
-        "commits": 0,
-        "auto_closures": 0,
-        "pr_advances": 0,
-        "strikes": 1,
-        "peak_context_window": None,
-    }
+        assert payload["outcome"] == "no_progress"
+        assert payload["issues"] == []
+        assert payload["summary"] == {
+            "model": None,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "cost_usd": None,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": None,
+        }
 
 
 def test_outer_abort_or_gone_marks_unclosed_issue_contribution() -> None:

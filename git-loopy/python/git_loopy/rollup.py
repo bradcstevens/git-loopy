@@ -199,11 +199,11 @@ class IterationRollupAccumulator:
             else "parallel"
         )
         normalized_outcome = (
-            outcome
-            if outcome is not None
-            else "no_progress"
-            if derived_outcome == "no-progress"
+            "no_progress"
+            if outcome in {None, "empty_pool"} and derived_outcome == "no-progress"
             else derived_outcome
+            if outcome in {None, "empty_pool"}
+            else outcome
         )
         payload = {
             "outcome": normalized_outcome,
@@ -345,14 +345,21 @@ def _cost_value(usage: UsageTally, pricing: Pricing) -> float | None:
 
 
 def _argument_strings(value: Any) -> Iterator[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _argument_strings(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _argument_strings(item)
+    stack = [value]
+    seen_containers: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            yield item
+            continue
+        if not isinstance(item, (Mapping, list, tuple)):
+            continue
+        identity = id(item)
+        if identity in seen_containers:
+            continue
+        seen_containers.add(identity)
+        values = item.values() if isinstance(item, Mapping) else item
+        stack.extend(values)
 
 
 def _consulted_skills(tool_name: str, arguments: Any) -> set[str]:

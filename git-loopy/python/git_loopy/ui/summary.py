@@ -55,7 +55,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from git_loopy.pricing import Pricing, context_utilisation
+from git_loopy.pricing import Pricing
 from git_loopy.usage import UsageTally
 
 from .console import STYLES
@@ -484,13 +484,15 @@ class RunSummary:
         body.append(snap.model if snap.model is not None else "—")
         body.append("\n")
 
-        # Tokens line + context utilisation
+        # Consumption and Observed tokens are cumulative accounting. Keep the
+        # distinct peak Context-fill gauge on its own line.
         body.append("Tokens: ", style=STYLES["meta"])
         body.append(f"in={snap.tokens_in:,}  out={snap.tokens_out:,}")
-        body.append("    Context: ", style=STYLES["meta"])
-        ctx_text = self._format_context_line(snap)
-        body.append_text(ctx_text)
-        body.append("  (observed tokens)", style=STYLES["meta"])
+        body.append("    Observed tokens: ", style=STYLES["meta"])
+        body.append(f"{snap.context_used:,}")
+        body.append("\n")
+        body.append("Peak Context fill: ", style=STYLES["meta"])
+        body.append_text(self._format_peak_context_line(snap))
         body.append("\n")
 
         # Cost line
@@ -633,40 +635,26 @@ class RunSummary:
 
     # -- internal -----------------------------------------------------------
 
-    def _format_context_line(self, snap: IterationSnapshot) -> Text:
-        """Render ``used / window  (XX%)`` with high-watermark highlighting."""
+    def _format_peak_context_line(self, snap: IterationSnapshot) -> Text:
+        """Render the peak live Context-fill sample independently of accounting."""
         text = Text()
-        used = snap.context_used
-        if snap.peak_context_window is not None:
-            peak_used = snap.peak_context_window["current_tokens"]
-            used = int(peak_used) if peak_used is not None else 0
-            limit = snap.peak_context_window.get("token_limit")
-            if limit is None:
-                text.append(f"{used:,}")
-                return text
-            fraction = used / int(limit) if int(limit) > 0 else 0.0
-            line = f"{used:,} / {int(limit):,}  ({int(round(fraction * 100))}%)"
-            text.append(
-                line,
-                style=STYLES["warning"]
-                if fraction >= _CONTEXT_HIGH_WATERMARK
-                else None,
-            )
+        if snap.peak_context_window is None:
+            text.append("—", style=STYLES["meta"])
             return text
-        if snap.model is None:
+        peak_used = snap.peak_context_window["current_tokens"]
+        used = int(peak_used) if peak_used is not None else 0
+        limit = snap.peak_context_window.get("token_limit")
+        if limit is None:
             text.append(f"{used:,}")
             return text
-        util = context_utilisation(snap.model, used, self.pricing)
-        if util is None:
-            text.append(f"{used:,}")
-            return text
-        u, window, fraction = util
-        pct = int(round(fraction * 100))
-        line = f"{u:,} / {window:,}  ({pct}%)"
-        if fraction >= _CONTEXT_HIGH_WATERMARK:
-            text.append(line, style=STYLES["warning"])
-        else:
-            text.append(line)
+        fraction = used / int(limit) if int(limit) > 0 else 0.0
+        line = f"{used:,} / {int(limit):,}  ({int(round(fraction * 100))}%)"
+        text.append(
+            line,
+            style=STYLES["warning"]
+            if fraction >= _CONTEXT_HIGH_WATERMARK
+            else None,
+        )
         return text
 
     def _format_cost_line(self, snap: IterationSnapshot) -> Text:
