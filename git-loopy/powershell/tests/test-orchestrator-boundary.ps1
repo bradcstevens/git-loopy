@@ -164,8 +164,16 @@ if ($IsWindows) {
 }
 exit $Status
 '@
-    Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
+    Write-FakeCommand -BinDir $BinDir -Name "gh" -DirectPowerShell -Body @'
 $ErrorActionPreference = "Stop"
+function Complete-FakeCommand {
+    param([Parameter(Mandatory)][int]$Status)
+    if ($IsWindows) {
+        $global:LASTEXITCODE = $Status
+        return
+    }
+    exit $Status
+}
 [IO.File]::AppendAllText(
     $env:FAKE_GH_LOG,
     ($args -join " ") + [Environment]::NewLine
@@ -173,17 +181,20 @@ $ErrorActionPreference = "Stop"
 $Command = if ($args.Count -ge 2) { "$($args[0]) $($args[1])" } else { "" }
 switch -CaseSensitive ($Command) {
     "auth status" {
-        exit $(if ($env:FAKE_GH_AUTH_STATUS) {
+        $Status = if ($env:FAKE_GH_AUTH_STATUS) {
             [int]$env:FAKE_GH_AUTH_STATUS
         } else {
             0
-        })
+        }
+        Complete-FakeCommand $Status
+        return
     }
     "repo view" {
-        [Console]::Out.WriteLine(
+        Write-Output (
             '{"owner":{"login":"example"},"name":"repo","defaultBranchRef":{"name":"main"}}'
         )
-        exit 0
+        Complete-FakeCommand 0
+        return
     }
     "issue list" {
         $Count = if ([IO.File]::Exists($env:FAKE_GH_LIST_COUNT)) {
@@ -306,8 +317,16 @@ if ($IsWindows) {
 }
 exit $Status
 '@
-    Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
+    Write-FakeCommand -BinDir $BinDir -Name "gh" -DirectPowerShell -Body @'
 $ErrorActionPreference = "Stop"
+function Complete-FakeCommand {
+    param([Parameter(Mandatory)][int]$Status)
+    if ($IsWindows) {
+        $global:LASTEXITCODE = $Status
+        return
+    }
+    exit $Status
+}
 [IO.File]::AppendAllText(
     $env:FAKE_GH_LOG,
     ($args -join " ") + [Environment]::NewLine
@@ -315,17 +334,20 @@ $ErrorActionPreference = "Stop"
 $Command = if ($args.Count -ge 2) { "$($args[0]) $($args[1])" } else { "" }
 switch -CaseSensitive ($Command) {
     "auth status" {
-        exit $(if ($env:FAKE_GH_AUTH_STATUS) {
+        $Status = if ($env:FAKE_GH_AUTH_STATUS) {
             [int]$env:FAKE_GH_AUTH_STATUS
         } else {
             0
-        })
+        }
+        Complete-FakeCommand $Status
+        return
     }
     "repo view" {
-        [Console]::Out.WriteLine(
+        Write-Output (
             '{"owner":{"login":"example"},"name":"repo","defaultBranchRef":{"name":"main"}}'
         )
-        exit 0
+        Complete-FakeCommand 0
+        return
     }
     "issue list" {
         $Count = if ([IO.File]::Exists($env:FAKE_GH_LIST_COUNT)) {
@@ -337,16 +359,18 @@ switch -CaseSensitive ($Command) {
         [IO.File]::WriteAllText($env:FAKE_GH_LIST_COUNT, [string]$Count)
         if ($env:FAKE_GH_EMPTY_AFTER -and
             ($Count -gt [int]$env:FAKE_GH_EMPTY_AFTER)) {
-            [Console]::Out.WriteLine("[]")
+            Write-Output "[]"
         } else {
-            [Console]::Out.Write([IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON))
+            Write-Output ([IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON))
         }
-        exit 0
+        Complete-FakeCommand 0
+        return
     }
     "issue view" {
         $ViewPath = Join-Path $env:FAKE_GH_VIEW_DIR "$($args[2]).json"
-        [Console]::Out.Write([IO.File]::ReadAllText($ViewPath))
-        exit 0
+        Write-Output ([IO.File]::ReadAllText($ViewPath))
+        Complete-FakeCommand 0
+        return
     }
     "issue close" {
         # Record the auto-closure: the issue number (one per line) and the
@@ -363,13 +387,15 @@ switch -CaseSensitive ($Command) {
                 [string]$args[4]
             )
         }
-        exit 0
+        Complete-FakeCommand 0
+        return
     }
     default {
         [Console]::Error.WriteLine(
             "unexpected gh invocation: " + ($args -join " ")
         )
-        exit 92
+        Complete-FakeCommand 92
+        return
     }
 }
 '@
