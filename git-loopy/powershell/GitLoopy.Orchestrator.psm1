@@ -1055,9 +1055,10 @@ function Get-GitLoopyCommitsInRange {
     if ($Pre -ceq $Head) {
         return @()
     }
+    $LogFormat = "--format=%H%x1f%s%x1f%ad%x1f%b%x1e"
     $Lines = @(
         & git -C $RepoRoot log `
-            --format="%H%x1f%s%x1f%ad%x1f%b%x1e" --date=short "$Pre..$Head" 2>$null
+            $LogFormat --date=short "$Pre..$Head" 2>$null
     )
     return (ConvertFrom-GitLoopyLogOutput -Lines $Lines)
 }
@@ -1146,9 +1147,10 @@ function Get-GitLoopyRecentCommitsBlock {
         [string]$RepoRoot
     )
 
+    $LogFormat = "--format=%H%x1f%s%x1f%ad%x1f%b%x1e"
     $Lines = @(
         & git -C $RepoRoot log `
-            -n5 --format="%H%x1f%s%x1f%ad%x1f%b%x1e" --date=short 2>$null
+            -n5 $LogFormat --date=short 2>$null
     )
     $Commits = ConvertFrom-GitLoopyLogOutput -Lines $Lines
     if ($Commits.Count -eq 0) {
