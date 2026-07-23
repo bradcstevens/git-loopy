@@ -46,6 +46,7 @@ from copilot.generated.session_events import (
     SessionEvent,
     SessionEventType,
     SessionStartData,
+    SessionUsageInfoData,
     UserInputRequestedData,
 )
 from copilot.session import PermissionRequestResult
@@ -61,6 +62,7 @@ from git_loopy.events import (
     SESSION_CREATED,
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
+    USAGE_CONTEXT_WINDOW,
     WRAPPER_ASK_USER_ATTEMPTED,
 )
 from git_loopy.persist import EventLogWriter
@@ -1306,6 +1308,49 @@ async def test_iteration_session_routes_mapped_sdk_event_to_writer(
     assert msg_line["run_id"] == _FIXED_RUN_ID
     assert msg_line["iter"] == 2
     assert msg_line["content"] == "hello world"
+
+
+async def test_iteration_session_records_sdk_live_context_window(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=2,
+        ) as sdk_session:
+            sdk_session.emit(
+                _sdk_event(
+                    SessionEventType.SESSION_USAGE_INFO,
+                    SessionUsageInfoData(
+                        current_tokens=12_000,
+                        messages_length=9,
+                        token_limit=32_000,
+                    ),
+                )
+            )
+
+    context = next(
+        event
+        for event in map(json.loads, event_log.path.read_text().splitlines())
+        if event["type"] == USAGE_CONTEXT_WINDOW
+    )
+    assert context == {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": _FIXED_RUN_ID,
+        "iter": 2,
+        "type": USAGE_CONTEXT_WINDOW,
+        "current_tokens": 12_000,
+        "effective_ceiling_tokens": 24_000,
+        "effective_target_tokens": 16_000,
+        "token_limit": 32_000,
+    }
 
 
 async def test_iteration_session_routes_mapped_sdk_event_to_renderer(

@@ -120,10 +120,14 @@ PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "agent_output": True,
     "structured_agent_events": True,
     "token_usage": True,
-    "context_window": False,
+    "context_window": True,
     "skill_consultation": True,
     "cost": True,
 }
+
+_DEFAULT_CONTEXT_TARGET_TOKENS = 100_000
+_DEFAULT_CONTEXT_CEILING_TOKENS = 150_000
+_CONTEXT_WINDOW_SAFETY_PERCENT = 75
 
 # ---------------------------------------------------------------------------
 # Event-type string literals
@@ -481,6 +485,16 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             "input": int(data.input_tokens) if data.input_tokens is not None else 0,
             "output": int(data.output_tokens) if data.output_tokens is not None else 0,
         }
+    if et is SessionEventType.SESSION_USAGE_INFO:
+        token_limit = int(data.token_limit) if data.token_limit is not None else None
+        target, ceiling = _effective_context_budget(token_limit)
+        return {
+            "type": USAGE_CONTEXT_WINDOW,
+            "current_tokens": max(0, int(data.current_tokens)),
+            "token_limit": token_limit,
+            "effective_target_tokens": target,
+            "effective_ceiling_tokens": ceiling,
+        }
     if et in (
         SessionEventType.PERMISSION_REQUESTED,
         SessionEventType.PERMISSION_COMPLETED,
@@ -537,6 +551,17 @@ def _enum_value(obj: Any) -> Any:
     if obj is None:
         return None
     return getattr(obj, "value", obj)
+
+
+def _effective_context_budget(token_limit: int | None) -> tuple[int, int]:
+    """Apply the locked 75% model-window safety cap to the default budget."""
+    if token_limit is None or token_limit <= 0:
+        return (_DEFAULT_CONTEXT_TARGET_TOKENS, _DEFAULT_CONTEXT_CEILING_TOKENS)
+    cap = token_limit * _CONTEXT_WINDOW_SAFETY_PERCENT // 100
+    if _DEFAULT_CONTEXT_CEILING_TOKENS <= cap:
+        return (_DEFAULT_CONTEXT_TARGET_TOKENS, _DEFAULT_CONTEXT_CEILING_TOKENS)
+    target = _DEFAULT_CONTEXT_TARGET_TOKENS * cap // _DEFAULT_CONTEXT_CEILING_TOKENS
+    return (target, cap)
 
 
 def _walk_strings(

@@ -84,6 +84,48 @@ def test_iteration_start_updates_current_iteration() -> None:
     assert state.status == "running"
 
 
+def test_context_window_samples_are_iteration_scoped_and_retain_peak() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "insight_capabilities": {"context_window": True},
+        }
+    )
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 12_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 8_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        }
+    )
+
+    assert state.context_window is not None
+    assert state.context_window.current_tokens == 8_000
+    assert state.peak_context_window is not None
+    assert state.peak_context_window.current_tokens == 12_000
+
+    state.render({"type": events_module.WRAPPER_ITERATION_END, "iter": 1})
+    assert state.context_window is None
+    assert state.peak_context_window is not None
+
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    assert state.context_window is None
+    assert state.peak_context_window is None
+
+
 def test_strike_updates_count_and_max() -> None:
     state = _make_state()
     state.render(
@@ -215,6 +257,66 @@ def test_format_header_now_override_is_used_for_elapsed() -> None:
     assert "elapsed 0:02:05" in header
 
 
+def test_format_header_renders_context_fill_and_smart_zone_cues() -> None:
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 20_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        }
+    )
+
+    header = format_header(state)
+    assert "context 20,000/32,000 62%" in header
+    assert "[██████░░░░]" in header
+    assert "TARGET 16,000" in header
+    assert "ceiling 24,000" in header
+
+
+def test_format_header_retains_partial_context_without_derived_cues() -> None:
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 12_000,
+            "token_limit": None,
+            "effective_target_tokens": 100_000,
+            "effective_ceiling_tokens": 150_000,
+        }
+    )
+
+    header = format_header(state)
+    context = header.split("context ", 1)[1].split("  •", 1)[0]
+    assert context == "12,000/—"
+
+
+def test_context_window_capability_distinguishes_unavailable_from_no_sample() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "insight_capabilities": {"context_window": False},
+        }
+    )
+    assert state.context_window_available is False
+    assert state.context_window is None
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "insight_capabilities": {"context_window": True},
+        }
+    )
+    assert state.context_window_available is True
+    assert state.context_window is None
+    assert "context —" in format_header(state)
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance + import guard
 # ---------------------------------------------------------------------------
@@ -248,6 +350,7 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
     # Log-driving literals (issue #34).
     assert state_module._ASSISTANT_REASONING == events_module.ASSISTANT_REASONING
+    assert state_module._USAGE_CONTEXT_WINDOW == events_module.USAGE_CONTEXT_WINDOW
     assert state_module._TOOL_CALL == events_module.TOOL_CALL
     # Per-issue consumption literal (issue #36).
     assert state_module._USAGE_TOKENS == events_module.USAGE_TOKENS

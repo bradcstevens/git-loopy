@@ -78,6 +78,68 @@ async def test_header_renders_run_identity_and_state() -> None:
     assert "strikes 1/3" in header
 
 
+async def test_header_renders_live_context_fill_from_state() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 20_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        }
+    )
+    app = GitLoopyApp(state)
+
+    async with app.run_test():
+        header = str(app.query_one("#header", Static).renderable)
+
+    assert "context 20,000/32,000 62%" in header
+    assert "[██████░░░░]" in header
+    assert "TARGET 16,000" in header
+
+
+async def test_header_suppresses_derived_context_fill_for_partial_sample() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 12_000,
+            "token_limit": None,
+            "effective_target_tokens": 100_000,
+            "effective_ceiling_tokens": 150_000,
+        }
+    )
+    app = GitLoopyApp(state)
+
+    async with app.run_test():
+        header = str(app.query_one("#header", Static).renderable)
+
+    context = header.split("context ", 1)[1].split("  •", 1)[0]
+    assert context == "12,000/—"
+
+
+async def test_header_clears_context_fill_at_iteration_end() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "current_tokens": 12_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        }
+    )
+    app = GitLoopyApp(state, refresh_interval=3600)
+
+    async with app.run_test():
+        state.render({"type": events_module.WRAPPER_ITERATION_END, "iter": 3})
+        app._refresh()
+        header = str(app.query_one("#header", Static).renderable)
+
+    assert "context —" in header
+
+
 async def test_q_requests_stop_and_app_exits() -> None:
     app = GitLoopyApp(_make_state())
     async with app.run_test() as pilot:

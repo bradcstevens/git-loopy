@@ -225,7 +225,7 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
   "agent_output": true,
   "structured_agent_events": true,
   "token_usage": true,
-  "context_window": false,
+  "context_window": true,
   "skill_consultation": true,
   "cost": true
 }

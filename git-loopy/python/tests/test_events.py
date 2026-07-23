@@ -44,6 +44,7 @@ from copilot.generated.session_events import (
     SessionIdleData,
     SessionShutdownData,
     SessionStartData,
+    SessionUsageInfoData,
     ShutdownCodeChanges,
     ShutdownType,
     ToolExecutionCompleteData,
@@ -66,6 +67,7 @@ from git_loopy.events import (
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
     TOOL_RESULT,
+    USAGE_CONTEXT_WINDOW,
     USAGE_TOKENS,
     WRAPPER_AFK_READY_COLLECTED,
     WRAPPER_ASK_USER_ATTEMPTED,
@@ -842,6 +844,25 @@ def test_map_sdk_event_assistant_usage_returns_usage_tokens() -> None:
     assert out["model"] == "claude-opus-4.7-xhigh"
     assert out["input"] == 1000
     assert out["output"] == 200
+
+
+def test_map_sdk_usage_info_returns_live_context_window_snapshot() -> None:
+    sdk = _wrap_sdk(
+        SessionEventType.SESSION_USAGE_INFO,
+        SessionUsageInfoData(
+            current_tokens=12_000,
+            messages_length=9,
+            token_limit=32_000,
+        ),
+    )
+
+    assert map_sdk_event(sdk) == {
+        "type": USAGE_CONTEXT_WINDOW,
+        "current_tokens": 12_000,
+        "token_limit": 32_000,
+        "effective_target_tokens": 16_000,
+        "effective_ceiling_tokens": 24_000,
+    }
 
 
 def test_map_sdk_event_permission_requested_returns_none() -> None:

@@ -446,7 +446,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "agent_output": True,
         "structured_agent_events": True,
         "token_usage": True,
-        "context_window": False,
+        "context_window": True,
         "skill_consultation": True,
         "cost": True,
     }

@@ -685,7 +685,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "agent_output": True,
         "structured_agent_events": True,
         "token_usage": True,
-        "context_window": False,
+        "context_window": True,
         "skill_consultation": True,
         "cost": True,
     }

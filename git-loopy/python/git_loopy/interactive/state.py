@@ -65,11 +65,13 @@ from git_loopy.usage import UsageTally
 __all__ = [
     "LiveRunState",
     "IssueLedgerEntry",
+    "ContextWindowSnapshot",
     "QueueRow",
     "LogLine",
     "LogLineView",
     "IssueDetail",
     "format_header",
+    "format_context_fill",
     "format_duration",
     "format_wall_clock",
     "format_detail_header",
@@ -124,6 +126,7 @@ _TOOL_CALL = "tool.call"
 #: worked it. Re-declared locally (importing ``git_loopy.events`` would pull the
 #: SDK) and kept in lockstep by the parity test.
 _USAGE_TOKENS = "usage.tokens"
+_USAGE_CONTEXT_WINDOW = "usage.context_window"
 
 # Historical schema-1 traces predate ``wrapper.issue.activated``. Keep their
 # marker projection readable, but disable it as soon as the authoritative event
@@ -271,6 +274,16 @@ class LogLine:
         return self.kind == LOG_REASONING
 
 
+@dataclass(frozen=True)
+class ContextWindowSnapshot:
+    """One truthful live **Context fill** sample for the current Iteration."""
+
+    current_tokens: int
+    token_limit: int | None
+    effective_target_tokens: int | None
+    effective_ceiling_tokens: int | None
+
+
 def _default_wall_clock() -> datetime:
     """Local wall-clock time, used for the human-readable run-start stamp."""
     return datetime.now()
@@ -341,6 +354,9 @@ class LiveRunState:
         self.status = _STATUS_STARTING
         self.strikes = 0
         self.ended = False
+        self.context_window_available: bool | None = None
+        self.context_window: ContextWindowSnapshot | None = None
+        self.peak_context_window: ContextWindowSnapshot | None = None
 
         # -- per-run ledger (issue #25) -------------------------------------
         #: Every issue seen in any pool this run, keyed by ref in first-seen
@@ -454,6 +470,11 @@ class LiveRunState:
         if etype == _RUN_START:
             self._mark_started()
             self.status = _STATUS_RUNNING
+            capabilities = event.get("insight_capabilities")
+            if isinstance(capabilities, Mapping):
+                available = capabilities.get("context_window")
+                if isinstance(available, bool):
+                    self.context_window_available = available
             max_strikes = event.get("max_nmt_strikes")
             if max_strikes is not None:
                 self.max_strikes = _coerce_int(max_strikes, self.max_strikes)
@@ -498,6 +519,17 @@ class LiveRunState:
                 event.get("input"),
                 event.get("output"),
             )
+        elif etype == _USAGE_CONTEXT_WINDOW:
+            snapshot = _context_window_snapshot(event)
+            if snapshot is not None:
+                self.context_window_available = True
+                self.context_window = snapshot
+                if (
+                    self.peak_context_window is None
+                    or snapshot.current_tokens
+                    > self.peak_context_window.current_tokens
+                ):
+                    self.peak_context_window = snapshot
         elif etype == _RUN_END:
             outcome = event.get("outcome")
             self.status = str(outcome) if outcome is not None else "ended"
@@ -1064,6 +1096,8 @@ class LiveRunState:
         self._iter_strike = False
         self._authoritative_binding = False
         self._msg_buffer = ""
+        self.context_window = None
+        self.peak_context_window = None
         # Per-issue Logs (and per-issue token tallies) ACCUMULATE across
         # iterations (issues #34 / #36), so they are never cleared here. Only the
         # per-iteration streaming scratch resets: the pending pre-activation
@@ -1212,6 +1246,7 @@ class LiveRunState:
         # the pending buffer) before the active issue is parked, so the last
         # in-progress line is retained in the per-issue Log (issue #34).
         self._flush_partial()
+        self.context_window = None
         ref = self.active_ref
         if (
             ref is None
@@ -1276,6 +1311,24 @@ class LiveRunState:
         return as_int if as_int is not None else ref
 
 
+def _context_window_snapshot(
+    event: Mapping[str, Any],
+) -> ContextWindowSnapshot | None:
+    current = _optional_nonnegative_int(event.get("current_tokens"))
+    if current is None:
+        return None
+    return ContextWindowSnapshot(
+        current_tokens=current,
+        token_limit=_optional_positive_int(event.get("token_limit")),
+        effective_target_tokens=_optional_positive_int(
+            event.get("effective_target_tokens")
+        ),
+        effective_ceiling_tokens=_optional_positive_int(
+            event.get("effective_ceiling_tokens")
+        ),
+    )
+
+
 def _parse_utc_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -1293,6 +1346,21 @@ def _coerce_int(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    number = _optional_nonnegative_int(value)
+    return number if number is not None and number > 0 else None
 
 
 # ---------------------------------------------------------------------------
@@ -1480,6 +1548,7 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
 
     started = format_wall_clock(state.started_wall)
     elapsed = _format_elapsed(state.elapsed_seconds(now))
+    context_fill = format_context_fill(state.context_window)
 
     if state.active_ref is not None:
         # Serial single-active header — byte-for-byte unchanged.
@@ -1509,9 +1578,36 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         f"  •  start {started}  elapsed {elapsed}"
         f"  •  iter {state.iteration}"
         f"  •  active {active}"
+        f"  •  context {context_fill}"
         f"  •  {state.status}"
         f"  •  strikes {state.strikes}/{state.max_strikes}"
     )
+
+
+def format_context_fill(snapshot: ContextWindowSnapshot | None) -> str:
+    """Render the Header's compact, current-Iteration **Context fill**."""
+    if snapshot is None:
+        return "—"
+    current = f"{snapshot.current_tokens:,}"
+    limit = snapshot.token_limit
+    if limit is None:
+        return f"{current}/—"
+
+    fraction = snapshot.current_tokens / limit
+    percentage = f"{fraction:.0%}"
+    filled = min(10, max(0, int(fraction * 10)))
+    bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
+    parts = [f"{current}/{limit:,}", percentage, bar]
+
+    target = snapshot.effective_target_tokens
+    if target is not None:
+        label = "TARGET" if snapshot.current_tokens >= target else "target"
+        parts.append(f"{label} {target:,}")
+    ceiling = snapshot.effective_ceiling_tokens
+    if ceiling is not None:
+        label = "CEILING" if snapshot.current_tokens >= ceiling else "ceiling"
+        parts.append(f"{label} {ceiling:,}")
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
