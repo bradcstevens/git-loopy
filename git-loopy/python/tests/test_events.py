@@ -865,6 +865,25 @@ def test_map_sdk_usage_info_returns_live_context_window_snapshot() -> None:
     }
 
 
+def test_map_sdk_usage_info_preserves_unknown_context_budget() -> None:
+    sdk = _wrap_sdk(
+        SessionEventType.SESSION_USAGE_INFO,
+        SessionUsageInfoData(
+            current_tokens=12_000,
+            messages_length=9,
+            token_limit=None,  # type: ignore[arg-type]
+        ),
+    )
+
+    assert map_sdk_event(sdk) == {
+        "type": USAGE_CONTEXT_WINDOW,
+        "current_tokens": 12_000,
+        "token_limit": None,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+
+
 def test_map_sdk_event_permission_requested_returns_none() -> None:
     """The session-module permission handler emits the decision event;
     the lifecycle event itself doesn't generate JSONL output."""

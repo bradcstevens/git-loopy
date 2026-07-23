@@ -486,7 +486,8 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             "output": int(data.output_tokens) if data.output_tokens is not None else 0,
         }
     if et is SessionEventType.SESSION_USAGE_INFO:
-        token_limit = int(data.token_limit) if data.token_limit is not None else None
+        raw_limit = data.token_limit
+        token_limit = int(raw_limit) if raw_limit is not None and raw_limit > 0 else None
         target, ceiling = _effective_context_budget(token_limit)
         return {
             "type": USAGE_CONTEXT_WINDOW,
@@ -553,10 +554,12 @@ def _enum_value(obj: Any) -> Any:
     return getattr(obj, "value", obj)
 
 
-def _effective_context_budget(token_limit: int | None) -> tuple[int, int]:
+def _effective_context_budget(
+    token_limit: int | None,
+) -> tuple[int | None, int | None]:
     """Apply the locked 75% model-window safety cap to the default budget."""
-    if token_limit is None or token_limit <= 0:
-        return (_DEFAULT_CONTEXT_TARGET_TOKENS, _DEFAULT_CONTEXT_CEILING_TOKENS)
+    if token_limit is None:
+        return (None, None)
     cap = token_limit * _CONTEXT_WINDOW_SAFETY_PERCENT // 100
     if _DEFAULT_CONTEXT_CEILING_TOKENS <= cap:
         return (_DEFAULT_CONTEXT_TARGET_TOKENS, _DEFAULT_CONTEXT_CEILING_TOKENS)
