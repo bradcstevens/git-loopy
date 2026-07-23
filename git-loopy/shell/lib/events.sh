@@ -45,7 +45,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
 )
 declare -r GIT_LOOPY_EVENT_SCHEMA_VERSION=1
 declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
-  "agent_output": false,
+  "agent_output": true,
   "structured_agent_events": false,
   "token_usage": false,
   "context_window": false,

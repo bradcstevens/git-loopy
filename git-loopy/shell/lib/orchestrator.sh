@@ -940,9 +940,119 @@ git_loopy_build_prompt() {
     "$commits_block" "$issues_block" "$prompt_text"
 }
 
+_git_loopy_pool_contains_ref() {
+  local ref="$1"
+  jq -e --argjson ref "$ref" '
+    any(.[];
+      (if has("number") then .number else .ref end) == $ref
+    )
+  ' <<<"$GIT_LOOPY_POOL_JSON" >/dev/null
+}
+
+_git_loopy_publish_active_binding() {
+  local iteration="$1"
+  local ref="$2"
+  local source="$3"
+  local observed_at="$4"
+  [[ -z "$_GIT_LOOPY_ACTIVE_REF" ]] || return 1
+  _GIT_LOOPY_ACTIVE_REF="$ref"
+
+  local issue_arg payload
+  if [[ "$ref" =~ ^[0-9]+$ ]]; then
+    issue_arg="$ref"
+  else
+    issue_arg="$(jq -cn --arg ref "$ref" '$ref')" || return 1
+  fi
+  payload="$(
+    jq -cn \
+      --arg activated_at "$observed_at" \
+      --arg binding_source "$source" \
+      --argjson issue "$issue_arg" \
+      '{
+        activated_at: $activated_at,
+        binding_source: $binding_source,
+        issue: $issue
+      }'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ISSUE_ACTIVATED]}" \
+    "$iteration" \
+    "$payload" \
+    "$observed_at"
+}
+
+_git_loopy_bind_active_issue() {
+  local iteration="$1"
+  local ref="$2"
+  local source="$3"
+  local observed_at="$4"
+  local state_dir="$5"
+  local active_path="$state_dir/active-ref"
+  local warned_path="$state_dir/warned-marker-refs"
+  local active_ref=""
+  [[ -f "$active_path" ]] && active_ref="$(<"$active_path")"
+
+  if [[ -n "$active_ref" ]]; then
+    if [[ "$source" == "working_marker" && "$active_ref" != "$ref" ]] &&
+      ! grep -Fxq "$ref" "$warned_path" 2>/dev/null; then
+      printf '%s\n' "$ref" >>"$warned_path"
+      printf 'git-loopy: conflicting Active-issue marker for #%s ignored; Iteration is already bound to #%s\n' \
+        "$ref" "$active_ref" >&2
+    fi
+    return 1
+  fi
+  if [[ "$source" == "working_marker" ]] &&
+    ! _git_loopy_pool_contains_ref "$ref"; then
+    if ! grep -Fxq "$ref" "$warned_path" 2>/dev/null; then
+      printf '%s\n' "$ref" >>"$warned_path"
+      printf 'git-loopy: Active-issue marker for #%s ignored; issue is not in the current Pool\n' \
+        "$ref" >&2
+    fi
+    return 1
+  fi
+
+  printf '%s' "$ref" >"$active_path"
+  _git_loopy_publish_active_binding \
+    "$iteration" "$ref" "$source" "$observed_at"
+}
+
+_git_loopy_stream_agent_output() {
+  local iteration="$1"
+  local state_dir="$2"
+  local marker_pattern='<[[:space:]]*working[[:space:]]+issue[[:space:]]*=[[:space:]]*"?#?[0-9]+"?[[:space:]]*>'
+  local marker_ref_pattern='([0-9]+)'
+  local line observed_at remaining marker marker_ref payload
+  shopt -s nocasematch
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    observed_at="$(git_loopy_iso_timestamp)" || return 1
+    printf '%s\n' "$line" >&2
+
+    remaining="$line"
+    while [[ "$remaining" =~ $marker_pattern ]]; do
+      marker="${BASH_REMATCH[0]}"
+      [[ "$marker" =~ $marker_ref_pattern ]] || break
+      marker_ref="${BASH_REMATCH[1]}"
+      _git_loopy_bind_active_issue \
+        "$iteration" "$marker_ref" "working_marker" "$observed_at" "$state_dir" ||
+        true
+      remaining="${remaining#*"$marker"}"
+    done
+
+    payload="$(
+      jq -cn --arg text "$line" '{kind: "unclassified", text: $text}'
+    )" || return 1
+    git_loopy_emit_event \
+      "${GIT_LOOPY_EVENT_TYPES[AGENT_OUTPUT]}" \
+      "$iteration" \
+      "$payload" \
+      "$observed_at" || return 1
+  done
+}
+
 git_loopy_run_bounded_turn() {
-  # Run one already-assembled agent turn ("$@") with its own stdout folded to
-  # stderr — so stdout stays the JSONL Event stream (contract §4) — bounded by a
+  # Run one already-assembled agent turn ("$@") with stdout converted into
+  # unclassified Events while the same text remains visible on stderr, bounded by a
   # wall-clock send timeout. The bound is enforced by a built-in background
   # watchdog rather than timeout(1)/gtimeout, so the shell port needs no extra
   # dependency and runs unchanged on Linux, macOS, and WSL. Returns the turn's
@@ -950,7 +1060,13 @@ git_loopy_run_bounded_turn() {
   # as exit 124 (GNU timeout's convention) — a failed, non-progress turn that
   # lands no agent commit, so §6 Strike accounting counts it accordingly.
   local timeout_seconds="$1"
-  shift
+  local iteration=""
+  if [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+    iteration="$2"
+    shift 2
+  else
+    shift
+  fi
 
   # Whole-second poll budget: the integer part (forced to base 10 so a
   # zero-padded value like "08" is never mis-parsed as octal) plus one second
@@ -968,8 +1084,19 @@ git_loopy_run_bounded_turn() {
   local flag_dir
   flag_dir="$(mktemp -d)" || return 1
   local timed_out_flag="$flag_dir/timed_out"
-
-  "$@" 1>&2 &
+  local output_pid=""
+  if [[ -n "$iteration" ]]; then
+    local output_fifo="$flag_dir/agent-output"
+    mkfifo "$output_fifo" || {
+      rm -rf "$flag_dir"
+      return 1
+    }
+    _git_loopy_stream_agent_output "$iteration" "$flag_dir" <"$output_fifo" &
+    output_pid=$!
+    "$@" >"$output_fifo" &
+  else
+    "$@" 1>&2 &
+  fi
   local turn_pid=$!
 
   # Watchdog: poll the turn's liveness once a second until the budget is spent.
@@ -1000,6 +1127,10 @@ git_loopy_run_bounded_turn() {
 
   local status=0
   wait "$turn_pid" 2>/dev/null || status=$?
+  local output_status=0
+  if [[ -n "$output_pid" ]]; then
+    wait "$output_pid" 2>/dev/null || output_status=$?
+  fi
 
   # The turn is gone (on its own, or via the watchdog's SIGTERM/SIGKILL). Retire
   # the watchdog so it never lingers into the next turn, then reap it.
@@ -1011,13 +1142,22 @@ git_loopy_run_bounded_turn() {
     printf 'git-loopy: copilot turn exceeded the %ss send timeout; terminated.\n' \
       "$timeout_seconds" >&2
     result=124
+  elif ((output_status != 0)); then
+    printf 'git-loopy: could not record the complete copilot output stream.\n' >&2
+    result="$output_status"
+  fi
+  if [[ -n "$iteration" ]]; then
+    _GIT_LOOPY_ACTIVE_REF=""
+    [[ -f "$flag_dir/active-ref" ]] &&
+      _GIT_LOOPY_ACTIVE_REF="$(<"$flag_dir/active-ref")"
   fi
   rm -rf "$flag_dir"
   return "$result"
 }
 
 git_loopy_run_agent_turn() {
-  local prompt="$1"
+  local iteration="$1"
+  local prompt="$2"
   local -a argv=(copilot --yolo -p "$prompt" --model "$GIT_LOOPY_MODEL" --no-color)
   if [[ -n "$GIT_LOOPY_REASONING_EFFORT" ]]; then
     argv+=(--reasoning-effort "$GIT_LOOPY_REASONING_EFFORT")
@@ -1034,10 +1174,13 @@ git_loopy_run_agent_turn() {
   # stream, and bound the turn by the resolved send timeout. The helper preserves
   # Copilot's real exit status (contract §4), or terminates and fails a turn that
   # overruns the bound so a hung agent never hangs the Iteration.
-  git_loopy_run_bounded_turn "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "${argv[@]}"
+  git_loopy_run_bounded_turn \
+    "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "$iteration" "${argv[@]}"
 }
 
 _GIT_LOOPY_AUTO_CLOSURES=0
+_GIT_LOOPY_ACTIVE_REF=""
+_GIT_LOOPY_ITERATION_STARTED_AT=""
 # The first Pool issue this Iteration actually closed (OPEN -> closed), in
 # encounter order. It is the strongest Checkpoint-attribution signal — the
 # equivalent of the Python reference's `completions[0].ref` — so `infer_active_ref`
@@ -1102,6 +1245,11 @@ git_loopy_close_one_issue() {
       "$issue" >&2
     return 0
   }
+  [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]] ||
+    _GIT_LOOPY_FIRST_CLOSED_REF="$issue"
+  _git_loopy_publish_active_binding \
+    "$iteration" "$issue" "closure" "$_GIT_LOOPY_ITERATION_STARTED_AT" ||
+    true
 
   local shas_json payload
   shas_json="$(_git_loopy_string_array_json "${ref_shas[@]}")" || return 1
@@ -1117,7 +1265,6 @@ git_loopy_close_one_issue() {
     "$iteration" \
     "$payload" || return 1
   _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
-  [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]] || _GIT_LOOPY_FIRST_CLOSED_REF="$issue"
 }
 
 git_loopy_pool_actionable_close_refs() {
@@ -1177,6 +1324,10 @@ git_loopy_infer_active_ref() {
   # Pool (the only candidate); else nothing (unattributed). `$1` is the
   # new-commit JSON; prints the ref (an issue number or a PRDs path) or nothing.
   local commits_json="$1"
+  if [[ -n "$_GIT_LOOPY_ACTIVE_REF" ]]; then
+    printf '%s' "$_GIT_LOOPY_ACTIVE_REF"
+    return 0
+  fi
   if [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]]; then
     printf '%s' "$_GIT_LOOPY_FIRST_CLOSED_REF"
     return 0
@@ -1197,6 +1348,30 @@ git_loopy_infer_active_ref() {
     return 0
   fi
   printf ''
+}
+
+git_loopy_infer_active_binding() {
+  local commits_json="$1"
+  if [[ -n "$_GIT_LOOPY_FIRST_CLOSED_REF" ]]; then
+    printf '%s\nclosure\n' "$_GIT_LOOPY_FIRST_CLOSED_REF"
+    return 0
+  fi
+
+  local actionable first
+  actionable="$(git_loopy_pool_actionable_close_refs "$commits_json")" || return 1
+  first="$(jq -r '.[0] // empty' <<<"$actionable")" || return 1
+  if [[ -n "$first" ]]; then
+    printf '%s\ncommit\n' "$first"
+    return 0
+  fi
+
+  local pool_length
+  pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
+  if [[ "$pool_length" == "1" ]]; then
+    jq -r '.[0] | if has("number") then .number else .ref end' \
+      <<<"$GIT_LOOPY_POOL_JSON" || return 1
+    printf 'single_member_pool\n'
+  fi
 }
 
 _GIT_LOOPY_CHECKPOINT_SHA=""
@@ -1367,9 +1542,12 @@ git_loopy_run_discovery() {
     fi
     iteration="$next_iteration"
 
+    _GIT_LOOPY_ITERATION_STARTED_AT="$(git_loopy_iso_timestamp)" || return 1
     git_loopy_emit_event \
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_START]}" \
-      "$iteration" || return 1
+      "$iteration" \
+      '{}' \
+      "$_GIT_LOOPY_ITERATION_STARTED_AT" || return 1
 
     git_loopy_collect_pool || return 1
     local refs
@@ -1411,7 +1589,8 @@ git_loopy_run_discovery() {
     pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1
 
     local agent_status=0
-    git_loopy_run_agent_turn "$prompt" || agent_status=$?
+    _GIT_LOOPY_ACTIVE_REF=""
+    git_loopy_run_agent_turn "$iteration" "$prompt" || agent_status=$?
     if ((agent_status != 0)); then
       printf 'git-loopy: copilot turn exited with status %s; continuing.\n' \
         "$agent_status" >&2
@@ -1459,6 +1638,19 @@ git_loopy_run_discovery() {
     # Iterations accumulate Strikes and the threshold ends the Run as stuck.
     git_loopy_auto_close_pool_issues "$iteration" "$commits_json" || return 1
     local auto_closures="$_GIT_LOOPY_AUTO_CLOSURES"
+    if [[ -z "$_GIT_LOOPY_ACTIVE_REF" ]]; then
+      local -a inferred_binding=()
+      mapfile -t inferred_binding < <(
+        git_loopy_infer_active_binding "$commits_json"
+      )
+      if ((${#inferred_binding[@]} == 2)); then
+        _git_loopy_publish_active_binding \
+          "$iteration" \
+          "${inferred_binding[0]}" \
+          "${inferred_binding[1]}" \
+          "$_GIT_LOOPY_ITERATION_STARTED_AT" || return 1
+      fi
+    fi
 
     # Runner Checkpoint + auto-push (ADR-0004). Capture any dirty / untracked
     # work-in-progress in one close-keyword-free Checkpoint attributed to the

@@ -164,7 +164,11 @@ calls=0
 printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
 # Emit on stdout to prove the agent stream is routed away from the JSONL
 # Event stream (the Orchestrator sends it to stderr).
-printf 'copilot agent stream marker\n'
+if [[ -n "${FAKE_COPILOT_OUTPUT_FILE:-}" ]]; then
+  cat "$FAKE_COPILOT_OUTPUT_FILE"
+else
+  printf 'copilot agent stream marker\n'
+fi
 # A per-call commit plan (opt-in) lets a scenario vary commit messages across
 # Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
 # `-F` so multi-line close-keyword bodies survive. Falling back to the simple
@@ -224,6 +228,9 @@ case "${1-} ${2-}" in
     cat "$FAKE_GH_VIEW_DIR/${3}.json"
     ;;
   "issue close")
+    if [[ "${FAKE_GH_CLOSE_STATUS:-0}" != "0" ]]; then
+      exit "$FAKE_GH_CLOSE_STATUS"
+    fi
     # Record the auto-closure: the issue number (one per line) and the wrap-up
     # comment, so a scenario can assert which Pool issues the loop closed and
     # which commit SHAs the comment attributed.
@@ -472,7 +479,7 @@ jq -se --arg release_version "$expected_release_version" '
   and .[0].release_version == $release_version
   and .[0].schema_version == 1
   and .[0].insight_capabilities == {
-    agent_output: false,
+    agent_output: true,
     structured_agent_events: false,
     token_usage: false,
     context_window: false,
@@ -570,6 +577,13 @@ export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
 setup_copilot_env "github-cap"
 export FAKE_COPILOT_COMMITS=0
+cat >"$temp_dir/github-cap-agent-output" <<'EOF'
+pre-marker output
+<working issue=41>
+<working issue=42>
+post-marker output
+EOF
+export FAKE_COPILOT_OUTPUT_FILE="$temp_dir/github-cap-agent-output"
 export GIT_LOOPY_MODEL="env-model"
 export GIT_LOOPY_REASONING_EFFORT="medium"
 export GIT_LOOPY_DENY_TOOLS="env-tool"
@@ -582,7 +596,7 @@ if ! run_turn_entrypoint \
   fail "bounded turn Run did not exit 0: $(<"$temp_dir/github-cap.stderr")"
 fi
 unset GIT_LOOPY_MODEL GIT_LOOPY_REASONING_EFFORT GIT_LOOPY_DENY_TOOLS \
-  GIT_LOOPY_DENY_SKILLS FAKE_COPILOT_COMMITS
+  GIT_LOOPY_DENY_SKILLS FAKE_COPILOT_COMMITS FAKE_COPILOT_OUTPUT_FILE
 assert_equal "2" "$(<"$FAKE_GH_LIST_COUNT")" "Pool is rebuilt each Iteration"
 assert_equal "2" "$(<"$FAKE_COPILOT_CALLS")" \
   "exactly one Copilot turn per non-empty Iteration"
@@ -638,12 +652,35 @@ grep -Fxq 'skill(cli-skill)' "$FAKE_COPILOT_FLAGS" ||
 grep -Fxq 'skill(env-skill)' "$FAKE_COPILOT_FLAGS" ||
   fail "environment deny-skill not mapped onto --deny-tool skill(...)"
 
-# The agent's own output streams to stderr, never onto the JSONL Event stream.
+# The agent's own output remains human-readable on stderr and is also represented
+# once as truthful unclassified Events on stdout/replay.
 assert_contains "$(<"$temp_dir/github-cap.stderr")" \
-  "copilot agent stream marker" \
+  "pre-marker output" \
   "agent output streams to stderr"
-[[ "$(<"$temp_dir/github-cap.stdout")" != *"copilot agent stream marker"* ]] ||
-  fail "agent output polluted the JSONL Event stream"
+jq -se '
+  ([.[] | select(.type == "agent.output") | .text] == [
+    "pre-marker output",
+    "<working issue=41>",
+    "<working issue=42>",
+    "post-marker output",
+    "pre-marker output",
+    "<working issue=41>",
+    "<working issue=42>",
+    "post-marker output"
+  ])
+  and ([.[] | select(.type == "agent.output")] | all(.kind == "unclassified"))
+  and ([.[] | select(.type == "wrapper.issue.activated")] | length == 2)
+  and ([.[] | select(.type == "wrapper.issue.activated")]
+    | all(
+      .issue == 41
+      and .binding_source == "working_marker"
+      and .activated_at == .ts
+    ))
+' "$temp_dir/github-cap.stdout" >/dev/null ||
+  fail "shell output Events or immutable Working-marker binding drifted"
+assert_contains "$(<"$temp_dir/github-cap.stderr")" \
+  "conflicting Active-issue marker for #42 ignored; Iteration is already bound to #41" \
+  "conflicting marker diagnostic"
 mapfile -t cap_replay < <(find "$repo/.git-loopy/logs" -type f -name '*.jsonl')
 assert_equal "1" "${#cap_replay[@]}" "turn Run replay file count"
 cmp -s "$temp_dir/github-cap.stdout" "${cap_replay[0]}" ||
@@ -695,8 +732,10 @@ expected_commit_seq="$(
     "wrapper.run.start",
     "wrapper.iteration.start",
     "wrapper.afk_ready.collected",
+    "agent.output",
     "wrapper.commit.recorded",
     "wrapper.commit.recorded",
+    "wrapper.issue.activated",
     "wrapper.iteration.end",
     "wrapper.run.end"
   ]'
@@ -713,6 +752,10 @@ jq -se '
     | all(.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")))
   and ([.[] | select(.type == "wrapper.commit.recorded")]
     | all(.sha | test("^[0-9a-f]{40}$")))
+  and ([.[] | select(.type == "wrapper.issue.activated")]
+    | length == 1
+      and .[0].issue == 41
+      and .[0].binding_source == "single_member_pool")
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-commits.stdout" >/dev/null ||
   fail "new agent commits were not recorded as contract commit events"
@@ -1078,6 +1121,14 @@ jq -se '
     | .issue == 41 and (.shas | length == 2) and .sha == .shas[0])
   and ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
     == ["chore: follow-up tidy", "feat: land the eligible work"])
+  and ([.[] | select(.type == "wrapper.issue.activated")]
+    | length == 1
+      and .[0].issue == 41
+      and .[0].binding_source == "closure")
+  and (
+    ([.[] | .type] | index("wrapper.issue.activated"))
+    < ([.[] | .type] | index("wrapper.auto_close"))
+  )
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/auto-close.stdout" >/dev/null ||
@@ -1294,15 +1345,16 @@ mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
 cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
 feat: real work
 
-Refs #41
+Closes #41
 EOF
+export FAKE_GH_CLOSE_STATUS=1
 if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/agent-commit-push.stdout" \
   "$temp_dir/agent-commit-push.stderr" 1; then
   fail "agent-commit-push Run did not exit 0: \
 $(<"$temp_dir/agent-commit-push.stderr")"
 fi
-unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED FAKE_GH_CLOSE_STATUS
 jq -se '
   ([.[] | select(.type == "wrapper.commit.recorded") | .subject]
     == ["feat: real work"])
@@ -1310,11 +1362,15 @@ jq -se '
   and ([.[] | select(.type == "wrapper.push.recorded")] | length == 1)
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and ([.[] | select(.type == "wrapper.auto_close")] | length == 0)
+  and ([.[] | select(.type == "wrapper.issue.activated")]
+    | length == 1
+      and .[0].issue == 41
+      and .[0].binding_source == "commit")
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-commit-push.stdout" >/dev/null ||
   fail "a clean agent commit did not push without a Checkpoint"
 [[ ! -e "$temp_dir/agent-commit-push-closed.log" ]] ||
-  fail "a Refs-only commit closed an issue"
+  fail "a failed closure was recorded as closed"
 branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
 assert_equal \
   "$(git -C "$repo" rev-parse HEAD)" \

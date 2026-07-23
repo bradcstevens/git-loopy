@@ -231,11 +231,11 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
 }
 ```
 
-The values above are the Python Orchestrator's current manifest. Shell and PowerShell currently
-declare all six values `false`; later work may change a value to `true` only when that
-Orchestrator emits the signal truthfully. `false` means unavailable. `true` with no sample yet is
-still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and an
-observed collection with no members is `[]`.
+The values above are the Python Orchestrator's current manifest. The shell Orchestrator declares
+only `agent_output` available; PowerShell currently declares all six values unavailable. Later work
+may change a value to `true` only when that Orchestrator emits the signal truthfully. `false` means
+unavailable. `true` with no sample yet is still unknown. Unknown scalar values are JSON `null`; an
+observed count of none is `0`, and an observed collection with no members is `[]`.
 
 The following additive Insight payload shapes are reserved by schema 1. Existing Phase 1 traces,
 including payload-free `wrapper.iteration.end` records, remain valid. When an Orchestrator begins
