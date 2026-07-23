@@ -19,7 +19,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
-| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
+| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -96,12 +96,25 @@ invokes the real Python, shell, and PowerShell entrypoints in one seam. It prove
 `--version` output, no Run-preflight calls or artifacts, and explicit failure for malformed,
 non-UTF-8, or unavailable Release metadata.
 
+The source-release verifier
+[`python/git_loopy/source_release.py`](../python/git_loopy/source_release.py)
+uses the same fixture to reject lightweight or mismatched tags, missing explicit
+Release-version bumps, missing edited notes, metadata drift, and drift in any
+real Orchestrator `--version` or Continuation capability output. It generates
+and verifies the tagged source archive before
+[`source-release.yml`](../../.github/workflows/source-release.yml) creates a
+stable or prerelease GitHub Release. Publication has no custom artifact or
+package-channel upload.
+
 Run them from the repository root:
 
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_continuation_scenarios.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_release_version.py
+uv run --project git-loopy/python --all-extras \
+  pytest -q git-loopy/python/tests/test_source_release.py \
+  git-loopy/python/tests/test_source_release_workflow.py
 uv run --project git-loopy/python --all-extras \
   pytest -q git-loopy/python/tests/test_release_identity_conformance.py
 bash git-loopy/shell/tests/test-event-conformance.sh

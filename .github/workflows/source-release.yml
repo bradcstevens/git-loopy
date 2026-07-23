@@ -1,0 +1,79 @@
+name: Publish source Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  tag-preflight:
+    name: Verify committed Release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify annotated tag and committed Release identity
+        env:
+          PYTHONPATH: git-loopy/python
+        run: >-
+          python3 -m git_loopy.source_release
+          --repository-root .
+          --tag-ref "$GITHUB_REF"
+          --tag-only
+
+  family-conformance:
+    name: Prove Runner-family Conformance
+    needs: tag-preflight
+    uses: ./.github/workflows/runner-family-gate.yml
+
+  publish:
+    name: Verify and publish source Release
+    needs:
+      - tag-preflight
+      - family-conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Verify tagged source archive and public identities
+        id: release
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.source_release
+          --repository-root .
+          --tag-ref "$GITHUB_REF"
+          --archive-output "$RUNNER_TEMP/git-loopy-source.tar"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish stable GitHub Release
+        if: steps.release.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}"
+          --verify-tag
+          --title "git-loopy ${{ steps.release.outputs.version }}"
+          --notes-file "${{ steps.release.outputs.notes_path }}"
+          --latest
+
+      - name: Publish prerelease GitHub Release
+        if: steps.release.outputs.prerelease == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}"
+          --verify-tag
+          --title "git-loopy ${{ steps.release.outputs.version }}"
+          --notes-file "${{ steps.release.outputs.notes_path }}"
+          --prerelease

@@ -16,6 +16,90 @@
       "value": "1.2.3-rc.1"
     }
   ],
+  "publication_cases": [
+    {
+      "id": "stable",
+      "version": "1.2.3",
+      "prerelease": false
+    },
+    {
+      "id": "development",
+      "version": "1.2.3-dev.0",
+      "prerelease": true
+    },
+    {
+      "id": "release-candidate",
+      "version": "1.2.3-rc.1",
+      "prerelease": true
+    }
+  ],
+  "invalid_tag_cases": [
+    {
+      "id": "malformed-version",
+      "tag_version": "1.2",
+      "authority_version": "1.2",
+      "annotated": true,
+      "bumped": true,
+      "notes": true,
+      "error": "Semantic Versioning"
+    },
+    {
+      "id": "lightweight",
+      "tag_version": "1.2.3",
+      "authority_version": "1.2.3",
+      "annotated": false,
+      "bumped": true,
+      "notes": true,
+      "error": "annotated"
+    },
+    {
+      "id": "mismatched",
+      "tag_version": "1.2.4",
+      "authority_version": "1.2.3",
+      "annotated": true,
+      "bumped": true,
+      "notes": true,
+      "error": "does not match"
+    },
+    {
+      "id": "not-version-bump",
+      "tag_version": "1.2.3",
+      "authority_version": "1.2.3",
+      "annotated": true,
+      "bumped": false,
+      "notes": true,
+      "error": "explicit Release-version bump"
+    },
+    {
+      "id": "missing-edited-notes",
+      "tag_version": "1.2.3",
+      "authority_version": "1.2.3",
+      "annotated": true,
+      "bumped": true,
+      "notes": false,
+      "error": "edited release notes"
+    }
+  ],
+  "source_tree_drift_cases": [
+    {
+      "id": "package",
+      "expected_error": "Python package Release version mismatch"
+    },
+    {
+      "id": "source-entrypoint",
+      "expected_error": "shell --version"
+    },
+    {
+      "id": "manifest",
+      "expected_error": "shell Continuation capability manifest"
+    }
+  ],
+  "artifact_drift_cases": [
+    {
+      "id": "tagged-source-entrypoint",
+      "expected_error": "shell --version"
+    }
+  ],
   "invalid_versions": [
     {
       "id": "empty",

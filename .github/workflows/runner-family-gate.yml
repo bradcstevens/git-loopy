@@ -1,16 +1,17 @@
 name: Runner family gate
 
 # Anti-drift gate for the whole Runner family (ADR-0013, docs/wrapper-contract.md).
-# Every push and pull request must prove that the Python reference Orchestrator and
-# the shell + PowerShell ports still implement the same Wrapper contract on the
-# operating systems each member claims to support. All jobs use fake external tools
-# and scratch repositories, so the gate needs neither live Copilot nor GitHub
-# credentials. The shape of this file is pinned by
+# Every push, pull request, and calling release workflow must prove that the Python
+# reference Orchestrator and the shell + PowerShell ports still implement the same
+# Wrapper contract on the operating systems each member claims to support. All jobs
+# use fake external tools and scratch repositories, so the gate needs neither live
+# Copilot nor GitHub credentials. The shape of this file is pinned by
 # git-loopy/python/tests/test_runner_family_gate.py.
 
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read

@@ -11,3 +11,9 @@ Artifacts selected as one packaged distribution require exact Release-version eq
 discovered TUI helpers negotiate Event-schema capabilities instead: a compatible helper from a
 different Release may be used with a warning, while Release equality by itself never proves
 compatibility.
+
+Source publication starts only from a commit that explicitly changes `VERSION`, carries matching
+package metadata and edited `docs/releases/v<VERSION>.md` notes, and is selected by an annotated
+`v<VERSION>` tag. The tagged tree is archived and all three Orchestrator identity and Continuation
+capability seams are verified after Runner-family Conformance and before GitHub creates the Release.
+Stable versions become stable Releases; Semantic Versioning prereleases remain GitHub prereleases.
