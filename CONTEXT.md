@@ -573,6 +573,17 @@ spelling; `git_loopy` as the importable Python package. Supersedes the retired
 **copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
+**Release version**:
+The Semantic Versioning identity assigned to one published git-loopy distribution.
+Every included **Orchestrator**, packaged **Skill** set, and **TUI helper** shares it;
+contract and schema versions remain separate compatibility identities.
+_Avoid_: component version, protocol version, schema version.
+
+**Release target**:
+The planned **Release version** to which an issue contributes. It states delivery
+intent without changing the issue's workflow readiness or dependency relationships.
+_Avoid_: version label, release label.
+
 **Ralph loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop
 that drives the Copilot agent to work triaged issues one at a time. A concept,
