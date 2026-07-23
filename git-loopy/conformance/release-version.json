@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "expected_release_version": "0.1.0",
-  "expected_python_distribution_version": "0.1.0",
+  "expected_release_version": "0.2.0-dev.0",
+  "expected_python_distribution_version": "0.2.0.dev0",
   "valid_versions": [
     {
       "id": "stable",

@@ -9,4 +9,4 @@ wrapper contract (``ready-for-agent`` filter, ``## What to build`` +
 auto-close backstop, Memento Model preserved at the session level).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0-dev.0"
