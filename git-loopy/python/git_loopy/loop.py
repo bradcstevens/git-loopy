@@ -133,6 +133,7 @@ from git_loopy.persist import (
 )
 from git_loopy.pricing import Pricing, PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
+from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -481,6 +482,7 @@ class _Loop:
         self,
         *,
         config: RunConfig,
+        release_version: str,
         git: git_module.GitClient,
         prompt_text: str,
         pricing: Pricing,
@@ -494,6 +496,7 @@ class _Loop:
         include_prs: bool = False,
     ) -> None:
         self._config = config
+        self._release_version = release_version
         self._git = git
         self._prompt_text = prompt_text
         self._pricing = pricing
@@ -1056,6 +1059,7 @@ class _Loop:
             events_module.WRAPPER_RUN_START,
             iter_num=None,
             issue_source=self._config.issue_source,
+            release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
             insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
             max_iterations=self._config.max_iterations,
@@ -1199,6 +1203,7 @@ class _ParallelLoop:
         self,
         *,
         config: RunConfig,
+        release_version: str,
         git: git_module.GitClient,
         prompt_text: str,
         pricing: Pricing,
@@ -1214,6 +1219,7 @@ class _ParallelLoop:
         include_prs: bool = False,
     ) -> None:
         self._config = config
+        self._release_version = release_version
         self._git = git
         self._prompt_text = prompt_text
         self._writers = writers
@@ -1247,6 +1253,7 @@ class _ParallelLoop:
         # write ONE consistent event + counter stream.
         self._serial = _Loop(
             config=config,
+            release_version=release_version,
             git=git,
             prompt_text=prompt_text,
             pricing=pricing,
@@ -1278,6 +1285,7 @@ class _ParallelLoop:
             events_module.WRAPPER_RUN_START,
             iter_num=None,
             issue_source=self._config.issue_source,
+            release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
             insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
             max_iterations=self._config.max_iterations,
@@ -2125,6 +2133,12 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         * ``1`` — abort (NMT strike threshold or
           preflight / setup failure).
     """
+    try:
+        release_version = read_runtime_release_version()
+    except ReleaseVersionError as exc:
+        print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
+        return 1
+
     # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
     #    repository root once; ``.root`` feeds the writers / prompt / source setup.
     try:
@@ -2305,6 +2319,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     if config.parallel > 1:
         loop = _ParallelLoop(
             config=config,
+            release_version=release_version,
             git=git,
             prompt_text=prompt_text,
             pricing=pricing,
@@ -2322,6 +2337,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     else:
         loop = _Loop(
             config=config,
+            release_version=release_version,
             git=git,
             prompt_text=prompt_text,
             pricing=pricing,

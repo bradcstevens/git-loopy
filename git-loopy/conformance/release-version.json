@@ -69,14 +69,25 @@
       "id": "source-drift",
       "authority_version": "1.2.3",
       "source_version": "1.2.4",
+      "runtime_version": "1.2.3",
       "package_version": "1.2.3",
       "publication_version": "1.2.3",
       "drift_input": "source"
     },
     {
+      "id": "runtime-drift",
+      "authority_version": "1.2.3",
+      "source_version": "1.2.3",
+      "runtime_version": "1.2.4",
+      "package_version": "1.2.3",
+      "publication_version": "1.2.3",
+      "drift_input": "runtime"
+    },
+    {
       "id": "package-drift",
       "authority_version": "1.2.3",
       "source_version": "1.2.3",
+      "runtime_version": "1.2.3",
       "package_version": "1.2.4",
       "publication_version": "1.2.3",
       "drift_input": "package"
@@ -85,6 +96,7 @@
       "id": "publication-drift",
       "authority_version": "1.2.3",
       "source_version": "1.2.3",
+      "runtime_version": "1.2.3",
       "package_version": "1.2.3",
       "publication_version": "1.2.4",
       "drift_input": "publication"
@@ -93,6 +105,7 @@
   "matching_metadata": {
     "authority_version": "1.2.3-rc.1",
     "source_version": "1.2.3-rc.1",
+    "runtime_version": "1.2.3-rc.1",
     "package_version": "1.2.3-rc.1",
     "publication_version": "1.2.3-rc.1"
   }

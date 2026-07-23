@@ -16,9 +16,19 @@ Deeper behaviour (the iteration driver itself) is covered by
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+
+RELEASE_VERSION_FIXTURE = json.loads(
+    (
+        Path(__file__).parents[2] / "conformance" / "release-version.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _git_loopy_command() -> list[str]:
@@ -30,9 +40,49 @@ def _git_loopy_command() -> list[str]:
     install), fall back to invoking the module directly so the smoke
     remains meaningful.
     """
-    if shutil.which("git-loopy"):
-        return ["git-loopy"]
+    if executable := shutil.which("git-loopy"):
+        return [executable]
     return [sys.executable, "-m", "git_loopy.cli"]
+
+
+def _run_with_runtime_release_metadata(
+    tmp_path: Path,
+    *,
+    arguments: list[str] | None = None,
+    content: str | None = None,
+    unavailable_kind: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    runtime_root = tmp_path / "runtime"
+    shutil.copytree(Path(__file__).parents[1] / "git_loopy", runtime_root / "git_loopy")
+    metadata = runtime_root / "git_loopy" / "VERSION"
+    if unavailable_kind == "missing":
+        metadata.unlink()
+    elif unavailable_kind == "directory":
+        metadata.unlink()
+        metadata.mkdir()
+    elif unavailable_kind == "invalid_utf8":
+        metadata.write_bytes(b"\xff")
+    elif content is not None:
+        metadata.write_text(content, encoding="utf-8")
+
+    outside_repository = tmp_path / "outside"
+    outside_repository.mkdir()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(runtime_root)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "git_loopy.cli",
+            *(arguments or ["--version"]),
+        ],
+        cwd=outside_repository,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
 
 
 def test_git_loopy_help_exits_zero() -> None:
@@ -59,12 +109,92 @@ def test_git_loopy_help_exits_zero() -> None:
         "GIT_LOOPY_ENABLED_SKILLS",
         "GIT_LOOPY_DENY_TOOLS",
         "GIT_LOOPY_PRICING_FILE",
+        "--version",
     ):
         assert expected in stdout, (
             f"--help missing expected token {expected!r}; stdout was:\n"
             f"{stdout}"
         )
     assert "Deprecated" in stdout
+
+
+def test_git_loopy_version_reports_shared_release_identity_outside_repository(
+    tmp_path: Path,
+) -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": "",
+            "GIT_LOOPY_ISSUE_SOURCE": "unavailable",
+            "GIT_LOOPY_INTERACTIVE": "1",
+            "GIT_LOOPY_ENABLED_SKILLS": "unavailable",
+        }
+    )
+    result = subprocess.run(
+        _git_loopy_command() + ["--version"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert (
+        result.stdout
+        == f"git-loopy {RELEASE_VERSION_FIXTURE['expected_release_version']}\n"
+    )
+    assert result.stderr == ""
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_git_loopy_version_rejects_malformed_shared_release_values(
+    tmp_path: Path,
+) -> None:
+    for case in RELEASE_VERSION_FIXTURE["invalid_versions"]:
+        result = _run_with_runtime_release_metadata(
+            tmp_path / case["id"],
+            content=case["value"],
+        )
+
+        assert result.returncode != 0
+        assert result.stdout == ""
+        assert "Release version error:" in result.stderr
+        assert "Semantic Versioning" in result.stderr
+        assert "unknown" not in result.stderr.lower()
+
+
+def test_git_loopy_version_fails_closed_when_release_metadata_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    for case in RELEASE_VERSION_FIXTURE["invalid_authority_inputs"]:
+        result = _run_with_runtime_release_metadata(
+            tmp_path / case["id"],
+            unavailable_kind=case["kind"],
+        )
+
+        assert result.returncode != 0
+        assert result.stdout == ""
+        assert "Release version error:" in result.stderr
+        assert "cannot read Python runtime Release metadata" in result.stderr
+        assert "unknown" not in result.stderr.lower()
+
+
+def test_continuation_capabilities_fails_cleanly_without_release_metadata(
+    tmp_path: Path,
+) -> None:
+    result = _run_with_runtime_release_metadata(
+        tmp_path,
+        arguments=["continuation", "capabilities"],
+        unavailable_kind="missing",
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "Release version error:" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "unknown" not in result.stderr.lower()
 
 
 def test_git_loopy_rejects_negative_iterations() -> None:

@@ -95,6 +95,7 @@ from git_loopy.config import (
     SkillPolicyInputs,
     gate_reasoning_effort,
 )
+from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 
 __all__ = [
     "main",
@@ -261,6 +262,11 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: 7200).\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="print the git-loopy Release version and exit",
     )
     parser.add_argument(
         "max_iterations",
@@ -792,7 +798,11 @@ def _run_skills(args: argparse.Namespace) -> int:
 
 def _run_continuation(args: argparse.Namespace) -> int:
     """Dispatch one native Continuation command without starting a Run."""
-    from git_loopy.continuation import run_command
+    try:
+        from git_loopy.continuation import run_command
+    except ReleaseVersionError as exc:
+        print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
+        return 1
 
     return run_command(
         args.continuation_operation,
@@ -1536,6 +1546,15 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.version:
+        try:
+            release_version = read_runtime_release_version()
+        except ReleaseVersionError as exc:
+            print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
+            return 1
+        print(f"git-loopy {release_version}")
+        return 0
 
     # Early git-root resolution so cwd-not-a-repo crashes with a clean
     # message before we pay the cost of importing the loop module

@@ -24,6 +24,7 @@ _SEMVER = re.compile(
 )
 _PYTHON_SOURCE_VERSION = Path("git-loopy/python/git_loopy/__init__.py")
 _PYTHON_PACKAGE_METADATA = Path("git-loopy/python/pyproject.toml")
+_PYTHON_RUNTIME_VERSION = Path("git-loopy/python/git_loopy/VERSION")
 
 
 class ReleaseVersionError(ValueError):
@@ -45,9 +46,8 @@ def _validate_semver(value: str, label: str) -> str:
     return value
 
 
-def read_release_version(path: Path) -> str:
-    """Read one strict Semantic Versioning value from ``path``."""
-    content = _read_metadata_text(path, "Release version authority")
+def _read_release_value(path: Path, label: str) -> str:
+    content = _read_metadata_text(path, label)
     if content.endswith("\r\n"):
         value = content[:-2]
     elif content.endswith("\n"):
@@ -55,7 +55,18 @@ def read_release_version(path: Path) -> str:
     else:
         value = content
 
-    return _validate_semver(value, f"Release version authority {path}")
+    return _validate_semver(value, f"{label} {path}")
+
+
+def read_release_version(path: Path) -> str:
+    """Read one strict Semantic Versioning value from ``path``."""
+    return _read_release_value(path, "Release version authority")
+
+
+def read_runtime_release_version(path: Path | None = None) -> str:
+    """Read the exact Release version shipped with the Python distribution."""
+    runtime_path = path or Path(__file__).with_name("VERSION")
+    return _read_release_value(runtime_path, "Python runtime Release metadata")
 
 
 def _read_python_source_version(path: Path) -> str:
@@ -128,6 +139,14 @@ def validate_repository_release_version(
         raise ReleaseVersionError(
             "Python source Release version mismatch: "
             f"expected {authority!r} from VERSION, found {source!r} in {source_path}"
+        )
+
+    runtime_path = repository_root / _PYTHON_RUNTIME_VERSION
+    runtime = read_runtime_release_version(runtime_path)
+    if runtime != authority:
+        raise ReleaseVersionError(
+            "Python runtime Release version mismatch: "
+            f"expected {authority!r} from VERSION, found {runtime!r} in {runtime_path}"
         )
 
     package_path = repository_root / _PYTHON_PACKAGE_METADATA

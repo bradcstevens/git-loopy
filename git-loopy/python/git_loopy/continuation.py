@@ -18,6 +18,7 @@ from git_loopy.gh import (
     GhError,
     SubprocessContinuationGitHubClient,
 )
+from git_loopy.release_version import read_runtime_release_version
 
 CONTINUATION_CONTRACT_VERSION = "1.0"
 RECORD_FORMAT = 1
@@ -25,6 +26,7 @@ WRAPPER_CONTRACT_VERSION = "1.2"
 EVENT_SCHEMA_VERSION = "1.1"
 
 CAPABILITY_MANIFEST: dict[str, Any] = {
+    "release_version": read_runtime_release_version(),
     "continuation_contract_versions": [CONTINUATION_CONTRACT_VERSION],
     "record_formats": [RECORD_FORMAT],
     "wrapper_contract_version": WRAPPER_CONTRACT_VERSION,

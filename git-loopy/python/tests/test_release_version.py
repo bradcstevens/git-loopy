@@ -25,9 +25,11 @@ def _write_repository_metadata(
     authority_version: str,
     *,
     source_version: str | None = None,
+    runtime_version: str | None = None,
     package_version: str | None = None,
 ) -> None:
     source_version = source_version or authority_version
+    runtime_version = runtime_version or authority_version
     package_version = package_version or authority_version
     (root / "VERSION").write_text(f"{authority_version}\n", encoding="utf-8")
 
@@ -37,6 +39,7 @@ def _write_repository_metadata(
         f'__version__ = "{source_version}"\n',
         encoding="utf-8",
     )
+    (package_dir / "VERSION").write_text(f"{runtime_version}\n", encoding="utf-8")
     (package_dir.parent / "pyproject.toml").write_text(
         "\n".join(
             (
@@ -148,6 +151,7 @@ def test_repository_validator_rejects_metadata_drift(
         tmp_path,
         case["authority_version"],
         source_version=case["source_version"],
+        runtime_version=case["runtime_version"],
         package_version=case["package_version"],
     )
     extra_args = (
@@ -163,6 +167,7 @@ def test_repository_validator_rejects_metadata_drift(
     assert "release version validation failed:" in result.stderr
     expected_label = {
         "source": "Python source Release version mismatch",
+        "runtime": "Python runtime Release version mismatch",
         "package": "Python package Release version mismatch",
         "publication": "Publication Release version mismatch",
     }[case["drift_input"]]
@@ -179,6 +184,7 @@ def test_repository_validator_accepts_matching_publication_metadata(
         tmp_path,
         case["authority_version"],
         source_version=case["source_version"],
+        runtime_version=case["runtime_version"],
         package_version=case["package_version"],
     )
 

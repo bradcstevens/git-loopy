@@ -19,7 +19,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
-| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, unavailable-authority scenarios, and source/package/publication drift cases |
+| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -49,8 +49,10 @@ native command and deterministic scripted GitHub transport.
 compatibility versions. `expected_release_version` mirrors the repository-root
 `VERSION` authority for family adapters; `expected_python_distribution_version`
 records only the normalized Python packaging representation of that same value.
-The Python repository validator reads the authority plus the source and package
-metadata copies without importing the Orchestrator:
+The Python repository validator reads the authority plus the source, packaged
+runtime, and package metadata copies without importing the Orchestrator. The
+runtime copy is the fail-closed input for `git-loopy --version`, Run-start
+Events, and the native Continuation capability manifest:
 
 ```bash
 uv run --project git-loopy/python --all-extras \

@@ -58,6 +58,13 @@ from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
 
+EXPECTED_RELEASE_VERSION = json.loads(
+    (
+        Path(__file__).parents[2] / "conformance" / "release-version.json"
+    ).read_text(encoding="utf-8")
+)["expected_release_version"]
+
+
 # ---------------------------------------------------------------------------
 # Parallel-aware SDK fakes — record working_directory + route per-Lane commits.
 # ---------------------------------------------------------------------------
@@ -665,6 +672,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
             assert "lane_issue" not in e
     run_start = next(e for e in events if e["type"] == "wrapper.run.start")
     assert run_start["schema_version"] == 1
+    assert run_start["release_version"] == EXPECTED_RELEASE_VERSION
     assert run_start["insight_capabilities"] == {
         "agent_output": True,
         "structured_agent_events": True,

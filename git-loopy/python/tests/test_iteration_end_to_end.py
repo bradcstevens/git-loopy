@@ -72,6 +72,13 @@ from git_loopy.wrapper import is_checkpoint_message
 from tests.fakes import FakeGitClient, FakeGitHubClient
 
 
+EXPECTED_RELEASE_VERSION = json.loads(
+    (
+        Path(__file__).parents[2] / "conformance" / "release-version.json"
+    ).read_text(encoding="utf-8")
+)["expected_release_version"]
+
+
 # ---------------------------------------------------------------------------
 # Fakes — minimal stand-ins for the SDK + git/gh surface the loop touches.
 # ---------------------------------------------------------------------------
@@ -414,6 +421,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         if json.loads(raw)["type"] == "wrapper.run.start"
     )
     assert run_start["schema_version"] == 1
+    assert run_start["release_version"] == EXPECTED_RELEASE_VERSION
     assert run_start["insight_capabilities"] == {
         "agent_output": True,
         "structured_agent_events": True,
@@ -1635,6 +1643,7 @@ def _make_loop(
     pricing = Pricing(models={})
     loop = loop_module._Loop(
         config=RunConfig(),
+        release_version=EXPECTED_RELEASE_VERSION,
         git=FakeGitClient(repo_root),
         prompt_text="",
         pricing=pricing,
