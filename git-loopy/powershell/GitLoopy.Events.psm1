@@ -34,7 +34,7 @@ $script:EventTypes = [ordered]@{
 }
 $script:EventSchemaVersion = 1
 $script:InsightCapabilities = [ordered]@{
-    agent_output = $false
+    agent_output = $true
     structured_agent_events = $false
     token_usage = $false
     context_window = $false

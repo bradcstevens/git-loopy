@@ -269,9 +269,20 @@ if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
     $Calls = [int][IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
 }
 [IO.File]::WriteAllText($env:FAKE_COPILOT_CALLS, [string]($Calls + 1))
-# Emit on stdout to prove the agent stream is routed away from the JSONL Event
-# stream (the Orchestrator forwards it to stderr).
-Write-Output "copilot agent stream marker"
+# Emit on stdout to prove native CLI text remains human-readable on stderr and
+# is also represented as unclassified Events.
+if ($env:FAKE_COPILOT_OUTPUT_FILE) {
+    foreach ($Line in [IO.File]::ReadAllLines($env:FAKE_COPILOT_OUTPUT_FILE)) {
+        Write-Output $Line
+    }
+} else {
+    Write-Output "copilot agent stream marker"
+}
+if ($env:FAKE_COPILOT_STDERR_FILE) {
+    foreach ($Line in [IO.File]::ReadAllLines($env:FAKE_COPILOT_STDERR_FILE)) {
+        [Console]::Error.WriteLine($Line)
+    }
+}
 # A per-call commit plan (opt-in) lets a scenario vary commit messages across
 # Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
 # `-F` so multi-line close-keyword bodies survive. Falling back to the simple
@@ -362,6 +373,10 @@ switch -CaseSensitive ($Command) {
         return
     }
     "issue close" {
+        if ($env:FAKE_GH_CLOSE_STATUS) {
+            Complete-FakeCommand ([int]$env:FAKE_GH_CLOSE_STATUS)
+            return
+        }
         # Record the auto-closure: the issue number (one per line) and the
         # wrap-up comment, so a scenario can assert which Pool issues the loop
         # closed and which commit SHAs the comment attributed.
@@ -800,7 +815,7 @@ exit 97
     ) $Events[0]["release_version"] "Run Release version"
     Assert-Equal 1 $Events[0]["schema_version"] "Run Event-schema version"
     $ExpectedInsightCapabilities = [ordered]@{
-        agent_output = $false
+        agent_output = $true
         structured_agent_events = $false
         token_usage = $false
         context_window = $false
@@ -933,6 +948,25 @@ exit 97
     $env:FAKE_GH_VIEW_DIR = $CapViews
     Set-CopilotEnv -Prefix "github-cap"
     $env:FAKE_COPILOT_COMMITS = "0"
+    $CapAgentOutput = Join-Path $TempDir "github-cap-agent-output.txt"
+    [IO.File]::WriteAllText(
+        $CapAgentOutput,
+        (
+            "pre-marker output`n" +
+            "<working issue=41>`n" +
+            "<working issue=42>`n" +
+            "post-marker output`n"
+        ),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $env:FAKE_COPILOT_OUTPUT_FILE = $CapAgentOutput
+    $CapAgentStderr = Join-Path $TempDir "github-cap-agent-stderr.txt"
+    [IO.File]::WriteAllText(
+        $CapAgentStderr,
+        "native stderr chatter`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    $env:FAKE_COPILOT_STDERR_FILE = $CapAgentStderr
     $env:GIT_LOOPY_MODEL = "env-model"
     $env:GIT_LOOPY_REASONING_EFFORT = "medium"
     $env:GIT_LOOPY_DENY_TOOLS = "env-tool"
@@ -956,7 +990,9 @@ exit 97
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_DENY_TOOLS",
         "GIT_LOOPY_DENY_SKILLS",
-        "FAKE_COPILOT_COMMITS"
+        "FAKE_COPILOT_COMMITS",
+        "FAKE_COPILOT_OUTPUT_FILE",
+        "FAKE_COPILOT_STDERR_FILE"
     )) {
         [Environment]::SetEnvironmentVariable($Name, $null)
     }
@@ -1039,16 +1075,51 @@ exit 97
         $CapFlagLines -ccontains "skill(env-skill)"
     ) "environment deny-skill mapped onto --deny-tool skill(...)"
 
-    # The agent's own output streams to stderr, never onto the Event stream.
+    # Native CLI text remains human-readable on stderr and is represented once
+    # as truthful unclassified Events in stdout and replay.
     Assert-Contains (
         [IO.File]::ReadAllText($CapStderr)
-    ) "copilot agent stream marker" "agent output streams to stderr"
-    Assert-True (
-        -not ([IO.File]::ReadAllText($CapStdout)).Contains(
-            "copilot agent stream marker",
-            [StringComparison]::Ordinal
+    ) "pre-marker output" "agent output streams to stderr"
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) "native stderr chatter" "native CLI stderr remains visible"
+    $OutputEvents = @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "agent.output" }
+    )
+    Assert-Equal (
+        "pre-marker output,<working issue=41>,<working issue=42>," +
+        "post-marker output,pre-marker output,<working issue=41>," +
+        "<working issue=42>,post-marker output"
+    ) ([string]::Join(",", @($OutputEvents | ForEach-Object { $_["text"] }))) (
+        "native CLI output Event order"
+    )
+    foreach ($Event in $OutputEvents) {
+        Assert-Equal "unclassified" $Event["kind"] "native CLI output kind"
+        Assert-True (
+            [string]$Event["text"] -cne "native stderr chatter"
+        ) "native CLI stderr was mislabeled as agent output"
+    }
+    $ActivationEvents = @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 2 $ActivationEvents.Count "one Active-issue binding per Iteration"
+    foreach ($Event in $ActivationEvents) {
+        Assert-Equal 41 $Event["issue"] "Working marker Active issue"
+        Assert-Equal "working_marker" $Event["binding_source"] (
+            "Working marker binding source"
         )
-    ) "agent output polluted the JSONL Event stream"
+        Assert-Equal $Event["ts"] $Event["activated_at"] (
+            "activation observation timestamp"
+        )
+    }
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) (
+        "conflicting Active-issue marker for #42 ignored; " +
+        "Iteration is already bound to #41"
+    ) "conflicting marker diagnostic"
     $CapReplay = @(
         Get-ChildItem `
             -LiteralPath (Join-Path $CapRepo ".git-loopy/logs") `
@@ -1075,7 +1146,9 @@ exit 97
         -StderrPath $DefaultStderr
     [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
     [Environment]::SetEnvironmentVariable("FAKE_GH_EMPTY_AFTER", $null)
-    Assert-Equal 0 $Status "unlimited turn Run exit"
+    Assert-Equal 0 $Status (
+        "unlimited turn Run exit: " + [IO.File]::ReadAllText($DefaultStderr)
+    )
     Assert-Equal "2" (
         [IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT)
     ) "unlimited Run rebuilds the Pool until it empties"
@@ -1125,8 +1198,9 @@ exit 97
     $CommitsEvents = Read-Events -Path $CommitsStdout
     Assert-Equal (
         "wrapper.run.start,wrapper.iteration.start," +
-        "wrapper.afk_ready.collected,wrapper.commit.recorded," +
-        "wrapper.commit.recorded,wrapper.iteration.end,wrapper.run.end"
+        "wrapper.afk_ready.collected,agent.output,wrapper.commit.recorded," +
+        "wrapper.commit.recorded,wrapper.issue.activated," +
+        "wrapper.iteration.end,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
         "commit events precede the Iteration end that closes their Iteration"
     )
@@ -1150,6 +1224,19 @@ exit 97
             [string]$Commit["date"] -match '^\d{4}-\d{2}-\d{2}$'
         ) "commit event carries an ISO date"
     }
+    $SingleMemberBindings = @(
+        $CommitsEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $SingleMemberBindings.Count (
+        "single-member Pool produces one Active-issue binding"
+    )
+    Assert-Equal 41 $SingleMemberBindings[0]["issue"] (
+        "single-member Pool Active issue"
+    )
+    Assert-Equal "single_member_pool" $SingleMemberBindings[0]["binding_source"] (
+        "single-member Pool binding source"
+    )
     Assert-Equal "iteration_cap" (
         $CommitsEvents[-1]["outcome"]
     ) "agent-commit Run outcome"
@@ -1549,6 +1636,24 @@ Read outside the worktree.
     )
     Assert-Equal 1 $AutoCloseEvents.Count "exactly one auto_close event"
     Assert-Equal 41 $AutoCloseEvents[0]["issue"] "auto_close targets the Pool issue"
+    $AutoBindings = @(
+        $AutoEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $AutoBindings.Count "closure produces one Active-issue binding"
+    Assert-Equal 41 $AutoBindings[0]["issue"] "closure Active issue"
+    Assert-Equal "closure" $AutoBindings[0]["binding_source"] (
+        "closure binding source"
+    )
+    Assert-True (
+        [Array]::IndexOf(
+            @($AutoEvents | ForEach-Object { $_["type"] }),
+            "wrapper.issue.activated"
+        ) -lt [Array]::IndexOf(
+            @($AutoEvents | ForEach-Object { $_["type"] }),
+            "wrapper.auto_close"
+        )
+    ) "closure binding precedes auto-close"
     Assert-Equal 2 (
         $AutoCloseEvents[0]["shas"].Count
     ) "auto_close attributes both referencing SHAs"
@@ -1848,9 +1953,10 @@ Read outside the worktree.
     [IO.Directory]::CreateDirectory((Join-Path $PushPlan "1")) | Out-Null
     [IO.File]::WriteAllText(
         (Join-Path $PushPlan "1/1.msg"),
-        "feat: real work`n`nRefs #41`n"
+        "feat: real work`n`nCloses #41`n"
     )
     $env:FAKE_COPILOT_PLAN_DIR = $PushPlan
+    $env:FAKE_GH_CLOSE_STATUS = "1"
     $PushStdout = Join-Path $TempDir "agent-commit-push.stdout"
     $PushStderr = Join-Path $TempDir "agent-commit-push.stderr"
     $Status = Invoke-Entrypoint `
@@ -1860,6 +1966,7 @@ Read outside the worktree.
         -StderrPath $PushStderr `
         -Arguments @("1")
     [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSE_STATUS", $null)
     Assert-Equal 0 $Status "agent-commit-push Run exit"
     $PushEvents = Read-Events -Path $PushStdout
     Assert-Equal "feat: real work" (
@@ -1880,11 +1987,20 @@ Read outside the worktree.
     ) "a progress Iteration records no Strike"
     Assert-Equal 0 (
         @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
-    ) "a Refs-only commit closes no issue"
+    ) "a failed closure records no auto-close"
+    $CommitBindings = @(
+        $PushEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $CommitBindings.Count "commit produces one Active-issue binding"
+    Assert-Equal 41 $CommitBindings[0]["issue"] "commit Active issue"
+    Assert-Equal "commit" $CommitBindings[0]["binding_source"] (
+        "commit binding source"
+    )
     Assert-Equal "iteration_cap" $PushEvents[-1]["outcome"] "agent-commit-push Run outcome"
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
-    ) "a Refs-only commit closed no issue"
+    ) "a failed closure was not recorded as closed"
     $PushBranch = ([string](& git -C $PushRepo rev-parse --abbrev-ref HEAD)).Trim()
     Assert-Equal (
         ([string](& git -C $PushRepo rev-parse HEAD)).Trim()
@@ -2093,11 +2209,14 @@ finally {
         "FAKE_GH_EMPTY_AFTER",
         "FAKE_GH_CLOSED",
         "FAKE_GH_CLOSE_DIR",
+        "FAKE_GH_CLOSE_STATUS",
         "FAKE_COPILOT_FLAGS",
         "FAKE_COPILOT_PROMPT",
         "FAKE_COPILOT_CALLS",
         "FAKE_COPILOT_COMMITS",
         "FAKE_COPILOT_EXIT",
+        "FAKE_COPILOT_OUTPUT_FILE",
+        "FAKE_COPILOT_STDERR_FILE",
         "FAKE_COPILOT_PLAN_DIR",
         "FAKE_COPILOT_SLEEP",
         "GIT_LOOPY_MODEL",
