@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from git_loopy.pricing import Pricing
 from git_loopy.usage import UsageTally
@@ -179,10 +179,15 @@ class IterationRollupAccumulator:
         iter_num: int,
         strikes: int,
         outcome: str | None = None,
+        advanced_issues: Iterable[int | str] = (),
     ) -> dict[str, Any]:
         current = self._current
         if current is None or current.iter_num != iter_num:
             raise ValueError(f"no active Iteration {iter_num}")
+        for issue in advanced_issues:
+            contribution = current.contributions.get(issue)
+            if contribution is not None:
+                contribution.advanced = True
         now = self._monotonic()
         status_override = outcome if outcome in {"aborted", "gone"} else None
         issues = [

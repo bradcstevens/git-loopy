@@ -842,6 +842,60 @@ def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
     assert fake_git.active_worktrees == []
 
 
+def test_published_lane_is_advanced_when_source_closure_fails(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        issue_close_errors={
+            42: gh_module.GhError(
+                ["gh", "issue", "close", "42"],
+                1,
+                "closure failed",
+            )
+        },
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    assert exit_code == 0
+    events = _logged_events(tmp_path)
+    iteration_end = next(
+        event for event in events if event["type"] == "wrapper.iteration.end"
+    )
+    assert [issue["status"] for issue in iteration_end["issues"]] == [
+        "advanced",
+        "closed",
+    ]
+
+
 def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     tmp_path, monkeypatch
 ) -> None:

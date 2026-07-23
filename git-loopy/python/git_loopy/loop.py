@@ -1035,12 +1035,14 @@ class _Loop:
         iter_num: int,
         *,
         outcome: str | None = None,
+        advanced_issues: Iterable[int | str] = (),
     ) -> dict[str, Any]:
         """Emit and persist one Orchestrator-owned normalized Iteration rollup."""
         payload = self._rollup.finish(
             iter_num=iter_num,
             strikes=self._strike_machine.strikes,
             outcome=outcome,
+            advanced_issues=advanced_issues,
         )
         event = self._emit(
             events_module.WRAPPER_ITERATION_END,
@@ -1534,24 +1536,25 @@ class _ParallelLoop:
         #     Lanes so base stays green. Operates on branch names in the main
         #     worktree, so it runs after the Lane worktrees are gone and before
         #     the round's single Strike tick.
-        integration_successes = await self._integrate_wave(iter_num, lanes)
+        integrated_issues = await self._integrate_wave(iter_num, lanes)
 
         # 4) Strike tick — once per round. A successful Integration is the round's
         #    progress signal (ADR-0009): Lane commits count only once they LAND on
         #    base, so a round that lands nothing adds a strike even if the agents
         #    committed inside their worktrees.
         outcome = self._tick_round(
-            iter_num, commits=0, closures=integration_successes
+            iter_num, commits=0, closures=len(integrated_issues)
         )
 
         self._serial._finish_iteration(
             iter_num,
             outcome="aborted" if outcome == "aborted" else "parallel",
+            advanced_issues=integrated_issues,
         )
 
         if outcome == "aborted":
-            return ("aborted", total_commits, integration_successes)
-        return ("continue", total_commits, integration_successes)
+            return ("aborted", total_commits, len(integrated_issues))
+        return ("continue", total_commits, len(integrated_issues))
 
     def _setup_lane_worktree(self, lane: _Lane) -> None:
         """Prepare a Lane's freshly created worktree before its session (#65).
@@ -1719,7 +1722,9 @@ class _ParallelLoop:
         )
         return sha
 
-    async def _integrate_wave(self, iter_num: int, lanes: list[_Lane]) -> int:
+    async def _integrate_wave(
+        self, iter_num: int, lanes: list[_Lane]
+    ) -> set[int | str]:
         """Serialized, robust Integration for a Wave's Lanes (#62 + #63, ADR-0009).
 
         Lands each green Lane branch on base in **ascending issue-number order**
@@ -1742,14 +1747,16 @@ class _ParallelLoop:
            success; after K failures the issue falls back to a serial Iteration
            with exactly one breadcrumb comment and its Lane branch is kept.
 
-        Returns the number of Lanes that landed green — via the happy path or
-        auto-resolution — which is the round's Strike progress. A reverted-then-
-        recovered Lane counts once; a fallback Lane counts zero.
+        Returns the issues whose Lanes landed green — via the happy path or
+        auto-resolution. Their count is the round's Strike progress, while their
+        identities distinguish published-but-unclosed work from failed Lanes in
+        the normalized Iteration rollup.
         """
-        successes = 0
+        integrated: set[int | str] = set()
         for lane in sorted(lanes, key=_lane_sort_key):
-            successes += await self._integrate_lane(iter_num, lane)
-        return successes
+            if await self._integrate_lane(iter_num, lane):
+                integrated.add(lane.item.ref)
+        return integrated
 
     async def _integrate_lane(self, iter_num: int, lane: _Lane) -> int:
         """Integrate one Lane; return ``1`` if it landed green, else ``0``.
