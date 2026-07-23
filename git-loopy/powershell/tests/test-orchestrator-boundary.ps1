@@ -16,6 +16,7 @@ $Pwsh = (
     Get-Command pwsh -CommandType Application |
         Select-Object -First 1
 ).Source
+$FakeCommandLauncher = $null
 
 function Assert-True {
     param(
@@ -102,18 +103,43 @@ function Write-FakeCommand {
 
     if ($IsWindows) {
         $ScriptPath = Join-Path $BinDir "$Name-fake.ps1"
-        $LauncherPath = Join-Path $BinDir "$Name.cmd"
+        $LauncherPath = Join-Path $BinDir "$Name.exe"
         [IO.File]::WriteAllText(
             $ScriptPath,
             $Body,
             [Text.UTF8Encoding]::new($false)
         )
-        $Launcher = "@pwsh -NoLogo -NoProfile -File `"%~dp0$Name-fake.ps1`" %*`r`n"
-        [IO.File]::WriteAllText(
-            $LauncherPath,
-            $Launcher,
-            [Text.ASCIIEncoding]::new()
-        )
+        if ($null -eq $script:FakeCommandLauncher) {
+            $script:FakeCommandLauncher = Join-Path $TempDir "fake-command.exe"
+            Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+
+public static class FakeCommandLauncher
+{
+    public static int Main(string[] args)
+    {
+        string name = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
+        string script = Path.Combine(AppContext.BaseDirectory, name + "-fake.ps1");
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false };
+        start.ArgumentList.Add("-NoLogo");
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(script);
+        foreach (string argument in args)
+        {
+            start.ArgumentList.Add(argument);
+        }
+        using Process process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start fake command.");
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+}
+'@ -OutputAssembly $script:FakeCommandLauncher -OutputType ConsoleApplication
+        }
+        [IO.File]::Copy($script:FakeCommandLauncher, $LauncherPath, $true)
         return
     }
 
