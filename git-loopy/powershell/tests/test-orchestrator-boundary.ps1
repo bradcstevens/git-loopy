@@ -271,7 +271,7 @@ if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
 [IO.File]::WriteAllText($env:FAKE_COPILOT_CALLS, [string]($Calls + 1))
 # Emit on stdout to prove the agent stream is routed away from the JSONL Event
 # stream (the Orchestrator forwards it to stderr).
-[Console]::Out.WriteLine("copilot agent stream marker")
+Write-Output "copilot agent stream marker"
 # A per-call commit plan (opt-in) lets a scenario vary commit messages across
 # Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
 # `-F` so multi-line close-keyword bodies survive. Falling back to the simple
@@ -2014,7 +2014,7 @@ Read outside the worktree.
         -DirectPowerShell `
         -Body @'
 $ErrorActionPreference = "Stop"
-[Console]::Out.WriteLine("copilot agent stream marker")
+Write-Output "copilot agent stream marker"
 $Sleep = if ($env:FAKE_COPILOT_SLEEP) { [int]$env:FAKE_COPILOT_SLEEP } else { 60 }
 Start-Sleep -Seconds $Sleep
 [Console]::Error.WriteLine("slow copilot: turn finished unbounded")
