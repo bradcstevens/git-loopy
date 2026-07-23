@@ -800,15 +800,15 @@ def _run_continuation(args: argparse.Namespace) -> int:
     """Dispatch one native Continuation command without starting a Run."""
     try:
         from git_loopy.continuation import run_command
+
+        return run_command(
+            args.continuation_operation,
+            input_path=getattr(args, "input_path", None),
+            terminal=bool(getattr(args, "terminal", False)),
+        )
     except ReleaseVersionError as exc:
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
         return 1
-
-    return run_command(
-        args.continuation_operation,
-        input_path=getattr(args, "input_path", None),
-        terminal=bool(getattr(args, "terminal", False)),
-    )
 
 
 def _parse_csv_env(value: str | None) -> list[str]:
