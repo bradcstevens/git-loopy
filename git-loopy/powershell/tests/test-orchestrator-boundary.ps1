@@ -953,7 +953,8 @@ exit 97
         $CapAgentOutput,
         (
             "pre-marker output`n" +
-            "<working issue=41>`n" +
+            "<working issue=99>`n" +
+            "<working issue=041>`n" +
             "<working issue=42>`n" +
             "post-marker output`n"
         ),
@@ -1088,9 +1089,10 @@ exit 97
             Where-Object { $_["type"] -ceq "agent.output" }
     )
     Assert-Equal (
-        "pre-marker output,<working issue=41>,<working issue=42>," +
-        "post-marker output,pre-marker output,<working issue=41>," +
-        "<working issue=42>,post-marker output"
+        "pre-marker output,<working issue=99>,<working issue=041>," +
+        "<working issue=42>,post-marker output,pre-marker output," +
+        "<working issue=99>,<working issue=041>,<working issue=42>," +
+        "post-marker output"
     ) ([string]::Join(",", @($OutputEvents | ForEach-Object { $_["text"] }))) (
         "native CLI output Event order"
     )
@@ -1114,6 +1116,12 @@ exit 97
             "activation observation timestamp"
         )
     }
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) (
+        "Active-issue marker for #99 ignored; " +
+        "issue is not in the current Pool"
+    ) "out-of-Pool marker diagnostic"
     Assert-Contains (
         [IO.File]::ReadAllText($CapStderr)
     ) (

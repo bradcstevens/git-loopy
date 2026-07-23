@@ -1357,12 +1357,26 @@ function Write-GitLoopyAgentOutput {
         [Text.RegularExpressions.RegexOptions]::IgnoreCase
     )
     foreach ($Match in $MarkerPattern.Matches($Line)) {
+        $MarkerRef = [string]$Match.Groups["issue"].Value
+        [int]$MarkerIssue = 0
+        if (
+            [int]::TryParse(
+                $MarkerRef,
+                [Globalization.NumberStyles]::None,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$MarkerIssue
+            )
+        ) {
+            $MarkerRef = $MarkerIssue.ToString(
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+        }
         Set-GitLoopyActiveBinding `
             -Context $Context `
             -EventTypes $EventTypes `
             -Iteration $Iteration `
             -Pool $Pool `
-            -Ref ([string]$Match.Groups["issue"].Value) `
+            -Ref $MarkerRef `
             -Source "working_marker" `
             -ObservedAt $ObservedAt | Out-Null
     }
