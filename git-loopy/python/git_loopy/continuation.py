@@ -1648,10 +1648,6 @@ def _reconcile_revision_protocol(
 
     for carrier in carriers:
         for comment in carrier.comments:
-            if _RECORD_MARKER in comment.body and (
-                comment.author in trusted_humans or comment.author in trusted_apps
-            ):
-                carriers_with_trusted_markers.add(carrier.number)
             authorized, rejection = _authorized_comment(
                 comment,
                 repository=repository,
@@ -1671,6 +1667,8 @@ def _reconcile_revision_protocol(
                         }
                     )
                 continue
+            if _RECORD_MARKER in comment.body:
+                carriers_with_trusted_markers.add(carrier.number)
             if (
                 comment.created_at is not None
                 and comment.updated_at is not None
@@ -1895,6 +1893,18 @@ def _publish(
 ) -> dict[str, Any]:
     repository, _trusted, completion, publication = _validate_completion(request)
     fingerprints = _semantic_fingerprints(completion)
+    if "observation" not in request and any(
+        field in request for field in ("parents", "reattestation")
+    ):
+        raise ContinuationError(
+            "observation is required when parents or reattestation is present"
+        )
+    if publication == "ephemeral" and any(
+        field in request for field in ("observation", "parents", "reattestation")
+    ):
+        raise ContinuationError(
+            "immutable revision fields require shared publication"
+        )
     if publication == "ephemeral":
         return {
             "ok": True,
@@ -1986,15 +1996,24 @@ def _publish(
                     }
     for evidence in completion["transition"]["evidence"]:
         github.read_issue_comment(repository, int(evidence["comment_id"]))
-    github.ensure_issue_label(repository, carrier_number, _INDEX_LABEL)
-    appended = github.append_issue_comment(repository, carrier_number, body)
+    try:
+        github.ensure_issue_label(repository, carrier_number, _INDEX_LABEL)
+        appended = github.append_issue_comment(repository, carrier_number, body)
+        committed = github.read_issue_comment(repository, appended.id)
+    except GhError as exc:
+        raise PublicationRepairRequired(
+            "publication failed after durable transition: "
+            f"{exc.stderr_tail}; repair required"
+        ) from exc
     if appended.author != producer["login"]:
-        raise ContinuationError(
-            "authenticated comment author does not match completion producer"
+        raise PublicationRepairRequired(
+            "published Producer revision author does not match completion producer; "
+            "repair required"
         )
-    committed = github.read_issue_comment(repository, appended.id)
     if committed.body != body or committed.author != producer["login"]:
-        raise ContinuationError("Producer revision reread did not match the append")
+        raise PublicationRepairRequired(
+            "Producer revision reread did not match the append; repair required"
+        )
     status = "committed"
     conflicting_heads: list[str] = []
     if protocol:
@@ -2306,24 +2325,6 @@ def run_command(
         return 1
     except GhError as exc:
         message = exc.stderr_tail
-        if operation == "publish" and "observation" in request:
-            message = (
-                f"publication failed after durable transition: {message}; "
-                "repair required"
-            )
-            _emit_json(
-                {
-                    "ok": False,
-                    "operation": operation,
-                    "error": {
-                        "code": "repair_required",
-                        "message": message,
-                    },
-                },
-                stdout,
-            )
-            print(f"git-loopy continuation: {message}", file=stderr)
-            return 1
         _emit_json(
             {
                 "ok": False,

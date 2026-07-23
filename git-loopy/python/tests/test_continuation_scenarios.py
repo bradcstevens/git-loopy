@@ -1473,7 +1473,11 @@ def test_python_reconcile_quarantines_producer_after_permission_revocation(
             "carrier": 237,
             "code": "producer_permission_revoked",
             "comment_id": 9001,
-        }
+        },
+        {
+            "carrier": 237,
+            "code": "index_label_stale",
+        },
     ]
     assert github.calls == ["list-all-carriers", "permission:planner"]
     assert stderr == ""
@@ -1553,6 +1557,65 @@ def test_python_operational_publish_failure_is_repair_required(
     assert "append failed" in result["error"]["message"]
     assert result["ok"] is False
     assert "repair required" in stderr.lower()
+
+
+def test_python_atomic_root_failure_after_durable_evidence_is_repair_required(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    github.fail_append = True
+
+    exit_code, result, stderr = _publish_result(
+        _valid_publish_request("shared-continue"),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "repair_required"
+    assert "append failed" in result["error"]["message"]
+    assert result["ok"] is False
+    assert "repair required" in stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("parents", ["0" * 64]),
+        (
+            "reattestation",
+            {
+                "affected_heads": ["0" * 64],
+                "authorized_by": "planner",
+                "mode": "copy",
+            },
+        ),
+    ],
+)
+def test_python_publish_rejects_revision_fields_without_observation(
+    field: str,
+    value: object,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github = _RecordingGitHub()
+    request = _valid_publish_request("shared-continue")
+    request[field] = value
+
+    exit_code, result, stderr = _publish_result(
+        request,
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "observation is required" in result["error"]["message"]
+    assert github.calls == []
+    assert "observation is required" in stderr
 
 
 @pytest.mark.parametrize(
