@@ -11,7 +11,9 @@ $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
 $ModulePath = Join-Path $PortDir "GitLoopy.Events.psm1"
+$OrchestratorModulePath = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
 
+Import-Module $OrchestratorModulePath -Force
 Import-Module $ModulePath -Force
 
 function Assert-True {
@@ -88,6 +90,69 @@ Assert-Equal (
 foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]
     Assert-Equal $Case["jsonl"] $Actual "serialization fixture: $($Case["id"])"
+}
+
+foreach (
+    $Case in @(
+        $Fixture["normalized_rollup_cases"] |
+            Where-Object { $_["orchestrator"] -ceq "powershell" }
+    )
+) {
+    $InputFacts = $Case["input"]
+    $RollupArguments = @{
+        IterationStartedMonotonic = $InputFacts["iteration_started_monotonic"]
+        FinishedMonotonic = $InputFacts["finished_monotonic"]
+        ActiveIssue = $InputFacts["active_issue"]
+        ActiveStartedAt = (
+            Get-GitLoopyIsoTimestamp -Timestamp $InputFacts["active_started_at"]
+        )
+        ActiveStartedMonotonic = $InputFacts["active_started_monotonic"]
+        FirstStartedAt = (
+            Get-GitLoopyIsoTimestamp -Timestamp $InputFacts["first_started_at"]
+        )
+        FirstStartedMonotonic = $InputFacts["first_started_monotonic"]
+        PreviousCumulativeActiveSeconds = (
+            $InputFacts["previous_cumulative_active_seconds"]
+        )
+        Commits = $InputFacts["commits"]
+        AutoClosures = $InputFacts["auto_closures"]
+        PrAdvances = $InputFacts["pr_advances"]
+        Strikes = $InputFacts["strikes"]
+    }
+    if ($InputFacts.Contains("active_closed_at")) {
+        $RollupArguments["ActiveClosedAt"] = Get-GitLoopyIsoTimestamp `
+            -Timestamp $InputFacts["active_closed_at"]
+        $RollupArguments["ActiveClosedMonotonic"] = (
+            $InputFacts["active_closed_monotonic"]
+        )
+    }
+    if ($InputFacts.Contains("terminal_outcome")) {
+        $RollupArguments["TerminalOutcome"] = $InputFacts["terminal_outcome"]
+    }
+    $Actual = Get-GitLoopyIterationRollup @RollupArguments
+    $ExpectedEvent = [ordered]@{
+        ts = "2026-05-16T00:00:00.000Z"
+        run_id = "01HXR0000000000000000000AA"
+        iter = 1
+        type = "wrapper.iteration.end"
+    }
+    foreach ($Key in $Case["expected"].Keys) {
+        $ExpectedEvent[$Key] = $Case["expected"][$Key]
+    }
+    $ActualEvent = [ordered]@{
+        ts = "2026-05-16T00:00:00.000Z"
+        run_id = "01HXR0000000000000000000AA"
+        iter = 1
+        type = "wrapper.iteration.end"
+    }
+    foreach ($Key in $Actual.Keys) {
+        $ActualEvent[$Key] = $Actual[$Key]
+    }
+    Assert-Equal (
+        ConvertTo-GitLoopyJsonLine -Event $ExpectedEvent
+    ) (
+        ConvertTo-GitLoopyJsonLine -Event $ActualEvent
+    ) "normalized rollup fixture: $($Case["id"])"
 }
 
 $GeneratedRunId = New-GitLoopyRunId

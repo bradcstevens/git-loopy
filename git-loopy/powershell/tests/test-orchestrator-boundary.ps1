@@ -7,6 +7,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+$OrchestratorModule = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
+Import-Module $OrchestratorModule -Force
 $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
@@ -833,6 +835,35 @@ exit 97
         )
     }
     Assert-Equal 0 $Events[2]["issues"].Count "empty collected Pool"
+    Assert-Equal "no_progress" $Events[3]["outcome"] "empty Iteration outcome"
+    Assert-True (
+        $Events[3]["duration_seconds"] -is [double] -or
+        $Events[3]["duration_seconds"] -is [long]
+    ) "empty Iteration duration is numeric"
+    Assert-True (
+        $Events[3]["duration_seconds"] -ge 0
+    ) "empty Iteration duration is non-negative"
+    Assert-Equal 0 $Events[3]["issues"].Count "empty Iteration issue contributions"
+    Assert-Equal 0 $Events[3]["summary"]["commits"] "empty Iteration commits"
+    Assert-Equal 0 $Events[3]["summary"]["auto_closures"] (
+        "empty Iteration closures"
+    )
+    Assert-Equal 0 $Events[3]["summary"]["strikes"] "empty Iteration Strikes"
+    foreach ($Name in @(
+        "model",
+        "tokens_in",
+        "tokens_out",
+        "observed_tokens",
+        "cost_usd",
+        "tool_count",
+        "skill_call_count",
+        "skills_consulted",
+        "peak_context_window"
+    )) {
+        Assert-True (
+            $null -eq $Events[3]["summary"][$Name]
+        ) "empty Iteration unavailable $Name"
+    }
     Assert-Equal "empty_pool" $Events[4]["outcome"] "empty Run outcome"
     Assert-Equal 1 $Events[4]["iterations_run"] "empty Run Iteration count"
 
@@ -1245,6 +1276,54 @@ exit 97
     Assert-Equal "single_member_pool" $SingleMemberBindings[0]["binding_source"] (
         "single-member Pool binding source"
     )
+    $CommitsIterationEnd = @(
+        $CommitsEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "advanced" $CommitsIterationEnd["outcome"] (
+        "commit Iteration outcome"
+    )
+    Assert-True (
+        $CommitsIterationEnd["duration_seconds"] -ge 0
+    ) "commit Iteration duration"
+    Assert-Equal 2 $CommitsIterationEnd["summary"]["commits"] (
+        "commit Iteration Summary commits"
+    )
+    Assert-Equal 0 $CommitsIterationEnd["summary"]["auto_closures"] (
+        "commit Iteration Summary closures"
+    )
+    Assert-Equal 0 $CommitsIterationEnd["summary"]["strikes"] (
+        "commit Iteration Summary Strikes"
+    )
+    Assert-Equal 1 $CommitsIterationEnd["issues"].Count (
+        "commit Iteration issue contribution count"
+    )
+    $CommitContribution = $CommitsIterationEnd["issues"][0]
+    Assert-Equal 41 $CommitContribution["issue"] "commit contribution issue"
+    Assert-Equal "advanced" $CommitContribution["status"] (
+        "commit contribution status"
+    )
+    Assert-Equal (
+        $SingleMemberBindings[0]["activated_at"]
+    ) $CommitContribution["first_started_at"] (
+        "commit contribution first activation"
+    )
+    Assert-True (
+        $null -eq $CommitContribution["closed_at"] -and
+        $null -eq $CommitContribution["issue_elapsed_seconds"]
+    ) "advanced contribution has no closure-only facts"
+    Assert-True (
+        $CommitContribution["active_seconds"] -ge 0 -and
+        $CommitContribution["cumulative_active_seconds"] -eq
+            $CommitContribution["active_seconds"]
+    ) "fallback contribution carries monotonic Active time"
+    Assert-True (
+        $null -eq $CommitContribution["consumption"]["model"] -and
+        $null -eq $CommitContribution["consumption"]["tokens_in"] -and
+        $null -eq $CommitContribution["consumption"]["tokens_out"] -and
+        $null -eq $CommitContribution["cost_usd"] -and
+        $null -eq $CommitContribution["peak_context_window"]
+    ) "commit contribution does not guess unavailable telemetry"
     Assert-Equal "iteration_cap" (
         $CommitsEvents[-1]["outcome"]
     ) "agent-commit Run outcome"
@@ -1678,6 +1757,46 @@ Read outside the worktree.
     Assert-Equal 0 (
         @($AutoEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }).Count
     ) "a progress Iteration records no Strike"
+    $AutoIterationEnd = @(
+        $AutoEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "closed" $AutoIterationEnd["outcome"] (
+        "auto-close Iteration outcome"
+    )
+    Assert-Equal 2 $AutoIterationEnd["summary"]["commits"] (
+        "auto-close Summary commits"
+    )
+    Assert-Equal 1 $AutoIterationEnd["summary"]["auto_closures"] (
+        "auto-close Summary closures"
+    )
+    Assert-Equal 0 $AutoIterationEnd["summary"]["strikes"] (
+        "auto-close Summary Strikes"
+    )
+    Assert-Equal 1 $AutoIterationEnd["issues"].Count (
+        "auto-close issue contribution count"
+    )
+    $ClosedContribution = $AutoIterationEnd["issues"][0]
+    Assert-Equal 41 $ClosedContribution["issue"] "closed contribution issue"
+    Assert-Equal "closed" $ClosedContribution["status"] (
+        "closed contribution status"
+    )
+    Assert-Equal (
+        $AutoBindings[0]["activated_at"]
+    ) $ClosedContribution["first_started_at"] (
+        "closed contribution first activation"
+    )
+    Assert-Equal (
+        $AutoCloseEvents[0]["ts"]
+    ) $ClosedContribution["closed_at"] (
+        "closed contribution authoritative closure time"
+    )
+    Assert-True (
+        $ClosedContribution["issue_elapsed_seconds"] -ge 0 -and
+        $ClosedContribution["active_seconds"] -ge 0 -and
+        $ClosedContribution["cumulative_active_seconds"] -eq
+            $ClosedContribution["active_seconds"]
+    ) "closed contribution uses monotonic lifecycle durations"
     Assert-Equal "iteration_cap" $AutoEvents[-1]["outcome"] "auto-close Run outcome"
     $CloseComment = [IO.File]::ReadAllText(
         (Join-Path $env:FAKE_GH_CLOSE_DIR "41.comment")
@@ -1739,6 +1858,44 @@ Read outside the worktree.
     Assert-Equal 0 (
         @($ResetEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
     ) "no closing keyword means no auto-close"
+    $ResetIterationEnds = @(
+        $ResetEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )
+    Assert-Equal "no_progress,advanced,no_progress" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["outcome"] }
+        ))
+    ) "Strike-reset Iteration outcomes"
+    Assert-Equal "1,0,1" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["summary"]["strikes"] }
+        ))
+    ) "Strike-reset normalized Summary"
+    Assert-Equal "no-progress,advanced,no-progress" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["issues"][0]["status"] }
+        ))
+    ) "Strike-reset contribution statuses"
+    foreach ($IterationEnd in $ResetIterationEnds) {
+        Assert-True (
+            $null -eq $IterationEnd["issues"][0]["closed_at"] -and
+            $null -eq $IterationEnd["issues"][0]["issue_elapsed_seconds"]
+        ) "non-closure contribution leaves closure facts unknown"
+    }
+    Assert-Equal 1 (
+        @(
+            $ResetIterationEnds |
+                ForEach-Object { $_["issues"][0]["first_started_at"] } |
+                Sort-Object -Unique
+        ).Count
+    ) "repeated issue keeps its first activation"
+    Assert-True (
+        $ResetIterationEnds[0]["issues"][0]["cumulative_active_seconds"] -le
+            $ResetIterationEnds[1]["issues"][0]["cumulative_active_seconds"] -and
+        $ResetIterationEnds[1]["issues"][0]["cumulative_active_seconds"] -le
+            $ResetIterationEnds[2]["issues"][0]["cumulative_active_seconds"]
+    ) "repeated issue accumulates monotonic Active time"
     Assert-Equal "iteration_cap" $ResetEvents[-1]["outcome"] "strike-reset Run outcome"
     Assert-Equal 3 $ResetEvents[-1]["iterations_run"] "strike-reset ran every Iteration"
     Assert-True (
@@ -1790,6 +1947,22 @@ Read outside the worktree.
     Assert-Equal "wrapper.run.end" $StuckEvents[-1]["type"] "stuck Run ends with run.end"
     Assert-Equal "stuck" $StuckEvents[-1]["outcome"] "stuck Run outcome"
     Assert-Equal 3 $StuckEvents[-1]["iterations_run"] "stuck Run iterations"
+    $StuckIterationEnds = @(
+        $StuckEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )
+    Assert-Equal "no_progress,no_progress,aborted" (
+        [string]::Join(",", @(
+            $StuckIterationEnds | ForEach-Object { $_["outcome"] }
+        ))
+    ) "stuck Iteration outcomes"
+    Assert-Equal "aborted" $StuckIterationEnds[-1]["issues"][0]["status"] (
+        "threshold Strike contribution status"
+    )
+    Assert-True (
+        $null -eq $StuckIterationEnds[-1]["issues"][0]["closed_at"] -and
+        $null -eq $StuckIterationEnds[-1]["issues"][0]["issue_elapsed_seconds"]
+    ) "aborted contribution leaves closure facts unknown"
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
     ) "stuck Run closed no issue"
@@ -2206,6 +2379,39 @@ Start-Sleep -Seconds $Sleep
     Assert-Equal "iteration_cap" $SendTimeoutEvents[-1]["outcome"] "send-timeout Run outcome"
     Assert-Equal 1 $SendTimeoutEvents[-1]["iterations_run"] "send-timeout ran one Iteration"
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # UTC timestamps are durable facts, not a duration clock. A backwards
+    # wall-clock adjustment therefore preserves native monotonic lifecycle
+    # durations while retaining both authoritative timestamps verbatim.
+    $WallAdjusted = Get-GitLoopyIterationRollup `
+        -IterationStartedMonotonic 10 `
+        -FinishedMonotonic 15 `
+        -ActiveIssue 41 `
+        -ActiveStartedAt "2026-05-16T00:00:10.000Z" `
+        -ActiveStartedMonotonic 10 `
+        -FirstStartedAt "2026-05-16T00:00:10.000Z" `
+        -FirstStartedMonotonic 10 `
+        -ActiveClosedAt "2026-05-16T00:00:01.000Z" `
+        -ActiveClosedMonotonic 12 `
+        -AutoClosures 1
+    Assert-Equal "closed" $WallAdjusted["outcome"] (
+        "wall-adjusted closure outcome"
+    )
+    Assert-Equal 5 $WallAdjusted["duration_seconds"] (
+        "wall-adjusted Iteration duration"
+    )
+    Assert-Equal 2 $WallAdjusted["issues"][0]["active_seconds"] (
+        "wall-adjusted Active duration"
+    )
+    Assert-Equal 2 $WallAdjusted["issues"][0]["issue_elapsed_seconds"] (
+        "wall-adjusted issue elapsed"
+    )
+    Assert-Equal "2026-05-16T00:00:10.000Z" (
+        $WallAdjusted["issues"][0]["first_started_at"]
+    ) "wall-adjusted first activation timestamp"
+    Assert-Equal "2026-05-16T00:00:01.000Z" (
+        $WallAdjusted["issues"][0]["closed_at"]
+    ) "wall-adjusted closure timestamp"
 }
 finally {
     foreach ($Name in @(
