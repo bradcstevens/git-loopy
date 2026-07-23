@@ -36,16 +36,16 @@ function Remove-TestDirectory {
     $Deadline = [DateTime]::UtcNow.AddSeconds(5)
     while ([IO.Directory]::Exists($Path)) {
         try {
-            [IO.Directory]::Delete($Path, $true)
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
             return
         }
-        catch [Management.Automation.MethodInvocationException] {
-            if (
-                $_.Exception.InnerException -isnot [IO.IOException] -and
-                $_.Exception.InnerException -isnot [UnauthorizedAccessException]
-            ) {
+        catch [IO.IOException] {
+            if ([DateTime]::UtcNow -ge $Deadline) {
                 throw
             }
+            Start-Sleep -Milliseconds 100
+        }
+        catch [UnauthorizedAccessException] {
             if ([DateTime]::UtcNow -ge $Deadline) {
                 throw
             }

@@ -39,10 +39,15 @@ from typing import NamedTuple
 
 # The one place the exclusion set is defined. Imported by the guard test so the
 # sync and the guard can never disagree about which skills are vendored. These
-# three are optional tool/vendor integrations, cleanly severable from the core
+# are optional tool/vendor integrations, cleanly severable from the core
 # loop-engineering catalog (PRD #121).
 SKILL_DENYLIST: frozenset[str] = frozenset(
-    {"microsoft-docs", "microsoft-foundry", "playwright-cli"}
+    {
+        "azure-mcaps-resource-deployment",
+        "microsoft-docs",
+        "microsoft-foundry",
+        "playwright-cli",
+    }
 )
 
 # scripts/ -> python/ -> git-loopy/ -> <repo root>

@@ -297,7 +297,7 @@ function Write-GitLoopyContinuationError {
             message = $Message
         }
     })
-    [Console]::Error.WriteLine("git-loopy continuation: $Message")
+    [Console]::Error.Write("git-loopy continuation: $Message`n")
     return 1
 }
 

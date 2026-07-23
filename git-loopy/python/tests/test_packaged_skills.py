@@ -9,7 +9,7 @@ The repo-root ``.copilot/skills/`` is the single human-edited canonical source o
 truth; ``git_loopy/skills/`` holds *generated* vendored copies regenerated
 wholesale by ``scripts/sync_skills.py`` (the committed sync command). The vendored
 catalog is exactly ``subdirs(.copilot/skills/) - SKILL_DENYLIST`` -- every
-canonical skill except the three optional tool/vendor integrations.
+canonical skill except the optional tool/vendor integrations.
 
 These guards assert the vendored catalog (a) is exactly the canonical set minus
 the denylist and byte-identical to canonical, (b) never contains a denied skill,
@@ -129,10 +129,15 @@ def _assert_dirs_identical(left: Path, right: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_denylist_is_exactly_the_three_integrations() -> None:
-    """The one place the exclusion set is defined names exactly the three."""
+def test_denylist_is_exactly_the_optional_integrations() -> None:
+    """The one place the exclusion set names every optional integration."""
     assert sync_skills.SKILL_DENYLIST == frozenset(
-        {"microsoft-docs", "microsoft-foundry", "playwright-cli"}
+        {
+            "azure-mcaps-resource-deployment",
+            "microsoft-docs",
+            "microsoft-foundry",
+            "playwright-cli",
+        }
     )
 
 
@@ -172,7 +177,7 @@ def test_every_vendored_skill_is_the_real_skill() -> None:
 
 
 def test_denied_skills_are_absent_from_the_vendored_catalog() -> None:
-    """None of the three denied integrations may leak into the wheel."""
+    """No denied integration may leak into the wheel."""
     vendored = _packaged_skills_path()
     for denied in sync_skills.SKILL_DENYLIST:
         assert not (vendored / denied).exists(), (
