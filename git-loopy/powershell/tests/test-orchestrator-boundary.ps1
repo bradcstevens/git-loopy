@@ -1810,6 +1810,77 @@ Read outside the worktree.
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSE_DIR", $null)
 
+    # An agent may perform the required source closure itself before the
+    # Orchestrator reaches its closing-keyword backstop. The source's CLOSED
+    # state is still authoritative lifecycle evidence, but it is not an
+    # auto-closure and must not cause a duplicate `gh issue close`.
+    $AgentClosedRepo = Join-Path $TempDir "agent-closed"
+    $AgentClosedBin = Join-Path $TempDir "agent-closed-bin"
+    New-RealTestRepo -Root $AgentClosedRepo
+    Write-TurnTools -BinDir $AgentClosedBin
+    $AgentClosedList = Join-Path $TempDir "agent-closed-list.json"
+    [IO.File]::Copy($CapList, $AgentClosedList, $true)
+    $AgentClosedViews = Join-Path $TempDir "agent-closed-views"
+    [IO.Directory]::CreateDirectory($AgentClosedViews) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $AgentClosedViews "41.json"), @'
+{
+  "number": 41,
+  "state": "CLOSED",
+  "url": "https://example.invalid/issues/41"
+}
+'@)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-closed-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-closed-list.count"
+    $env:FAKE_GH_LIST_JSON = $AgentClosedList
+    $env:FAKE_GH_VIEW_DIR = $AgentClosedViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "agent-closed-closed.log"
+    Set-CopilotEnv -Prefix "agent-closed"
+    $AgentClosedPlan = Join-Path $TempDir "agent-closed-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $AgentClosedPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $AgentClosedPlan "1/1.msg"),
+        "feat: close at the source`n`nCloses #41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $AgentClosedPlan
+    $AgentClosedStdout = Join-Path $TempDir "agent-closed.stdout"
+    $AgentClosedStderr = Join-Path $TempDir "agent-closed.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $AgentClosedRepo `
+        -FakeBin $AgentClosedBin `
+        -StdoutPath $AgentClosedStdout `
+        -StderrPath $AgentClosedStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+    Assert-Equal 0 $Status "agent-closed turn Run exit"
+    Assert-True (
+        -not [IO.File]::Exists((Join-Path $TempDir "agent-closed-closed.log"))
+    ) "an already-closed source issue was closed again"
+    $AgentClosedEvents = Read-Events -Path $AgentClosedStdout
+    Assert-Equal 0 (
+        @(
+            $AgentClosedEvents |
+                Where-Object { $_["type"] -ceq "wrapper.auto_close" }
+        ).Count
+    ) "agent source closure was mislabeled as an auto-close"
+    $AgentClosedIterationEnd = @(
+        $AgentClosedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "closed" $AgentClosedIterationEnd["outcome"] (
+        "agent source closure Iteration outcome"
+    )
+    Assert-Equal 0 $AgentClosedIterationEnd["summary"]["auto_closures"] (
+        "agent source closure Summary auto-closures"
+    )
+    Assert-Equal "closed" $AgentClosedIterationEnd["issues"][0]["status"] (
+        "agent source closure contribution status"
+    )
+    Assert-True (
+        $null -ne $AgentClosedIterationEnd["issues"][0]["closed_at"] -and
+        $null -ne $AgentClosedIterationEnd["issues"][0]["issue_elapsed_seconds"]
+    ) "agent source closure omitted closure-only facts"
+
     # Progress resets the Strike counter: a no-progress Iteration records a
     # Strike, the next Iteration's agent commit clears it, and a following
     # no-progress Iteration is Strike 1 again — never 2.
