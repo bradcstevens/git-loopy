@@ -2172,6 +2172,57 @@ def test_python_reconcile_reports_unverified_completion_for_unavailable_reads(
     assert stderr == ""
 
 
+def test_python_reconcile_reports_unverified_prerequisite_and_keeps_other_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unstable prerequisite read excludes only its own Action.
+
+    A prerequisite Target whose read never stabilizes yields a typed
+    ``unverified_prerequisite`` diagnostic and drops that Action from
+    guidance rather than surfacing an optimistic Ready or Blocked claim;
+    an independent Action with a stable fact set stays Ready, proving the
+    quarantine is the smallest safe scope.
+    """
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    blocked = copy.deepcopy(actions[0])
+    blocked["key"] = "blocked"
+    blocked["summary"] = "Publish the successor specification"
+    blocked["target"] = _issue(241)
+    blocked["completion_condition"] = {"kind": "issue-closed", "target": _issue(241)}
+    blocked["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    actions.append(blocked)
+
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    github.sequences["issue:501"] = [
+        GhError(["gh", "issue", "view"], 1, "temporarily unavailable"),
+        GhError(["gh", "issue", "view"], 1, "temporarily unavailable"),
+    ]
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    [ready] = result["result"]["actions"]
+    assert ready["readiness"] == "Ready"
+    assert ready["target"] == _issue(239)
+    assert "unsatisfied_prerequisites" not in ready
+    [diagnostic] = result["result"]["diagnostics"]
+    assert diagnostic["code"] == "unverified_prerequisite"
+    assert diagnostic["action_key"] == "blocked"
+    assert stderr == ""
+
+
 def test_python_reconcile_revision_protocol_discovers_every_carrier(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
