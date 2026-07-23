@@ -40,11 +40,12 @@ interaction-evidence, and condition schemas; exact Python native-publish stdout
 and stderr; raw-segment stress requests; and literal request templates with
 RFC 6902 `add`, `remove`, and `replace` patches for invalid completion cases.
 Adapters may materialize those generic fixture records but must not recreate the
-semantic dispatch they describe. The shell adapter drives those same portable
-JSON, completion-envelope, vocabulary, fingerprint, receipt, and atomic-failure
-records through its public native `publish` command. The PowerShell adapter
-drives the shared trusted publish-to-Reconciliation workflow through its public
-native command and deterministic scripted GitHub transport.
+semantic dispatch they describe. The shell and PowerShell adapters drive those
+same portable JSON, completion-envelope, vocabulary, fingerprint, receipt, and
+atomic-failure records — including the raw-segment stress requests and the
+byte-order-mark rejection — through their public native `publish` command. The
+PowerShell adapter also drives the shared trusted publish-to-Reconciliation
+workflow through its deterministic scripted GitHub transport.
 
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root

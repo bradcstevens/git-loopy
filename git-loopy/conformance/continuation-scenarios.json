@@ -2535,7 +2535,7 @@
     },
     {
       "id": "nesting-rejection-precedes-an-earlier-duplicate-key",
-      "distributions": ["python", "shell"],
+      "distributions": ["python", "shell", "powershell"],
       "arguments": ["continuation", "publish"],
       "request": {
         "source": "stdin",
@@ -2610,7 +2610,7 @@
     },
     {
       "id": "publish-rejects-utf8-bom",
-      "distributions": ["python", "shell"],
+      "distributions": ["python", "shell", "powershell"],
       "arguments": [
         "continuation",
         "publish",
