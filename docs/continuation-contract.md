@@ -63,10 +63,11 @@ The manifest describes capability only. It is not Automation scope, Performer po
 flag, or authority to publish or Dispatch.
 
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
-tracker operation. The Python and shell distributions now advertise their capability-gated
-`publish`/`reconcile` implementations described below. Each family member's native manifest remains
-the declaration of its other capabilities. `record-dispatch-result`, `repair-index`, terminal
-rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported. Mode is `off`.
+tracker operation. The Python, shell, and PowerShell distributions now advertise their
+capability-gated `publish`/`reconcile` implementations described below. Each family member's native
+manifest remains the declaration of its other capabilities. `record-dispatch-result`,
+`repair-index`, terminal rendering, report mode, execute-frontier, and concurrent Dispatch remain
+unsupported. Mode is `off`.
 
 ## 5. Event observations
 
@@ -108,8 +109,9 @@ its native implementation lands.
 ## 7. Native atomic completion records
 
 Python and shell `publish` accept one version-identifiable completion envelope for one Workstream
-and one planning Producer transition. Publication is `shared` or `ephemeral`, and the disposition
-is exactly one of:
+and one planning Producer transition. PowerShell currently accepts the trusted shared tracer subset:
+one `continue` completion carrying one planning Producer's `Publish spec` Action. Publication is
+`shared` or `ephemeral`, and the disposition is exactly one of:
 
 - `continue`: one or more complete Actions and no outcome or no-guidance branch;
 - `terminal`: one shared, durably evidenced `complete`, `rejected`, `abandoned`, or `superseded`
@@ -167,11 +169,11 @@ classification and evidence, completion condition, effects, requirements, and tr
 Basis, Producer provenance, carrier, timestamps, Readiness, and display order do not alter that
 fingerprint.
 
-Python `reconcile` performs a fresh all-state read of labeled carriers, parses marked comments,
-requires the comment author and embedded Producer to match the explicit trusted policy, validates
-the revision digest and semantic fingerprints, and reads current Action Targets. Supported open
-Targets are returned with their identity, semantic fingerprint, Instruction, Target, Basis,
-Producer provenance, interaction classification, Prerequisites, and completion condition.
-Terminal and no-guidance records contribute no Action. The discovery label is an index only: the
-Producer comment and current GitHub facts are authority, and no queue, journal, snapshot, or local
-cache is created.
+Each native `reconcile` performs a fresh all-state read of labeled carriers for its supported
+publication scope, parses marked comments, requires the comment author and embedded Producer to
+match the explicit trusted policy, validates the revision digest and semantic fingerprints, and
+reads current Action Targets. Supported open Targets are returned with their identity, semantic
+fingerprint, Instruction, Target, Basis, Producer provenance, interaction classification,
+Prerequisites, and completion condition. Terminal and no-guidance records contribute no Action.
+The discovery label is an index only: the Producer comment and current GitHub facts are authority,
+and no queue, journal, snapshot, or local cache is created.
