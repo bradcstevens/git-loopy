@@ -1632,6 +1632,445 @@ def _authorized_comment(
     return True, None
 
 
+_STABLE_READ_ATTEMPTS = 3
+_UNAVAILABLE = object()
+_NOT_FOUND_PHRASES = ("404", "not found", "could not resolve")
+_REVIEW_STATE_LABELS = {
+    "APPROVED": "approved",
+    "CHANGES_REQUESTED": "changes-requested",
+    "COMMENTED": "commented",
+}
+
+
+def _is_not_found_error(exc: GhError) -> bool:
+    """Return whether ``exc`` is a definitive absence, not a transient outage.
+
+    A definitive 404-shaped failure is itself a stable durable fact (the
+    Target does not currently exist); anything else is genuine
+    unavailability and must never be treated as a negative result.
+    """
+    message = exc.stderr_tail.lower()
+    return any(phrase in message for phrase in _NOT_FOUND_PHRASES)
+
+
+def _stable_read(reader: Any, *, is_not_found: Any = _is_not_found_error) -> tuple[Any, bool]:
+    """Read a durable fact, retrying only when the read is genuinely in doubt.
+
+    A clean first read is accepted immediately as authoritative (so the
+    common case costs exactly one GitHub call, matching every previously
+    published command shape). Retries are reserved for reads that are
+    *not* immediately trustworthy: a failed attempt is retried up to
+    ``_STABLE_READ_ATTEMPTS`` times in total, and a value is only accepted
+    once two consecutive attempts agree (including two consecutive
+    unavailable attempts, which are themselves stable evidence of
+    persistent failure). Returns ``(value, stable)``; ``value`` is
+    ``None`` for a definitive absence, or ``_UNAVAILABLE`` when the read
+    could not be trusted.
+    """
+    try:
+        first: Any = reader()
+    except GhError as exc:
+        first = None if is_not_found(exc) else _UNAVAILABLE
+    else:
+        return first, True
+    if first is None:
+        return None, True
+    previous = first
+    for _attempt in range(_STABLE_READ_ATTEMPTS - 1):
+        try:
+            current: Any = reader()
+        except GhError as exc:
+            current = None if is_not_found(exc) else _UNAVAILABLE
+        if current == previous:
+            return current, True
+        previous = current
+    return previous, False
+
+
+def _artifact_read_plan(
+    target_kind: str,
+    target: dict[str, Any],
+    github: ContinuationGitHubClient,
+    repository: str,
+) -> tuple[tuple[Any, ...], Any]:
+    """Return the shared cache key and reader for one reference Target.
+
+    Reference kinds reuse the identical cache key used by their dedicated
+    condition kind (for example ``issue``) so that an ``artifact-exists``
+    check and an ``issue-open`` check against the same issue within one
+    reconcile call are evaluated against exactly one stable read.
+    """
+    if target_kind == "issue":
+        number = int(target["number"])
+        return ("issue", repository, number), (
+            lambda: github.read_issue(repository, number)
+        )
+    if target_kind == "pull-request":
+        number = int(target["number"])
+        return ("pull-request", repository, number), (
+            lambda: github.read_pull_request(repository, number)
+        )
+    if target_kind == "commit":
+        sha = str(target["sha"])
+        return ("commit", repository, sha), (
+            lambda: github.read_commit(repository, sha)
+        )
+    if target_kind == "branch":
+        name = str(target["name"])
+        return ("branch", repository, name), (
+            lambda: github.read_branch(repository, name)
+        )
+    if target_kind == "issue-comment":
+        comment_id = int(target["comment_id"])
+        return ("issue-comment", repository, comment_id), (
+            lambda: github.read_issue_comment(repository, comment_id)
+        )
+    if target_kind == "pull-request-review":
+        pull_request = int(target["pull_request"])
+        review_id = int(target["review_id"])
+        return ("pull-request-review", repository, pull_request, review_id), (
+            lambda: github.read_pull_request_review(
+                repository, pull_request, review_id
+            )
+        )
+    raise AssertionError(f"unsupported reference target kind: {target_kind}")
+
+
+def _predicate_issue_open(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.state == "OPEN"
+
+
+def _predicate_issue_closed(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.state == "CLOSED"
+
+
+def _predicate_pull_request_open(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.state == "OPEN"
+
+
+def _predicate_pull_request_closed(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.state in {"CLOSED", "MERGED"}
+
+
+def _predicate_pull_request_merged(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.state == "MERGED"
+
+
+def _predicate_issue_label_present(condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and condition["label"] in value.labels
+
+
+def _predicate_sub_issues_complete(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.completed >= value.total
+
+
+def _predicate_existence(_condition: dict[str, Any], value: Any) -> bool:
+    return value is not None
+
+
+def _predicate_branch_head_equals(condition: dict[str, Any], value: Any) -> bool:
+    return value is not None and value.sha == condition["target"]["sha"]
+
+
+def _predicate_pull_request_review_state(condition: dict[str, Any], value: Any) -> bool:
+    if value is None:
+        return False
+    return _REVIEW_STATE_LABELS.get(value.state) == condition["state"]
+
+
+_CONDITION_PREDICATES: dict[str, Any] = {
+    "issue-open": _predicate_issue_open,
+    "issue-closed": _predicate_issue_closed,
+    "dependency-satisfied": _predicate_issue_closed,
+    "pull-request-open": _predicate_pull_request_open,
+    "pull-request-closed": _predicate_pull_request_closed,
+    "pull-request-merged": _predicate_pull_request_merged,
+    "issue-label-present": _predicate_issue_label_present,
+    "sub-issues-complete": _predicate_sub_issues_complete,
+    "commit-exists": _predicate_existence,
+    "artifact-exists": _predicate_existence,
+    "branch-head-equals": _predicate_branch_head_equals,
+    "pull-request-review-state": _predicate_pull_request_review_state,
+}
+
+
+def _reference_read_plan(
+    kind: str,
+    condition: dict[str, Any],
+    github: ContinuationGitHubClient,
+    repository: str,
+) -> tuple[tuple[Any, ...], Any]:
+    target = condition["target"]
+    if kind == "artifact-exists":
+        return _artifact_read_plan(target["kind"], target, github, repository)
+    if kind == "issue-label-present":
+        number = int(target["number"])
+        return ("issue-labels", repository, number), (
+            lambda: github.read_issue_labels(repository, number)
+        )
+    if kind == "sub-issues-complete":
+        number = int(target["number"])
+        return ("issue-sub-issues", repository, number), (
+            lambda: github.read_issue_sub_issues(repository, number)
+        )
+    return _artifact_read_plan(target["kind"], target, github, repository)
+
+
+def _evaluate_condition(
+    condition: dict[str, Any],
+    *,
+    github: ContinuationGitHubClient,
+    repository: str,
+    fact_cache: dict[tuple[Any, ...], tuple[Any, bool]],
+    resolve_local: Any,
+) -> str:
+    """Evaluate one typed condition against the shared stable fact set.
+
+    Returns ``"satisfied"``, ``"unsatisfied"``, or ``"unverified"``. Every
+    reference read is served from ``fact_cache`` so the same durable Target
+    is read at most once per reconcile call regardless of how many
+    conditions across however many fragments reference it.
+    """
+    kind = condition["kind"]
+    if kind == "action-completed":
+        return resolve_local(str(condition["action_key"]))
+    cache_key, reader = _reference_read_plan(kind, condition, github, repository)
+    if cache_key not in fact_cache:
+        fact_cache[cache_key] = _stable_read(reader)
+    value, stable = fact_cache[cache_key]
+    if not stable or value is _UNAVAILABLE:
+        return "unverified"
+    return "satisfied" if _CONDITION_PREDICATES[kind](condition, value) else "unsatisfied"
+
+
+def _evaluate_fragment(
+    record: dict[str, Any],
+    *,
+    github: ContinuationGitHubClient,
+    repository: str,
+    fact_cache: dict[tuple[Any, ...], tuple[Any, bool]],
+) -> tuple[
+    list[tuple[dict[str, Any], str, list[dict[str, Any]]]],
+    list[dict[str, Any]],
+]:
+    """Derive Ready/Blocked outstanding Actions for one Producer revision.
+
+    Completed, Unverified, and cyclic Actions are excluded from the
+    returned outstanding-action list and reported only via diagnostics,
+    since Unverified evidence must never surface as an optimistic
+    Ready/Blocked/completion classification.
+    """
+    actions_by_key = {action["key"]: action for action in record["actions"]}
+    status_cache: dict[str, str] = {}
+    diagnostics: list[dict[str, Any]] = []
+    revision_id = record["revision_id"]
+
+    def resolve_completion(key: str, stack: tuple[str, ...]) -> str:
+        if key in status_cache:
+            return status_cache[key]
+        if key in stack:
+            cycle = list(stack[stack.index(key) :]) + [key]
+            diagnostics.append(
+                {
+                    "code": "prerequisite_cycle",
+                    "revision_id": revision_id,
+                    "actions": cycle,
+                }
+            )
+            for cycle_key in cycle:
+                status_cache[cycle_key] = "conflict"
+            return "conflict"
+        action = actions_by_key.get(key)
+        if action is None:
+            status_cache[key] = "unverified"
+            return "unverified"
+        status = _evaluate_condition(
+            action["completion_condition"],
+            github=github,
+            repository=repository,
+            fact_cache=fact_cache,
+            resolve_local=lambda referenced: resolve_completion(
+                referenced, stack + (key,)
+            ),
+        )
+        status_cache[key] = status
+        return status
+
+    results: list[tuple[dict[str, Any], str, list[dict[str, Any]]]] = []
+    for action in record["actions"]:
+        key = action["key"]
+        completion_status = resolve_completion(key, ())
+        if completion_status in {"conflict", "satisfied"}:
+            continue
+        if completion_status == "unverified":
+            diagnostics.append(
+                {
+                    "code": "unverified_completion",
+                    "revision_id": revision_id,
+                    "action_key": key,
+                }
+            )
+            continue
+
+        unsatisfied: list[dict[str, Any]] = []
+        prerequisite_unverified = False
+        conflicted = False
+        for prerequisite in action["prerequisites"]:
+            status = _evaluate_condition(
+                prerequisite,
+                github=github,
+                repository=repository,
+                fact_cache=fact_cache,
+                resolve_local=lambda referenced: resolve_completion(
+                    referenced, (key,)
+                ),
+            )
+            if status == "conflict":
+                conflicted = True
+                break
+            if status == "unverified":
+                prerequisite_unverified = True
+            elif status == "unsatisfied":
+                unsatisfied.append(prerequisite)
+        if conflicted:
+            continue
+        if prerequisite_unverified:
+            diagnostics.append(
+                {
+                    "code": "unverified_prerequisite",
+                    "revision_id": revision_id,
+                    "action_key": key,
+                }
+            )
+            continue
+        readiness = "Blocked" if unsatisfied else "Ready"
+        results.append((action, readiness, unsatisfied))
+    return results, diagnostics
+
+
+def _union_basis(basis_lists: Any) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for basis_list in basis_lists:
+        for item in basis_list:
+            seen[_canonical_json(item)] = item
+    return [seen[key] for key in sorted(seen)]
+
+
+def _union_provenance(contributed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for entry in contributed:
+        record = entry["record"]
+        comment = entry["comment"]
+        producer = entry["producer"]
+        key = (record["carrier"]["number"], record["revision_id"], comment.id)
+        seen[key] = {
+            "login": producer["login"],
+            "role": producer["role"],
+            "carrier": record["carrier"],
+            "revision_id": record["revision_id"],
+            "comment_id": comment.id,
+            "comment_url": comment.url,
+        }
+    return [seen[key] for key in sorted(seen)]
+
+
+def _derive_actions(
+    guidance_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+    *,
+    github: ContinuationGitHubClient,
+    repository: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Derive deduplicated, conflict-checked outstanding Actions on demand.
+
+    Evaluates every guidance-selected fragment against one shared stable
+    fact set, then groups equivalent live claims under one Action identity:
+    matching semantics union their Basis/Producer provenance, while
+    incompatible semantics under the same identity are reported as a
+    Continuation conflict and quarantined (excluded entirely) rather than
+    resolved by recency or discovery order.
+    """
+    fact_cache: dict[tuple[Any, ...], tuple[Any, bool]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    contributions: dict[str, list[dict[str, Any]]] = {}
+
+    for carrier, comment, record in guidance_entries:
+        results, fragment_diagnostics = _evaluate_fragment(
+            record, github=github, repository=repository, fact_cache=fact_cache
+        )
+        diagnostics.extend(fragment_diagnostics)
+        producer = record["producer"]
+        for action, readiness, unsatisfied in results:
+            identity = _action_identity(record, action)
+            contributions.setdefault(identity, []).append(
+                {
+                    "carrier": carrier,
+                    "comment": comment,
+                    "record": record,
+                    "producer": producer,
+                    "action": action,
+                    "readiness": readiness,
+                    "unsatisfied": unsatisfied,
+                    "semantic_fingerprint": record["semantic_fingerprints"][
+                        action["key"]
+                    ],
+                }
+            )
+
+    actions: list[dict[str, Any]] = []
+    for identity, contributed in contributions.items():
+        fingerprints = {entry["semantic_fingerprint"] for entry in contributed}
+        if len(fingerprints) > 1:
+            diagnostics.append(
+                {
+                    "code": "action_conflict",
+                    "identity": identity,
+                    "revision_ids": sorted(
+                        entry["record"]["revision_id"] for entry in contributed
+                    ),
+                    "semantic_fingerprints": sorted(fingerprints),
+                }
+            )
+            continue
+        contributed.sort(
+            key=lambda entry: (entry["record"]["revision_id"], entry["comment"].id)
+        )
+        canonical = contributed[0]
+        action = canonical["action"]
+        item = {
+            "identity": identity,
+            "semantic_fingerprint": canonical["semantic_fingerprint"],
+            "workstream_anchor": canonical["record"]["workstream"]["anchor"],
+            "summary": action["summary"],
+            "kind": action["kind"],
+            "readiness": canonical["readiness"],
+            "instruction": action["instruction"],
+            "target": action["target"],
+            "basis": _union_basis(entry["action"]["basis"] for entry in contributed),
+            "producer": {
+                **canonical["producer"],
+                "carrier": canonical["record"]["carrier"],
+                "revision_id": canonical["record"]["revision_id"],
+                "comment_id": canonical["comment"].id,
+                "comment_url": canonical["comment"].url,
+            },
+            "prerequisites": action["prerequisites"],
+            "interaction": action["interaction"],
+            "completion_condition": action["completion_condition"],
+        }
+        if len(contributed) > 1:
+            # Only surface provenance once a live claim was actually merged
+            # under this identity, preserving the exact single-source
+            # command framing otherwise.
+            item["provenance"] = _union_provenance(contributed)
+        if canonical["unsatisfied"]:
+            # Only surface unsatisfied prerequisites for Blocked Actions,
+            # preserving the exact existing Ready-only command framing.
+            item["unsatisfied_prerequisites"] = canonical["unsatisfied"]
+        actions.append(item)
+    actions.sort(key=lambda action: action["identity"])
+    return actions, diagnostics
+
+
 def _reconcile_revision_protocol(
     request: dict[str, Any],
     github: ContinuationGitHubClient,
@@ -1794,56 +2233,10 @@ def _reconcile_revision_protocol(
     observed_head_entries.sort(
         key=lambda entry: (entry[0].number, entry[2]["revision_id"])
     )
-    actions: list[dict[str, Any]] = []
-    for carrier, comment, record in guidance_entries:
-        producer = record["producer"]
-        for action in record.get("actions", []):
-            if (
-                action["target"]["kind"] != "issue"
-                or action["prerequisites"]
-                or action["completion_condition"]["kind"] != "issue-closed"
-                or action["completion_condition"]["target"]["kind"] != "issue"
-            ):
-                diagnostics.append(
-                    {
-                        "code": "unsupported_reconciliation_semantics",
-                        "revision_id": record["revision_id"],
-                        "action_key": action["key"],
-                    }
-                )
-                continue
-            target = github.read_issue(
-                repository,
-                int(action["target"]["number"]),
-            )
-            if target.state != "OPEN":
-                continue
-            actions.append(
-                {
-                    "identity": _action_identity(record, action),
-                    "semantic_fingerprint": record["semantic_fingerprints"][
-                        action["key"]
-                    ],
-                    "workstream_anchor": record["workstream"]["anchor"],
-                    "summary": action["summary"],
-                    "kind": action["kind"],
-                    "readiness": "Ready",
-                    "instruction": action["instruction"],
-                    "target": action["target"],
-                    "basis": action["basis"],
-                    "producer": {
-                        **producer,
-                        "carrier": record["carrier"],
-                        "revision_id": record["revision_id"],
-                        "comment_id": comment.id,
-                        "comment_url": comment.url,
-                    },
-                    "prerequisites": action["prerequisites"],
-                    "interaction": action["interaction"],
-                    "completion_condition": action["completion_condition"],
-                }
-            )
-    actions.sort(key=lambda action: action["identity"])
+    actions, action_diagnostics = _derive_actions(
+        guidance_entries, github=github, repository=repository
+    )
+    diagnostics.extend(action_diagnostics)
 
     heads = [
         {
@@ -2094,9 +2487,11 @@ def _reconcile(
         if revision_protocol
         else github.list_continuation_carriers(repository, _INDEX_LABEL)
     )
-    actions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     revision_count = 0
+    guidance_entries: list[
+        tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
+    ] = []
     for carrier in carriers:
         for comment in carrier.comments:
             if comment.author not in trusted:
@@ -2118,53 +2513,11 @@ def _reconcile(
             }
             _validate_completion(completion_request)
             revision_count += 1
-            for action in record.get("actions", []):
-                if (
-                    action["target"]["kind"] != "issue"
-                    or action["prerequisites"]
-                    or action["completion_condition"]["kind"] != "issue-closed"
-                    or action["completion_condition"]["target"]["kind"] != "issue"
-                ):
-                    diagnostics.append(
-                        {
-                            "code": "unsupported_reconciliation_semantics",
-                            "revision_id": record["revision_id"],
-                            "action_key": action["key"],
-                        }
-                    )
-                    continue
-                target = github.read_issue(
-                    repository,
-                    int(action["target"]["number"]),
-                )
-                if target.state != "OPEN":
-                    continue
-                actions.append(
-                    {
-                        "identity": _action_identity(record, action),
-                        "semantic_fingerprint": record["semantic_fingerprints"][
-                            action["key"]
-                        ],
-                        "workstream_anchor": record["workstream"]["anchor"],
-                        "summary": action["summary"],
-                        "kind": action["kind"],
-                        "readiness": "Ready",
-                        "instruction": action["instruction"],
-                        "target": action["target"],
-                        "basis": action["basis"],
-                        "producer": {
-                            **producer,
-                            "carrier": record["carrier"],
-                            "revision_id": record["revision_id"],
-                            "comment_id": comment.id,
-                            "comment_url": comment.url,
-                        },
-                        "prerequisites": action["prerequisites"],
-                        "interaction": action["interaction"],
-                        "completion_condition": action["completion_condition"],
-                    }
-                )
-    actions.sort(key=lambda action: action["identity"])
+            guidance_entries.append((carrier, comment, record))
+    actions, action_diagnostics = _derive_actions(
+        guidance_entries, github=github, repository=repository
+    )
+    diagnostics.extend(action_diagnostics)
     result = {
         "status": "guidance" if actions else "waiting",
         "observed": {

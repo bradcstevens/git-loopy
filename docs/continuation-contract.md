@@ -177,12 +177,32 @@ authenticates a marked comment before semantic parsing, requires the comment aut
 Producer to match explicit trust, validates the revision digest and semantic fingerprints, and
 reads current Action Targets. Human Producers require current write, maintain, or admin permission;
 bot and App identities require explicit allowlisting. Untrusted marker lookalikes are security
-diagnostics, not records and not reasons to quarantine trusted guidance. Supported open Targets are
-returned with their identity, semantic
-fingerprint, Instruction, Target, Basis, Producer provenance, interaction classification,
-Prerequisites, and completion condition. Terminal and no-guidance records contribute no Action.
-The discovery label is an index only: the Producer comment and current GitHub facts are authority,
-and no queue, journal, snapshot, or local cache is created.
+diagnostics, not records and not reasons to quarantine trusted guidance. Every pinned v1 Action-kind
+and condition kind is genuinely evaluated against current GitHub facts. Open Actions are returned
+with their identity, semantic fingerprint, Instruction, Target, Basis, Producer provenance,
+interaction classification, Prerequisites, completion condition, and an explicit `Ready` or
+`Blocked` Readiness; a Blocked Action's `unsatisfied_prerequisites` names exactly the Prerequisites
+still outstanding. Terminal and no-guidance records contribute no Action. The discovery label is an
+index only: the Producer comment and current GitHub facts are authority, and no queue, journal,
+snapshot, or local cache is created.
+
+Python's immutable-revision Reconciliation discovers issues and pull requests with a complete,
+paginated all-state read rather than label-authoritative discovery: explicit closed coverage
+traverses every returned page regardless of index-label presence or staleness. Each durable read
+(issue, pull request, labels, sub-issues, commit, branch, review, comment) uses a source-specific
+validator and up to three bounded stable-read attempts; a definitive not-found is itself a stable
+negative fact, but persistent churn or an unavailable read yields a typed `unverified_completion` or
+`unverified_prerequisite` diagnostic and excludes only the affected Action, never an optimistic
+Ready, Blocked, completion, or retirement claim. Completion conditions and every typed Prerequisite,
+including local `action-completed` dependencies on other Actions in the same read, are evaluated
+against one stable fact set gathered for that call; a cycle formed through mutually referencing
+`action-completed` completion conditions is a `prerequisite_cycle` diagnostic, not infinite
+recursion. Equivalent live claims sharing one Action identity are deduplicated into one guidance
+entry: their durable Basis and Producer provenance union together, and an optional `provenance` list
+(present only when more than one lineage actually contributed) records each contributing login,
+role, carrier, and revision. Incompatible semantics under one identity are never resolved by
+timestamp, discovery order, or recency; they surface as an `action_conflict` diagnostic and are
+excluded from guidance until one lineage retires.
 
 Python Reconciliation returns an opaque `sha256:` observation token over the repository, current
 Producer heads, and inspected comment validators. Immutable publication names exactly those
