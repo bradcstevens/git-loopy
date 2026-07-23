@@ -117,7 +117,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
 from copilot.generated.rpc import (
@@ -222,6 +222,12 @@ class SessionConfig(Protocol):
     deny_skills: frozenset[str]
     verbosity: int
     render_reasoning: bool
+
+
+class EventObserver(Protocol):
+    """Raw Event consumer used by Orchestrator-owned accounting."""
+
+    def observe(self, event: Mapping[str, Any]) -> object: ...
 
 
 class _IssueBinding(Protocol):
@@ -602,6 +608,7 @@ class IterationSession:
         issue_ref: int | str | None = None,
         issue_binding: _IssueBinding | None = None,
         skill_exposure: SkillExposure | None = None,
+        event_observer: EventObserver | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -625,6 +632,7 @@ class IterationSession:
             event_log=self._event_log,
             sinks=self._sinks,
             diag=None,
+            observer=event_observer,
         )
 
     @property

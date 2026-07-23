@@ -762,6 +762,62 @@ def test_iteration_end_freezes_snapshot_and_appends_to_completed() -> None:
     assert summary.completed[0].iter_num == 1
 
 
+def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1})
+    renderer.render(
+        {"type": USAGE_TOKENS, "model": "stale", "input": 1, "output": 1}
+    )
+    renderer.render(
+        {
+            "type": WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "advanced",
+            "duration_seconds": 12.25,
+            "summary": {
+                "model": "unknown-model",
+                "tokens_in": 100,
+                "tokens_out": 20,
+                "observed_tokens": 120,
+                "cost_usd": None,
+                "tool_count": 4,
+                "skill_call_count": 1,
+                "skills_consulted": ["tdd"],
+                "commits": 2,
+                "auto_closures": 0,
+                "pr_advances": 1,
+                "strikes": 0,
+                "peak_context_window": {
+                    "current_tokens": 120,
+                    "token_limit": None,
+                    "effective_target_tokens": None,
+                    "effective_ceiling_tokens": None,
+                },
+            },
+            "issues": [{"issue": 42, "status": "advanced"}],
+        }
+    )
+    snap = summary.completed[0]
+    assert snap.issue_num == 42
+    assert snap.duration_seconds == 12.25
+    assert (snap.model, snap.tokens_in, snap.tokens_out) == (
+        "unknown-model",
+        100,
+        20,
+    )
+    assert snap.skills_consulted == {"tdd"}
+    assert snap.commits == 2
+    assert snap.pr_advances == 1
+    assert snap.outcome == "advanced"
+    assert snap.peak_context_window == {
+        "current_tokens": 120,
+        "token_limit": None,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+    assert snap.issues == ({"issue": 42, "status": "advanced"},)
+
+
 def test_iteration_end_without_start_does_not_crash() -> None:
     """A stray iteration.end event (e.g. abort path) must not crash."""
     renderer, summary, _buf = _make_renderer()

@@ -689,6 +689,20 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "skill_consultation": True,
         "cost": True,
     }
+    iteration_end = next(
+        e for e in events if e["type"] == "wrapper.iteration.end"
+    )
+    assert iteration_end["outcome"] == "parallel"
+    assert {item["issue"] for item in iteration_end["issues"]} == {42, 43}
+    assert all(
+        item["status"] == "closed" for item in iteration_end["issues"]
+    )
+    run_payload = json.loads(
+        next((tmp_path / ".git-loopy" / "runs").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert run_payload["iterations"][0]["issues"] == iteration_end["issues"]
 
 
 def test_parallel_run_falls_back_to_serial_when_under_two_eligible(

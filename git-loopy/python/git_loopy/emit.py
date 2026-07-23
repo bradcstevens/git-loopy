@@ -31,10 +31,11 @@ Design notes:
 
 * **Scrub once, before the guards.** :meth:`dispatch` scrubs the envelope a
   single time and passes the *same* scrubbed dict to both ``event_log.write``
-  and ``sinks.render`` — so the JSONL line and every sink receive identical
-  bytes. The scrub runs *outside* the write/render guards: a scrub failure
-  surfaces (it is a programming error, not a transient I/O fault), while a write
-  or render failure is contained so one cannot starve the other.
+  and ``sinks.render``. An optional internal observer receives the raw envelope
+  first so accounting can recognize Skills before oversized arguments are
+  truncated; it must never persist or render that envelope. Scrub and observer
+  failures surface as programming errors, while write or render failures are
+  contained so one cannot starve the other.
 * **Error policy is injected.** ``diag`` selects between the loop's
   warn-and-continue and the session's silent-in-the-SDK-callback behaviours: on
   a write/render failure the emitter calls ``diag.warning(...)`` when a ``diag``
@@ -52,7 +53,7 @@ Design notes:
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from git_loopy.events import make_event, scrub
 
@@ -75,6 +76,12 @@ class _Sinks(Protocol):
     """
 
     def render(self, event: dict[str, Any]) -> object: ...
+
+
+class _EventObserver(Protocol):
+    """Raw pre-scrub Event consumer used by Orchestrator accounting."""
+
+    def observe(self, event: Mapping[str, Any]) -> object: ...
 
 
 class _DiagLogger(Protocol):
@@ -104,11 +111,13 @@ class EventEmitter:
         event_log: _EventLog,
         sinks: _Sinks,
         diag: _DiagLogger | None = None,
+        observer: _EventObserver | None = None,
     ) -> None:
         self._run_id = run_id
         self._event_log = event_log
         self._sinks = sinks
         self._diag = diag
+        self._observer = observer
 
     def emit(
         self,
@@ -134,7 +143,7 @@ class EventEmitter:
         return envelope
 
     def dispatch(self, envelope: dict[str, Any]) -> None:
-        """Scrub ``envelope`` once, then fan it out to the writer and the sinks.
+        """Observe raw data, scrub once, then fan out to writer and sinks.
 
         The single :func:`git_loopy.events.scrub` call runs *before* the guards,
         so both ``event_log.write`` and ``sinks.render`` receive the same
@@ -143,6 +152,8 @@ class EventEmitter:
         cannot starve the other; on failure the emitter warns iff a ``diag`` was
         injected, else stays silent.
         """
+        if self._observer is not None:
+            self._observer.observe(envelope)
         scrubbed = scrub(envelope)
         try:
             self._event_log.write(scrubbed)

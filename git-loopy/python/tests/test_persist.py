@@ -430,7 +430,11 @@ def test_run_summary_json_matches_documented_schema(tmp_path: Path) -> None:
         "skills_consulted": ["domain-modeling", "tdd"],
         "commits": 1,
         "auto_closures": 1,
+        "pr_advances": 0,
         "strikes": 0,
+        "outcome": None,
+        "peak_context_window": None,
+        "issues": [],
     }
 
 

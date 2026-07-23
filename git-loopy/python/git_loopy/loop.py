@@ -136,6 +136,7 @@ from git_loopy.persist import (
 from git_loopy.pricing import Pricing, PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -501,16 +502,15 @@ class _Loop:
         self._release_version = release_version
         self._git = git
         self._prompt_text = prompt_text
-        self._pricing = pricing
         self._writers = writers
         self._sinks = sinks
-        self._summary = summary
         self._client = client
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
         self._include_prs = include_prs
+        self._rollup = IterationRollupAccumulator(pricing=pricing)
         # Base branch to restore to after a PR iteration (captured in
         # ``drive`` only when PRs are in scope). ``None`` = unknown / detached
         # HEAD, which disables the defensive restore.
@@ -529,6 +529,7 @@ class _Loop:
             event_log=self._writers.event_log,
             sinks=self._sinks,
             diag=self._diag,
+            observer=self._rollup,
         )
 
     # -- event fan-out ------------------------------------------------------
@@ -686,11 +687,7 @@ class _Loop:
             if not pool:
                 # Close the iteration cleanly so the snapshot lifecycle is
                 # consistent even on the empty-pool path.
-                self._emit(
-                    events_module.WRAPPER_ITERATION_END,
-                    iter_num=iter_num,
-                )
-                self._record_counters(iter_num)
+                self._finish_iteration(iter_num, outcome="empty_pool")
                 return ("empty_pool", 0, 0)
             issue_binding = self._new_active_issue_binding(
                 iter_num, allowed_refs=(item.ref for item in pool)
@@ -716,8 +713,7 @@ class _Loop:
                 pre_sha = self._git.head_sha()
             except git_module.GitError as exc:
                 self._diag.error("git head_sha failed: %s; aborting iteration", exc)
-                self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
-                self._record_counters(iter_num)
+                self._finish_iteration(iter_num, outcome="no_progress")
                 return ("continue", 0, 0)
 
             # 5) Run the SDK session.
@@ -735,6 +731,7 @@ class _Loop:
                         reasoning_effort=self._config.reasoning_effort,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
+                        event_observer=self._rollup,
                     ) as sdk_session:
                         try:
                             await sdk_session.send_and_wait(
@@ -884,8 +881,10 @@ class _Loop:
                 )
 
             # 11) Close the iteration snapshot, persist counters.
-            self._emit(events_module.WRAPPER_ITERATION_END, iter_num=iter_num)
-            self._record_counters(iter_num)
+            self._finish_iteration(
+                iter_num,
+                outcome="aborted" if outcome == "aborted" else None,
+            )
 
             if outcome == "aborted":
                 return ("aborted", len(new_commits), completion_count)
@@ -1031,36 +1030,37 @@ class _Loop:
             )
             return []
 
-    def _record_counters(self, iter_num: int) -> None:
-        """Persist the iteration's counter row.
-
-        Reads the last completed snapshot from the renderer's
-        :class:`RunSummary` (closed on :data:`WRAPPER_ITERATION_END`)
-        and translates it to an :class:`~git_loopy.persist.IterationCounters`
-        via the UI's :meth:`IterationSnapshot.to_counters_kwargs` seam.
-        """
-        completed = self._summary.completed
-        if not completed:
-            return
-        # Find the snapshot for this iter_num (most-recent match wins).
-        snap = None
-        for s in reversed(completed):
-            if s.iter_num == iter_num:
-                snap = s
-                break
-        if snap is None:
-            return
-        kwargs = snap.to_counters_kwargs(pricing=self._pricing)
-        # Carry the strike-machine's current count into the persisted row
-        # so the run-summary JSON shows what the wrapper actually saw.
-        kwargs["strikes"] = self._strike_machine.strikes
+    def _finish_iteration(
+        self,
+        iter_num: int,
+        *,
+        outcome: str | None = None,
+    ) -> dict[str, Any]:
+        """Emit and persist one Orchestrator-owned normalized Iteration rollup."""
+        payload = self._rollup.finish(
+            iter_num=iter_num,
+            strikes=self._strike_machine.strikes,
+            outcome=outcome,
+        )
+        event = self._emit(
+            events_module.WRAPPER_ITERATION_END,
+            iter_num=iter_num,
+            **payload,
+        )
         try:
-            self._writers.run_summary.record(IterationCounters(**kwargs))
+            self._writers.run_summary.record(
+                IterationCounters.from_rollup(
+                    iter_num=iter_num,
+                    payload=payload,
+                )
+            )
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
                 "RunSummaryWriter.record failed for iter %d: %s",
-                iter_num, exc,
+                iter_num,
+                exc,
             )
+        return event
 
     # -- public driver -----------------------------------------------------
 
@@ -1544,10 +1544,10 @@ class _ParallelLoop:
             iter_num, commits=0, closures=integration_successes
         )
 
-        self._serial._emit(
-            events_module.WRAPPER_ITERATION_END, iter_num=iter_num
+        self._serial._finish_iteration(
+            iter_num,
+            outcome="aborted" if outcome == "aborted" else "parallel",
         )
-        self._serial._record_counters(iter_num)
 
         if outcome == "aborted":
             return ("aborted", total_commits, integration_successes)
@@ -1618,6 +1618,7 @@ class _ParallelLoop:
                 working_directory=str(lane.git.root),
                 issue_ref=lane.item.ref,
                 skill_exposure=self._skill_exposure,
+                event_observer=self._serial._rollup,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
@@ -2002,7 +2003,9 @@ class _ParallelLoop:
                 model=lane.model,
                 reasoning_effort=lane.reasoning_effort,
                 working_directory=str(int_git.root),
+                issue_ref=lane.item.ref,
                 skill_exposure=self._skill_exposure,
+                event_observer=self._serial._rollup,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(prompt, timeout=send_timeout)

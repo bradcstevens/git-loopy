@@ -54,6 +54,7 @@ from copilot.generated.session_events import (
     AssistantUsageData,
     SessionEvent,
     SessionEventType,
+    SessionUsageInfoData,
     ToolExecutionStartData,
 )
 
@@ -302,8 +303,11 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
             SessionEventType.TOOL_EXECUTION_START,
             ToolExecutionStartData(
                 tool_call_id="call-1",
-                tool_name="edit",
-                arguments={"path": "foo.py"},
+                tool_name="view",
+                arguments={
+                    "path": ".copilot/skills/tdd/SKILL.md",
+                    "padding": "x" * 2_000,
+                },
             ),
         ),
         _sdk_event(
@@ -319,6 +323,14 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
                 input_tokens=1234,
                 output_tokens=567,
                 model="claude-opus-4.7-xhigh",
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=3,
+                token_limit=32_000,
             ),
         ),
     ]
@@ -450,6 +462,47 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "skill_consultation": True,
         "cost": True,
     }
+    iteration_end = next(
+        event
+        for event in events_seen
+        if event["type"] == "wrapper.iteration.end"
+    )
+    assert iteration_end["outcome"] == "closed"
+    assert iteration_end["duration_seconds"] >= 0
+    assert iteration_end["summary"] == {
+        "model": "claude-opus-4.7-xhigh",
+        "tokens_in": 1234,
+        "tokens_out": 567,
+        "observed_tokens": 1801,
+        "cost_usd": None,
+        "tool_count": 1,
+        "skill_call_count": 0,
+        "skills_consulted": ["tdd"],
+        "commits": 1,
+        "auto_closures": 1,
+        "pr_advances": 0,
+        "strikes": 0,
+        "peak_context_window": {
+            "current_tokens": 12_000,
+            "token_limit": 32_000,
+            "effective_target_tokens": 16_000,
+            "effective_ceiling_tokens": 24_000,
+        },
+    }
+    assert len(iteration_end["issues"]) == 1
+    issue_contribution = iteration_end["issues"][0]
+    assert issue_contribution["issue"] == 42
+    assert issue_contribution["status"] == "closed"
+    assert issue_contribution["closed_at"] is not None
+    assert issue_contribution["issue_elapsed_seconds"] is not None
+    assert issue_contribution["consumption"] == {
+        "model": "claude-opus-4.7-xhigh",
+        "tokens_in": 1234,
+        "tokens_out": 567,
+    }
+    assert issue_contribution["peak_context_window"] == iteration_end["summary"][
+        "peak_context_window"
+    ]
     resolved = next(
         json.loads(raw)
         for raw in log_lines
@@ -486,6 +539,16 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert iter_row["tokens_out"] == 567
     assert iter_row["tool_count"] == 1
     assert iter_row["strikes"] == 0  # progress was made (1 commit + 1 close)
+    assert iter_row["outcome"] == iteration_end["outcome"]
+    assert iter_row["duration_seconds"] == iteration_end["duration_seconds"]
+    assert iter_row["context_used"] == iteration_end["summary"]["observed_tokens"]
+    assert iter_row["skill_count"] == iteration_end["summary"]["skill_call_count"]
+    assert iter_row["skills_consulted"] == ["tdd"]
+    assert iter_row["pr_advances"] == iteration_end["summary"]["pr_advances"]
+    assert iter_row["peak_context_window"] == iteration_end["summary"][
+        "peak_context_window"
+    ]
+    assert iter_row["issues"] == iteration_end["issues"]
 
 
 def test_skill_policy_failure_stops_before_source_collection_or_work(
@@ -1513,7 +1576,7 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     * exit 0,
     * the PR block reaches the prompt,
     * ``wrapper.pr.advanced`` is logged and ``wrapper.auto_close`` is not,
-    * the iteration row counts the advance as an auto-closure (progress),
+    * the iteration row counts the PR advance separately from auto-closures,
       with 0 commits and 0 strikes,
     * the base branch is never switched (HEAD already on base).
     """
@@ -1636,12 +1699,13 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
         "Iteration is already bound to #7"
     ) in diagnostics
 
-    # Run-summary: the advance counts as progress (auto_closure), 0 commits, 0 strikes.
+    # Run-summary: the advance is progress, but not an issue auto-closure.
     json_files = list((tmp_path / ".git-loopy" / "runs").glob("*.json"))
     payload = json.loads(json_files[0].read_text(encoding="utf-8"))
     iter_row = payload["iterations"][0]
     assert iter_row["commits"] == 0
-    assert iter_row["auto_closures"] == 1
+    assert iter_row["auto_closures"] == 0
+    assert iter_row["pr_advances"] == 1
     assert iter_row["strikes"] == 0
 
 

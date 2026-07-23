@@ -10,23 +10,18 @@ artefacts the renderer prints:
   plus a totals footer).
 
 The renderer drives this module via :meth:`RunSummary.on_iteration_start`,
-:meth:`RunSummary.on_iteration_end`, and the per-event accumulator
-methods. The loop slice (#10) reads :attr:`RunSummary.completed` to
-translate iteration snapshots into :class:`git_loopy.persist.IterationCounters`
-records via :meth:`IterationSnapshot.to_counters` — that's the explicit
-conversion seam between the UI's display dataclass and the persist
-module's storage dataclass.
+:meth:`RunSummary.on_iteration_end`, and the per-event accumulator methods.
+At Iteration end, the Orchestrator's normalized rollup replaces the live
+best-effort counters before the snapshot is frozen. Persistence consumes that
+same rollup directly, so neither replay nor the UI is an accounting authority.
 
 Design notes:
 
 * **Two-dataclass posture.** :class:`IterationSnapshot` (UI) and
-  :class:`git_loopy.persist.IterationCounters` (persist) intentionally
-  do NOT share a base. Keeping them separate prevents UI concerns
-  (timestamps, issue numbers, transient pricing state) from polluting
-  the persisted JSON schema, and prevents persist-only fields (which
-  may grow over time) from forcing UI redraws. The
-  :meth:`IterationSnapshot.to_counters` method is the deterministic
-  conversion seam.
+  :class:`git_loopy.persist.IterationCounters` (persist) intentionally do NOT
+  share a base. Both project the normalized rollup into their own concerns;
+  the compatibility :meth:`IterationSnapshot.to_counters_kwargs` helper is not
+  used as the production persistence authority.
 * **First non-None model wins — via the shared UsageTally.** Some SDK
   versions emit ``usage.tokens`` events with ``model=None``; the tally
   retains the first authoritative model name and ignores subsequent
@@ -53,7 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 from rich.box import ROUNDED, SIMPLE
 from rich.panel import Panel
@@ -143,7 +138,15 @@ class IterationSnapshot:
     skills_consulted: set[str] = field(default_factory=set)
     commits: int = 0
     auto_closures: int = 0
+    pr_advances: int = 0
     strikes: int = 0
+    outcome: Optional[str] = None
+    peak_context_window: Optional[dict[str, int | None]] = None
+    issues: tuple[dict[str, Any], ...] = ()
+    normalized_duration_seconds: Optional[float] = None
+    normalized_observed_tokens: Optional[int] = None
+    normalized_cost_usd: Optional[Decimal] = None
+    has_normalized_rollup: bool = False
 
     @property
     def model(self) -> Optional[str]:
@@ -170,11 +173,15 @@ class IterationSnapshot:
         model-context measurement (multiple turns within a session would
         double-count input tokens, which already include prior history).
         """
+        if self.normalized_observed_tokens is not None:
+            return self.normalized_observed_tokens
         return self.usage.total_tokens
 
     @property
     def duration_seconds(self) -> float:
         """Wall-clock duration in seconds, or ``0.0`` if not yet closed."""
+        if self.normalized_duration_seconds is not None:
+            return self.normalized_duration_seconds
         if self.started_at is None or self.ended_at is None:
             return 0.0
         return (self.ended_at - self.started_at).total_seconds()
@@ -185,25 +192,23 @@ class IterationSnapshot:
         Delegates to :meth:`~git_loopy.usage.UsageTally.cost`, which carries
         the ``None``/unknown-model guard so callers render the em dash.
         """
+        if self.has_normalized_rollup:
+            return self.normalized_cost_usd
         return self.usage.cost(pricing)
 
     def to_counters_kwargs(self, *, pricing: Pricing) -> dict:
         """Return a kwargs dict suitable for constructing
         :class:`git_loopy.persist.IterationCounters`.
 
-        Returning a dict (rather than an :class:`IterationCounters`
-        instance directly) keeps this UI module's import graph free of
-        ``git_loopy.persist``. The loop slice (#10) does::
+        Returning a dict (rather than an :class:`IterationCounters` instance
+        directly) keeps this UI module's import graph free of
+        ``git_loopy.persist``. Compatibility callers may do::
 
             from git_loopy.persist import IterationCounters
             counters = IterationCounters(**snap.to_counters_kwargs(pricing=p))
 
-        The conversion logic (e.g. ``context_used = tokens_in + tokens_out``)
-        lives here because it's UI-data-shape concern; the loop just
-        wires the field names through. If
-        :class:`git_loopy.persist.IterationCounters` ever gains a new
-        required field the runner cares about, this method is the one
-        place that needs to know.
+        Production persistence instead uses
+        :meth:`git_loopy.persist.IterationCounters.from_rollup`.
         """
         return {
             "iter": self.iter_num,
@@ -242,6 +247,7 @@ class RunTotals:
     cost_usd: Optional[Decimal]
     commits: int
     auto_closures: int
+    pr_advances: int
     final_strikes: int
     iterations_with_skill: int
     skills_seen: tuple[str, ...]
@@ -258,9 +264,8 @@ class RunSummary:
 
     Owned by the caller (typically the loop slice) and passed to the
     :class:`~git_loopy.ui.renderer.Renderer`. The renderer subscribes to
-    events and drives the accumulator methods below; the caller reads
-    :attr:`completed` (and optionally :meth:`totals`) to translate to
-    persist-side records.
+    events and drives the accumulator methods below. The completed snapshots
+    are renderer projections of the normalized Iteration-end records.
 
     Attributes:
         pricing: :class:`git_loopy.pricing.Pricing` table used for cost
@@ -291,7 +296,9 @@ class RunSummary:
         self.current = snap
         return snap
 
-    def on_iteration_end(self) -> Optional[IterationSnapshot]:
+    def on_iteration_end(
+        self, rollup: Optional[Mapping[str, Any]] = None
+    ) -> Optional[IterationSnapshot]:
         """Close the current snapshot, append to :attr:`completed`, return it.
 
         Returns ``None`` if no iteration is currently open (a stray
@@ -300,10 +307,58 @@ class RunSummary:
         snap = self.current
         if snap is None:
             return None
+        if rollup is not None:
+            self._apply_rollup(snap, rollup)
         snap.ended_at = datetime.now(timezone.utc)
         self.completed.append(snap)
         self.current = None
         return snap
+
+    @staticmethod
+    def _apply_rollup(
+        snap: IterationSnapshot,
+        rollup: Mapping[str, Any],
+    ) -> None:
+        summary = rollup.get("summary")
+        issues = rollup.get("issues")
+        if not isinstance(summary, Mapping) or not isinstance(issues, list):
+            return
+        model = summary.get("model")
+        snap.usage = UsageTally(
+            model=model if isinstance(model, str) else None,
+            tokens_in=int(summary.get("tokens_in", 0)),
+            tokens_out=int(summary.get("tokens_out", 0)),
+        )
+        snap.normalized_duration_seconds = float(
+            rollup.get("duration_seconds", 0.0)
+        )
+        snap.normalized_observed_tokens = int(
+            summary.get("observed_tokens", 0)
+        )
+        cost = summary.get("cost_usd")
+        snap.normalized_cost_usd = (
+            Decimal(str(cost)) if cost is not None else None
+        )
+        snap.has_normalized_rollup = True
+        snap.tool_count = int(summary.get("tool_count", 0))
+        snap.skill_count = int(summary.get("skill_call_count", 0))
+        snap.skills_consulted = {
+            str(skill) for skill in summary.get("skills_consulted", [])
+        }
+        snap.commits = int(summary.get("commits", 0))
+        snap.auto_closures = int(summary.get("auto_closures", 0))
+        snap.pr_advances = int(summary.get("pr_advances", 0))
+        snap.strikes = int(summary.get("strikes", 0))
+        snap.outcome = str(rollup.get("outcome", "no_progress"))
+        peak = summary.get("peak_context_window")
+        snap.peak_context_window = (
+            dict(peak) if isinstance(peak, Mapping) else None
+        )
+        snap.issues = tuple(dict(issue) for issue in issues)
+        if snap.issue_num is None and len(snap.issues) == 1:
+            issue = snap.issues[0].get("issue")
+            if isinstance(issue, int):
+                snap.issue_num = issue
 
     # -- per-event accumulators --------------------------------------------
 
@@ -364,6 +419,7 @@ class RunSummary:
         tokens_out = sum(s.tokens_out for s in self.completed)
         commits = sum(s.commits for s in self.completed)
         auto_closures = sum(s.auto_closures for s in self.completed)
+        pr_advances = sum(s.pr_advances for s in self.completed)
         priced_costs = [
             s.cost_usd(self.pricing)
             for s in self.completed
@@ -396,6 +452,7 @@ class RunSummary:
             cost_usd=cost_usd,
             commits=commits,
             auto_closures=auto_closures,
+            pr_advances=pr_advances,
             final_strikes=final_strikes,
             iterations_with_skill=iterations_with_skill,
             skills_seen=skills_seen,
@@ -457,6 +514,8 @@ class RunSummary:
         body.append(str(snap.commits))
         body.append("    Auto-closures: ", style=STYLES["meta"])
         body.append(str(snap.auto_closures))
+        body.append("    PR advances: ", style=STYLES["meta"])
+        body.append(str(snap.pr_advances))
         body.append("    Strikes: ", style=STYLES["meta"])
         body.append(str(snap.strikes))
 
@@ -518,6 +577,11 @@ class RunSummary:
             footer=str(totals.auto_closures),
         )
         table.add_column(
+            "PR advances",
+            justify="right",
+            footer=str(totals.pr_advances),
+        )
+        table.add_column(
             "Final strikes",
             justify="right",
             footer=str(totals.final_strikes),
@@ -538,6 +602,7 @@ class RunSummary:
                 cost_str,
                 str(snap.commits),
                 str(snap.auto_closures),
+                str(snap.pr_advances),
                 str(snap.strikes),
             )
         return table
@@ -562,6 +627,7 @@ class RunSummary:
         text.append(f"  •  cost {_format_decimal_footer(totals.cost_usd)}")
         text.append(f"  •  commits {totals.commits}")
         text.append(f"  •  closures {totals.auto_closures}")
+        text.append(f"  •  PR advances {totals.pr_advances}")
         text.append(f"  •  strikes {totals.final_strikes}")
         return text
 
@@ -571,6 +637,22 @@ class RunSummary:
         """Render ``used / window  (XX%)`` with high-watermark highlighting."""
         text = Text()
         used = snap.context_used
+        if snap.peak_context_window is not None:
+            peak_used = snap.peak_context_window["current_tokens"]
+            used = int(peak_used) if peak_used is not None else 0
+            limit = snap.peak_context_window.get("token_limit")
+            if limit is None:
+                text.append(f"{used:,}")
+                return text
+            fraction = used / int(limit) if int(limit) > 0 else 0.0
+            line = f"{used:,} / {int(limit):,}  ({int(round(fraction * 100))}%)"
+            text.append(
+                line,
+                style=STYLES["warning"]
+                if fraction >= _CONTEXT_HIGH_WATERMARK
+                else None,
+            )
+            return text
         if snap.model is None:
             text.append(f"{used:,}")
             return text

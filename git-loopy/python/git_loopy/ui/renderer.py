@@ -235,7 +235,7 @@ class Renderer:
         self.console.print(text)
 
     def _on_iteration_end(self, event: dict[str, Any]) -> None:
-        snap = self.summary.on_iteration_end()
+        snap = self.summary.on_iteration_end(event)
         if snap is None:
             return
         self.console.print(self.summary.build_iteration_panel(snap))

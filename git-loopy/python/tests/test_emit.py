@@ -71,6 +71,14 @@ class _RecordingSink:
         self.events.append(event)
 
 
+class _RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def observe(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+
+
 class _RaisingLog:
     """A writer whose ``write`` always fails, to exercise the write guard."""
 
@@ -140,6 +148,32 @@ def test_dispatch_redacts_secret_before_render() -> None:
     assert secret not in repr(sink.events[0])
     # Writer got the same scrubbed dict — the JSONL line and the sink agree.
     assert log.events[0] is sink.events[0]
+
+
+def test_dispatch_observer_receives_raw_event_before_scrubbing() -> None:
+    log = _RecordingLog()
+    sink = _RecordingSink()
+    observer = _RecordingObserver()
+    emitter = EventEmitter(
+        run_id="RUN",
+        event_log=log,
+        sinks=sink,
+        observer=observer,
+    )
+    arguments = {"skill": "tdd", "padding": "x" * 2_000}
+    envelope = make_event(
+        "tool.call",
+        run_id="RUN",
+        iter=1,
+        tool_name="skill",
+        arguments=arguments,
+    )
+
+    emitter.dispatch(envelope)
+
+    assert observer.events == [envelope]
+    assert observer.events[0]["arguments"] == arguments
+    assert sink.events[0]["arguments"].startswith("<truncated:")
 
 
 # ---------------------------------------------------------------------------

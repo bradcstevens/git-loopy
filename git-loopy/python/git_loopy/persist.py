@@ -63,7 +63,11 @@ The :class:`RunSummaryWriter` emits a single JSON document on close::
           "skills_consulted": ["tdd"],                      # sorted distinct skill names
           "commits": 1,                                    # int (commits made during iter)
           "auto_closures": 1,                              # int (wrapper auto-closes)
-          "strikes": 0                                     # int (NMT strike count AFTER iter)
+          "pr_advances": 0,                                # int (PR head advances)
+          "strikes": 0,                                    # int (NMT strike count AFTER iter)
+          "outcome": "closed",                             # normalized Iteration outcome
+          "peak_context_window": null,                     # normalized Context peak
+          "issues": []                                     # normalized issue/Lane contributions
         }
       ],
       "skill_adoption": {
@@ -116,7 +120,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Mapping, Self, TextIO
 
 from git_loopy.events import scrub, to_jsonl_line
 
@@ -248,9 +252,8 @@ class IterationCounters:
     """Per-iteration counter rollup recorded by the loop.
 
     Fields match the run-summary JSON schema documented in the module
-    docstring. ``est_cost_usd`` is :class:`decimal.Decimal` (or :data:`None`
-    for unknown models); :meth:`RunSummaryWriter.flush` serialises it to
-    string for JSON round-trip-safety.
+    docstring. Production rows are projected from the normalized
+    ``wrapper.iteration.end`` payload by :meth:`from_rollup`.
     """
 
     iter: int
@@ -265,7 +268,46 @@ class IterationCounters:
     skills_consulted: tuple[str, ...] = ()
     commits: int = 0
     auto_closures: int = 0
+    pr_advances: int = 0
     strikes: int = 0
+    outcome: str | None = None
+    peak_context_window: dict[str, int | None] | None = None
+    issues: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_rollup(cls, *, iter_num: int, payload: Mapping[str, Any]) -> Self:
+        """Construct a replay row from the authoritative Iteration rollup."""
+        summary = payload.get("summary")
+        issues = payload.get("issues")
+        if not isinstance(summary, Mapping) or not isinstance(issues, list):
+            raise ValueError("invalid normalized Iteration rollup")
+        cost = summary.get("cost_usd")
+        peak = summary.get("peak_context_window")
+        return cls(
+            iter=iter_num,
+            duration_seconds=float(payload["duration_seconds"]),
+            model=summary.get("model")
+            if isinstance(summary.get("model"), str)
+            else None,
+            tokens_in=int(summary["tokens_in"]),
+            tokens_out=int(summary["tokens_out"]),
+            context_used=int(summary["observed_tokens"]),
+            est_cost_usd=Decimal(str(cost)) if cost is not None else None,
+            tool_count=int(summary["tool_count"]),
+            skill_count=int(summary["skill_call_count"]),
+            skills_consulted=tuple(
+                str(skill) for skill in summary["skills_consulted"]
+            ),
+            commits=int(summary["commits"]),
+            auto_closures=int(summary["auto_closures"]),
+            pr_advances=int(summary["pr_advances"]),
+            strikes=int(summary["strikes"]),
+            outcome=str(payload["outcome"]),
+            peak_context_window=(
+                dict(peak) if isinstance(peak, Mapping) else None
+            ),
+            issues=tuple(dict(issue) for issue in issues),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +444,11 @@ class RunSummaryWriter(AbstractContextManager["RunSummaryWriter"]):
                     "skills_consulted": list(c.skills_consulted),
                     "commits": c.commits,
                     "auto_closures": c.auto_closures,
+                    "pr_advances": c.pr_advances,
                     "strikes": c.strikes,
+                    "outcome": c.outcome,
+                    "peak_context_window": c.peak_context_window,
+                    "issues": list(c.issues),
                 }
                 for c in self._iterations
             ],
