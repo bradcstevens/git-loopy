@@ -460,6 +460,13 @@ iteration's timing and streamed output to that issue in real time. The first val
 marker immutably binds a serial **Iteration**; later conflicting markers do not
 reassign its work.
 
+**Pickup**:
+The instant the runner binds one issue to a unit of work, before that unit's agent
+session begins. Because the issue is known first, pickup is where its **Routed pair**
+resolves. Each **Lane** binds its **Active issue** at pickup; a serial **Iteration**
+has no pickup — its Active issue is self-selected mid-session.
+_Avoid_: assignment, dispatch, selection.
+
 **Queue**:
 The per-run ledger of every issue seen in any pool during the run, each carrying a
 status; the selectable list shown in the live interface. Distinct from the pool,
@@ -620,6 +627,28 @@ Whether **Config** and assets apply machine-wide (**global**) or only within one
 (**project**). Project overrides global. The git-loopy engine is installed once, globally; scope
 governs *which* settings and assets resolve for a run, not which binary runs.
 _Avoid_: local (ambiguous), workspace.
+
+**Task type**:
+The classification an issue carries as a `task-type:<key>` label. Read, never inferred —
+no title, body, or other content may imply it. The taxonomy is open and
+operator-extensible; the shipped keys are a recommended starting point, not a closed set.
+A task type selects a **Routed pair** and nothing else: it does not order or prioritise work.
+_Avoid_: category, priority, issue kind.
+
+**Routing**:
+Resolving an issue's **Task type** to the model and reasoning effort its work runs on,
+replacing the single run-wide default with a per-task-type default. A **Config**-file-only
+tier: any explicit model or reasoning-effort flag or environment override suppresses routing
+for the whole run. An unlabelled issue, an unknown key, or two keys disagreeing all fall back
+to the run-wide default.
+_Avoid_: model selection (that is the operator-facing picker), dispatch, assignment.
+
+**Routed pair**:
+The single model and reasoning effort one unit of work runs on, after **Routing** has
+resolved it and the effort has been gated against the model roster — an effort the model
+does not accept is dropped so the backend chooses. Resolved once at **Pickup** and never
+switched mid-session; the same pair carries the unit's follow-on work.
+_Avoid_: model override, effective model.
 
 ### The runner family
 
@@ -922,3 +951,11 @@ _Avoid_: independent, parallelizable (as the label name).
   pressure — resolved: **Context fill** is the current Iteration's live occupancy,
   **Observed tokens** is its cumulative token total, and **Consumption** is the
   scoped tokens-and-cost measure.
+- `model` was used for both the run-wide configured choice and the choice one unit of
+  work actually runs on, which diverge once **Routing** is configured — resolved: the
+  run-wide setting remains the default, and the per-unit resolved-and-gated choice is
+  the **Routed pair**, fixed at **Pickup**. The billed model reported in **Consumption**
+  is a third, observed thing and is neither.
+- `task type` was read as implying work order — resolved: a **Task type** selects a
+  **Routed pair** only. Scheduling priority is a separate, currently unmodelled axis and
+  must not be folded into the `task-type:` label vocabulary.

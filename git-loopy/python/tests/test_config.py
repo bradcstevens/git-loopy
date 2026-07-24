@@ -186,6 +186,7 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
         "claude-sonnet-4.5": frozenset(),
         "claude-haiku-4.5": frozenset(),
+        "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
@@ -195,7 +196,8 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5-mini": frozenset({"low", "medium", "high"}),
         "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
-        "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
+        "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
+        "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
         "gpt-5.6-luna": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
         ),
@@ -225,11 +227,11 @@ def test_recommended_routing_is_the_locked_six_type_core() -> None:
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("gpt-5.6-sol", "high"),
-        "review": ("claude-opus-4.8", "xhigh"),
+        "planning": ("gpt-5.6-sol", "xhigh"),
+        "review": ("claude-opus-4.8", "high"),
         "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-terra", "medium"),
+        "test": ("claude-sonnet-5", "medium"),
+        "docs": ("gpt-5.6-terra", "low"),
         "chore": ("gpt-5.6-luna", "low"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
@@ -289,7 +291,7 @@ def test_recommended_routing_preserves_the_shipped_global_default() -> None:
         "claude-opus-4.8",
         "max",
     )
-    assert RECOMMENDED_ROUTING["planning"] == ("gpt-5.6-sol", "high")
+    assert RECOMMENDED_ROUTING["planning"] == ("gpt-5.6-sol", "xhigh")
     assert RECOMMENDED_ROUTING["planning"] != (
         cli._DEFAULT_MODEL,
         cli._DEFAULT_REASONING_EFFORT,
