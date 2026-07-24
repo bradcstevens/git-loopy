@@ -983,6 +983,16 @@ function Get-GitLoopyGitHubPool {
         if ($null -eq $Full -or $Full -isnot [Collections.IDictionary]) {
             continue
         }
+        # `gh issue list --state open` is a snapshot; this per-issue view is the
+        # live read and therefore the authoritative source state. An issue the
+        # source already reports CLOSED is finished work, not AFK-ready work:
+        # record the source closure as lifecycle evidence and keep the issue out
+        # of the Pool so the agent is never handed an already-closed issue and
+        # the closing-keyword backstop never issues a duplicate `gh issue close`.
+        if ([string]$Full["state"] -ceq "CLOSED") {
+            $script:GitLoopySourceClosedRefs.Add([string]$Number)
+            continue
+        }
         $FullBody = if ($null -eq $Full["body"]) {
             ""
         }
@@ -1380,6 +1390,11 @@ $script:GitLoopyIssueCumulativeActiveSeconds = @{}
 $script:GitLoopyWarnedMarkerRefs = [Collections.Generic.HashSet[string]]::new(
     [StringComparer]::Ordinal
 )
+# Refs this Iteration observed as already closed at the source (first-encounter
+# order). An agent may perform the required source closure itself, so a CLOSED
+# source state is authoritative lifecycle evidence the Orchestrator did not
+# produce — never a wrapper auto-closure.
+$script:GitLoopySourceClosedRefs = [Collections.Generic.List[string]]::new()
 
 function Publish-GitLoopyActiveBinding {
     param(
@@ -1426,6 +1441,68 @@ function Publish-GitLoopyActiveBinding {
         }) `
         -Timestamp $ObservedAt
     return $true
+}
+
+function Register-GitLoopySourceClosure {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [string]$Ref
+    )
+
+    # Record one authoritative source closure the Orchestrator did not perform —
+    # the agent (or a human) closed the issue at the source itself. It binds the
+    # Iteration's Active issue and stamps the closure instant, so the normalized
+    # rollup reports the `closed` Status with its closure-only facts, but it is
+    # not a wrapper auto-closure: no `wrapper.auto_close` Event, no closure
+    # count, and no duplicate `gh issue close`.
+    Publish-GitLoopyActiveBinding `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Ref $Ref `
+        -Source "closure" `
+        -ObservedAt $script:GitLoopyIterationStartedAt | Out-Null
+    if ([string]$script:GitLoopyActiveRef -cne $Ref) {
+        return
+    }
+    if (-not [string]::IsNullOrEmpty($script:GitLoopyActiveClosedAt)) {
+        return
+    }
+    $script:GitLoopyActiveClosedAt = Get-GitLoopyIsoTimestamp `
+        -Timestamp ([DateTimeOffset]::UtcNow)
+    $script:GitLoopyActiveClosedMonotonic = Get-GitLoopyMonotonicSeconds
+}
+
+function Register-GitLoopyObservedSourceClosures {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration
+    )
+
+    # Replay the closures this Iteration's Pool read observed at the source, in
+    # first-encounter order. Deliberately called after the turn (or on the
+    # empty-Pool path, where no turn runs) so a Working marker still wins the
+    # Active binding; an already-bound Iteration keeps its binding and only a
+    # closure of the bound issue stamps the closure instant.
+    foreach ($Ref in @($script:GitLoopySourceClosedRefs)) {
+        Register-GitLoopySourceClosure `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Ref $Ref
+    }
 }
 
 function Get-GitLoopyCurrentIterationRollup {
@@ -1843,9 +1920,22 @@ function Invoke-GitLoopyCloseOneIssue {
         -Description "gh issue view #$Issue"
     if (
         $null -eq $View -or
-        $View -isnot [Collections.IDictionary] -or
-        [string]$View["state"] -cne "OPEN"
+        $View -isnot [Collections.IDictionary]
     ) {
+        return $false
+    }
+    if ([string]$View["state"] -cne "OPEN") {
+        # The agent may have performed the required source closure itself before
+        # the Orchestrator reached this backstop. That CLOSED state is still
+        # authoritative lifecycle evidence, but it is not an auto-closure: record
+        # it and skip the duplicate `gh issue close`.
+        if ([string]$View["state"] -ceq "CLOSED") {
+            Register-GitLoopySourceClosure `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration `
+                -Ref ([string]$Issue)
+        }
         return $false
     }
 
@@ -2247,6 +2337,7 @@ function Invoke-GitLoopyDiscovery {
         $script:GitLoopyActiveClosedAt = $null
         $script:GitLoopyActiveClosedMonotonic = $null
         $script:GitLoopyWarnedMarkerRefs.Clear()
+        $script:GitLoopySourceClosedRefs.Clear()
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_START"] `
@@ -2273,6 +2364,13 @@ function Invoke-GitLoopyDiscovery {
             -Payload ([ordered]@{ issues = [object[]]$Refs })
 
         if ($Pool.Count -eq 0) {
+            # No turn runs, so no Working marker can claim this Iteration: any
+            # closure the Pool read observed at the source is its only Active
+            # binding and lifecycle evidence.
+            Register-GitLoopyObservedSourceClosures `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration
             $Rollup = Get-GitLoopyCurrentIterationRollup `
                 -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
                 -Strikes $Strikes
@@ -2366,6 +2464,13 @@ function Invoke-GitLoopyDiscovery {
             -Iteration $Iteration `
             -Pool $Pool `
             -Commits $NewCommits
+        # Binding priority (CONTEXT.md): a Working marker from the turn wins,
+        # then a wrapper closure, then a closure the Pool read observed at the
+        # source, then the commit / single-member-Pool fallback.
+        Register-GitLoopyObservedSourceClosures `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration
         if ($null -eq $script:GitLoopyActiveRef) {
             $FallbackBinding = Get-GitLoopyFallbackBinding `
                 -Pool $Pool `

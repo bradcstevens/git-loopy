@@ -67,3 +67,6 @@ docs/feature-requests/
 # entry, so committing one makes `actions/checkout` fail its submodule cleanup
 # with "fatal: No url found for submodule path ... in .gitmodules".
 .worktrees/
+
+# Throwaway debugging scratch space (fake `gh` stubs, captured stdout/stderr).
+.scratch/
