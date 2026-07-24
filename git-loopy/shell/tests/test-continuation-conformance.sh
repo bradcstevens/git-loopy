@@ -906,7 +906,8 @@ while IFS= read -r scenario; do
         fail "$id exact stdout mismatch"
     else
       expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
-      [[ "$actual_json" == "$expected_json" ]] ||
+      jq -e --argjson expected "$expected_json" \
+        '. == $expected' "$stdout_path" >/dev/null ||
         fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
     fi
     [[ "$(wc -l <"$stdout_path" | tr -d ' ')" == "1" ]] ||

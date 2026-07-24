@@ -2293,7 +2293,7 @@
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
-                "operations": ["publish", "reconcile"]
+                "operations": ["publish", "reconcile", "repair-index"]
               }
             },
             "operations": {
@@ -2301,13 +2301,14 @@
               "publish": true,
               "reconcile": true,
               "record-dispatch-result": false,
-              "repair-index": false
+              "repair-index": true
             },
             "instruction_handlers": [],
             "instruction_modes": [],
             "evaluators": [],
             "effect_scopes": [],
             "optional_capabilities": {
+              "immutable_producer_revisions": true,
               "terminal_rendering": false,
               "concurrent_dispatch": false
             },
@@ -2439,29 +2440,6 @@
           }
         },
         "stderr_contains": "record-dispatch-result is not supported",
-        "github_calls": []
-      }
-    },
-    {
-      "id": "repair-index-fails-closed",
-      "distributions": ["shell"],
-      "arguments": ["continuation", "repair-index"],
-      "request": {
-        "source": "stdin",
-        "json": {}
-      },
-      "github_script": [],
-      "expected": {
-        "exit_code": 1,
-        "stdout": {
-          "ok": false,
-          "operation": "repair-index",
-          "error": {
-            "code": "unsupported_operation",
-            "message": "repair-index is not supported by this distribution"
-          }
-        },
-        "stderr_contains": "repair-index is not supported",
         "github_calls": []
       }
     },
@@ -2880,6 +2858,7 @@
       "id": "immutable-empty-observation",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -2935,6 +2914,7 @@
       "id": "untrusted-marker",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3023,6 +3003,7 @@
       "id": "permission-revocation",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3127,6 +3108,7 @@
       "id": "allowlisted-app-root",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3286,6 +3268,7 @@
       "id": "deterministic-retry",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3419,6 +3402,7 @@
       "id": "mutated-comment",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3608,6 +3592,7 @@
       "id": "stale-non-equivalent-publish-conflicts",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3835,6 +3820,7 @@
       "id": "missing-predecessor-is-quarantined",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -3942,6 +3928,7 @@
       "id": "tainted-lineage-requires-reattestation",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -4118,6 +4105,7 @@
       "id": "authorized-reattestation-recovers-lineage",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -4360,6 +4348,7 @@
       "id": "repair-index-adds-missing-label",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -4470,6 +4459,7 @@
       "id": "repair-index-removes-stale-label",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -4552,6 +4542,7 @@
       "id": "post-transition-publication-failure-requires-repair",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5056,6 +5047,7 @@
       "id": "unparseable-revision-has-reattestable-identity",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5157,6 +5149,7 @@
       "id": "reattestation-replaces-unparseable-revision",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5394,6 +5387,7 @@
       "id": "equivalent-concurrent-publish-remains-committed",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5621,6 +5615,7 @@
       "id": "equivalent-concurrent-heads-deduplicate-guidance",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5823,6 +5818,7 @@
       "id": "non-equivalent-heads-form-visible-fork",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -5966,6 +5962,7 @@
       "id": "fork-resolution-names-all-current-heads",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -6237,6 +6234,7 @@
       "id": "resolved-fork-has-one-live-head",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -7391,6 +7389,7 @@
       "id": "observation-token-mismatch-is-rejected",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -7507,6 +7506,7 @@
       "id": "deleted-observed-revision-requires-repair",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -7666,6 +7666,7 @@
       "id": "missing-index-label-does-not-hide-revision",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -7844,6 +7845,7 @@
       "id": "edited-revision-quarantines-smallest-lineage",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -8047,6 +8049,7 @@
       "id": "broken-ancestry-quarantines-smallest-lineage",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -8257,6 +8260,7 @@
       "id": "append-reread-mismatch-requires-repair",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -8454,6 +8458,7 @@
       "id": "reattestation-requires-separate-authority",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -8602,6 +8607,7 @@
       "id": "reattestation-must-name-all-tainted-heads",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -8790,6 +8796,7 @@
       "id": "trusted-human-root",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "github_script": [

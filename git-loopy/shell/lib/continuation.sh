@@ -27,7 +27,7 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":false},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"terminal_rendering":false,"concurrent_dispatch":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":false,"concurrent_dispatch":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
 }
@@ -385,6 +385,179 @@ _git_loopy_continuation_fingerprints() {
     )"
   done < <(jq -c '.actions[]?' <<<"$completion")
   printf '%s\n' "$fingerprints"
+}
+
+_git_loopy_continuation_validate_observation() {
+  local request="$1"
+  local repository="$2"
+  local result token_source expected_token
+  result="$(
+    jq -c '
+      def digest: test("^[0-9a-f]{64}$");
+      if (
+        (.observation | type == "object")
+        and ((.observation | keys | sort) == ["heads","token","validators"])
+        and (.observation.heads | type == "array")
+        and (.observation.validators | type == "array")
+        and all(.observation.heads[];
+          type == "object"
+          and ((keys | sort) == [
+            "carrier","producer","revision_id","workstream_anchor"
+          ])
+          and (.carrier | type == "number" and . > 0 and floor == .)
+          and (.producer | type == "string" and length > 0)
+          and (.revision_id | type == "string" and digest)
+          and (.workstream_anchor | type == "object")
+        )
+        and all(.observation.validators[];
+          type == "object"
+          and ((keys | sort) == ["comment_id","sha256"])
+          and (.comment_id | type == "number" and . > 0 and floor == .)
+          and (.sha256 | type == "string" and digest)
+        )
+        and (
+          [.observation.heads[].revision_id] as $ids
+          | ($ids | unique | length) == ($ids | length)
+        )
+        and (.parents | type == "array")
+        and (.parents == [.observation.heads[].revision_id])
+      ) then
+        {ok:true}
+      else
+        {ok:false}
+      end
+    ' <<<"$request"
+  )"
+  if [[ "$(jq -r '.ok' <<<"$result")" != "true" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(
+      if ! jq -e '.observation | type == "object"' <<<"$request" >/dev/null 2>&1; then
+        printf '%s' "observation must be an object"
+      elif ! jq -e '.parents == [.observation.heads[].revision_id]' \
+        <<<"$request" >/dev/null 2>&1; then
+        printf '%s' "parents must name the observed heads in order"
+      else
+        printf '%s' "observation is outside the supported immutable revision contract"
+      fi
+    )"
+    return 1
+  fi
+  token_source="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson heads "$(jq -c '.observation.heads' <<<"$request")" \
+      --argjson validators "$(jq -c '.observation.validators' <<<"$request")" \
+      '{repository:$repository,heads:$heads,validators:$validators}'
+  )"
+  expected_token="sha256:$(
+    printf '%s' "$(jq -cS . <<<"$token_source")" |
+      _git_loopy_continuation_sha256
+  )"
+  if [[ "$(jq -r '.observation.token' <<<"$request")" != "$expected_token" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="observation token does not match its bound state"
+    return 1
+  fi
+}
+
+_git_loopy_continuation_validate_reattestation() {
+  local request="$1"
+  local producer="$2"
+  if ! jq -e '
+    (.reattestation | type == "object")
+    and ((.reattestation | keys | sort) == [
+      "affected_heads","authorized_by","mode"
+    ])
+    and (.reattestation.affected_heads | type == "array" and length > 0)
+    and all(.reattestation.affected_heads[];
+      type == "string" and test("^[0-9a-f]{64}$")
+    )
+    and (
+      .reattestation.affected_heads as $heads
+      | ($heads | unique | length) == ($heads | length)
+    )
+    and (.reattestation.authorized_by | type == "string" and length > 0)
+    and (.reattestation.mode | IN("copy","replace","retire"))
+    and ((.trusted_reattesters // []) | type == "array")
+  ' <<<"$request" >/dev/null 2>&1; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="reattestation is outside the supported immutable revision contract"
+    return 1
+  fi
+  if [[ "$(jq -r '.reattestation.authorized_by' <<<"$request")" != "$producer" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="reattestation.authorized_by must match the authenticated producer"
+    return 1
+  fi
+  if ! jq -e --arg producer "$producer" \
+    '(.trusted_reattesters // []) | index($producer) != null' \
+    <<<"$request" >/dev/null; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="reattestation actor is not separately authorized"
+    return 1
+  fi
+  GIT_LOOPY_CONTINUATION_REATTESTATION="$(
+    jq -c '.reattestation' <<<"$request"
+  )"
+}
+
+_git_loopy_continuation_authorize_producer() {
+  local request="$1"
+  local repository="$2"
+  local producer="$3"
+  local actor permission
+  if ! actor="$(gh api user)"; then
+    _git_loopy_continuation_github_error \
+      "publish" \
+      "reading the authenticated GitHub actor"
+    return 1
+  fi
+  if ! jq -e '
+    type == "object"
+    and (.login | type == "string")
+    and (.type | type == "string")
+  ' <<<"$actor" >/dev/null 2>&1; then
+    _git_loopy_continuation_github_error \
+      "publish" \
+      "decoding the authenticated GitHub actor"
+    return 1
+  fi
+  if [[ "$(jq -r '.login' <<<"$actor")" != "$producer" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="authenticated actor does not match completion producer"
+    return 2
+  fi
+  if [[ "$(jq -r '.type' <<<"$actor")" == "Bot" ||
+    "$(jq -r '.type' <<<"$actor")" == "App" ]]; then
+    if ! jq -e --arg producer "$producer" \
+      '(.trusted_apps // []) | index($producer) != null' \
+      <<<"$request" >/dev/null; then
+      GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="authenticated App producer is not allowlisted"
+      return 2
+    fi
+    return 0
+  fi
+  if ! jq -e --arg producer "$producer" \
+    '.trusted_producers | index($producer) != null' \
+    <<<"$request" >/dev/null; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="authenticated human producer is not trusted"
+    return 2
+  fi
+  if ! permission="$(
+    gh api "repos/$repository/collaborators/$producer/permission"
+  )"; then
+    _git_loopy_continuation_github_error \
+      "publish" \
+      "reading Producer repository permission"
+    return 1
+  fi
+  if ! jq -e '.permission | type == "string"' <<<"$permission" >/dev/null 2>&1; then
+    _git_loopy_continuation_github_error \
+      "publish" \
+      "decoding Producer repository permission"
+    return 1
+  fi
+  case "$(jq -r '.permission | ascii_upcase' <<<"$permission")" in
+    ADMIN | MAINTAIN | WRITE) return 0 ;;
+    *)
+      GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="authenticated human producer lacks current write permission"
+      return 2
+      ;;
+  esac
 }
 
 _git_loopy_continuation_validate_completion_request() {
@@ -748,7 +921,11 @@ _git_loopy_continuation_validate_completion_request() {
       def validate_request($request):
         object($request; "request")
         and fields(
-          $request; "request"; ["repository", "trusted_producers", "completion"]; []
+          $request; "request"; ["repository", "trusted_producers", "completion"];
+          [
+            "observation", "parents", "reattestation", "trusted_apps",
+            "trusted_reattesters"
+          ]
         )
         and string($request.repository; "repository")
         and (if ($request.repository | test("^[^/]+/[^/]+$")) then true
@@ -778,8 +955,7 @@ _git_loopy_continuation_validate_completion_request() {
              then true
              else fail("completion.disposition is unsupported") end)
         and array(
-          $request.trusted_producers; "trusted_producers";
-          $request.completion.publication == "shared"
+          $request.trusted_producers; "trusted_producers"; false
         )
         and all(
           $request.trusted_producers[];
@@ -789,6 +965,22 @@ _git_loopy_continuation_validate_completion_request() {
                   == ($request.trusted_producers | length)
              then true
              else fail("trusted_producers must not contain duplicates") end)
+        and array($request.trusted_apps // []; "trusted_apps"; false)
+        and all(
+          ($request.trusted_apps // [])[];
+          string(.; "trusted_apps item")
+        )
+        and (if (($request.trusted_apps // []) | unique | length)
+                  == (($request.trusted_apps // []) | length)
+             then true
+             else fail("trusted_apps must not contain duplicates") end)
+        and (if $request.completion.publication != "shared"
+                  or (
+                    ($request.trusted_producers + ($request.trusted_apps // []))
+                    | length
+                  ) > 0
+             then true
+             else fail("trusted Producers must not be empty") end)
         and object($request.completion.workstream; "completion.workstream")
         and fields(
           $request.completion.workstream; "completion.workstream";
@@ -840,7 +1032,7 @@ _git_loopy_continuation_validate_completion_request() {
         and (if $request.completion.producer.role == "planning" then true
              else fail("completion.producer.role must be planning") end)
         and (if $request.completion.publication != "shared"
-                  or ($request.trusted_producers
+                  or (($request.trusted_producers + ($request.trusted_apps // []))
                       | index($request.completion.producer.login))
              then true
              else fail("completion producer is not trusted") end)
@@ -1068,16 +1260,33 @@ _git_loopy_continuation_publish() {
     return 1
   fi
 
-  local repository completion producer publication
+  local repository completion producer publication protocol parents fingerprints
+  local reattestation
   repository="$(jq -r '.repository' <<<"$request")"
   completion="$(jq -c '.completion' <<<"$request")"
   producer="$(jq -r '.producer.login' <<<"$completion")"
   publication="$(jq -r '.publication' <<<"$completion")"
+  protocol=0
+  parents="null"
+  reattestation="null"
+  if jq -e 'has("observation")' <<<"$request" >/dev/null; then
+    protocol=1
+  elif jq -e 'has("parents") or has("reattestation")' \
+    <<<"$request" >/dev/null; then
+    _git_loopy_continuation_error \
+      "publish" \
+      "invalid_request" \
+      "observation is required when parents or reattestation is present"
+    return 1
+  fi
+  if [[ "$publication" == "ephemeral" ]] && ((protocol)); then
+    _git_loopy_continuation_error \
+      "publish" \
+      "invalid_request" \
+      "immutable revision fields require shared publication"
+    return 1
+  fi
 
-  local revision_id fingerprints record body
-  revision_id="$(
-    printf '%s' "$canonical_completion" | _git_loopy_continuation_sha256
-  )"
   fingerprints="$(_git_loopy_continuation_fingerprints "$completion")"
   if [[ "$publication" == "ephemeral" ]]; then
     jq -cn \
@@ -1096,6 +1305,116 @@ _git_loopy_continuation_publish() {
     return 0
   fi
 
+  if ((protocol)); then
+    if ! _git_loopy_continuation_validate_observation "$request" "$repository"; then
+      _git_loopy_continuation_error \
+        "publish" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    local authorization_status
+    if _git_loopy_continuation_authorize_producer \
+      "$request" "$repository" "$producer"; then
+      :
+    else
+      authorization_status=$?
+      if ((authorization_status == 2)); then
+        _git_loopy_continuation_error \
+          "publish" \
+          "invalid_request" \
+          "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      fi
+      return 1
+    fi
+    if jq -e 'has("reattestation")' <<<"$request" >/dev/null; then
+      if ! _git_loopy_continuation_validate_reattestation "$request" "$producer"; then
+        _git_loopy_continuation_error \
+          "publish" \
+          "invalid_request" \
+          "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+        return 1
+      fi
+      reattestation="$GIT_LOOPY_CONTINUATION_REATTESTATION"
+    fi
+    _git_loopy_continuation_load_all_carriers "$repository" || return 1
+    parents="$(jq -c '.parents' <<<"$request")"
+    local validator observed_comment actual_digest
+    while IFS= read -r validator; do
+      observed_comment="$(
+        jq -c --argjson comment_id "$(jq '.comment_id' <<<"$validator")" '
+          first(.[] | .comments[] | select(.id == $comment_id)) // null
+        ' <<<"$GIT_LOOPY_CONTINUATION_CARRIERS"
+      )"
+      if [[ "$observed_comment" == "null" ]]; then
+        _git_loopy_continuation_error \
+          "publish" \
+          "repair_required" \
+          "observed Producer revision was deleted; repair required"
+        return 1
+      fi
+      actual_digest="$(
+        printf '%s' "$(jq -r '.body' <<<"$observed_comment")" |
+          _git_loopy_continuation_sha256
+      )"
+      if [[ "$actual_digest" != "$(jq -r '.sha256' <<<"$validator")" ]]; then
+        _git_loopy_continuation_error \
+          "publish" \
+          "repair_required" \
+          "observed Producer revision was mutated; repair required"
+        return 1
+      fi
+    done < <(jq -c '.observation.validators[]' <<<"$request")
+    _git_loopy_continuation_tainted_heads \
+      "$completion" \
+      "$GIT_LOOPY_CONTINUATION_CARRIERS" \
+      "$(jq -c '
+        [(.trusted_producers + (.trusted_apps // []))[]] | unique | sort
+      ' <<<"$request")"
+    if [[ "$reattestation" == "null" ]] &&
+      (($(jq 'length' <<<"$GIT_LOOPY_CONTINUATION_TAINTED_HEADS") > 0)); then
+      _git_loopy_continuation_error \
+        "publish" \
+        "repair_required" \
+        "tainted Producer lineage requires authorized re-attestation; repair required"
+      return 1
+    fi
+    if (($(jq 'length' <<<"$GIT_LOOPY_CONTINUATION_TAINTED_HEADS") > 0)) &&
+      [[ "$(jq -c 'sort' <<<"$GIT_LOOPY_CONTINUATION_TAINTED_HEADS")" != \
+        "$(jq -c '.affected_heads | sort' <<<"$reattestation")" ]]; then
+      _git_loopy_continuation_error \
+        "publish" \
+        "invalid_request" \
+        "reattestation.affected_heads must name every tainted lineage head"
+      return 1
+    fi
+  fi
+
+  local revision_id record body identity_source
+  identity_source="$canonical_completion"
+  if ((protocol)) &&
+    (( $(jq 'length' <<<"$parents") > 0 )) ||
+    [[ "$reattestation" != "null" ]]; then
+    identity_source="$(
+      jq -cn \
+        --argjson completion "$completion" \
+        --argjson parents "$parents" \
+        --argjson reattestation "$reattestation" \
+        '{
+          completion:$completion,
+          parents:$parents
+        } + (
+          if $reattestation != null
+          then {reattestation:$reattestation}
+          else {}
+          end
+        )'
+    )"
+  fi
+  revision_id="$(
+    printf '%s' "$(jq -cS . <<<"$identity_source")" |
+      _git_loopy_continuation_sha256
+  )"
   local carrier carrier_number
   carrier="$(jq -c '.carrier' <<<"$completion")"
   carrier_number="$(jq -r '.number' <<<"$carrier")"
@@ -1103,10 +1422,20 @@ _git_loopy_continuation_publish() {
     jq -cS \
       --arg revision_id "$revision_id" \
       --argjson fingerprints "$fingerprints" \
+      --argjson protocol "$protocol" \
+      --argjson parents "$parents" \
+      --argjson reattestation "$reattestation" \
       '. + {
         revision_id: $revision_id,
         semantic_fingerprints: $fingerprints
-      }' <<<"$completion"
+      }
+      + (if $protocol == 1 then {parents:$parents} else {} end)
+      + (
+          if $reattestation != null
+          then {reattestation:$reattestation}
+          else {}
+          end
+        )' <<<"$completion"
   )"
   local record_length
   record_length="$(printf '%s' "$record" | LC_ALL=C wc -c | tr -d ' ')"
@@ -1126,6 +1455,56 @@ _git_loopy_continuation_publish() {
       "invalid_request" \
       "Producer revision exceeds live carrier body limit"
     return 1
+  fi
+
+  if ((protocol)); then
+    local existing_comment
+    while IFS= read -r existing_comment; do
+      [[ "$(jq -r '.author' <<<"$existing_comment")" == "$producer" ]] || continue
+      if [[ "$(jq -r '.body' <<<"$existing_comment")" == "$body" ]]; then
+        local existing_record_status
+        if _git_loopy_continuation_parse_revision_record \
+          "$existing_comment" "$repository" \
+          "$(jq -c '
+            [(.trusted_producers + (.trusted_apps // []))[]] | unique | sort
+          ' <<<"$request")"; then
+          if [[ "$(jq -r '.revision_id' \
+            <<<"$GIT_LOOPY_CONTINUATION_RECORD")" == "$revision_id" ]]; then
+            jq -cn \
+              --arg revision_id "$revision_id" \
+              --argjson carrier "$carrier" \
+              --argjson comment_id "$(jq '.id' <<<"$existing_comment")" \
+              --arg comment_url "$(jq -r '.url' <<<"$existing_comment")" \
+              --arg index_label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+              --argjson fingerprints "$fingerprints" \
+              --argjson parents "$parents" \
+              '{
+                ok:true,
+                operation:"publish",
+                receipt:{
+                  status:"idempotent",
+                  revision_id:$revision_id,
+                  carrier:$carrier,
+                  comment:{id:$comment_id,url:$comment_url},
+                  index_label:$index_label,
+                  semantic_fingerprints:$fingerprints,
+                  parents:$parents
+                }
+              }'
+            return 0
+          fi
+        else
+          existing_record_status=$?
+          : "$existing_record_status"
+        fi
+      fi
+    done < <(
+      jq -c --argjson carrier "$carrier_number" '
+        .[]
+        | select(.number == $carrier)
+        | .comments[]
+      ' <<<"$GIT_LOOPY_CONTINUATION_CARRIERS"
+    )
   fi
 
   local evidence_id
@@ -1162,11 +1541,18 @@ _git_loopy_continuation_publish() {
       gh api \
         --method POST \
         "repos/$repository/issues/$carrier_number/comments" \
-        --input -
+        --input - 2>&1
   )"; then
-    _git_loopy_continuation_github_error \
-      "publish" \
-      "appending the Producer revision"
+    if ((protocol)); then
+      _git_loopy_continuation_error \
+        "publish" \
+        "repair_required" \
+        "publication failed after durable transition: $appended; repair required"
+    else
+      _git_loopy_continuation_github_error \
+        "publish" \
+        "appending the Producer revision"
+    fi
     return 1
   fi
   if ! jq -e 'type == "object"' <<<"$appended" >/dev/null 2>&1; then
@@ -1176,10 +1562,17 @@ _git_loopy_continuation_publish() {
     return 1
   fi
   if [[ "$(jq -r '.user.login' <<<"$appended")" != "$producer" ]]; then
-    _git_loopy_continuation_error \
-      "publish" \
-      "invalid_request" \
-      "authenticated comment author does not match completion producer"
+    if ((protocol)); then
+      _git_loopy_continuation_error \
+        "publish" \
+        "repair_required" \
+        "published Producer revision author does not match completion producer; repair required"
+    else
+      _git_loopy_continuation_error \
+        "publish" \
+        "invalid_request" \
+        "authenticated comment author does not match completion producer"
+    fi
     return 1
   fi
 
@@ -1201,11 +1594,98 @@ _git_loopy_continuation_publish() {
   fi
   if [[ "$(jq -r '.body' <<<"$committed")" != "$body" ]] ||
     [[ "$(jq -r '.user.login' <<<"$committed")" != "$producer" ]]; then
-    _git_loopy_continuation_error \
-      "publish" \
-      "invalid_request" \
-      "Producer revision reread did not match the append"
+    if ((protocol)); then
+      _git_loopy_continuation_error \
+        "publish" \
+        "repair_required" \
+        "Producer revision reread did not match the append; repair required"
+    else
+      _git_loopy_continuation_error \
+        "publish" \
+        "invalid_request" \
+        "Producer revision reread did not match the append"
+    fi
     return 1
+  fi
+
+  local receipt_status conflicting_heads
+  receipt_status="committed"
+  conflicting_heads="[]"
+  if ((protocol)); then
+    local lineage_records existing_comment existing_status
+    lineage_records="$(jq -cn --argjson record "$record" '[$record]')"
+    while IFS= read -r existing_comment; do
+      [[ "$(jq -r '.author' <<<"$existing_comment")" == "$producer" ]] || continue
+      if _git_loopy_continuation_parse_revision_record \
+        "$existing_comment" "$repository" \
+        "$(jq -c '
+          [(.trusted_producers + (.trusted_apps // []))[]] | unique | sort
+        ' <<<"$request")"; then
+        if [[ "$(jq -cS '.workstream.anchor' \
+          <<<"$GIT_LOOPY_CONTINUATION_RECORD")" == \
+          "$(jq -cS '.workstream.anchor' <<<"$record")" ]]; then
+          lineage_records="$(
+            jq -cn \
+              --argjson current "$lineage_records" \
+              --argjson record "$GIT_LOOPY_CONTINUATION_RECORD" \
+              '$current + [$record]'
+          )"
+        fi
+      else
+        existing_status=$?
+        : "$existing_status"
+      fi
+    done < <(
+      jq -c --argjson carrier "$carrier_number" '
+        .[]
+        | select(.number == $carrier)
+        | .comments[]
+      ' <<<"$GIT_LOOPY_CONTINUATION_CARRIERS"
+    )
+    if [[ "$reattestation" != "null" ]]; then
+      lineage_records="$(
+        jq -c \
+          --argjson affected "$(jq -c '.affected_heads' <<<"$reattestation")" \
+          '[.[] | select(
+            .revision_id as $id | $affected | index($id) == null
+          )]' <<<"$lineage_records"
+      )"
+    fi
+    local live_records semantics_count
+    live_records="$(
+      jq -c '
+        [.[] | .parents[]?] as $referenced
+        | [
+            .[]
+            | select(
+                (.revision_id as $id | $referenced | index($id)) == null
+              )
+          ]
+      ' <<<"$lineage_records"
+    )"
+    semantics_count="$(
+      jq '
+        [
+          .[] | {
+            disposition:.disposition,
+            actions:(
+              .semantic_fingerprints
+              | to_entries
+              | sort_by(.key)
+              | map([.key,.value])
+            ),
+            outcome:(.outcome // null),
+            no_guidance:(.no_guidance // null)
+          }
+        ] | unique | length
+      ' <<<"$live_records"
+    )"
+    if ((semantics_count > 1)); then
+      receipt_status="conflict"
+      conflicting_heads="$(
+        jq -c '[.[].revision_id] | sort' <<<"$live_records"
+      )"
+    fi
   fi
 
   jq -cn \
@@ -1215,18 +1695,32 @@ _git_loopy_continuation_publish() {
     --arg comment_url "$(jq -r '.html_url' <<<"$committed")" \
     --arg index_label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
     --argjson fingerprints "$fingerprints" \
+    --argjson protocol "$protocol" \
+    --argjson parents "$parents" \
+    --arg status "$receipt_status" \
+    --argjson conflicting_heads "$conflicting_heads" \
+    --argjson reattestation "$reattestation" \
     '{
       ok: true,
       operation: "publish",
       receipt: {
-        status: "committed",
+        status: $status,
         revision_id: $revision_id,
         carrier: $carrier,
         comment: {id: $comment_id, url: $comment_url},
         index_label: $index_label,
         semantic_fingerprints: $fingerprints
       }
-    }'
+    }
+    | if $protocol == 1 then .receipt.parents = $parents else . end
+    | if $reattestation != null
+      then .receipt.reattestation = $reattestation
+      else .
+      end
+    | if ($conflicting_heads | length) > 0
+      then .receipt.conflicting_heads = $conflicting_heads
+      else .
+      end'
 }
 
 _git_loopy_continuation_comment_id() {
@@ -1237,6 +1731,794 @@ _git_loopy_continuation_comment_id() {
     else (.url | capture("#issuecomment-(?<id>[0-9]+)$").id | tonumber)
     end
   ' <<<"$comment"
+}
+
+_git_loopy_continuation_comment_taint_identity() {
+  local carrier="$1"
+  local comment_id="$2"
+  local source
+  source="$(
+    jq -cn \
+      --argjson carrier "$carrier" \
+      --argjson comment_id "$comment_id" \
+      '{carrier:$carrier,comment_id:$comment_id,kind:"invalid-producer-comment"}'
+  )"
+  printf '%s' "$(jq -cS . <<<"$source")" |
+    _git_loopy_continuation_sha256
+}
+
+_git_loopy_continuation_parse_revision_record() {
+  local comment="$1"
+  local repository="$2"
+  local trusted="$3"
+  local body prefix raw record completion parents identity_source expected fingerprints
+  body="$(jq -r '.body' <<<"$comment")"
+  prefix="$GIT_LOOPY_CONTINUATION_RECORD_MARKER"$'\n```json\n'
+  if [[ "$body" != "$prefix"* || "$body" != *$'\n```' ]]; then
+    return 2
+  fi
+  raw="${body#"$prefix"}"
+  raw="${raw%$'\n```'}"
+  record="$(jq -cS . <<<"$raw" 2>/dev/null)" || {
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="Producer revision comment $(jq -r '.id' <<<"$comment") contains invalid JSON"
+    return 1
+  }
+  completion="$(
+    jq -cS 'del(
+      .revision_id,
+      .semantic_fingerprints,
+      .parents,
+      .reattestation
+    )' <<<"$record"
+  )"
+  parents="$(jq -c '.parents // []' <<<"$record")"
+  identity_source="$completion"
+  if (($(jq 'length' <<<"$parents") > 0)) ||
+    jq -e 'has("reattestation")' <<<"$record" >/dev/null; then
+    identity_source="$(
+      jq -cn \
+        --argjson completion "$completion" \
+        --argjson parents "$parents" \
+        --argjson record "$record" \
+        '{
+          completion:$completion,
+          parents:$parents
+        } + (
+          if ($record | has("reattestation"))
+          then {reattestation:$record.reattestation}
+          else {}
+          end
+        )'
+    )"
+  fi
+  expected="$(
+    printf '%s' "$(jq -cS . <<<"$identity_source")" |
+      _git_loopy_continuation_sha256
+  )"
+  if [[ "$(jq -r '.revision_id // ""' <<<"$record")" != "$expected" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="Producer revision has an invalid revision identity"
+    return 1
+  fi
+  fingerprints="$(_git_loopy_continuation_fingerprints "$completion")"
+  if [[ "$(jq -cS '.semantic_fingerprints' <<<"$record")" != \
+    "$(jq -cS . <<<"$fingerprints")" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="Producer revision has invalid semantic fingerprints"
+    return 1
+  fi
+  local validation_request
+  validation_request="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson trusted_producers "$trusted" \
+      --argjson completion "$completion" \
+      '{
+        repository:$repository,
+        trusted_producers:$trusted_producers,
+        completion:$completion
+      }'
+  )"
+  if ! _git_loopy_continuation_validate_completion_request "$validation_request"; then
+    return 1
+  fi
+  if ! jq -e '
+    (.parents // [] | type == "array")
+    and all((.parents // [])[];
+      type == "string" and test("^[0-9a-f]{64}$")
+    )
+    and (
+      (.parents // []) as $parents
+      | ($parents | unique | length) == ($parents | length)
+    )
+  ' <<<"$record" >/dev/null 2>&1; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="revision parents are malformed"
+    return 1
+  fi
+  GIT_LOOPY_CONTINUATION_RECORD="$record"
+  GIT_LOOPY_CONTINUATION_COMPLETION="$completion"
+}
+
+_git_loopy_continuation_tainted_heads() {
+  local completion="$1"
+  local carriers="$2"
+  local trusted="$3"
+  local carrier_number producer anchor records tainted comment parse_status
+  carrier_number="$(jq -r '.carrier.number' <<<"$completion")"
+  producer="$(jq -r '.producer.login' <<<"$completion")"
+  anchor="$(jq -cS '.workstream.anchor' <<<"$completion")"
+  records="[]"
+  tainted="[]"
+  while IFS= read -r comment; do
+    [[ "$(jq -r '.author' <<<"$comment")" == "$producer" ]] || continue
+    [[ "$(jq -r '.body' <<<"$comment")" == *"$GIT_LOOPY_CONTINUATION_RECORD_MARKER"* ]] ||
+      continue
+    if _git_loopy_continuation_parse_revision_record \
+      "$comment" "$(jq -r '.carrier.repository' <<<"$completion")" "$trusted"; then
+      parse_status=0
+    else
+      parse_status=$?
+    fi
+    if ((parse_status == 1)); then
+      local taint_identity
+      taint_identity="$(
+        _git_loopy_continuation_comment_taint_identity \
+          "$carrier_number" \
+          "$(jq -r '.id' <<<"$comment")"
+      )"
+      tainted="$(
+        jq -cn \
+          --argjson current "$tainted" \
+          --arg id "$taint_identity" \
+          '($current + [$id]) | unique | sort'
+      )"
+      continue
+    elif ((parse_status == 2)); then
+      continue
+    fi
+    [[ "$(jq -cS '.workstream.anchor' \
+      <<<"$GIT_LOOPY_CONTINUATION_RECORD")" == "$anchor" ]] || continue
+    records="$(
+      jq -cn \
+        --argjson current "$records" \
+        --argjson record "$GIT_LOOPY_CONTINUATION_RECORD" \
+        '$current + [$record]'
+    )"
+    if [[ "$(jq -r '.created_at' <<<"$comment")" != \
+      "$(jq -r '.updated_at' <<<"$comment")" ]]; then
+      tainted="$(
+        jq -cn \
+          --argjson current "$tainted" \
+          --arg id "$(jq -r '.revision_id' \
+            <<<"$GIT_LOOPY_CONTINUATION_RECORD")" \
+          '($current + [$id]) | unique | sort'
+      )"
+    fi
+  done < <(
+    jq -c --argjson carrier "$carrier_number" '
+      .[]
+      | select(.number == $carrier)
+      | .comments[]
+    ' <<<"$carriers"
+  )
+  tainted="$(
+    jq -cn \
+      --argjson records "$records" \
+      --argjson initial "$tainted" '
+      [$records[].revision_id] as $ids
+      | (
+          $initial + [
+            $records[]
+            | select(any(
+                .parents[]?;
+                . as $parent | $ids | index($parent) == null
+              ))
+            | .revision_id
+          ]
+          | unique
+        ) as $direct
+      | reduce range(0; ($records | length)) as $iteration (
+          $direct;
+          . as $tainted
+          | (
+              . + [
+                $records[]
+                | select(any(
+                    .parents[]?;
+                    . as $parent | $tainted | index($parent) != null
+                  ))
+                | .revision_id
+              ]
+              | unique
+            )
+        )
+      | . as $all_tainted
+      | [
+          $records[]
+          | select(
+              .revision_id as $id
+              | $all_tainted
+              | index($id) != null
+            )
+          | .parents[]?
+          | select(. as $parent | $all_tainted | index($parent) != null)
+        ] as $referenced
+      | [
+          $all_tainted[]
+          | select(. as $id | $referenced | index($id) == null)
+        ]
+      | unique
+      | sort
+    '
+  )"
+  GIT_LOOPY_CONTINUATION_TAINTED_HEADS="$tainted"
+}
+
+_git_loopy_continuation_load_all_carriers() {
+  local repository="$1"
+  local page response item comment_page comments labels normalized
+  GIT_LOOPY_CONTINUATION_CARRIERS="[]"
+  page=1
+  while :; do
+    if ! response="$(
+      gh api "repos/$repository/issues?state=all&per_page=100&page=$page"
+    )"; then
+      _git_loopy_continuation_github_error \
+        "reconcile" \
+        "discovering all Producer carriers"
+      return 1
+    fi
+    if ! jq -e 'type == "array"' <<<"$response" >/dev/null 2>&1; then
+      _git_loopy_continuation_github_error \
+        "reconcile" \
+        "decoding all Producer carriers"
+      return 1
+    fi
+    while IFS= read -r item; do
+      jq -e '
+        (.number | type == "number")
+        and (.state | type == "string")
+        and (.html_url | type == "string")
+        and (.labels | type == "array")
+        and (.comments | type == "number")
+      ' <<<"$item" >/dev/null 2>&1 || {
+        _git_loopy_continuation_github_error \
+          "reconcile" \
+          "decoding all Producer carriers"
+        return 1
+      }
+      [[ "$(jq -r 'has("pull_request")' <<<"$item")" == "false" ]] || continue
+
+      comments="[]"
+      if (($(jq -r '.comments' <<<"$item") > 0)); then
+        comment_page=1
+        while :; do
+          local comment_response
+          if ! comment_response="$(
+            gh api \
+              "repos/$repository/issues/$(jq -r '.number' <<<"$item")/comments?per_page=100&page=$comment_page"
+          )"; then
+            _git_loopy_continuation_github_error \
+              "reconcile" \
+              "reading Producer carrier comments"
+            return 1
+          fi
+          if ! jq -e 'type == "array"' <<<"$comment_response" >/dev/null 2>&1; then
+            _git_loopy_continuation_github_error \
+              "reconcile" \
+              "decoding Producer carrier comments"
+            return 1
+          fi
+          comments="$(
+            jq -cn \
+              --argjson current "$comments" \
+              --argjson page "$comment_response" \
+              '$current + [
+                $page[] | {
+                  id: (.databaseId // .id),
+                  url: (.url // .html_url),
+                  body: .body,
+                  author: (.user.login // .author.login),
+                  author_type: (.user.type // .author.type // "User"),
+                  created_at: (.createdAt // .created_at),
+                  updated_at: (.updatedAt // .updated_at)
+                }
+              ]'
+          )"
+          (($(jq 'length' <<<"$comment_response") == 100)) || break
+          comment_page=$((comment_page + 1))
+        done
+      fi
+      labels="$(jq -c '[.labels[] | select(.name | type == "string") | .name]' <<<"$item")"
+      normalized="$(
+        jq -cn \
+          --argjson number "$(jq '.number' <<<"$item")" \
+          --arg state "$(jq -r '.state | ascii_upcase' <<<"$item")" \
+          --arg url "$(jq -r '.html_url' <<<"$item")" \
+          --argjson labels "$labels" \
+          --argjson comments "$comments" \
+          '{
+            number:$number,
+            state:$state,
+            url:$url,
+            labels:$labels,
+            comments:$comments
+          }'
+      )"
+      GIT_LOOPY_CONTINUATION_CARRIERS="$(
+        jq -cn \
+          --argjson current "$GIT_LOOPY_CONTINUATION_CARRIERS" \
+          --argjson carrier "$normalized" \
+          '$current + [$carrier]'
+      )"
+    done < <(jq -c '.[]' <<<"$response")
+    (($(jq 'length' <<<"$response") == 100)) || break
+    page=$((page + 1))
+  done
+}
+
+_git_loopy_continuation_reconcile_revision_protocol() {
+  local request="$1"
+  local repository carriers
+  repository="$(jq -r '.repository' <<<"$request")"
+  _git_loopy_continuation_load_all_carriers "$repository" || return 1
+  carriers="$GIT_LOOPY_CONTINUATION_CARRIERS"
+
+  local diagnostics indexed_carriers trusted_marker_carriers record_carriers entries
+  local trusted comment
+  diagnostics="[]"
+  trusted_marker_carriers="[]"
+  record_carriers="[]"
+  entries="[]"
+  trusted="$(jq -c '
+    [(.trusted_producers + (.trusted_apps // []))[]] | unique | sort
+  ' <<<"$request")"
+  local -A producer_permissions=()
+  indexed_carriers="$(
+    jq --arg label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+      '[.[] | select(.labels | index($label) != null)] | length' <<<"$carriers"
+  )"
+  while IFS= read -r comment; do
+    [[ "$(jq -r '.comment.body' <<<"$comment")" == *"$GIT_LOOPY_CONTINUATION_RECORD_MARKER"* ]] ||
+      continue
+    local author author_type carrier_number authorized rejection permission_response
+    author="$(jq -r '.comment.author' <<<"$comment")"
+    author_type="$(jq -r '.comment.author_type' <<<"$comment")"
+    carrier_number="$(jq -r '.carrier' <<<"$comment")"
+    authorized=0
+    rejection="untrusted_marker_ignored"
+    if [[ "$author_type" == "Bot" || "$author_type" == "App" ]]; then
+      if jq -e --arg author "$author" \
+        '(.trusted_apps // []) | index($author) != null' \
+        <<<"$request" >/dev/null; then
+        authorized=1
+      fi
+    elif jq -e --arg author "$author" \
+      '.trusted_producers | index($author) != null' \
+      <<<"$request" >/dev/null; then
+      if [[ -z "${producer_permissions[$author]+x}" ]]; then
+        if ! permission_response="$(
+          gh api "repos/$repository/collaborators/$author/permission"
+        )"; then
+          _git_loopy_continuation_github_error \
+            "reconcile" \
+            "reading Producer repository permission"
+          return 1
+        fi
+        if ! jq -e '.permission | type == "string"' \
+          <<<"$permission_response" >/dev/null 2>&1; then
+          _git_loopy_continuation_github_error \
+            "reconcile" \
+            "decoding Producer repository permission"
+          return 1
+        fi
+        producer_permissions[$author]="$(jq -r '.permission | ascii_upcase' \
+          <<<"$permission_response")"
+      fi
+      case "${producer_permissions[$author]}" in
+        ADMIN | MAINTAIN | WRITE) authorized=1 ;;
+        *) rejection="producer_permission_revoked" ;;
+      esac
+    fi
+
+    if ((authorized)); then
+      trusted_marker_carriers="$(
+        jq -cn \
+          --argjson current "$trusted_marker_carriers" \
+          --argjson carrier "$carrier_number" \
+          '($current + [$carrier]) | unique | sort'
+      )"
+      if [[ "$(jq -r '.comment.created_at' <<<"$comment")" != \
+        "$(jq -r '.comment.updated_at' <<<"$comment")" ]]; then
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson carrier "$carrier_number" \
+            --argjson comment_id "$(jq '.comment.id' <<<"$comment")" \
+            '$current + [{
+              code:"mutated_revision",
+              carrier:$carrier,
+              comment_id:$comment_id
+            }]'
+        )"
+        continue
+      fi
+      local parse_status
+      if _git_loopy_continuation_parse_revision_record \
+        "$(jq -c '.comment' <<<"$comment")" "$repository" "$trusted"; then
+        if [[ "$(jq -r '.producer.login' \
+          <<<"$GIT_LOOPY_CONTINUATION_RECORD")" != "$author" ]]; then
+          GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="embedded Producer does not match authenticated comment author"
+          parse_status=1
+        else
+          parse_status=0
+        fi
+      else
+        parse_status=$?
+      fi
+      if ((parse_status == 1)); then
+        local affected_head
+        affected_head="$(
+          _git_loopy_continuation_comment_taint_identity \
+            "$carrier_number" \
+            "$(jq -r '.comment.id' <<<"$comment")"
+        )"
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson carrier "$carrier_number" \
+            --argjson comment_id "$(jq '.comment.id' <<<"$comment")" \
+            --arg affected_head "$affected_head" \
+            --arg message "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR" \
+            '$current + [{
+              code:"invalid_revision",
+              carrier:$carrier,
+              comment_id:$comment_id,
+              affected_head:$affected_head,
+              message:$message
+            }]'
+        )"
+      elif ((parse_status == 0)); then
+        local entry
+        entry="$(
+          jq -cn \
+            --argjson carrier "$carrier_number" \
+            --argjson comment "$(jq -c '.comment' <<<"$comment")" \
+            --argjson record "$GIT_LOOPY_CONTINUATION_RECORD" \
+            '{
+              carrier:$carrier,
+              comment:$comment,
+              record:$record,
+              lineage: ([
+                $carrier,
+                $record.producer.login,
+                $record.workstream.anchor
+              ] | tojson),
+              semantics: ({
+                disposition:$record.disposition,
+                actions:(
+                  $record.semantic_fingerprints
+                  | to_entries
+                  | sort_by(.key)
+                  | map([.key,.value])
+                ),
+                outcome:($record.outcome // null),
+                no_guidance:($record.no_guidance // null)
+              } | tojson)
+            }'
+        )"
+        entries="$(
+          jq -cn \
+            --argjson current "$entries" \
+            --argjson entry "$entry" \
+            '$current + [$entry]'
+        )"
+        record_carriers="$(
+          jq -cn \
+            --argjson current "$record_carriers" \
+            --argjson carrier "$carrier_number" \
+            '($current + [$carrier]) | unique | sort'
+        )"
+      fi
+    else
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --arg code "$rejection" \
+          --argjson carrier "$carrier_number" \
+          --argjson comment_id "$(jq '.comment.id' <<<"$comment")" \
+          --arg author "$author" \
+          '$current + [{
+            code:$code,
+            carrier:$carrier,
+            comment_id:$comment_id,
+            author:$author
+          }]'
+      )"
+    fi
+  done < <(jq -c '.[] as $carrier | $carrier.comments[] | {
+    carrier:$carrier.number,
+    comment:.
+  }' <<<"$carriers")
+  while IFS= read -r carrier_number; do
+    if ! jq -e --argjson carrier "$carrier_number" \
+      'index($carrier) != null' <<<"$(
+        jq -c --arg label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+          '[.[] | select(.labels | index($label) != null) | .number]' \
+          <<<"$carriers"
+      )" >/dev/null; then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --argjson carrier "$carrier_number" \
+          '$current + [{code:"index_label_missing",carrier:$carrier}]'
+      )"
+    fi
+  done < <(jq -r '.[]' <<<"$record_carriers")
+  while IFS= read -r carrier_number; do
+    if ! jq -e --argjson carrier "$carrier_number" \
+      'index($carrier) != null' <<<"$trusted_marker_carriers" >/dev/null; then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --argjson carrier "$carrier_number" \
+          '$current + [{code:"index_label_stale",carrier:$carrier}]'
+      )"
+    fi
+  done < <(
+    jq -r --arg label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+      '.[] | select(.labels | index($label) != null) | .number' <<<"$carriers"
+  )
+
+  local missing_predecessors live_entries guidance_entries forks
+  local heads validators actions
+  missing_predecessors="$(
+    jq -c '
+      sort_by(.lineage)
+      | group_by(.lineage)
+      | map(
+          . as $lineage
+          | [$lineage[].record.revision_id] as $ids
+          | [
+              $lineage[]
+              | (
+                  [
+                    .record.parents[]?
+                    | select(. as $parent | $ids | index($parent) == null)
+                  ] | sort
+                ) as $missing
+              | select(($missing | length) > 0)
+              | {
+                  code:"missing_predecessor",
+                  comment_id:.comment.id,
+                  revision_id:.record.revision_id,
+                  missing:$missing
+                }
+            ]
+        )
+      | add // []
+    ' <<<"$entries"
+  )"
+  diagnostics="$(
+    jq -cn \
+      --argjson diagnostics "$diagnostics" \
+      --argjson missing "$missing_predecessors" \
+      '$diagnostics + $missing'
+  )"
+  live_entries="$(
+    jq -c '
+      sort_by(.lineage)
+      | group_by(.lineage)
+      | map(
+          . as $lineage
+          | [$lineage[].record.revision_id] as $ids
+          | [
+              $lineage[]
+              | select(any(
+                  .record.parents[]?;
+                  . as $parent | $ids | index($parent) == null
+                ))
+              | .record.revision_id
+            ] as $direct_taint
+          | reduce range(0; ($lineage | length)) as $iteration (
+              $direct_taint;
+              . as $tainted
+              | (
+                  . + [
+                    $lineage[]
+                    | select(any(
+                        .record.parents[]?;
+                        . as $parent | $tainted | index($parent) != null
+                      ))
+                    | .record.revision_id
+                  ]
+                  | unique
+                )
+            ) as $tainted
+          | [
+              $lineage[]
+              | select(
+                  .record.revision_id as $id
+                  | $tainted
+                  | index($id) == null
+                )
+            ] as $usable
+          | [$usable[].record.parents[]?] as $referenced
+          | [
+              $usable[]
+              | select(
+                  (.record.revision_id as $id | $referenced | index($id)) == null
+                )
+            ]
+        )
+      | add // []
+      | sort_by(.carrier,.record.revision_id)
+    ' <<<"$entries"
+  )"
+  forks="$(
+    jq -c '
+      sort_by(.lineage)
+      | group_by(.lineage)
+      | map(select([.[].semantics] | unique | length > 1))
+      | map({
+          code:"revision_fork",
+          carrier:.[0].carrier,
+          heads:([.[].record.revision_id] | sort)
+        })
+    ' <<<"$live_entries"
+  )"
+  diagnostics="$(
+    jq -cn \
+      --argjson diagnostics "$diagnostics" \
+      --argjson forks "$forks" \
+      '$diagnostics + $forks'
+  )"
+  guidance_entries="$(
+    jq -c '
+      sort_by(.lineage)
+      | group_by(.lineage)
+      | map(
+          select([.[].semantics] | unique | length == 1)
+          | min_by(.record.revision_id)
+        )
+    ' <<<"$live_entries"
+  )"
+  heads="$(
+    jq -c '[.[] | {
+      carrier:.carrier,
+      producer:.record.producer.login,
+      revision_id:.record.revision_id,
+      workstream_anchor:.record.workstream.anchor
+    }]' <<<"$live_entries"
+  )"
+  validators="$(
+    while IFS= read -r entry; do
+      jq -cn \
+        --argjson comment_id "$(jq '.comment.id' <<<"$entry")" \
+        --arg sha256 "$(
+          printf '%s' "$(jq -r '.comment.body' <<<"$entry")" |
+            _git_loopy_continuation_sha256
+        )" \
+        '{comment_id:$comment_id,sha256:$sha256}'
+    done < <(jq -c 'sort_by(.comment.id)[]' <<<"$entries") |
+      jq -sc .
+  )"
+  actions="[]"
+  while IFS= read -r candidate; do
+    local action target_number target identity_source identity projection
+    action="$(jq -c '.action' <<<"$candidate")"
+    if ! jq -e '
+      .target.kind == "issue"
+      and .prerequisites == []
+      and .completion_condition.kind == "issue-closed"
+      and .completion_condition.target.kind == "issue"
+    ' <<<"$action" >/dev/null; then
+      continue
+    fi
+    target_number="$(jq -r '.completion_condition.target.number' <<<"$action")"
+    if ! target="$(
+      gh issue view "$target_number" \
+        --repo "$repository" \
+        --json number,state,url
+    )"; then
+      _git_loopy_continuation_github_error \
+        "reconcile" \
+        "reading an Action Target"
+      return 1
+    fi
+    [[ "$(jq -r '.state' <<<"$target")" == "OPEN" ]] || continue
+    identity_source="$(
+      jq -cS '{
+        anchor:.record.workstream.anchor,
+        kind:.action.kind,
+        target:.action.target,
+        occurrence:.action.occurrence
+      }' <<<"$candidate"
+    )"
+    identity="$(
+      printf '%s' "$identity_source" | _git_loopy_continuation_sha256
+    )"
+    projection="$(
+      jq -cn \
+        --arg identity "$identity" \
+        --argjson candidate "$candidate" \
+        '($candidate.record) as $record
+        | ($candidate.action) as $action
+        | {
+            identity:$identity,
+            semantic_fingerprint:
+              $record.semantic_fingerprints[$action.key],
+            workstream_anchor:$record.workstream.anchor,
+            summary:$action.summary,
+            kind:$action.kind,
+            readiness:"Ready",
+            instruction:$action.instruction,
+            target:$action.target,
+            basis:$action.basis,
+            producer:(
+              $record.producer + {
+                carrier:$record.carrier,
+                revision_id:$record.revision_id,
+                comment_id:$candidate.comment.id,
+                comment_url:$candidate.comment.url
+              }
+            ),
+            prerequisites:$action.prerequisites,
+            interaction:$action.interaction,
+            completion_condition:$action.completion_condition
+          }'
+    )"
+    actions="$(
+      jq -cn \
+        --argjson current "$actions" \
+        --argjson projection "$projection" \
+        '$current + [$projection]'
+    )"
+  done < <(jq -c '.[] as $entry | $entry.record.actions[]? | {
+    record:$entry.record,
+    comment:$entry.comment,
+    action:.
+  }' <<<"$guidance_entries")
+  actions="$(jq -c 'sort_by(.identity)' <<<"$actions")"
+
+  local observation_source token
+  observation_source="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson heads "$heads" \
+      --argjson validators "$validators" \
+      '{repository:$repository,heads:$heads,validators:$validators}'
+  )"
+  token="sha256:$(
+    printf '%s' "$(jq -cS . <<<"$observation_source")" |
+      _git_loopy_continuation_sha256
+  )"
+  jq -cn \
+    --arg repository "$repository" \
+    --argjson indexed_carriers "$indexed_carriers" \
+    --argjson diagnostics "$diagnostics" \
+    --argjson heads "$heads" \
+    --arg token "$token" \
+    --argjson validators "$validators" \
+    --argjson producer_revisions "$(jq 'length' <<<"$entries")" \
+    --argjson actions "$actions" \
+    '{
+      ok: true,
+      operation: "reconcile",
+      result: {
+        status: (if ($actions | length) > 0 then "guidance" else "waiting" end),
+        observed: {
+          repository: $repository,
+          indexed_carriers: $indexed_carriers,
+          producer_revisions: $producer_revisions
+        },
+        actions: $actions,
+        diagnostics: $diagnostics,
+        observation: {
+          heads: $heads,
+          token: $token,
+          validators: $validators
+        }
+      }
+    }'
 }
 
 _git_loopy_continuation_reconcile() {
@@ -1251,6 +2533,20 @@ _git_loopy_continuation_reconcile() {
       "invalid_request" \
       "request is outside the supported trusted Reconciliation contract"
     return 1
+  fi
+  if ! jq -e '
+    (.trusted_apps // [] | type == "array")
+    and ((has("revision_protocol") | not) or (.revision_protocol | type == "boolean"))
+  ' <<<"$request" >/dev/null 2>&1; then
+    _git_loopy_continuation_error \
+      "reconcile" \
+      "invalid_request" \
+      "request is outside the supported trusted Reconciliation contract"
+    return 1
+  fi
+  if [[ "$(jq -r '.revision_protocol // false' <<<"$request")" == "true" ]]; then
+    _git_loopy_continuation_reconcile_revision_protocol "$request"
+    return $?
   fi
 
   local repository carriers actions revision_count
@@ -1436,6 +2732,185 @@ _git_loopy_continuation_reconcile() {
     }'
 }
 
+_git_loopy_continuation_repair_index() {
+    local request="$1"
+    if ! jq -e '
+      type == "object"
+      and ((keys | sort) == ["repository","trusted_apps","trusted_producers"])
+      and (.repository | type == "string" and test("^[^/]+/[^/]+$"))
+      and (.trusted_producers | type == "array" and length > 0)
+      and all(.trusted_producers[]; type == "string" and length > 0)
+      and ((.trusted_apps // []) | type == "array")
+    ' <<<"$request" >/dev/null 2>&1; then
+      _git_loopy_continuation_error \
+        "repair-index" \
+        "invalid_request" \
+        "request is outside the supported index-repair contract"
+      return 1
+    fi
+
+    local repository actor login actor_type permission carriers trusted
+    repository="$(jq -r '.repository' <<<"$request")"
+    if ! actor="$(gh api user)"; then
+      _git_loopy_continuation_github_error \
+        "repair-index" \
+        "reading the authenticated GitHub actor"
+      return 1
+    fi
+    login="$(jq -r '.login // ""' <<<"$actor")"
+    actor_type="$(jq -r '.type // ""' <<<"$actor")"
+    if [[ -z "$login" || -z "$actor_type" ]]; then
+      _git_loopy_continuation_github_error \
+        "repair-index" \
+        "decoding the authenticated GitHub actor"
+      return 1
+    fi
+    if [[ "$actor_type" == "Bot" || "$actor_type" == "App" ]]; then
+      if ! jq -e --arg login "$login" \
+        '(.trusted_apps // []) | index($login) != null' \
+        <<<"$request" >/dev/null; then
+        _git_loopy_continuation_error \
+          "repair-index" \
+          "invalid_request" \
+          "authenticated App actor is not allowlisted"
+        return 1
+      fi
+    else
+      if ! jq -e --arg login "$login" \
+        '.trusted_producers | index($login) != null' \
+        <<<"$request" >/dev/null; then
+        _git_loopy_continuation_error \
+          "repair-index" \
+          "invalid_request" \
+          "authenticated human actor is not trusted"
+        return 1
+      fi
+      if ! permission="$(
+        gh api "repos/$repository/collaborators/$login/permission"
+      )"; then
+        _git_loopy_continuation_github_error \
+          "repair-index" \
+          "reading Producer repository permission"
+        return 1
+      fi
+      case "$(jq -r '.permission | ascii_upcase' <<<"$permission")" in
+        ADMIN | MAINTAIN | WRITE) ;;
+        *)
+          _git_loopy_continuation_error \
+            "repair-index" \
+            "invalid_request" \
+            "authenticated human actor lacks current write permission"
+          return 1
+          ;;
+      esac
+    fi
+
+    _git_loopy_continuation_load_all_carriers "$repository" || return 1
+    carriers="$GIT_LOOPY_CONTINUATION_CARRIERS"
+    trusted="$(jq -c '
+      [(.trusted_producers + (.trusted_apps // []))[]] | unique | sort
+    ' <<<"$request")"
+    local added removed carrier
+    added="[]"
+    removed="[]"
+    while IFS= read -r carrier; do
+      local has_record has_trusted_marker comment
+      has_record=0
+      has_trusted_marker=0
+      while IFS= read -r comment; do
+        local author author_type authorized comment_permission
+        author="$(jq -r '.author' <<<"$comment")"
+        author_type="$(jq -r '.author_type' <<<"$comment")"
+        authorized=0
+        if [[ "$author_type" == "Bot" || "$author_type" == "App" ]]; then
+          jq -e --arg author "$author" \
+            '(.trusted_apps // []) | index($author) != null' \
+            <<<"$request" >/dev/null && authorized=1
+        elif jq -e --arg author "$author" \
+          '.trusted_producers | index($author) != null' \
+          <<<"$request" >/dev/null; then
+          if ! comment_permission="$(
+            gh api "repos/$repository/collaborators/$author/permission"
+          )"; then
+            _git_loopy_continuation_github_error \
+              "repair-index" \
+              "reading Producer repository permission"
+            return 1
+          fi
+          case "$(jq -r '.permission | ascii_upcase' <<<"$comment_permission")" in
+            ADMIN | MAINTAIN | WRITE) authorized=1 ;;
+          esac
+        fi
+        ((authorized)) || continue
+        [[ "$(jq -r '.body' <<<"$comment")" != \
+          *"$GIT_LOOPY_CONTINUATION_RECORD_MARKER"* ]] ||
+          has_trusted_marker=1
+        if _git_loopy_continuation_parse_revision_record \
+          "$comment" "$repository" "$trusted"; then
+          if [[ "$(jq -r '.producer.login' \
+            <<<"$GIT_LOOPY_CONTINUATION_RECORD")" == "$author" ]]; then
+            has_record=1
+          fi
+        fi
+      done < <(jq -c '.comments[]' <<<"$carrier")
+
+      local number indexed
+      number="$(jq -r '.number' <<<"$carrier")"
+      indexed=0
+      jq -e --arg label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+        '.labels | index($label) != null' <<<"$carrier" >/dev/null &&
+        indexed=1
+      if ((has_record && !indexed)); then
+        if ! gh label create "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+          --repo "$repository" \
+          --color 5319E7 \
+          --description "Repairable discovery index for git-loopy Continuation records" \
+          --force >/dev/null; then
+          _git_loopy_continuation_github_error \
+            "repair-index" \
+            "establishing the discovery label"
+          return 1
+        fi
+        if ! gh issue edit "$number" \
+          --repo "$repository" \
+          --add-label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" >/dev/null; then
+          _git_loopy_continuation_github_error \
+            "repair-index" \
+            "adding the discovery label"
+          return 1
+        fi
+        added="$(jq -cn --argjson current "$added" --argjson number "$number" \
+          '($current + [$number]) | sort')"
+      elif ((indexed && !has_trusted_marker)); then
+        if ! gh issue edit "$number" \
+          --repo "$repository" \
+          --remove-label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" >/dev/null; then
+          _git_loopy_continuation_github_error \
+            "repair-index" \
+            "removing the stale discovery label"
+          return 1
+        fi
+        removed="$(jq -cn --argjson current "$removed" --argjson number "$number" \
+          '($current + [$number]) | sort')"
+      fi
+    done < <(jq -c '.[]' <<<"$carriers")
+
+    jq -cn \
+      --arg index_label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+      --argjson added "$added" \
+      --argjson removed "$removed" \
+      '{
+        ok:true,
+        operation:"repair-index",
+        result:{
+          status:"repaired",
+          index_label:$index_label,
+          added:$added,
+          removed:$removed
+        }
+      }'
+}
+
 git_loopy_continuation_main() {
   local operation="${1:-}"
   [[ -n "$operation" ]] || {
@@ -1516,6 +2991,9 @@ git_loopy_continuation_main() {
       else
         _git_loopy_continuation_reconcile "$request"
       fi
+      ;;
+    repair-index)
+      _git_loopy_continuation_repair_index "$request"
       ;;
     *)
       _git_loopy_continuation_error \
