@@ -3,7 +3,7 @@
 > The separately versioned, language-neutral contract for Workflow Continuation across the
 > git-loopy Runner family. Domain terms are defined in [`CONTEXT.md`](../CONTEXT.md).
 
-**Continuation contract version:** 1.0
+**Continuation contract version:** 1.1
 
 **Record format:** 1
 
@@ -72,6 +72,18 @@ and fail closed on `reconcile --terminal` with `unsupported_operation` until the
 land. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
 
+Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
+implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
+reference. Python advertises `prospective_projection: true`; shell and PowerShell advertise `false`
+and fail closed rather than ignoring the gated fields: `completion.retirements` is a structural
+`publish` rejection, and `previous_actions` or `handoff` on `reconcile` returns
+`unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
+ordering rule and every family member implements it.
+
+Every distribution advertises `continuation_contract_versions: ["1.0", "1.1"]` and accepts a
+completion record declaring either. Contract 1.1 adds only optional fields, so a record published
+under 1.0 stays valid without rewriting.
+
 ## 5. Event observations
 
 Event schema 1.1 adds `wrapper.continuation.reconciled`,
@@ -83,7 +95,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
 language-neutral, data-only public-command harness. It independently declares fixture schema 1.4,
-Continuation contract 1.0, record format 1, Wrapper contract 1.3, and Event schema 1.1.
+Continuation contract 1.1, record format 1, Wrapper contract 1.3, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
 objects are supplied through the declared stdin or file source. `$INPUT_FILE` is the fixture
@@ -108,6 +120,15 @@ data-only RFC 6902 `add`, `remove`, and `replace` patches. A workflow executes m
 native commands against one ordered scripted-GitHub transport. Family adapters run only scenarios
 and workflows naming their distribution, so a member advertises and proves a capability only when
 its native implementation lands.
+
+Fixture schema 1.4 adds the §8 prospective-projection vocabulary to the same data-only harness:
+`revision_protocol.diagnostic_codes` pins the family's complete `reconcile` diagnostic vocabulary —
+the union across every distribution, not one member's subset — so a distribution emitting an
+unregistered code is a fixture change rather than a silent addition. Scenarios may pin
+`retirements`, `outcomes`, `delta`, and `handoff_reference` result fields and the exact Continuation
+view order. Ordering scenarios name every distribution, because ordering is ungated; scenarios
+exercising the gated §8 request fields name only the distributions advertising
+`prospective_projection`.
 
 ## 7. Native atomic completion records
 
@@ -232,25 +253,41 @@ returns `repair_required`; it never falls back to ephemeral guidance or a succes
 
 ## 8. Prospective projection: retirement, ordering, delta, Handoff, and terminal rendering
 
-The Python distribution's `reconcile` derives a wholly prospective projection: every result replaces
-the prior one in full from durable facts rather than appending to a history, queue, or journal. The
-following optional, version-1 request and result fields extend the contract without changing any
-existing request or pinned response shape; omitting them selects exactly the prior behavior.
+A distribution advertising the `prospective_projection` capability derives a wholly prospective
+projection from `reconcile`: every result replaces the prior one in full from durable facts rather
+than appending to a history, queue, or journal. The following optional, version-1.1 request and
+result fields extend the contract without changing any existing request or pinned response shape;
+omitting them selects exactly the prior behavior. The deterministic ordering below is the exception:
+it is ungated and every family member implements it.
 
 **Retirement receipts (request `completion.retirements`, result `retirements`).** A successor's
 `completion` may carry a bounded, transient list of typed retirement receipts, each naming a
 `predecessor_revision_id`, the retired `action_key`, a `reason` of `completed`, `lost-basis`,
 `workstream-outcome`, or `supersession`, durable `evidence`, and — only for `supersession` — a
 `replacement` Action identity inputs. Reconciliation derives a receipt's live legitimacy purely by
-comparing the requesting successor against the exact predecessor(s) it names in its own `parents`
-and `semantic_fingerprints`: there is no central journal, tombstone, or cache. A supersession must
-name a current replacement Action with a different durable occurrence identity; reusing the retired
-identity does not create a recurrence. A receipt naming an unrelated revision, an unknown action
-key, or a `replacement` outside `supersession` is a structural rejection; a receipt naming a real
-predecessor that the successor does not actually retire or supersede surfaces as an
-`invalid_retirement_receipt` diagnostic rather than a fatal error. Completed or invalidated
-occurrences never resurrect: retirement is transient and reported once, for the refresh that proves
-it, not persisted.
+comparing the requesting successor's own projected Action identities against the exact
+predecessor(s) it names in its own `parents`: a retirement is proven when the predecessor's Action
+identity is absent from the successor. There is no central journal, tombstone, or cache. Every
+recurrence — whatever the receipt's `reason` — must carry a durable `occurrence` discriminator
+distinct from the retired one; an Action re-declared under the retired occurrence identity is the
+same occurrence, not a recurrence, and proves no retirement. A `supersession` must additionally name
+its `replacement` explicitly, sharing the retired Action's Workstream Anchor, kind, and Target while
+differing in `occurrence`, and that replacement must be live in the successor. A receipt naming an
+unrelated revision, an unknown action key, or a `replacement` outside `supersession` is a structural
+rejection; a receipt naming a real predecessor that the successor does not actually retire or
+supersede surfaces as an `invalid_retirement_receipt` diagnostic rather than a fatal error.
+
+Retirement is enforced across the whole ancestor chain, not just the immediate parents. An Action
+identity retired anywhere in a revision's ancestry can never resurrect: a later revision re-declaring
+that identity taints itself and reports `retired_occurrence_resurrected` with the offending
+identities. Retirement itself stays transient — reported once, for the refresh that proves it, and
+never persisted.
+
+Retirement legitimacy is provable only against an immutable revision chain. Label-indexed discovery
+is deliberately lineage-free (the atomic-root capability subset), so it can neither prove nor project
+a Retirement. When discovered records carry receipts, the label-indexed path reports
+`retirements_require_revision_protocol` naming those `revision_ids` rather than silently dropping
+them; `revision_protocol: true` is required to project `retirements`.
 
 **Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
 entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other
@@ -260,11 +297,15 @@ projection reports `waiting`; anything else with open guidance reports `guidance
 Action list never implies completion — closed coverage must be explicit (`revision_protocol: true`
 with a full paginated read, or an equivalent explicit closed-coverage read).
 
-**Deterministic ordering.** Actions order `Ready` before `Blocked`, then by a per-record local
-topological layer derived only from local `action-completed` prerequisites in that same fragment
-(cycle-safe), then by canonical Workstream Anchor. Within one Workstream, local declaration order
-applies before Action identity breaks the final tie. No local declaration order leaks across
-Workstreams, and no global Action-kind stage order, timestamp, or discovery order ever participates.
+**Deterministic ordering.** Every distribution orders Actions `Ready` before `Blocked`, then by a
+per-record local topological layer derived only from local `action-completed` prerequisites in that
+same fragment, then by canonical Workstream Anchor. Within one Workstream, local declaration order
+applies before Action identity breaks the final tie. Layers relax to a fixed point rather than
+resolving by recursive descent, so the answer never depends on the order Actions were declared or
+visited; anything still unresolved when the relaxation stops is on, or feeds, a prerequisite cycle
+and layers 0. No local declaration order leaks across Workstreams, and no global Action-kind stage
+order, timestamp, or discovery order ever participates. This rule is not capability-gated: it
+governs both the label-indexed and revision-protocol paths in every family member.
 
 **Refresh delta (request `previous_actions`, result `delta`).** Supplying the caller's own prior
 observed `actions` list (identity plus `semantic_fingerprint` pairs) makes reconcile return a
@@ -275,17 +316,20 @@ projection. Reconciliation holds no hidden memory of past calls; omitting `previ
 **Handoff reference (request `handoff`, result `actions[].handoff_reference`).** After Actions are
 fully derived, ordered, and their Readiness fixed, an explicit `handoff` request naming one
 `action_identity`, `context_available`, and, when available, one opaque machine-local `reference`
-attaches at most one `handoff_reference` to the exactly matching Action. An unavailable local
-context or an Action no longer present is reported as a
+and an optional human-readable `note` attaches at most one `handoff_reference` to the exactly
+matching Action. An unavailable local context or an Action no longer present is reported as a
 diagnostic-only `handoff_context_unavailable` or `handoff_action_unavailable` code; neither changes
 any Action's identity, Readiness, order, or completion — Handoff is a resume pointer, never an
 input to semantics.
 
-**Terminal rendering (`reconcile --terminal`).** The Python distribution renders one primary
-Action in full detail (Readiness, summary, Instruction, durable Target and Basis locators — never
-their content), an expandable Ready/Blocked remainder with hidden counts, a separate Needs-attention
-section for diagnostics (conflicts, malformed guidance, unstable reads, and Unverified scopes),
-Workstream outcomes, transient retirements from that refresh, and the bounded refresh delta when
-present. `--terminal` is accepted only by `reconcile`, exits `1` closed for every other operation,
-and is never mixed with machine JSON on the same invocation. Independent verified guidance remains
-usable even while unrelated occurrences sit in Needs attention.
+**Terminal rendering (`reconcile --terminal`).** A distribution advertising `terminal_rendering`
+renders one primary Action in full detail (Readiness, summary, Instruction, durable Target and Basis
+locators — never their content), a genuinely bounded Ready/Blocked remainder, a separate
+Needs-attention section for diagnostics (conflicts, malformed guidance, unstable reads, and
+Unverified scopes), Workstream outcomes, transient retirements from that refresh, and the bounded
+refresh delta when present. Each remainder group states both its full count and how many rows were
+withheld — `Ready (N more, H hidden)` — and points at plain `reconcile` to see the rest, so the
+rendering stays bounded no matter how large the projection is. `--terminal` is accepted only by
+`reconcile`; any other operation rejects it as a malformed invocation and exits `2` per §3. It is
+never mixed with machine JSON on the same invocation. Independent verified guidance remains usable
+even while unrelated occurrences sit in Needs attention.

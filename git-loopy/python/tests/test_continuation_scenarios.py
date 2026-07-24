@@ -3209,8 +3209,276 @@ def test_python_reconcile_revision_protocol_rejects_supersession_reusing_occurre
     assert stderr == ""
 
 
-def test_python_publish_rejects_retirement_with_unsupported_reason(
+def test_python_reconcile_revision_protocol_requires_occurrence_change_for_every_reason(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A recurrence needs a new occurrence whatever the receipt's reason is."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    # Claim the Action completed while re-declaring the very same occurrence.
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert [action["identity"] for action in result["result"]["actions"]] == [
+        original_action["identity"]
+    ]
+    assert "retirements" not in result["result"]
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_rejects_unrelated_supersession_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A replacement must recur the retired Action, not name an unrelated one."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    action = successor["completion"]["actions"][0]
+    action["occurrence"] = "v2"
+    action["target"] = _issue(240)
+    action["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "supersession",
+            "evidence": [_issue(237)],
+            # A different Target is a different Action, not a recurrence.
+            "replacement": {
+                "workstream_anchor": _issue(237),
+                "kind": "Publish spec",
+                "target": _issue(240),
+                "occurrence": "v2",
+            },
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert "retirements" not in result["result"]
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_refuses_resurrecting_a_retired_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A retirement anywhere in the ancestor chain outlives its immediate parent."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    # Generation 2 genuinely retires the root Action by recurring it as v2.
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, retired_view, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert original_action["identity"] not in [
+        action["identity"] for action in retired_view["result"]["actions"]
+    ]
+    [successor_head] = retired_view["result"]["observation"]["heads"]
+
+    # Generation 3 is entirely legitimate and says nothing about the root
+    # occurrence at all.
+    intermediate = _valid_publish_request("shared-continue")
+    intermediate.update({"trusted_apps": []})
+    intermediate["completion"]["actions"][0]["occurrence"] = "v3"
+    intermediate["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": successor_head["revision_id"],
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    intermediate["observation"] = retired_view["result"]["observation"]
+    intermediate["parents"] = [successor_head["revision_id"]]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        intermediate, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, intermediate_view, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert intermediate_view["result"]["diagnostics"] == []
+    [intermediate_head] = intermediate_view["result"]["observation"]["heads"]
+
+    # Generation 4 retires its own parent legitimately but re-declares the root
+    # occurrence. Only its grandparent proves that occurrence was retired, so
+    # nothing short of a full ancestor walk can catch this.
+    grandchild = _valid_publish_request("shared-continue")
+    grandchild.update({"trusted_apps": []})
+    grandchild["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": intermediate_head["revision_id"],
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    grandchild["observation"] = intermediate_view["result"]["observation"]
+    grandchild["parents"] = [intermediate_head["revision_id"]]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        grandchild, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    resurrections = [
+        diagnostic
+        for diagnostic in result["result"]["diagnostics"]
+        if diagnostic["code"] == "retired_occurrence_resurrected"
+    ]
+    assert len(resurrections) == 1
+    assert original_action["identity"] in resurrections[0]["identities"]
+    assert original_action["identity"] not in [
+        action["identity"] for action in result["result"]["actions"]
+    ]
+    assert result["result"]["status"] == "guidance"
+    assert stderr == ""
+
+
+def test_python_reconcile_label_path_gates_retirements_on_revision_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Lineage-free discovery says so rather than dropping receipts silently."""
+    github = _RecordingGitHub()
+    revision_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, revision_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    [gate] = [
+        diagnostic
+        for diagnostic in result["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+    assert gate["revision_ids"] == sorted(gate["revision_ids"])
+    assert gate["revision_ids"]
+    assert "retirements" not in result["result"]
+    assert stderr == ""
+
+
+def test_python_publish_rejects_retirement_with_unsupported_reason(    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Retirement shape is validated atomically, just like every other completion field."""
@@ -3564,18 +3832,24 @@ def test_python_reconcile_terminal_renders_primary_action_with_expandable_remain
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Terminal rendering shows one primary Action plus a bounded hidden count."""
+    """Terminal rendering bounds the remainder and states a true hidden count."""
     request = _valid_publish_request("shared-continue")
     actions = request["completion"]["actions"]
-    actions.append(
-        {
-            **copy.deepcopy(actions[0]),
-            "key": "second",
-            "summary": "Second Ready action",
-            "target": _issue(240),
-            "completion_condition": {"kind": "issue-closed", "target": _issue(240)},
-        }
-    )
+    for offset in range(5):
+        number = 240 + offset
+        actions.append(
+            {
+                **copy.deepcopy(actions[0]),
+                "key": f"extra-{offset}",
+                "summary": f"Ready action {offset}",
+                "target": _issue(number),
+                "occurrence": f"extra-{offset}",
+                "completion_condition": {
+                    "kind": "issue-closed",
+                    "target": _issue(number),
+                },
+            }
+        )
     github = _RecordingGitHub()
     publish_exit, _publish, _stderr = _publish_result(
         request, github, monkeypatch, capsys
@@ -3593,8 +3867,48 @@ def test_python_reconcile_terminal_renders_primary_action_with_expandable_remain
     assert "  Instruction (skill):\n/to-spec 237\n" in stdout
     assert "Target: https://github.com/octo/example/issues/239" in stdout
     assert "Basis: https://github.com/octo/example/issues/237" in stdout
-    assert "Ready (1 more):" in stdout
+    # Five Ready Actions remain behind the primary one; only the bounded rows
+    # are printed and the stated hidden count matches what was withheld.
+    assert "Ready (5 more, 2 hidden):" in stdout
+    rendered_rows = [line for line in stdout.splitlines() if line.startswith("  - ")]
+    assert len(rendered_rows) == continuation._TERMINAL_REMAINDER_ROWS
+    assert "expand the remaining 2 with reconcile without --terminal." in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_remainder_hides_nothing_when_it_fits(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A remainder inside the bound reports zero hidden and offers no expansion."""
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    actions.append(
+        {
+            **copy.deepcopy(actions[0]),
+            "key": "second",
+            "summary": "Second Ready action",
+            "target": _issue(240),
+            "occurrence": "second",
+            "completion_condition": {"kind": "issue-closed", "target": _issue(240)},
+        }
+    )
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert "Ready (1 more, 0 hidden):" in stdout
     assert "Second Ready action" in stdout
+    assert "expand the remaining" not in stdout
     assert stderr == ""
 
 

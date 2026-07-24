@@ -20,13 +20,14 @@ from git_loopy.gh import (
 )
 from git_loopy.release_version import read_runtime_release_version
 
-CONTINUATION_CONTRACT_VERSION = "1.0"
+CONTINUATION_CONTRACT_VERSION = "1.1"
+SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1")
 RECORD_FORMAT = 1
 WRAPPER_CONTRACT_VERSION = "1.3"
 EVENT_SCHEMA_VERSION = "1.1"
 
 CAPABILITY_MANIFEST: dict[str, Any] = {
-    "continuation_contract_versions": [CONTINUATION_CONTRACT_VERSION],
+    "continuation_contract_versions": list(SUPPORTED_CONTINUATION_CONTRACT_VERSIONS),
     "record_formats": [RECORD_FORMAT],
     "wrapper_contract_version": WRAPPER_CONTRACT_VERSION,
     "event_schema_version": EVENT_SCHEMA_VERSION,
@@ -46,6 +47,7 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     "effect_scopes": [],
     "optional_capabilities": {
         "immutable_producer_revisions": True,
+        "prospective_projection": True,
         "terminal_rendering": True,
         "concurrent_dispatch": False,
     },
@@ -155,7 +157,37 @@ _COVERAGE_UNCERTAINTY_CODES = frozenset(
         "missing_predecessor",
         "missing_retirement_receipt",
         "mutated_revision",
+        "retired_occurrence_resurrected",
         "revision_fork",
+    }
+)
+# The complete `reconcile` diagnostic vocabulary for the whole Runner family.
+# Registered here and pinned by the shared Conformance fixture so a new code
+# lands as one deliberate contract change rather than a silent addition. It is
+# a superset of what any one distribution emits: `unsupported_reconciliation_
+# semantics` is reported only by a distribution whose `reconcile` covers a
+# narrower slice of the Action vocabulary than this one.
+RECONCILE_DIAGNOSTIC_CODES = frozenset(
+    {
+        "action_conflict",
+        "handoff_action_unavailable",
+        "handoff_context_unavailable",
+        "index_label_missing",
+        "index_label_stale",
+        "invalid_retirement_receipt",
+        "invalid_revision",
+        "missing_predecessor",
+        "missing_retirement_receipt",
+        "mutated_revision",
+        "prerequisite_cycle",
+        "producer_permission_revoked",
+        "retired_occurrence_resurrected",
+        "retirements_require_revision_protocol",
+        "revision_fork",
+        "unsupported_reconciliation_semantics",
+        "untrusted_marker_ignored",
+        "unverified_completion",
+        "unverified_prerequisite",
     }
 )
 _REFERENCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -1330,7 +1362,10 @@ def _validate_completion(
             }
         ),
     )
-    if completion.get("continuation_contract_version") != CONTINUATION_CONTRACT_VERSION:
+    if (
+        completion.get("continuation_contract_version")
+        not in SUPPORTED_CONTINUATION_CONTRACT_VERSIONS
+    ):
         raise ContinuationError("unsupported Continuation contract version")
     if completion.get("record_format") != RECORD_FORMAT:
         raise ContinuationError("unsupported Continuation record format")
@@ -1785,6 +1820,32 @@ def _live_revision_entries(
     return [entry for entry in entries if entry[2]["revision_id"] not in referenced]
 
 
+def _record_identities(record: dict[str, Any]) -> set[str]:
+    return {_action_identity(record, action) for action in record.get("actions", [])}
+
+
+def _is_recurrence_of(
+    replacement: dict[str, Any],
+    predecessor_record: dict[str, Any],
+    retired_action: dict[str, Any],
+) -> bool:
+    """Decide whether one replacement repeats exactly the retired operation.
+
+    A recurrence is the *same* operation — identical Workstream Anchor,
+    Action kind, and durable Target — declared again under a genuinely new
+    durable occurrence discriminator. Reusing the retired occurrence is not a
+    recurrence, and neither is pointing at some unrelated Action.
+    """
+    return (
+        _canonical_json(replacement["workstream_anchor"])
+        == _canonical_json(predecessor_record["workstream"]["anchor"])
+        and replacement["kind"] == retired_action["kind"]
+        and _canonical_json(replacement["target"])
+        == _canonical_json(retired_action["target"])
+        and replacement["occurrence"] != retired_action["occurrence"]
+    )
+
+
 def _retirement_relationship(
     record: dict[str, Any],
     receipt: dict[str, Any],
@@ -1803,26 +1864,65 @@ def _retirement_relationship(
     if retired_action is None:
         return None
     retired_identity = _action_identity(predecessor_record, retired_action)
-    current_identities = {
-        _action_identity(record, action) for action in record.get("actions", [])
-    }
+    current_identities = _record_identities(record)
     if retired_identity in current_identities:
         return None
-    replacement_identity = None
-    if receipt["reason"] == "supersession":
-        replacement = receipt["replacement"]
-        replacement_identity = _action_identity_from_parts(
-            replacement["workstream_anchor"],
-            replacement["kind"],
-            replacement["target"],
-            replacement["occurrence"],
-        )
-        if (
-            replacement_identity == retired_identity
-            or replacement_identity not in current_identities
-        ):
-            return None
+    if receipt["reason"] != "supersession":
+        return retired_identity, None
+    replacement = receipt["replacement"]
+    if not _is_recurrence_of(replacement, predecessor_record, retired_action):
+        return None
+    replacement_identity = _action_identity_from_parts(
+        replacement["workstream_anchor"],
+        replacement["kind"],
+        replacement["target"],
+        replacement["occurrence"],
+    )
+    if replacement_identity not in current_identities:
+        return None
     return retired_identity, replacement_identity
+
+
+def _proven_retirements(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> tuple[list[tuple[dict[str, Any], str, str | None]], list[dict[str, Any]]]:
+    """Split one record's receipts into the proven ones and the unprovable ones.
+
+    This is the single place a receipt's live legitimacy is decided, so the
+    retirement projection, the missing-receipt check, and the ancestry
+    resurrection check can never disagree about what was really retired.
+    """
+    proven: list[tuple[dict[str, Any], str, str | None]] = []
+    unproven: list[dict[str, Any]] = []
+    parents = record.get("parents", [])
+    for receipt in record.get("retirements", []):
+        predecessor_id = str(receipt["predecessor_revision_id"])
+        predecessor_entry = by_id.get(predecessor_id)
+        relationship = (
+            _retirement_relationship(record, receipt, predecessor_entry[2])
+            if predecessor_entry is not None and predecessor_id in parents
+            else None
+        )
+        if relationship is None:
+            unproven.append(receipt)
+            continue
+        proven.append((receipt, relationship[0], relationship[1]))
+    return proven, unproven
+
+
+def _invalid_receipt_diagnostic(
+    comment: ContinuationComment,
+    record: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "code": "invalid_retirement_receipt",
+        "comment_id": comment.id,
+        "revision_id": record["revision_id"],
+        "predecessor_revision_id": str(receipt["predecessor_revision_id"]),
+        "action_key": str(receipt["action_key"]),
+    }
 
 
 def _apply_retirement_receipts(
@@ -1842,35 +1942,16 @@ def _apply_retirement_receipts(
     retirements: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     for _carrier, comment, record in live_entries:
-        for receipt in record.get("retirements", []):
-            predecessor_id = str(receipt["predecessor_revision_id"])
-            action_key = str(receipt["action_key"])
-            predecessor_entry = by_id.get(predecessor_id)
-            predecessor_record = predecessor_entry[2] if predecessor_entry else None
-            relationship = (
-                _retirement_relationship(record, receipt, predecessor_record)
-                if predecessor_record is not None
-                else None
-            )
-            if (
-                relationship is None
-                or predecessor_id not in record.get("parents", [])
-            ):
-                diagnostics.append(
-                    {
-                        "code": "invalid_retirement_receipt",
-                        "comment_id": comment.id,
-                        "revision_id": record["revision_id"],
-                        "predecessor_revision_id": predecessor_id,
-                        "action_key": action_key,
-                    }
-                )
-                continue
-            retired_identity, replacement_identity = relationship
+        proven, unproven = _proven_retirements(record, by_id)
+        diagnostics.extend(
+            _invalid_receipt_diagnostic(comment, record, receipt)
+            for receipt in unproven
+        )
+        for receipt, retired_identity, replacement_identity in proven:
             retirement_entry = {
                 "workstream_anchor": record["workstream"]["anchor"],
                 "action_identity": retired_identity,
-                "predecessor_revision_id": predecessor_id,
+                "predecessor_revision_id": str(receipt["predecessor_revision_id"]),
                 "reason": receipt["reason"],
                 "evidence": receipt["evidence"],
             }
@@ -1880,25 +1961,58 @@ def _apply_retirement_receipts(
     return retirements, diagnostics
 
 
+def _retired_ancestor_identities(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> set[str]:
+    """Collect every Action identity provably retired anywhere in the ancestry.
+
+    Retirement binds the whole descendant chain, not just the revision that
+    proved it: a completed or invalidated occurrence stays retired however
+    many revisions later it is re-declared. Walking the full ancestry is what
+    makes that durable without a tombstone ledger — the immutable chain
+    already read this Reconciliation is the only evidence consulted.
+    """
+    retired: set[str] = set()
+    seen: set[str] = set()
+    frontier = [str(parent) for parent in record.get("parents", [])]
+    while frontier:
+        revision_id = frontier.pop()
+        if revision_id in seen:
+            continue
+        seen.add(revision_id)
+        entry = by_id.get(revision_id)
+        if entry is None:
+            continue
+        ancestor = entry[2]
+        proven, _unproven = _proven_retirements(ancestor, by_id)
+        retired.update(identity for _receipt, identity, _replacement in proven)
+        frontier.extend(str(parent) for parent in ancestor.get("parents", []))
+    return retired
+
+
+def _resurrected_identities(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> list[str]:
+    """Find retired occurrences this record re-declares as live guidance."""
+    retired = _retired_ancestor_identities(record, by_id)
+    if not retired:
+        return []
+    return sorted(_record_identities(record) & retired)
+
+
 def _missing_retirement_receipts(
     record: dict[str, Any],
     by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
 ) -> list[dict[str, str]]:
     """Find predecessor Actions removed without a typed Retirement receipt."""
-    current_identities = {
-        _action_identity(record, action) for action in record.get("actions", [])
+    current_identities = _record_identities(record)
+    proven, _unproven = _proven_retirements(record, by_id)
+    declared = {
+        (str(receipt["predecessor_revision_id"]), str(receipt["action_key"]))
+        for receipt, _identity, _replacement in proven
     }
-    declared: set[tuple[str, str]] = set()
-    for receipt in record.get("retirements", []):
-        predecessor_id = str(receipt["predecessor_revision_id"])
-        predecessor_entry = by_id.get(predecessor_id)
-        predecessor = predecessor_entry[2] if predecessor_entry else None
-        if (
-            predecessor is not None
-            and predecessor_id in record.get("parents", [])
-            and _retirement_relationship(record, receipt, predecessor) is not None
-        ):
-            declared.add((predecessor_id, str(receipt["action_key"])))
     missing: list[dict[str, str]] = []
     for predecessor_id in record.get("parents", []):
         predecessor_entry = by_id.get(str(predecessor_id))
@@ -2375,46 +2489,50 @@ def _local_topological_layers(record: dict[str, Any]) -> dict[str, int]:
     Layer 0 has no local completed-Action prerequisite; otherwise the layer
     is one more than the deepest named local prerequisite. This captures
     only the Producer's own per-Workstream sequencing decision (never a
-    global Action-kind stage table) and never crashes on a cycle even
-    though one is already rejected at publish time.
+    global Action-kind stage table).
+
+    Layers are relaxed to a fixed point rather than resolved by recursive
+    descent, so the answer never depends on the order Actions were declared
+    or visited. Anything still unresolved when the relaxation stops is on, or
+    feeds, a prerequisite cycle and layers 0 — a cycle is already rejected at
+    publish time, and this keeps the order total either way. Every
+    distribution in the family implements this same fixed point.
     """
-    actions_by_key = {str(action["key"]): action for action in record.get("actions", [])}
-    layers: dict[str, int] = {}
-
-    def layer_of(key: str, stack: frozenset[str]) -> int:
-        if key in layers:
-            return layers[key]
-        if key in stack:
-            layers[key] = 0
-            return 0
-        action = actions_by_key.get(key)
-        if action is None:
-            layers[key] = 0
-            return 0
-        local_prerequisite_keys = [
-            str(prerequisite["action_key"])
-            for prerequisite in action.get("prerequisites", [])
-            if prerequisite.get("kind") == "action-completed"
-        ]
-        if not local_prerequisite_keys:
-            layers[key] = 0
-            return 0
-        layer = 1 + max(
-            layer_of(prerequisite_key, stack | {key})
-            for prerequisite_key in local_prerequisite_keys
+    prerequisites = {
+        str(action["key"]): sorted(
+            {
+                str(prerequisite["action_key"])
+                for prerequisite in action.get("prerequisites", [])
+                if prerequisite.get("kind") == "action-completed"
+            }
         )
-        layers[key] = layer
-        return layer
+        for action in record.get("actions", [])
+    }
+    layers: dict[str, int] = {}
+    for _round in range(len(prerequisites) + 1):
+        resolved = dict(layers)
+        for key, local_keys in prerequisites.items():
+            if key in resolved:
+                continue
+            if any(
+                other in prerequisites and other not in resolved
+                for other in local_keys
+            ):
+                continue
+            layers[key] = (
+                1 + max(resolved.get(other, 0) for other in local_keys)
+                if local_keys
+                else 0
+            )
+        if len(layers) == len(prerequisites):
+            break
+    return {key: layers.get(key, 0) for key in prerequisites}
 
-    for key in actions_by_key:
-        layer_of(key, frozenset())
-    return layers
 
-
-def _frontier_order_key(
+def _continuation_view_order_key(
     action: dict[str, Any],
 ) -> tuple[int, int, str, int, str]:
-    """Deterministic prospective-frontier order for verified guidance.
+    """Deterministic Continuation view order for verified guidance.
 
     Orders Ready Actions ahead of Blocked ones, then by each Action's
     deterministic local topological layer. Canonical Workstream Anchor keeps
@@ -2609,7 +2727,7 @@ def _derive_actions(
             # preserving the exact existing Ready-only command framing.
             item["unsatisfied_prerequisites"] = canonical["unsatisfied"]
         actions.append(item)
-    actions.sort(key=_frontier_order_key)
+    actions.sort(key=_continuation_view_order_key)
     for item in actions:
         del item["_topological_layer"]
         del item["_local_order_index"]
@@ -2751,32 +2869,28 @@ def _reconcile_revision_protocol(
             missing_retirements = _missing_retirement_receipts(record, by_id)
             if missing_retirements:
                 tainted.add(str(record["revision_id"]))
-                for receipt in record.get("retirements", []):
-                    predecessor_id = str(receipt["predecessor_revision_id"])
-                    predecessor_entry = by_id.get(predecessor_id)
-                    predecessor = predecessor_entry[2] if predecessor_entry else None
-                    action_key = str(receipt["action_key"])
-                    if (
-                        predecessor is None
-                        or predecessor_id not in record.get("parents", [])
-                        or _retirement_relationship(record, receipt, predecessor)
-                        is None
-                    ):
-                        diagnostics.append(
-                            {
-                                "code": "invalid_retirement_receipt",
-                                "comment_id": comment.id,
-                                "revision_id": record["revision_id"],
-                                "predecessor_revision_id": predecessor_id,
-                                "action_key": action_key,
-                            }
-                        )
+                _proven, unproven = _proven_retirements(record, by_id)
+                diagnostics.extend(
+                    _invalid_receipt_diagnostic(comment, record, receipt)
+                    for receipt in unproven
+                )
                 diagnostics.append(
                     {
                         "code": "missing_retirement_receipt",
                         "comment_id": comment.id,
                         "revision_id": record["revision_id"],
                         "missing": missing_retirements,
+                    }
+                )
+            resurrected = _resurrected_identities(record, by_id)
+            if resurrected:
+                tainted.add(str(record["revision_id"]))
+                diagnostics.append(
+                    {
+                        "code": "retired_occurrence_resurrected",
+                        "comment_id": comment.id,
+                        "revision_id": record["revision_id"],
+                        "identities": resurrected,
                     }
                 )
         changed = True
@@ -3149,6 +3263,22 @@ def _reconcile(
     if "handoff" in request:
         handoff = _validate_handoff(request["handoff"], "handoff")
         diagnostics.extend(_apply_handoff(actions, handoff))
+    # Retirement legitimacy is proven only against an immutable revision
+    # chain. Label-indexed discovery is deliberately lineage-free (the
+    # atomic-root capability subset), so it can neither prove nor project a
+    # Retirement. Say so rather than silently dropping the receipts.
+    gated_retirements = sorted(
+        str(record["revision_id"])
+        for _carrier, _comment, record in guidance_entries
+        if record.get("retirements")
+    )
+    if gated_retirements:
+        diagnostics.append(
+            {
+                "code": "retirements_require_revision_protocol",
+                "revision_ids": gated_retirements,
+            }
+        )
     result = {
         "status": status,
         "observed": {
@@ -3269,6 +3399,36 @@ def _render_locator(reference: dict[str, Any]) -> str:
     return kind
 
 
+_TERMINAL_REMAINDER_ROWS = 3
+
+
+def _render_remainder(
+    lines: list[str],
+    title: str,
+    remainder: list[dict[str, Any]],
+) -> None:
+    """Render one bounded remainder group whose hidden count is truthful.
+
+    The group is genuinely bounded: at most ``_TERMINAL_REMAINDER_ROWS``
+    compact rows are printed and the count of Actions actually withheld is
+    stated, so the human projection never claims to hide rows it just
+    printed. Nothing is dropped silently — the machine projection remains the
+    expansion.
+    """
+    if not remainder:
+        return
+    shown = remainder[:_TERMINAL_REMAINDER_ROWS]
+    hidden = len(remainder) - len(shown)
+    lines.append("")
+    lines.append(f"{title} ({len(remainder)} more, {hidden} hidden):")
+    for action in shown:
+        lines.append(f"  - {action['summary']} [{_render_locator(action['target'])}]")
+    if hidden:
+        lines.append(
+            f"  \u2026 expand the remaining {hidden} with reconcile without --terminal."
+        )
+
+
 def _render_terminal(result: dict[str, Any]) -> str:
     """Render one reconcile result as plain native terminal text.
 
@@ -3307,24 +3467,14 @@ def _render_terminal(result: dict[str, Any]) -> str:
         if "handoff_reference" in primary:
             handoff = primary["handoff_reference"]
             lines.append(f"  Handoff: {handoff['reference']}")
-        ready_remainder = [action for action in remainder if action["readiness"] == "Ready"]
+        ready_remainder = [
+            action for action in remainder if action["readiness"] == "Ready"
+        ]
         blocked_remainder = [
             action for action in remainder if action["readiness"] == "Blocked"
         ]
-        if ready_remainder:
-            lines.append("")
-            lines.append(f"Ready ({len(ready_remainder)} more):")
-            for action in ready_remainder:
-                lines.append(
-                    f"  - {action['summary']} [{_render_locator(action['target'])}]"
-                )
-        if blocked_remainder:
-            lines.append("")
-            lines.append(f"Blocked ({len(blocked_remainder)} hidden):")
-            for action in blocked_remainder:
-                lines.append(
-                    f"  - {action['summary']} [{_render_locator(action['target'])}]"
-                )
+        _render_remainder(lines, "Ready", ready_remainder)
+        _render_remainder(lines, "Blocked", blocked_remainder)
 
     diagnostics = result.get("diagnostics", [])
     if diagnostics:
@@ -3386,10 +3536,6 @@ def run_command(
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
 
-    if operation == "capabilities":
-        _emit_json({"ok": True, "capabilities": _capability_manifest()}, stdout)
-        return 0
-
     if terminal and operation != "reconcile":
         message = "terminal rendering is not supported by this distribution"
         _emit_json(
@@ -3402,6 +3548,10 @@ def run_command(
         )
         print(f"git-loopy continuation: {message}", file=stderr)
         return 1
+
+    if operation == "capabilities":
+        _emit_json({"ok": True, "capabilities": _capability_manifest()}, stdout)
+        return 0
 
     try:
         request = _read_request(input_path, stdin)
