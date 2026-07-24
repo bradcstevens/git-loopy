@@ -4717,6 +4717,7 @@
       "id": "stable-conditions-and-smallest-scope-quarantine",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -6442,6 +6443,7 @@
       "id": "equivalent-producer-claims-union-provenance",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -6684,6 +6686,7 @@
       "id": "incompatible-producer-claims-are-quarantined",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -6850,6 +6853,7 @@
       "id": "prerequisite-cycle-is-a-conflict",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [
@@ -6969,6 +6973,7 @@
       "id": "every-condition-kind-evaluates-natively",
       "distributions": [
         "python",
+        "shell",
         "powershell"
       ],
       "arguments": [

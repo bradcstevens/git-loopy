@@ -198,6 +198,104 @@ run_github_failure_probes() {
 
 run_github_failure_probes
 
+run_reconciliation_pagination_probe() {
+  local scenario request github_script github_state github_log
+  scenario="$(
+    jq -c '
+      first(
+        .scenarios[]
+        | select(.id == "missing-index-label-does-not-hide-revision")
+      )
+    ' "$fixture"
+  )"
+  request="$(jq -c '.request.json' <<<"$scenario")"
+  github_script="$tmp/reconciliation-pagination-github-script.json"
+  github_state="$tmp/reconciliation-pagination-github-state"
+  github_log="$tmp/reconciliation-pagination-github-calls"
+  jq -c '
+    .github_script[0] as $list
+    | .github_script[1] as $comments
+    | [
+        $list + {
+          stdout_json: [
+            range(1000; 1100) as $number
+            | {
+                number: $number,
+                state: "open",
+                html_url: "https://github.com/octo/example/issues/\($number)",
+                labels: [],
+                comments: 0
+              }
+          ]
+        },
+        $list + {
+          command: "api repos/octo/example/issues?state=all&per_page=100&page=2",
+          stdout_json: [
+            $list.stdout_json[0] + {comments: 101}
+          ]
+        },
+        $comments + {
+          stdout_json: [
+            range(8000; 8100) as $id
+            | {
+                id: $id,
+                html_url: (
+                  "https://github.com/octo/example/issues/237"
+                  + "#issuecomment-\($id)"
+                ),
+                body: "Ordinary issue discussion.",
+                user: {login: "maintainer", type: "User"},
+                created_at: "2026-07-22T19:00:00Z",
+                updated_at: "2026-07-22T19:00:00Z"
+              }
+          ]
+        },
+        $comments + {
+          command: (
+            "api repos/octo/example/issues/237/comments"
+            + "?per_page=100&page=2"
+          )
+        }
+      ] + .github_script[2:]
+  ' <<<"$scenario" >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/reconciliation-pagination.stdout"
+  local stderr_path="$tmp/reconciliation-pagination.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation reconcile \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 0 ]] ||
+    fail "paginated Reconciliation exit: expected 0, got $status"
+  jq -e '
+    .result.status == "guidance"
+    and (.result.actions | length) == 1
+    and any(
+      .result.diagnostics[];
+      .code == "index_label_missing" and .carrier == 237
+    )
+  ' "$stdout_path" >/dev/null ||
+    fail "paginated Reconciliation did not retain the unindexed Producer revision"
+  [[ ! -s "$stderr_path" ]] ||
+    fail "paginated Reconciliation unexpectedly wrote stderr"
+  local actual_calls expected_calls
+  actual_calls="$(jq -Rsc 'split("\n") | map(select(length > 0))' <"$github_log")"
+  expected_calls="$(jq -c '[.[].command]' "$github_script")"
+  [[ "$actual_calls" == "$expected_calls" ]] ||
+    fail "paginated Reconciliation did not consume every issue and comment page"
+}
+
+run_reconciliation_pagination_probe
+
 run_reattestation_retry_probe() {
   local scenario request existing github_script github_state github_log
   scenario="$(
