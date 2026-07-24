@@ -1392,24 +1392,25 @@ _git_loopy_continuation_publish() {
 
   local revision_id record body identity_source
   identity_source="$canonical_completion"
-  if ((protocol)) &&
-    (( $(jq 'length' <<<"$parents") > 0 )) ||
-    [[ "$reattestation" != "null" ]]; then
-    identity_source="$(
-      jq -cn \
-        --argjson completion "$completion" \
-        --argjson parents "$parents" \
-        --argjson reattestation "$reattestation" \
-        '{
-          completion:$completion,
-          parents:$parents
-        } + (
-          if $reattestation != null
-          then {reattestation:$reattestation}
-          else {}
-          end
-        )'
-    )"
+  if ((protocol)); then
+    if (($(jq 'length' <<<"$parents") > 0)) ||
+      [[ "$reattestation" != "null" ]]; then
+      identity_source="$(
+        jq -cn \
+          --argjson completion "$completion" \
+          --argjson parents "$parents" \
+          --argjson reattestation "$reattestation" \
+          '{
+            completion:$completion,
+            parents:$parents
+          } + (
+            if $reattestation != null
+            then {reattestation:$reattestation}
+            else {}
+            end
+          )'
+      )"
+    fi
   fi
   revision_id="$(
     printf '%s' "$(jq -cS . <<<"$identity_source")" |
@@ -1462,7 +1463,6 @@ _git_loopy_continuation_publish() {
     while IFS= read -r existing_comment; do
       [[ "$(jq -r '.author' <<<"$existing_comment")" == "$producer" ]] || continue
       if [[ "$(jq -r '.body' <<<"$existing_comment")" == "$body" ]]; then
-        local existing_record_status
         if _git_loopy_continuation_parse_revision_record \
           "$existing_comment" "$repository" \
           "$(jq -c '
@@ -1478,6 +1478,7 @@ _git_loopy_continuation_publish() {
               --arg index_label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
               --argjson fingerprints "$fingerprints" \
               --argjson parents "$parents" \
+              --argjson reattestation "$reattestation" \
               '{
                 ok:true,
                 operation:"publish",
@@ -1490,12 +1491,13 @@ _git_loopy_continuation_publish() {
                   semantic_fingerprints:$fingerprints,
                   parents:$parents
                 }
-              }'
+              }
+              | if $reattestation != null
+                then .receipt.reattestation = $reattestation
+                else .
+                end'
             return 0
           fi
-        else
-          existing_record_status=$?
-          : "$existing_record_status"
         fi
       fi
     done < <(
@@ -1612,7 +1614,7 @@ _git_loopy_continuation_publish() {
   receipt_status="committed"
   conflicting_heads="[]"
   if ((protocol)); then
-    local lineage_records existing_comment existing_status
+    local lineage_records existing_comment
     lineage_records="$(jq -cn --argjson record "$record" '[$record]')"
     while IFS= read -r existing_comment; do
       [[ "$(jq -r '.author' <<<"$existing_comment")" == "$producer" ]] || continue
@@ -1631,9 +1633,6 @@ _git_loopy_continuation_publish() {
               '$current + [$record]'
           )"
         fi
-      else
-        existing_status=$?
-        : "$existing_status"
       fi
     done < <(
       jq -c --argjson carrier "$carrier_number" '

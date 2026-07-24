@@ -198,6 +198,68 @@ run_github_failure_probes() {
 
 run_github_failure_probes
 
+run_reattestation_retry_probe() {
+  local scenario request existing github_script github_state github_log
+  scenario="$(
+    jq -c '
+      first(
+        .scenarios[]
+        | select(.id == "authorized-reattestation-recovers-lineage")
+      )
+    ' "$fixture"
+  )"
+  request="$(jq -c '.request.json' <<<"$scenario")"
+  existing="$(
+    jq -c '
+      first(
+        .github_script[]
+        | select(
+            .command == "api repos/octo/example/issues/comments/9003"
+          )
+      ).stdout_json + {
+        created_at: "2026-07-22T20:02:00Z",
+        updated_at: "2026-07-22T20:02:00Z"
+      }
+    ' <<<"$scenario"
+  )"
+  github_script="$tmp/reattestation-retry-github-script.json"
+  github_state="$tmp/reattestation-retry-github-state"
+  github_log="$tmp/reattestation-retry-github-calls"
+  jq -c --argjson existing "$existing" '
+    .github_script[:4]
+    | .[3].stdout_json += [$existing]
+  ' <<<"$scenario" >"$github_script"
+  : >"$github_log"
+
+  local stdout_path="$tmp/reattestation-retry.stdout"
+  local stderr_path="$tmp/reattestation-retry.stderr"
+  local status
+  set +e
+  printf '%s' "$request" |
+    PATH="$tmp/bin:$real_jq_dir:/usr/bin:/bin" \
+    GIT_LOOPY_SCRIPTED_GITHUB_LOG="$github_log" \
+    GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$github_script" \
+    GIT_LOOPY_SCRIPTED_GITHUB_STATE="$github_state" \
+    "$bash_bin" "$entrypoint" continuation publish \
+      >"$stdout_path" 2>"$stderr_path"
+  status="${PIPESTATUS[1]}"
+  set -e
+
+  [[ "$status" == 0 ]] ||
+    fail "re-attestation retry exit: expected 0, got $status"
+  jq -e --argjson expected "$(jq -c '.reattestation' <<<"$request")" '
+    .receipt.status == "idempotent"
+    and .receipt.reattestation == $expected
+  ' "$stdout_path" >/dev/null ||
+    fail "re-attestation retry did not preserve the typed receipt"
+  [[ ! -s "$stderr_path" ]] ||
+    fail "re-attestation retry unexpectedly wrote stderr"
+  [[ "$(wc -l <"$github_log" | tr -d ' ')" == 4 ]] ||
+    fail "re-attestation retry attempted a duplicate mutation"
+}
+
+run_reattestation_retry_probe
+
 materialize_publish_case() {
   local case="$1"
   jq -c --argjson case "$case" '
