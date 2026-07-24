@@ -1,2 +1,0 @@
-#!/bin/sh
-exec pwsh -NoLogo -NoProfile -File "$GIT_LOOPY_DEBUG_SCRIPTED_GITHUB" "$@"

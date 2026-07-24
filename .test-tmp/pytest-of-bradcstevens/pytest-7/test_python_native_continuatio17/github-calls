@@ -1,7 +1,0 @@
-api user
-api repos/octo/example/issues?state=all&per_page=100&page=1
-api repos/octo/example/issues/comments/7001
-label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force
-issue edit 237 --repo octo/example --add-label git-loopy-continuation
-api --method POST repos/octo/example/issues/237/comments --input -
-api repos/octo/example/issues/comments/9002
