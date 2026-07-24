@@ -24,6 +24,9 @@ import pytest
 from git_loopy import cli
 from git_loopy.config import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
+    MODEL_REASONING_EFFORTS,
+    REASONING_EFFORT_ORDER,
+    SUPPORTED_MODELS,
     RunConfig,
 )
 
@@ -670,3 +673,56 @@ def test_resolve_malformed_routing_raises_loudly() -> None:
 
     with pytest.raises(settings.SettingsError):
         _resolve(global_={"routing": {"planning": {"model": "claude-opus-4.8"}}})
+
+
+# ---------------------------------------------------------------------------
+# Roster-drift regression: every model the kit claims to support must resolve
+# warning-free through BOTH config-file tiers. The off-roster advisory is a
+# typo-catch, so a model that has drifted out of the kit's roster while still
+# being live in the Copilot catalog (e.g. `claude-opus-5`) fires it spuriously
+# on every startup.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", sorted(SUPPORTED_MODELS))
+def test_resolve_every_supported_model_routes_without_advisory(model: str) -> None:
+    warnings: list[str] = []
+    effort = next(
+        (e for e in REASONING_EFFORT_ORDER if e in MODEL_REASONING_EFFORTS[model]),
+        "high",
+    )
+    run = _resolve(
+        global_={
+            "model": model,
+            "routing": {"planning": {"model": model, "effort": effort}},
+        },
+        warn=warnings.append,
+    ).run
+
+    assert dict(run.routing) == {"planning": (model, effort)}
+    assert run.model == model
+    assert warnings == []
+
+
+@pytest.mark.parametrize("model", ["claude-opus-5", "gemini-3.6-flash"])
+def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
+    """Models live in the Copilot catalog must not trip the off-roster advisory.
+
+    A hand-maintained mirror of an external catalog can only be pinned against
+    hard-coded ids: an assertion derived from
+    :data:`~git_loopy.config.SUPPORTED_MODELS` is self-referential and stays
+    green while the roster drifts. Both ids shipped in the Copilot catalog
+    *after* the roster was last synced, so a config naming them warned on every
+    startup even though the run itself worked.
+    """
+    assert model in SUPPORTED_MODELS
+    warnings: list[str] = []
+    _resolve(
+        global_={
+            "model": model,
+            "routing": {"planning": {"model": model, "effort": "high"}},
+        },
+        warn=warnings.append,
+    )
+    assert [w for w in warnings if "supported" in w] == []
+

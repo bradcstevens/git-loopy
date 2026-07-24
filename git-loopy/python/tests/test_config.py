@@ -186,6 +186,7 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
         "claude-sonnet-4.5": frozenset(),
         "claude-haiku-4.5": frozenset(),
+        "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
@@ -195,6 +196,7 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5-mini": frozenset({"low", "medium", "high"}),
         "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
+        "gemini-3.6-flash": frozenset(),
         "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
         "gpt-5.6-luna": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}

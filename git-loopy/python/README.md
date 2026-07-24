@@ -379,6 +379,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `claude-sonnet-4.6`           | `low` `medium` `high` `max`              |
 | `claude-sonnet-4.5`           | _(none - effort forced unset)_           |
 | `claude-haiku-4.5`            | _(none - effort forced unset)_           |
+| `claude-opus-5`               | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.8` (default)   | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
@@ -388,6 +389,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.4-mini`                | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5-mini`                  | `low` `medium` `high`                    |
 | `gemini-3.1-pro-preview`      | `low` `medium` `high`                    |
+| `gemini-3.6-flash`            | _(none - effort forced unset)_           |
 | `gemini-3.5-flash`            | `low` `medium` `high`                    |
 | `gpt-5.6-luna`                | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
