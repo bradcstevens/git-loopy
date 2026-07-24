@@ -397,8 +397,8 @@ def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
     assert rc == 0
     routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
     assert routing["custom"] == {"model": "gpt-5.4", "effort": "high"}
-    assert routing["planning"] == {"model": "claude-opus-4.8", "effort": "max"}
-    assert routing["docs"] == {"model": "gpt-5-mini", "effort": "medium"}
+    assert routing["planning"] == {"model": "gpt-5.6-sol", "effort": "high"}
+    assert routing["docs"] == {"model": "gpt-5.6-terra", "effort": "medium"}
     assert len(routing) == 7
 
 

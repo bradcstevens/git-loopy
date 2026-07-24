@@ -138,35 +138,32 @@ REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 #:
 #: Keyed by the bare task-type key (the part *after* :data:`TASK_TYPE_LABEL_PREFIX`,
 #: matching :attr:`RunConfig.routing` and the ``[routing]`` config table), in the
-#: strictly-descending effort **ladder order** the guided walk presents. A 6-type
-#: core over a 3-model ladder:
+#: fixed **presentation order** the guided walk surfaces. A 6-type core:
 #:
 #: ==================  =================  ========
 #: task-type key       Model              Effort
 #: ==================  =================  ========
-#: ``planning``        ``claude-opus-4.8``  ``max``
-#: ``review``          ``claude-sonnet-5``  ``xhigh``
-#: ``implementation``  ``claude-sonnet-5``  ``high``
-#: ``test``            ``claude-sonnet-5``  ``medium``
-#: ``docs``            ``gpt-5-mini``       ``medium``
-#: ``chore``           ``gpt-5-mini``       ``low``
+#: ``planning``        ``gpt-5.6-sol``      ``high``
+#: ``review``          ``claude-opus-4.8``  ``xhigh``
+#: ``implementation``  ``gpt-5.6-terra``    ``high``
+#: ``test``            ``claude-sonnet-5``  ``high``
+#: ``docs``            ``gpt-5.6-terra``    ``medium``
+#: ``chore``           ``gpt-5.6-luna``     ``low``
 #: ==================  =================  ========
 #:
-#: The **global default stays** ``claude-opus-4.8 @ max`` (today's built-in) —
-#: deliberately no behaviour change: ``planning`` equals the default and is kept
-#: as an explicit intent marker, so seeding the core changes nothing for an
-#: unlabelled issue. ``gpt-5-mini`` (which accepts reasoning effort) carries the
-#: cheap tier so ``docs`` and ``chore`` differ by effort. Every pair is valid
-#: against :data:`MODEL_REASONING_EFFORTS` (it survives :func:`gate_reasoning_effort`
-#: unchanged) — pinned by ``tests/test_config.py``.
+#: The **global default stays** ``claude-opus-4.8 @ max`` (today's built-in), so
+#: an unlabelled issue is unaffected: it routes through the global default, not
+#: the ``planning`` route, which now deliberately diverges from the default. Every
+#: pair is valid against :data:`MODEL_REASONING_EFFORTS` (it survives
+#: :func:`gate_reasoning_effort` unchanged) — pinned by ``tests/test_config.py``.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("claude-opus-4.8", "max"),
-        "review": ("claude-sonnet-5", "xhigh"),
-        "implementation": ("claude-sonnet-5", "high"),
-        "test": ("claude-sonnet-5", "medium"),
-        "docs": ("gpt-5-mini", "medium"),
-        "chore": ("gpt-5-mini", "low"),
+        "planning": ("gpt-5.6-sol", "high"),
+        "review": ("claude-opus-4.8", "xhigh"),
+        "implementation": ("gpt-5.6-terra", "high"),
+        "test": ("claude-sonnet-5", "high"),
+        "docs": ("gpt-5.6-terra", "medium"),
+        "chore": ("gpt-5.6-luna", "low"),
     }
 )
 
