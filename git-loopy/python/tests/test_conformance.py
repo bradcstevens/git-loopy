@@ -20,6 +20,7 @@ from git_loopy.config import (
 )
 from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
 from git_loopy.pricing import Pricing
+from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.sources import is_afk_ready
 from git_loopy.ui import RunSummary
 from git_loopy.wrapper import (
@@ -132,6 +133,53 @@ def test_exit_code_fixture(case: dict[str, Any]) -> None:
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
 _DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
+_PYTHON_ROLLUP_CASES = [
+    case
+    for case in _EVENT_SCHEMA["normalized_rollup_cases"]
+    if case["orchestrator"] == "python"
+]
+
+
+class _FixtureClock:
+    value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+def test_event_fixture_covers_python_normalized_rollup() -> None:
+    assert _PYTHON_ROLLUP_CASES
+
+
+@pytest.mark.parametrize(
+    "case",
+    _PYTHON_ROLLUP_CASES,
+    ids=lambda case: case["id"],
+)
+def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
+    assert case["input"]["pricing"] == {"models": {}}
+    clock = _FixtureClock()
+    rollup = IterationRollupAccumulator(
+        pricing=Pricing(models={}),
+        monotonic=clock,
+    )
+    actual = []
+    for iteration in case["input"]["iterations"]:
+        for fixture_event in iteration["events"]:
+            event = dict(fixture_event)
+            clock.value = float(event.pop("observed_monotonic"))
+            rollup.observe(event)
+        finish = iteration["finish"]
+        clock.value = float(finish["finished_monotonic"])
+        actual.append(
+            rollup.finish(
+                iter_num=finish["iteration"],
+                strikes=finish["strikes"],
+                outcome=finish.get("terminal_outcome"),
+            )
+        )
+
+    assert actual == case["expected"]
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -357,13 +405,7 @@ def test_python_live_state_matches_dashboard_queue_and_drill_in_fixture() -> Non
     offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
     run_started = datetime.fromisoformat(case["events"][0]["ts"].replace("Z", "+00:00"))
 
-    class _Clock:
-        value = 0.0
-
-        def __call__(self) -> float:
-            return self.value
-
-    clock = _Clock()
+    clock = _FixtureClock()
     state = LiveRunState(
         run_id="",
         model=case["inputs"]["model"],

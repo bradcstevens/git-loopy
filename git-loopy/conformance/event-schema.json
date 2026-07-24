@@ -133,6 +133,263 @@
   },
   "normalized_rollup_cases": [
     {
+      "id": "python-monotonic-closure-survives-wall-clock-reversal",
+      "orchestrator": "python",
+      "input": {
+        "pricing": {
+          "models": {}
+        },
+        "iterations": [
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 1,
+                "ts": "2026-05-16T00:00:00.000Z",
+                "observed_monotonic": 10
+              },
+              {
+                "type": "usage.tokens",
+                "iter": 1,
+                "model": "new-model",
+                "input": 0,
+                "output": 0,
+                "observed_monotonic": 11
+              },
+              {
+                "type": "usage.context_window",
+                "iter": 1,
+                "current_tokens": 0,
+                "token_limit": null,
+                "effective_target_tokens": null,
+                "effective_ceiling_tokens": null,
+                "observed_monotonic": 11
+              },
+              {
+                "type": "tool.call",
+                "iter": 1,
+                "tool_name": "skill",
+                "arguments": {
+                  "skill": "tdd"
+                },
+                "observed_monotonic": 11
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 1,
+                "issue": 42,
+                "activated_at": "2026-05-16T00:00:10.000Z",
+                "binding_source": "working_marker",
+                "observed_monotonic": 12
+              },
+              {
+                "type": "wrapper.commit.recorded",
+                "iter": 1,
+                "issue": 42,
+                "sha": "abc",
+                "observed_monotonic": 14
+              },
+              {
+                "type": "wrapper.auto_close",
+                "iter": 1,
+                "issue": 42,
+                "ts": "2026-05-16T00:00:01.000Z",
+                "observed_monotonic": 15
+              }
+            ],
+            "finish": {
+              "iteration": 1,
+              "strikes": 0,
+              "finished_monotonic": 16
+            }
+          }
+        ]
+      },
+      "expected": [
+        {
+          "outcome": "closed",
+          "duration_seconds": 6.0,
+          "summary": {
+            "model": "new-model",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "cost_usd": null,
+            "tool_count": 1,
+            "skill_call_count": 1,
+            "skills_consulted": ["tdd"],
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": {
+              "current_tokens": 0,
+              "token_limit": null,
+              "effective_target_tokens": null,
+              "effective_ceiling_tokens": null
+            }
+          },
+          "issues": [
+            {
+              "issue": 42,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:10.000Z",
+              "closed_at": "2026-05-16T00:00:01.000Z",
+              "issue_elapsed_seconds": 3.0,
+              "active_seconds": 3.0,
+              "cumulative_active_seconds": 3.0,
+              "consumption": {
+                "model": "new-model",
+                "tokens_in": 0,
+                "tokens_out": 0
+              },
+              "cost_usd": null,
+              "peak_context_window": {
+                "current_tokens": 0,
+                "token_limit": null,
+                "effective_target_tokens": null,
+                "effective_ceiling_tokens": null
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "python-repeated-issue-excludes-inactive-gap",
+      "orchestrator": "python",
+      "input": {
+        "pricing": {
+          "models": {}
+        },
+        "iterations": [
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 1,
+                "ts": "2026-05-16T00:00:00.000Z",
+                "observed_monotonic": 30
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 1,
+                "issue": 84,
+                "activated_at": "2026-05-16T00:00:10.000Z",
+                "binding_source": "working_marker",
+                "observed_monotonic": 30
+              }
+            ],
+            "finish": {
+              "iteration": 1,
+              "strikes": 1,
+              "finished_monotonic": 32
+            }
+          },
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 2,
+                "ts": "2026-05-16T00:00:20.000Z",
+                "observed_monotonic": 40
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 2,
+                "issue": 84,
+                "activated_at": "2026-05-16T00:00:20.000Z",
+                "binding_source": "working_marker",
+                "observed_monotonic": 40
+              }
+            ],
+            "finish": {
+              "iteration": 2,
+              "strikes": 1,
+              "terminal_outcome": "gone",
+              "finished_monotonic": 44
+            }
+          }
+        ]
+      },
+      "expected": [
+        {
+          "outcome": "no_progress",
+          "duration_seconds": 2.0,
+          "summary": {
+            "model": null,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "cost_usd": null,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 84,
+              "status": "no-progress",
+              "first_started_at": "2026-05-16T00:00:10.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 2.0,
+              "cumulative_active_seconds": 2.0,
+              "consumption": {
+                "model": null,
+                "tokens_in": 0,
+                "tokens_out": 0
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "outcome": "gone",
+          "duration_seconds": 4.0,
+          "summary": {
+            "model": null,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "cost_usd": null,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 84,
+              "status": "gone",
+              "first_started_at": "2026-05-16T00:00:10.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 4.0,
+              "cumulative_active_seconds": 6.0,
+              "consumption": {
+                "model": null,
+                "tokens_in": 0,
+                "tokens_out": 0
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "shell-unavailable-telemetry",
       "orchestrator": "shell",
       "input": {

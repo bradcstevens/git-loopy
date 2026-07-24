@@ -76,8 +76,9 @@ catalog globs that do not identify a concrete `<name>` do not count.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
-adapter pins the Dashboard fixture's public semantic shape; producer and
-production-reducer rollout remains in the downstream Dashboard issues. The
+adapter drives Python's normalized Iteration-rollup seam and pins the Dashboard
+fixture's public semantic shape; producer and production-reducer rollout remains
+in the downstream Dashboard issues. The
 native discovery adapters call their production discriminator, Checkpoint-message,
 and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
@@ -87,7 +88,8 @@ Their Event-schema adapters call the production serialization and replay seams f
 [`shell/tests/test-event-conformance.sh`](../shell/tests/test-event-conformance.sh)
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
-The shell adapter also drives its native normalized Iteration-rollup seam from the shared case.
+Each family adapter drives its native normalized Iteration-rollup seam from its
+orchestrator-scoped shared cases.
 The native Continuation adapters invoke each real public entrypoint from
 [`python/tests/test_continuation_scenarios.py`](../python/tests/test_continuation_scenarios.py),
 [`shell/tests/test-continuation-conformance.sh`](../shell/tests/test-continuation-conformance.sh),
