@@ -514,6 +514,13 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
     } == continuation_module.CAPABILITY_MANIFEST
 
 
+def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:
+    """The fixture pins every diagnostic code reconcile is allowed to emit."""
+    registered = _CONTINUATION_SCENARIOS["revision_protocol"]["diagnostic_codes"]
+    assert set(registered) == continuation_module.RECONCILE_DIAGNOSTIC_CODES
+    assert registered == sorted(registered)
+
+
 def test_continuation_fixture_pins_completion_vocabularies() -> None:
     records = _CONTINUATION_SCENARIOS["completion_records"]
     assert set(records["publications"]) == continuation_module.PUBLICATIONS

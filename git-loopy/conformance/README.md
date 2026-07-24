@@ -54,6 +54,14 @@ semantics, and Prerequisite cycles; its production-boundary probe traverses
 complete issue and comment pagination without treating the discovery label as
 authority.
 
+Fixture schema 1.4 adds the prospective-projection vocabulary. `revision_protocol.diagnostic_codes`
+pins the family's complete `reconcile` diagnostic vocabulary — the union across every distribution,
+not one member's subset — so emitting an unregistered code is a fixture change rather than a silent
+addition. Scenarios may pin the `retirements`, `outcomes`, `delta`, and `handoff_reference` result
+fields and the exact Continuation view order. Ordering scenarios name every distribution because the
+ordering rule is ungated; scenarios exercising the gated request fields name only distributions
+advertising `prospective_projection`.
+
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root
 `VERSION` authority for family adapters; `expected_python_distribution_version`

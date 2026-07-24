@@ -31,7 +31,8 @@ class GitLoopyContinuationGitHubException : System.Exception {
     }
 }
 
-$Script:ContinuationContractVersion = "1.0"
+$Script:ContinuationContractVersion = "1.1"
+$Script:SupportedContinuationContractVersions = @("1.0", "1.1")
 $Script:RecordFormat = 1
 $Script:WrapperContractVersion = "1.3"
 $Script:EventSchemaVersion = "1.1"
@@ -243,7 +244,8 @@ $Script:TriggerKinds = $Script:HumanBoundaryReasons
 $Script:ShaPattern = "^[0-9a-f]{40}$"
 
 $Script:CapabilityManifest = [ordered]@{
-    continuation_contract_versions = @($Script:ContinuationContractVersion)
+    continuation_contract_versions =
+        @($Script:SupportedContinuationContractVersions)
     record_formats = @($Script:RecordFormat)
     wrapper_contract_version = $Script:WrapperContractVersion
     event_schema_version = $Script:EventSchemaVersion
@@ -267,6 +269,7 @@ $Script:CapabilityManifest = [ordered]@{
         immutable_producer_revisions = $true
         terminal_rendering = $false
         concurrent_dispatch = $false
+        prospective_projection = $false
     }
     continuation_modes = [ordered]@{
         default = "off"
@@ -1321,7 +1324,8 @@ function Test-GitLoopyCompletion {
             "disposition", "workstream", "transition", "producer"
         ) `
         -Optional @("carrier", "actions", "outcome", "no_guidance", "advisory_extensions")
-    if ($Completion["continuation_contract_version"] -cne $Script:ContinuationContractVersion) {
+    if ($Completion["continuation_contract_version"] -cnotin
+        $Script:SupportedContinuationContractVersions) {
         throw (New-GitLoopyRejection "unsupported Continuation contract version")
     }
     if ($Completion["record_format"] -ne $Script:RecordFormat) {
@@ -3487,6 +3491,196 @@ function Get-GitLoopyUnionProvenance {
     )
 }
 
+function Get-GitLoopyLocalTopologicalLayers {
+    <#
+        .SYNOPSIS
+        Layer every local Action by its own record's action-completed graph.
+
+        .DESCRIPTION
+        Layer 0 has no local completed-Action prerequisite; otherwise the layer
+        is one more than the deepest named local prerequisite. Layers relax to a
+        fixed point rather than resolving by recursive descent, so the answer
+        never depends on the order Actions were declared or visited. Anything
+        still unresolved when the relaxation stops is on, or feeds, a
+        prerequisite cycle and layers 0. Every distribution in the family
+        implements this same fixed point.
+    #>
+    param([Parameter(Mandatory)][Collections.IDictionary]$Record)
+
+    $Prerequisites = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($Action in @($Record["actions"])) {
+        $Named = [Collections.Generic.SortedSet[string]]::new(
+            [StringComparer]::Ordinal
+        )
+        foreach ($Prerequisite in @($Action["prerequisites"])) {
+            if ([string]$Prerequisite["kind"] -ceq "action-completed") {
+                [void]$Named.Add([string]$Prerequisite["action_key"])
+            }
+        }
+        $Prerequisites[[string]$Action["key"]] = @($Named)
+    }
+    $Layers = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    for ($Round = 0; $Round -le $Prerequisites.Count; $Round++) {
+        $Resolved = [Collections.Specialized.OrderedDictionary]::new(
+            [StringComparer]::Ordinal
+        )
+        foreach ($Key in @($Layers.Keys)) {
+            $Resolved[$Key] = $Layers[$Key]
+        }
+        foreach ($Key in @($Prerequisites.Keys)) {
+            if ($Resolved.Contains($Key)) {
+                continue
+            }
+            $Local = @($Prerequisites[$Key])
+            $Pending = $false
+            foreach ($Other in $Local) {
+                if ($Prerequisites.Contains($Other) -and
+                    -not $Resolved.Contains($Other)) {
+                    $Pending = $true
+                    break
+                }
+            }
+            if ($Pending) {
+                continue
+            }
+            if ($Local.Count -eq 0) {
+                $Layers[$Key] = 0
+                continue
+            }
+            $Deepest = 0
+            foreach ($Other in $Local) {
+                $Candidate = 0
+                if ($Resolved.Contains($Other)) {
+                    $Candidate = [int]$Resolved[$Other]
+                }
+                if ($Candidate -gt $Deepest) {
+                    $Deepest = $Candidate
+                }
+            }
+            $Layers[$Key] = $Deepest + 1
+        }
+        if ($Layers.Count -eq $Prerequisites.Count) {
+            break
+        }
+    }
+    $Result = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($Key in @($Prerequisites.Keys)) {
+        if ($Layers.Contains($Key)) {
+            $Result[$Key] = [int]$Layers[$Key]
+        } else {
+            $Result[$Key] = 0
+        }
+    }
+    return $Result
+}
+
+function Compare-GitLoopyContinuationViewOrder {
+    <#
+        .SYNOPSIS
+        Deterministic Continuation view order for verified guidance.
+
+        .DESCRIPTION
+        Orders Ready Actions ahead of Blocked ones, then by each Action's
+        deterministic local topological layer. Canonical Workstream Anchor keeps
+        a Producer's declaration position local to that Workstream; local
+        Workflow-semantic precedence then orders its own Actions before
+        canonical Action identity breaks the final tie. String comparisons are
+        ordinal so the order matches the rest of the family byte for byte.
+    #>
+    param([object]$Left, [object]$Right)
+
+    $LeftRank = if ([string]$Left["readiness"] -ceq "Ready") { 0 } else { 1 }
+    $RightRank = if ([string]$Right["readiness"] -ceq "Ready") { 0 } else { 1 }
+    if ($LeftRank -ne $RightRank) {
+        return $LeftRank - $RightRank
+    }
+    $LeftLayer = [int]$Left["_topological_layer"]
+    $RightLayer = [int]$Right["_topological_layer"]
+    if ($LeftLayer -ne $RightLayer) {
+        return $LeftLayer - $RightLayer
+    }
+    $AnchorOrder = [string]::CompareOrdinal(
+        (ConvertTo-GitLoopyCanonicalJson $Left["workstream_anchor"]),
+        (ConvertTo-GitLoopyCanonicalJson $Right["workstream_anchor"])
+    )
+    if ($AnchorOrder -ne 0) {
+        return $AnchorOrder
+    }
+    $LeftLocal = [int]$Left["_local_order_index"]
+    $RightLocal = [int]$Right["_local_order_index"]
+    if ($LeftLocal -ne $RightLocal) {
+        return $LeftLocal - $RightLocal
+    }
+    $IdentityOrder = [string]::CompareOrdinal(
+        [string]$Left["identity"],
+        [string]$Right["identity"]
+    )
+    if ($IdentityOrder -ne 0) {
+        return $IdentityOrder
+    }
+    # List<T>.Sort is an unstable introsort, so break the final tie on arrival
+    # order to reproduce the stable sort the rest of the family performs.
+    return [int]$Left["_arrival_index"] - [int]$Right["_arrival_index"]
+}
+
+function Add-GitLoopyContinuationOrderKey {
+    <#
+        .SYNOPSIS
+        Attach the ordering-only fields a projected Action is sorted by.
+    #>
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Item,
+        [Parameter(Mandatory)][Collections.IDictionary]$Record,
+        [Parameter(Mandatory)][Collections.IDictionary]$Action,
+        [Parameter(Mandatory)][Collections.IDictionary]$LayerCache
+    )
+
+    $RevisionId = [string]$Record["revision_id"]
+    if (-not $LayerCache.Contains($RevisionId)) {
+        $LayerCache[$RevisionId] =
+            Get-GitLoopyLocalTopologicalLayers -Record $Record
+    }
+    $ActionKey = [string]$Action["key"]
+    $LocalKeys = @(
+        @($Record["actions"]) | ForEach-Object { [string]$_["key"] }
+    )
+    $Item["_topological_layer"] = [int]$LayerCache[$RevisionId][$ActionKey]
+    $Item["_local_order_index"] = [int]([Array]::IndexOf($LocalKeys, $ActionKey))
+}
+
+function Get-GitLoopyContinuationViewOrder {
+    <#
+        .SYNOPSIS
+        Sort projected Actions into Continuation view order and drop the
+        ordering-only fields.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [Collections.Generic.List[object]]$Actions
+    )
+
+    for ($Index = 0; $Index -lt $Actions.Count; $Index++) {
+        $Actions[$Index]["_arrival_index"] = $Index
+    }
+    $Actions.Sort([Comparison[object]]{
+        param($Left, $Right)
+        Compare-GitLoopyContinuationViewOrder -Left $Left -Right $Right
+    })
+    foreach ($Item in $Actions) {
+        $Item.Remove("_topological_layer")
+        $Item.Remove("_local_order_index")
+        $Item.Remove("_arrival_index")
+    }
+    return , [object[]]@($Actions)
+}
+
 function Get-GitLoopyDerivedActions {
     param(
         [Parameter(Mandatory)][Collections.IList]$GuidanceEntries,
@@ -3532,6 +3726,9 @@ function Get-GitLoopyDerivedActions {
         }
     }
     $Actions = [Collections.Generic.List[object]]::new()
+    $LayerCache = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
     foreach ($Identity in @($Contributions.Keys)) {
         $Contributed = $Contributions[$Identity]
         $Fingerprints = [Collections.Generic.HashSet[string]]::new(
@@ -3565,6 +3762,7 @@ function Get-GitLoopyDerivedActions {
         )
         $Canonical = $Sorted[0]
         $Action = $Canonical["action"]
+        $CanonicalRecord = $Canonical["record"]
         $Producer = [ordered]@{}
         foreach ($Entry in $Canonical["producer"].GetEnumerator()) {
             $Producer[$Entry.Key] = $Entry.Value
@@ -3588,6 +3786,11 @@ function Get-GitLoopyDerivedActions {
             interaction = $Action["interaction"]
             completion_condition = $Action["completion_condition"]
         }
+        Add-GitLoopyContinuationOrderKey `
+            -Item $Item `
+            -Record $CanonicalRecord `
+            -Action $Action `
+            -LayerCache $LayerCache
         if ($Contributed.Count -gt 1) {
             $Item["provenance"] =
                 Get-GitLoopyUnionProvenance -Contributions $Contributed
@@ -3598,9 +3801,7 @@ function Get-GitLoopyDerivedActions {
         $Actions.Add($Item)
     }
     return [ordered]@{
-        actions = [object[]]@(
-            $Actions | Sort-Object -Property { [string]$_["identity"] }
-        )
+        actions = Get-GitLoopyContinuationViewOrder -Actions $Actions
         diagnostics = $Diagnostics
     }
 }
@@ -3984,6 +4185,9 @@ function Invoke-GitLoopyContinuationReconcile {
     $Actions = [Collections.Generic.List[object]]::new()
     $Diagnostics = [Collections.Generic.List[object]]::new()
     $RevisionCount = 0
+    $LayerCache = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
     foreach ($Carrier in $Carriers) {
         if (
             $Carrier -isnot [Collections.IDictionary] -or
@@ -4076,7 +4280,7 @@ function Invoke-GitLoopyContinuationReconcile {
                 $ProducerEntry["revision_id"] = $Record["revision_id"]
                 $ProducerEntry["comment_id"] = $CommentId
                 $ProducerEntry["comment_url"] = $Comment["url"]
-                $Actions.Add([ordered]@{
+                $LabelItem = [ordered]@{
                     identity = $Identity
                     semantic_fingerprint =
                         $Record["semantic_fingerprints"][$Action["key"]]
@@ -4091,13 +4295,17 @@ function Invoke-GitLoopyContinuationReconcile {
                     prerequisites = $Action["prerequisites"]
                     interaction = $Action["interaction"]
                     completion_condition = $Action["completion_condition"]
-                })
+                }
+                Add-GitLoopyContinuationOrderKey `
+                    -Item $LabelItem `
+                    -Record $Record `
+                    -Action $Action `
+                    -LayerCache $LayerCache
+                $Actions.Add($LabelItem)
             }
         }
     }
-    $OrderedActions = @(
-        $Actions | Sort-Object -Property { [string]$_["identity"] }
-    )
+    $OrderedActions = Get-GitLoopyContinuationViewOrder -Actions $Actions
     return [ordered]@{
         ok = $true
         operation = "reconcile"
@@ -4340,6 +4548,18 @@ function Invoke-GitLoopyContinuationMain {
             $Result = Invoke-GitLoopyContinuationPublish $Request
         }
         elseif ($Operation -ceq "reconcile") {
+            if (
+                $Request.Contains("previous_actions") -or
+                $Request.Contains("handoff")
+            ) {
+                return Write-GitLoopyContinuationError `
+                    -Operation $Operation `
+                    -Code "unsupported_operation" `
+                    -Message (
+                        "prospective projection is not supported by this " +
+                        "distribution"
+                    )
+            }
             $Result = Invoke-GitLoopyContinuationReconcile $Request
         }
         elseif ($Operation -ceq "repair-index") {
