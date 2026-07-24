@@ -61,6 +61,7 @@ from git_loopy.interactive.state import (
     log_line_views,
     queue_rows,
 )
+from git_loopy.interactive.view_model import project_run_view
 from git_loopy.pricing import Pricing
 
 if TYPE_CHECKING:
@@ -628,31 +629,36 @@ class GitLoopyApp(App[None]):
         self.query_one("#log-header", Static).update(format_detail_header(detail))
         breakdown = self.query_one("#iteration-breakdown", DataTable)
         breakdown.clear()
-        for contribution in detail.contributions:
+        semantic = project_run_view(
+            self._state,
+            self._summary,
+            issue=self._open_ref,
+        )
+        for contribution in semantic["drill_in"]["iteration_breakdown"]["rows"]:
             identity = (
-                f"Lane {contribution.lane}"
-                if contribution.kind == "lane"
-                else f"Iteration {contribution.iteration}"
+                f"Lane {contribution['lane']}"
+                if contribution["kind"] == "lane"
+                else f"Iteration {contribution['iteration']}"
             )
-            peak = contribution.peak_context_window
+            peak = contribution["peak_context_window"]
             if peak is None:
                 peak_text = "—"
-            elif peak.token_limit is None:
-                peak_text = f"{peak.current_tokens:,}/—"
+            elif peak["token_limit"] is None:
+                peak_text = f"{peak['current_tokens']:,}/—"
             else:
                 peak_text = (
-                    f"{peak.current_tokens:,}/{peak.token_limit:,} "
-                    f"{peak.current_tokens / peak.token_limit:.0%}"
+                    f"{peak['current_tokens']:,}/{peak['token_limit']:,} "
+                    f"{peak['current_tokens'] / peak['token_limit']:.0%}"
                 )
             breakdown.add_row(
                 identity,
-                contribution.status,
-                format_duration(contribution.active_seconds),
-                f"{contribution.usage.tokens_in:,}",
-                f"{contribution.usage.tokens_out:,}",
+                contribution["status"],
+                format_duration(contribution["active_seconds"]),
+                f"{contribution['consumption']['tokens_in']:,}",
+                f"{contribution['consumption']['tokens_out']:,}",
                 (
-                    f"${contribution.cost_usd:.4f}"
-                    if contribution.cost_usd is not None
+                    f"${contribution['cost_usd']:.4f}"
+                    if contribution["cost_usd"] is not None
                     else "—"
                 ),
                 peak_text,

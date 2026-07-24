@@ -244,6 +244,7 @@ class RunTotals:
     iterations: int
     tokens_in: int
     tokens_out: int
+    observed_tokens: int
     cost_usd: Optional[Decimal]
     commits: int
     auto_closures: int
@@ -417,6 +418,7 @@ class RunSummary:
         """
         tokens_in = sum(s.tokens_in for s in self.completed)
         tokens_out = sum(s.tokens_out for s in self.completed)
+        observed_tokens = sum(s.context_used for s in self.completed)
         commits = sum(s.commits for s in self.completed)
         auto_closures = sum(s.auto_closures for s in self.completed)
         pr_advances = sum(s.pr_advances for s in self.completed)
@@ -449,6 +451,7 @@ class RunSummary:
             iterations=len(self.completed),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            observed_tokens=observed_tokens,
             cost_usd=cost_usd,
             commits=commits,
             auto_closures=auto_closures,
@@ -625,12 +628,19 @@ class RunSummary:
         text = Text()
         text.append("Summary", style=STYLES["meta"])
         text.append(f"  •  iters {totals.iterations}")
-        text.append(f"  •  tokens in={totals.tokens_in:,} out={totals.tokens_out:,}")
+        text.append(
+            f"  •  Observed tokens {totals.observed_tokens:,}"
+            f" (in={totals.tokens_in:,} out={totals.tokens_out:,})"
+        )
         text.append(f"  •  cost {_format_decimal_footer(totals.cost_usd)}")
         text.append(f"  •  commits {totals.commits}")
         text.append(f"  •  closures {totals.auto_closures}")
         text.append(f"  •  PR advances {totals.pr_advances}")
         text.append(f"  •  strikes {totals.final_strikes}")
+        text.append(
+            "  •  Skills consulted "
+            + (", ".join(totals.skills_seen) if totals.skills_seen else "none")
+        )
         return text
 
     # -- internal -----------------------------------------------------------

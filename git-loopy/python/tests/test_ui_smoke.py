@@ -1292,6 +1292,40 @@ def test_rollup_band_shows_run_level_totals() -> None:
     assert "$" in text
 
 
+def test_rollup_band_labels_observed_tokens_and_sorted_skills_from_rollups() -> None:
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
+    renderer.render(
+        {
+            "type": WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 4.0,
+            "summary": {
+                "model": "known-model",
+                "tokens_in": 100,
+                "tokens_out": 50,
+                "observed_tokens": 175,
+                "cost_usd": None,
+                "tool_count": 2,
+                "skill_call_count": 2,
+                "skills_consulted": ["tdd", "prototype"],
+                "commits": 1,
+                "auto_closures": 1,
+                "pr_advances": 0,
+                "strikes": 0,
+                "peak_context_window": None,
+            },
+            "issues": [{"issue": 42, "status": "closed"}],
+        }
+    )
+
+    text = summary.build_rollup_band().plain
+
+    assert "Observed tokens 175" in text
+    assert "Skills consulted prototype, tdd" in text
+
+
 def test_rollup_band_unknown_model_cost_is_em_dash() -> None:
     """An unknown-model run renders the cost as the existing em dash, not a crash."""
     renderer, summary, _buf = _make_renderer()
