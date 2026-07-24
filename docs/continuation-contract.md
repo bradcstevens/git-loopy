@@ -66,10 +66,10 @@ At the 1.0 foundation gate, every family member advertised the GitHub Adapter bu
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. `record-dispatch-result`, report mode,
-execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python advertises
-`terminal_rendering: true`; shell and PowerShell continue to advertise `terminal_rendering: false`
-and fail closed on `reconcile --terminal` with `unsupported_operation` until their native renderers
-land. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
+execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python and shell advertise
+`terminal_rendering: true`; PowerShell continues to advertise `terminal_rendering: false` and fails
+closed on `reconcile --terminal` with `unsupported_operation` until its native renderer lands.
+Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
 
 ## 5. Event observations
@@ -232,10 +232,11 @@ returns `repair_required`; it never falls back to ephemeral guidance or a succes
 
 ## 8. Prospective projection: retirement, ordering, delta, Handoff, and terminal rendering
 
-The Python distribution's `reconcile` derives a wholly prospective projection: every result replaces
-the prior one in full from durable facts rather than appending to a history, queue, or journal. The
-following optional, version-1 request and result fields extend the contract without changing any
-existing request or pinned response shape; omitting them selects exactly the prior behavior.
+The Python and shell distributions' `reconcile` commands derive a wholly prospective projection:
+every result replaces the prior one in full from durable facts rather than appending to a history,
+queue, or journal. The following optional, version-1 request and result fields extend the contract
+without changing any existing request or pinned response shape; omitting them selects exactly the
+prior behavior.
 
 **Retirement receipts (request `completion.retirements`, result `retirements`).** A successor's
 `completion` may carry a bounded, transient list of typed retirement receipts, each naming a
@@ -281,11 +282,12 @@ diagnostic-only `handoff_context_unavailable` or `handoff_action_unavailable` co
 any Action's identity, Readiness, order, or completion — Handoff is a resume pointer, never an
 input to semantics.
 
-**Terminal rendering (`reconcile --terminal`).** The Python distribution renders one primary
-Action in full detail (Readiness, summary, Instruction, durable Target and Basis locators — never
-their content), an expandable Ready/Blocked remainder with hidden counts, a separate Needs-attention
-section for diagnostics (conflicts, malformed guidance, unstable reads, and Unverified scopes),
-Workstream outcomes, transient retirements from that refresh, and the bounded refresh delta when
-present. `--terminal` is accepted only by `reconcile`, exits `1` closed for every other operation,
-and is never mixed with machine JSON on the same invocation. Independent verified guidance remains
-usable even while unrelated occurrences sit in Needs attention.
+**Terminal rendering (`reconcile --terminal`).** The Python and shell distributions render one
+primary Action in full detail (Readiness, summary, Instruction, durable Target and Basis locators —
+never their content), an expandable Ready/Blocked remainder with hidden counts, a separate
+Needs-attention section for diagnostics (conflicts, malformed guidance, unstable reads, and
+Unverified scopes), Workstream outcomes, transient retirements from that refresh, and the bounded
+refresh delta when present. `--terminal` is accepted only by `reconcile`; selecting it for another
+operation is malformed usage and exits `2`. A terminal-mode Reconciliation failure preserves its
+typed machine JSON and exit `1` rather than rendering human guidance. Independent verified guidance
+remains usable even while unrelated occurrences sit in Needs attention.
