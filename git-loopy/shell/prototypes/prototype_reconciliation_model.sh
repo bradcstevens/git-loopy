@@ -41,9 +41,9 @@ prototype_reconciliation_project() {
     [.actions[] | project] as $projected
     | {
         facts: $state.facts,
-        actions: [$projected[] | .action?],
-        diagnostics: [$projected[] | .diagnostic?],
-        retired: [$projected[] | .retired?]
+        actions: [$projected[] | .action? | select(. != null)],
+        diagnostics: [$projected[] | .diagnostic? | select(. != null)],
+        retired: [$projected[] | .retired? | select(. != null)]
       }
   ' <<<"$state"
 }
