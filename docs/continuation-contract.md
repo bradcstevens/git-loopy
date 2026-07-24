@@ -65,9 +65,11 @@ flag, or authority to publish or Dispatch.
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
-manifest remains the declaration of its other capabilities. `record-dispatch-result`,
-terminal rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported.
-Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
+manifest remains the declaration of its other capabilities. `record-dispatch-result`, report mode,
+execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python advertises
+`terminal_rendering: true`; shell and PowerShell continue to advertise `terminal_rendering: false`
+and fail closed on `reconcile --terminal` with `unsupported_operation` until their native renderers
+land. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
 
 ## 5. Event observations
@@ -227,3 +229,61 @@ operator and every record author, adds labels to trusted carriers, and removes l
 artifacts with no marked record. Publication still establishes the label before append and rereads
 the exact comment before commit. Any operational failure after the durable workflow transition
 returns `repair_required`; it never falls back to ephemeral guidance or a success-shaped receipt.
+
+## 8. Prospective projection: retirement, ordering, delta, Handoff, and terminal rendering
+
+The Python distribution's `reconcile` derives a wholly prospective projection: every result replaces
+the prior one in full from durable facts rather than appending to a history, queue, or journal. The
+following optional, version-1 request and result fields extend the contract without changing any
+existing request or pinned response shape; omitting them selects exactly the prior behavior.
+
+**Retirement receipts (request `completion.retirements`, result `retirements`).** A successor's
+`completion` may carry a bounded, transient list of typed retirement receipts, each naming a
+`predecessor_revision_id`, the retired `action_key`, a `reason` of `completed`, `lost-basis`,
+`workstream-outcome`, or `supersession`, durable `evidence`, and — only for `supersession` — a
+`replacement` local Action key. Reconciliation derives a receipt's live legitimacy purely by
+comparing the requesting successor against the exact predecessor(s) it names in its own `parents`
+and `semantic_fingerprints`: there is no central journal, tombstone, or cache. A receipt naming an
+unrelated revision, an unknown action key, or a `replacement` outside `supersession` is a structural
+rejection; a receipt naming a real predecessor that the successor does not actually supersede
+surfaces as an `invalid_retirement_receipt` diagnostic rather than a fatal error. Completed or
+invalidated occurrences never resurrect: retirement is transient and reported once, for the refresh
+that proves it, not persisted.
+
+**Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
+entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other
+Workstream's still-open guidance. `status` is `complete` only when every discovered Workstream has an
+explicit, destination-satisfied terminal outcome over closed coverage; an empty non-terminal
+projection reports `waiting`; anything else with open guidance reports `guidance`. A merely empty
+Action list never implies completion — closed coverage must be explicit (`revision_protocol: true`
+with a full paginated read, or an equivalent explicit closed-coverage read).
+
+**Deterministic ordering.** Actions order `Ready` before `Blocked`, then by a per-record local
+topological layer derived only from local `action-completed` prerequisites in that same fragment
+(cycle-safe), then by canonical Workstream Anchor. Within one Workstream, local declaration order
+applies before Action identity breaks the final tie. No local declaration order leaks across
+Workstreams, and no global Action-kind stage order, timestamp, or discovery order ever participates.
+
+**Refresh delta (request `previous_actions`, result `delta`).** Supplying the caller's own prior
+observed `actions` list (identity plus `semantic_fingerprint` pairs) makes reconcile return a
+bounded `delta` of `added`, `retired`, and `changed` action identities versus that explicit prior
+projection. Reconciliation holds no hidden memory of past calls; omitting `previous_actions` omits
+`delta` entirely and changes nothing else.
+
+**Handoff reference (request `handoff`, result `actions[].handoff_reference`).** After Actions are
+fully derived, ordered, and their Readiness fixed, an explicit `handoff` request naming one
+`action_identity`, `context_available`, and, when available, one opaque machine-local `reference`
+attaches at most one `handoff_reference` to the exactly matching Action. An unavailable local
+context or an Action no longer present is reported as a
+diagnostic-only `handoff_context_unavailable` or `handoff_action_unavailable` code; neither changes
+any Action's identity, Readiness, order, or completion — Handoff is a resume pointer, never an
+input to semantics.
+
+**Terminal rendering (`reconcile --terminal`).** The Python distribution renders one primary
+Action in full detail (Readiness, summary, Instruction, durable Target and Basis locators — never
+their content), an expandable Ready/Blocked remainder with hidden counts, a separate Needs-attention
+section for diagnostics (conflicts, malformed guidance, unstable reads, and Unverified scopes),
+Workstream outcomes, transient retirements from that refresh, and the bounded refresh delta when
+present. `--terminal` is accepted only by `reconcile`, exits `1` closed for every other operation,
+and is never mixed with machine JSON on the same invocation. Independent verified guidance remains
+usable even while unrelated occurrences sit in Needs attention.
