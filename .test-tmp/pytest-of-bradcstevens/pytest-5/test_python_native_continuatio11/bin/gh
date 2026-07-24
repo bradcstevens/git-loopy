@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /Users/bradcstevens/code/github/bradcstevens/git-loopy/git-loopy/python/.venv/bin/python3 /Users/bradcstevens/code/github/bradcstevens/git-loopy/git-loopy/python/tests/scripted_github.py "$@"
