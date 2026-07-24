@@ -225,11 +225,11 @@ def test_recommended_routing_is_the_locked_six_type_core() -> None:
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("gpt-5.6-sol", "high"),
-        "review": ("claude-opus-4.8", "xhigh"),
+        "planning": ("gpt-5.6-sol", "xhigh"),
+        "review": ("claude-opus-4.8", "high"),
         "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-terra", "medium"),
+        "test": ("claude-sonnet-5", "medium"),
+        "docs": ("gpt-5.6-terra", "low"),
         "chore": ("gpt-5.6-luna", "low"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
@@ -289,7 +289,7 @@ def test_recommended_routing_preserves_the_shipped_global_default() -> None:
         "claude-opus-4.8",
         "max",
     )
-    assert RECOMMENDED_ROUTING["planning"] == ("gpt-5.6-sol", "high")
+    assert RECOMMENDED_ROUTING["planning"] == ("gpt-5.6-sol", "xhigh")
     assert RECOMMENDED_ROUTING["planning"] != (
         cli._DEFAULT_MODEL,
         cli._DEFAULT_REASONING_EFFORT,

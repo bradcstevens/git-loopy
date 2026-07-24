@@ -2742,20 +2742,22 @@ _git_loopy_continuation_reconcile_revision_protocol() {
                 ))
               | .record.revision_id
             ] as $direct_taint
-          | reduce range(0; ($lineage | length)) as $iteration (
-              $direct_taint;
-              . as $tainted
-              | (
-                  . + [
-                    $lineage[]
-                    | select(any(
-                        .record.parents[]?;
-                        . as $parent | $tainted | index($parent) != null
-                      ))
-                    | .record.revision_id
-                  ]
-                  | unique
-                )
+          | (
+              reduce range(0; ($lineage | length)) as $iteration (
+                $direct_taint;
+                . as $tainted
+                | (
+                    . + [
+                      $lineage[]
+                      | select(any(
+                          .record.parents[]?;
+                          . as $parent | $tainted | index($parent) != null
+                        ))
+                      | .record.revision_id
+                    ]
+                    | unique
+                  )
+              )
             ) as $tainted
           | [
               $lineage[]

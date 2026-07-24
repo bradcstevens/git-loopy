@@ -62,3 +62,8 @@ docs/feature-requests/
 .reference/
 
 .copilot/skills/azure-mcaps-resource-deployment/
+
+# Nested git worktrees. These are gitlinks (mode 160000) with no .gitmodules
+# entry, so committing one makes `actions/checkout` fail its submodule cleanup
+# with "fatal: No url found for submodule path ... in .gitmodules".
+.worktrees/

@@ -1,0 +1,6 @@
+api repos/octo/example/issues?state=all&per_page=100&page=1
+api repos/octo/example/issues?state=all&per_page=100&page=2
+api repos/octo/example/issues/237/comments?per_page=100&page=1
+api repos/octo/example/issues/237/comments?per_page=100&page=2
+api repos/octo/example/collaborators/planner/permission
+issue view 239 --repo octo/example --json number,state,url

@@ -143,11 +143,11 @@ REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 #: ==================  =================  ========
 #: task-type key       Model              Effort
 #: ==================  =================  ========
-#: ``planning``        ``gpt-5.6-sol``      ``high``
-#: ``review``          ``claude-opus-4.8``  ``xhigh``
+#: ``planning``        ``gpt-5.6-sol``      ``xhigh``
+#: ``review``          ``claude-opus-4.8``  ``high``
 #: ``implementation``  ``gpt-5.6-terra``    ``high``
-#: ``test``            ``claude-sonnet-5``  ``high``
-#: ``docs``            ``gpt-5.6-terra``    ``medium``
+#: ``test``            ``claude-sonnet-5``  ``medium``
+#: ``docs``            ``gpt-5.6-terra``    ``low``
 #: ``chore``           ``gpt-5.6-luna``     ``low``
 #: ==================  =================  ========
 #:
