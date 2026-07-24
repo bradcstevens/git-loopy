@@ -1720,14 +1720,28 @@ def _parse_record(comment: ContinuationComment) -> dict[str, Any] | None:
     return record
 
 
-def _action_identity(record: dict[str, Any], action: dict[str, Any]) -> str:
+def _action_identity_from_parts(
+    anchor: dict[str, Any],
+    kind: str,
+    target: dict[str, Any],
+    occurrence: str,
+) -> str:
     source = {
-        "anchor": record["workstream"]["anchor"],
-        "kind": action["kind"],
-        "target": action["target"],
-        "occurrence": action["occurrence"],
+        "anchor": anchor,
+        "kind": kind,
+        "target": target,
+        "occurrence": occurrence,
     }
     return hashlib.sha256(_canonical_json(source).encode("utf-8")).hexdigest()
+
+
+def _action_identity(record: dict[str, Any], action: dict[str, Any]) -> str:
+    return _action_identity_from_parts(
+        record["workstream"]["anchor"],
+        action["kind"],
+        action["target"],
+        action["occurrence"],
+    )
 
 
 def _record_completion(record: dict[str, Any]) -> dict[str, Any]:
@@ -1771,6 +1785,46 @@ def _live_revision_entries(
     return [entry for entry in entries if entry[2]["revision_id"] not in referenced]
 
 
+def _retirement_relationship(
+    record: dict[str, Any],
+    receipt: dict[str, Any],
+    predecessor_record: dict[str, Any],
+) -> tuple[str, str | None] | None:
+    """Prove that one receipt removes its predecessor and names a new replacement."""
+    action_key = str(receipt["action_key"])
+    retired_action = next(
+        (
+            action
+            for action in predecessor_record.get("actions", [])
+            if str(action["key"]) == action_key
+        ),
+        None,
+    )
+    if retired_action is None:
+        return None
+    retired_identity = _action_identity(predecessor_record, retired_action)
+    current_identities = {
+        _action_identity(record, action) for action in record.get("actions", [])
+    }
+    if retired_identity in current_identities:
+        return None
+    replacement_identity = None
+    if receipt["reason"] == "supersession":
+        replacement = receipt["replacement"]
+        replacement_identity = _action_identity_from_parts(
+            replacement["workstream_anchor"],
+            replacement["kind"],
+            replacement["target"],
+            replacement["occurrence"],
+        )
+        if (
+            replacement_identity == retired_identity
+            or replacement_identity not in current_identities
+        ):
+            return None
+    return retired_identity, replacement_identity
+
+
 def _apply_retirement_receipts(
     live_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
     by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
@@ -1793,12 +1847,15 @@ def _apply_retirement_receipts(
             action_key = str(receipt["action_key"])
             predecessor_entry = by_id.get(predecessor_id)
             predecessor_record = predecessor_entry[2] if predecessor_entry else None
-            valid = (
-                predecessor_record is not None
-                and predecessor_id in record.get("parents", [])
-                and action_key in predecessor_record.get("semantic_fingerprints", {})
+            relationship = (
+                _retirement_relationship(record, receipt, predecessor_record)
+                if predecessor_record is not None
+                else None
             )
-            if not valid:
+            if (
+                relationship is None
+                or predecessor_id not in record.get("parents", [])
+            ):
                 diagnostics.append(
                     {
                         "code": "invalid_retirement_receipt",
@@ -1809,36 +1866,16 @@ def _apply_retirement_receipts(
                     }
                 )
                 continue
-            retired_action = next(
-                (
-                    action
-                    for action in predecessor_record.get("actions", [])
-                    if str(action["key"]) == action_key
-                ),
-                None,
-            )
+            retired_identity, replacement_identity = relationship
             retirement_entry = {
                 "workstream_anchor": record["workstream"]["anchor"],
-                "action_identity": (
-                    _action_identity(predecessor_record, retired_action)
-                    if retired_action is not None
-                    else None
-                ),
+                "action_identity": retired_identity,
                 "predecessor_revision_id": predecessor_id,
                 "reason": receipt["reason"],
                 "evidence": receipt["evidence"],
             }
-            if "replacement" in receipt:
-                replacement = receipt["replacement"]
-                replacement_source = {
-                    "anchor": replacement["workstream_anchor"],
-                    "kind": replacement["kind"],
-                    "target": replacement["target"],
-                    "occurrence": replacement["occurrence"],
-                }
-                retirement_entry["replacement_identity"] = hashlib.sha256(
-                    _canonical_json(replacement_source).encode("utf-8")
-                ).hexdigest()
+            if replacement_identity is not None:
+                retirement_entry["replacement_identity"] = replacement_identity
             retirements.append(retirement_entry)
     return retirements, diagnostics
 
@@ -1851,10 +1888,17 @@ def _missing_retirement_receipts(
     current_identities = {
         _action_identity(record, action) for action in record.get("actions", [])
     }
-    declared = {
-        (str(receipt["predecessor_revision_id"]), str(receipt["action_key"]))
-        for receipt in record.get("retirements", [])
-    }
+    declared: set[tuple[str, str]] = set()
+    for receipt in record.get("retirements", []):
+        predecessor_id = str(receipt["predecessor_revision_id"])
+        predecessor_entry = by_id.get(predecessor_id)
+        predecessor = predecessor_entry[2] if predecessor_entry else None
+        if (
+            predecessor is not None
+            and predecessor_id in record.get("parents", [])
+            and _retirement_relationship(record, receipt, predecessor) is not None
+        ):
+            declared.add((predecessor_id, str(receipt["action_key"])))
     missing: list[dict[str, str]] = []
     for predecessor_id in record.get("parents", []):
         predecessor_entry = by_id.get(str(predecessor_id))
@@ -2369,7 +2413,7 @@ def _local_topological_layers(record: dict[str, Any]) -> dict[str, int]:
 
 def _frontier_order_key(
     action: dict[str, Any],
-) -> tuple[int, int, int, str, str]:
+) -> tuple[int, int, str, int, str]:
     """Deterministic prospective-frontier order for verified guidance.
 
     Orders Ready Actions ahead of Blocked ones, then by each Action's
@@ -2715,8 +2759,8 @@ def _reconcile_revision_protocol(
                     if (
                         predecessor is None
                         or predecessor_id not in record.get("parents", [])
-                        or action_key
-                        not in predecessor.get("semantic_fingerprints", {})
+                        or _retirement_relationship(record, receipt, predecessor)
+                        is None
                     ):
                         diagnostics.append(
                             {

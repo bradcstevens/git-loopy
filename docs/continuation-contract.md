@@ -241,14 +241,16 @@ existing request or pinned response shape; omitting them selects exactly the pri
 `completion` may carry a bounded, transient list of typed retirement receipts, each naming a
 `predecessor_revision_id`, the retired `action_key`, a `reason` of `completed`, `lost-basis`,
 `workstream-outcome`, or `supersession`, durable `evidence`, and — only for `supersession` — a
-`replacement` local Action key. Reconciliation derives a receipt's live legitimacy purely by
+`replacement` Action identity inputs. Reconciliation derives a receipt's live legitimacy purely by
 comparing the requesting successor against the exact predecessor(s) it names in its own `parents`
-and `semantic_fingerprints`: there is no central journal, tombstone, or cache. A receipt naming an
-unrelated revision, an unknown action key, or a `replacement` outside `supersession` is a structural
-rejection; a receipt naming a real predecessor that the successor does not actually supersede
-surfaces as an `invalid_retirement_receipt` diagnostic rather than a fatal error. Completed or
-invalidated occurrences never resurrect: retirement is transient and reported once, for the refresh
-that proves it, not persisted.
+and `semantic_fingerprints`: there is no central journal, tombstone, or cache. A supersession must
+name a current replacement Action with a different durable occurrence identity; reusing the retired
+identity does not create a recurrence. A receipt naming an unrelated revision, an unknown action
+key, or a `replacement` outside `supersession` is a structural rejection; a receipt naming a real
+predecessor that the successor does not actually retire or supersede surfaces as an
+`invalid_retirement_receipt` diagnostic rather than a fatal error. Completed or invalidated
+occurrences never resurrect: retirement is transient and reported once, for the refresh that proves
+it, not persisted.
 
 **Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
 entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other

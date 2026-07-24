@@ -3152,6 +3152,63 @@ def test_python_reconcile_revision_protocol_reports_supersession_replacement_ide
     assert stderr == ""
 
 
+def test_python_reconcile_revision_protocol_rejects_supersession_reusing_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A repeated operation must use a new durable occurrence discriminator."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "supersession",
+            "evidence": [_issue(237)],
+            "replacement": {
+                "workstream_anchor": _issue(237),
+                "kind": "Publish spec",
+                "target": _issue(239),
+                "occurrence": "v1",
+            },
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    assert [action["identity"] for action in result["result"]["actions"]] == [
+        original_action["identity"]
+    ]
+    assert "retirements" not in result["result"]
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
 def test_python_publish_rejects_retirement_with_unsupported_reason(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
