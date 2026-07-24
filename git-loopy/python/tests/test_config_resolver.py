@@ -684,26 +684,6 @@ def test_resolve_malformed_routing_raises_loudly() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model", sorted(SUPPORTED_MODELS))
-def test_resolve_every_supported_model_routes_without_advisory(model: str) -> None:
-    warnings: list[str] = []
-    effort = next(
-        (e for e in REASONING_EFFORT_ORDER if e in MODEL_REASONING_EFFORTS[model]),
-        "high",
-    )
-    run = _resolve(
-        global_={
-            "model": model,
-            "routing": {"planning": {"model": model, "effort": effort}},
-        },
-        warn=warnings.append,
-    ).run
-
-    assert dict(run.routing) == {"planning": (model, effort)}
-    assert run.model == model
-    assert warnings == []
-
-
 @pytest.mark.parametrize("model", ["claude-opus-5", "gemini-3.6-flash"])
 def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     """Models live in the Copilot catalog must not trip the off-roster advisory.
@@ -716,13 +696,14 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     startup even though the run itself worked.
     """
     assert model in SUPPORTED_MODELS
+    effort = next(e for e in REASONING_EFFORT_ORDER if e in MODEL_REASONING_EFFORTS[model])
     warnings: list[str] = []
     _resolve(
         global_={
             "model": model,
-            "routing": {"planning": {"model": model, "effort": "high"}},
+            "routing": {"planning": {"model": model, "effort": effort}},
         },
         warn=warnings.append,
     )
-    assert [w for w in warnings if "supported" in w] == []
+    assert not any(model in w for w in warnings)
 

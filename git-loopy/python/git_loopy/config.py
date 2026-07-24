@@ -88,8 +88,8 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5-mini": frozenset({"low", "medium", "high"}),
     "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
-    "gemini-3.6-flash": frozenset(),
-    "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
+    "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
+    "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
     "gpt-5.6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),
