@@ -413,7 +413,7 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
             "",  # planning: keep
             "3",  # review: skip
             "2",  # implementation: override
-            "",  # keep the pre-seeded claude-sonnet-5 model
+            "",  # keep the pre-seeded gpt-5.6-terra model
             "",  # keep its pre-seeded "high" effort, not model default "max"
             "3",  # test: skip
             "",  # docs: keep
@@ -425,9 +425,9 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
     )
 
     assert routing == {
-        "planning": ("claude-opus-4.8", "max"),
-        "implementation": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5-mini", "medium"),
+        "planning": ("gpt-5.6-sol", "high"),
+        "implementation": ("gpt-5.6-terra", "high"),
+        "docs": ("gpt-5.6-terra", "medium"),
     }
 
 
@@ -552,12 +552,12 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
     assert rc == 0
     config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert config["routing"] == {
-        "planning": {"model": "claude-opus-4.8", "effort": "max"},
-        "review": {"model": "claude-sonnet-5", "effort": "xhigh"},
-        "implementation": {"model": "claude-sonnet-5", "effort": "high"},
-        "test": {"model": "claude-sonnet-5", "effort": "medium"},
-        "docs": {"model": "gpt-5-mini", "effort": "medium"},
-        "chore": {"model": "gpt-5-mini", "effort": "low"},
+        "planning": {"model": "gpt-5.6-sol", "effort": "high"},
+        "review": {"model": "claude-opus-4.8", "effort": "xhigh"},
+        "implementation": {"model": "gpt-5.6-terra", "effort": "high"},
+        "test": {"model": "claude-sonnet-5", "effort": "high"},
+        "docs": {"model": "gpt-5.6-terra", "effort": "medium"},
+        "chore": {"model": "gpt-5.6-luna", "effort": "low"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -595,9 +595,9 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
     config_path = settings.global_config_path(_env(tmp_path))
     config = tomllib.loads(config_path.read_text())
     assert config["routing"] == {
-        "planning": {"model": "claude-opus-4.8", "effort": "max"},
+        "planning": {"model": "gpt-5.6-sol", "effort": "high"},
         "implementation": {"model": "claude-sonnet-5", "effort": "high"},
-        "docs": {"model": "gpt-5-mini", "effort": "medium"},
+        "docs": {"model": "gpt-5.6-terra", "effort": "medium"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"

@@ -231,11 +231,11 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
 }
 ```
 
-The values above are the Python Orchestrator's current manifest. The shell Orchestrator declares
-only `agent_output` available; PowerShell currently declares all six values unavailable. Later work
-may change a value to `true` only when that Orchestrator emits the signal truthfully. `false` means
-unavailable. `true` with no sample yet is still unknown. Unknown scalar values are JSON `null`; an
-observed count of none is `0`, and an observed collection with no members is `[]`.
+The values above are the Python Orchestrator's current manifest. The shell and PowerShell
+Orchestrators declare only `agent_output` available. Later work may change a value to `true` only
+when that Orchestrator emits the signal truthfully. `false` means unavailable. `true` with no sample
+yet is still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and
+an observed collection with no members is `[]`.
 
 The following additive Insight payload shapes are reserved by schema 1. Existing Phase 1 traces,
 including payload-free `wrapper.iteration.end` records, remain valid. When an Orchestrator begins
@@ -264,13 +264,13 @@ closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_secon
 `consumption` (`model`, `tokens_in`, `tokens_out`), nullable `cost_usd`, and nullable
 `peak_context_window`. Only authoritative source closure populates closure-only fields.
 
-The shell Orchestrator emits this normalized payload from its native observable boundary.
-Iteration, Active-issue, and cumulative Active durations come from its monotonic clock; agent
-commits, successful wrapper closures, PR advances, and Strikes remain observed counts. Model and
-token Consumption, structured tool and Skill activity, Context fill, model pricing, and Cost remain
-`null` because native Copilot CLI output does not expose those measurements. The configured model
-is not a substitute for observed Consumption, and unavailable counters or collections MUST NOT be
-reported as `0` or `[]`.
+The shell and PowerShell Orchestrators emit this normalized payload from their native observable
+boundaries. Iteration, Active-issue, and cumulative Active durations come from each Orchestrator's
+monotonic clock; agent commits, successful wrapper closures, PR advances, and Strikes remain
+observed counts. Model and token Consumption, structured tool and Skill activity, Context fill,
+model pricing, and Cost remain `null` because native Copilot CLI output does not expose those
+measurements. The configured model is not a substitute for observed Consumption, and unavailable
+counters or collections MUST NOT be reported as `0` or `[]`.
 
 Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by

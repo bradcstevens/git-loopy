@@ -181,6 +181,21 @@ function Invoke-Scenario {
         elseif ($Request.Contains("raw")) {
             $RequestContent = [string]$Request["raw"]
         }
+        elseif ($Request.Contains("raw_segments")) {
+            $Builder = [Text.StringBuilder]::new()
+            foreach ($Segment in $Request["raw_segments"]) {
+                $Repeat = if ($Segment.Contains("repeat")) {
+                    [int]$Segment["repeat"]
+                }
+                else {
+                    1
+                }
+                for ($Index = 0; $Index -lt $Repeat; $Index++) {
+                    [void]$Builder.Append([string]$Segment["text"])
+                }
+            }
+            $RequestContent = $Builder.ToString()
+        }
         else {
             $RequestContent = $Request["json"] |
                 ConvertTo-Json -Compress -Depth 20
@@ -290,15 +305,15 @@ function Assert-ScenarioResult {
         "got $($Result.ExitCode); stderr: $($Result.Stderr)"
     )
 
-    if ($null -eq $Expected["stdout"]) {
-        Assert-True (
-            [string]::IsNullOrEmpty($Result.Stdout)
-        ) "$Id writes no stdout"
-    }
-    elseif ($Expected.Contains("stdout_exact")) {
+    if ($Expected.Contains("stdout_exact")) {
         Assert-True (
             $Result.Stdout -ceq [string]$Expected["stdout_exact"]
         ) "$Id exact stdout matches the shared fixture"
+    }
+    elseif ($null -eq $Expected["stdout"]) {
+        Assert-True (
+            [string]::IsNullOrEmpty($Result.Stdout)
+        ) "$Id writes no stdout"
     }
     else {
         $ActualJson = $Result.Stdout |

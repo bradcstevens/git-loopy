@@ -7,6 +7,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+$OrchestratorModule = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
+Import-Module $OrchestratorModule -Force
 $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
@@ -269,9 +271,20 @@ if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
     $Calls = [int][IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
 }
 [IO.File]::WriteAllText($env:FAKE_COPILOT_CALLS, [string]($Calls + 1))
-# Emit on stdout to prove the agent stream is routed away from the JSONL Event
-# stream (the Orchestrator forwards it to stderr).
-Write-Output "copilot agent stream marker"
+# Emit on stdout to prove native CLI text remains human-readable on stderr and
+# is also represented as unclassified Events.
+if ($env:FAKE_COPILOT_OUTPUT_FILE) {
+    foreach ($Line in [IO.File]::ReadAllLines($env:FAKE_COPILOT_OUTPUT_FILE)) {
+        Write-Output $Line
+    }
+} else {
+    Write-Output "copilot agent stream marker"
+}
+if ($env:FAKE_COPILOT_STDERR_FILE) {
+    foreach ($Line in [IO.File]::ReadAllLines($env:FAKE_COPILOT_STDERR_FILE)) {
+        [Console]::Error.WriteLine($Line)
+    }
+}
 # A per-call commit plan (opt-in) lets a scenario vary commit messages across
 # Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
 # `-F` so multi-line close-keyword bodies survive. Falling back to the simple
@@ -362,6 +375,10 @@ switch -CaseSensitive ($Command) {
         return
     }
     "issue close" {
+        if ($env:FAKE_GH_CLOSE_STATUS) {
+            Complete-FakeCommand ([int]$env:FAKE_GH_CLOSE_STATUS)
+            return
+        }
         # Record the auto-closure: the issue number (one per line) and the
         # wrap-up comment, so a scenario can assert which Pool issues the loop
         # closed and which commit SHAs the comment attributed.
@@ -800,7 +817,7 @@ exit 97
     ) $Events[0]["release_version"] "Run Release version"
     Assert-Equal 1 $Events[0]["schema_version"] "Run Event-schema version"
     $ExpectedInsightCapabilities = [ordered]@{
-        agent_output = $false
+        agent_output = $true
         structured_agent_events = $false
         token_usage = $false
         context_window = $false
@@ -818,6 +835,35 @@ exit 97
         )
     }
     Assert-Equal 0 $Events[2]["issues"].Count "empty collected Pool"
+    Assert-Equal "no_progress" $Events[3]["outcome"] "empty Iteration outcome"
+    Assert-True (
+        $Events[3]["duration_seconds"] -is [double] -or
+        $Events[3]["duration_seconds"] -is [long]
+    ) "empty Iteration duration is numeric"
+    Assert-True (
+        $Events[3]["duration_seconds"] -ge 0
+    ) "empty Iteration duration is non-negative"
+    Assert-Equal 0 $Events[3]["issues"].Count "empty Iteration issue contributions"
+    Assert-Equal 0 $Events[3]["summary"]["commits"] "empty Iteration commits"
+    Assert-Equal 0 $Events[3]["summary"]["auto_closures"] (
+        "empty Iteration closures"
+    )
+    Assert-Equal 0 $Events[3]["summary"]["strikes"] "empty Iteration Strikes"
+    foreach ($Name in @(
+        "model",
+        "tokens_in",
+        "tokens_out",
+        "observed_tokens",
+        "cost_usd",
+        "tool_count",
+        "skill_call_count",
+        "skills_consulted",
+        "peak_context_window"
+    )) {
+        Assert-True (
+            $null -eq $Events[3]["summary"][$Name]
+        ) "empty Iteration unavailable $Name"
+    }
     Assert-Equal "empty_pool" $Events[4]["outcome"] "empty Run outcome"
     Assert-Equal 1 $Events[4]["iterations_run"] "empty Run Iteration count"
 
@@ -933,6 +979,26 @@ exit 97
     $env:FAKE_GH_VIEW_DIR = $CapViews
     Set-CopilotEnv -Prefix "github-cap"
     $env:FAKE_COPILOT_COMMITS = "0"
+    $CapAgentOutput = Join-Path $TempDir "github-cap-agent-output.txt"
+    [IO.File]::WriteAllText(
+        $CapAgentOutput,
+        (
+            "pre-marker output`n" +
+            "<working issue=99>`n" +
+            "<working issue=041>`n" +
+            "<working issue=42>`n" +
+            "post-marker output`n"
+        ),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $env:FAKE_COPILOT_OUTPUT_FILE = $CapAgentOutput
+    $CapAgentStderr = Join-Path $TempDir "github-cap-agent-stderr.txt"
+    [IO.File]::WriteAllText(
+        $CapAgentStderr,
+        "native stderr chatter`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    $env:FAKE_COPILOT_STDERR_FILE = $CapAgentStderr
     $env:GIT_LOOPY_MODEL = "env-model"
     $env:GIT_LOOPY_REASONING_EFFORT = "medium"
     $env:GIT_LOOPY_DENY_TOOLS = "env-tool"
@@ -956,7 +1022,9 @@ exit 97
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_DENY_TOOLS",
         "GIT_LOOPY_DENY_SKILLS",
-        "FAKE_COPILOT_COMMITS"
+        "FAKE_COPILOT_COMMITS",
+        "FAKE_COPILOT_OUTPUT_FILE",
+        "FAKE_COPILOT_STDERR_FILE"
     )) {
         [Environment]::SetEnvironmentVariable($Name, $null)
     }
@@ -1039,16 +1107,58 @@ exit 97
         $CapFlagLines -ccontains "skill(env-skill)"
     ) "environment deny-skill mapped onto --deny-tool skill(...)"
 
-    # The agent's own output streams to stderr, never onto the Event stream.
+    # Native CLI text remains human-readable on stderr and is represented once
+    # as truthful unclassified Events in stdout and replay.
     Assert-Contains (
         [IO.File]::ReadAllText($CapStderr)
-    ) "copilot agent stream marker" "agent output streams to stderr"
-    Assert-True (
-        -not ([IO.File]::ReadAllText($CapStdout)).Contains(
-            "copilot agent stream marker",
-            [StringComparison]::Ordinal
+    ) "pre-marker output" "agent output streams to stderr"
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) "native stderr chatter" "native CLI stderr remains visible"
+    $OutputEvents = @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "agent.output" }
+    )
+    Assert-Equal (
+        "pre-marker output,<working issue=99>,<working issue=041>," +
+        "<working issue=42>,post-marker output,pre-marker output," +
+        "<working issue=99>,<working issue=041>,<working issue=42>," +
+        "post-marker output"
+    ) ([string]::Join(",", @($OutputEvents | ForEach-Object { $_["text"] }))) (
+        "native CLI output Event order"
+    )
+    foreach ($Event in $OutputEvents) {
+        Assert-Equal "unclassified" $Event["kind"] "native CLI output kind"
+        Assert-True (
+            [string]$Event["text"] -cne "native stderr chatter"
+        ) "native CLI stderr was mislabeled as agent output"
+    }
+    $ActivationEvents = @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 2 $ActivationEvents.Count "one Active-issue binding per Iteration"
+    foreach ($Event in $ActivationEvents) {
+        Assert-Equal 41 $Event["issue"] "Working marker Active issue"
+        Assert-Equal "working_marker" $Event["binding_source"] (
+            "Working marker binding source"
         )
-    ) "agent output polluted the JSONL Event stream"
+        Assert-Equal $Event["ts"] $Event["activated_at"] (
+            "activation observation timestamp"
+        )
+    }
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) (
+        "Active-issue marker for #99 ignored; " +
+        "issue is not in the current Pool"
+    ) "out-of-Pool marker diagnostic"
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) (
+        "conflicting Active-issue marker for #42 ignored; " +
+        "Iteration is already bound to #41"
+    ) "conflicting marker diagnostic"
     $CapReplay = @(
         Get-ChildItem `
             -LiteralPath (Join-Path $CapRepo ".git-loopy/logs") `
@@ -1075,7 +1185,9 @@ exit 97
         -StderrPath $DefaultStderr
     [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
     [Environment]::SetEnvironmentVariable("FAKE_GH_EMPTY_AFTER", $null)
-    Assert-Equal 0 $Status "unlimited turn Run exit"
+    Assert-Equal 0 $Status (
+        "unlimited turn Run exit: " + [IO.File]::ReadAllText($DefaultStderr)
+    )
     Assert-Equal "2" (
         [IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT)
     ) "unlimited Run rebuilds the Pool until it empties"
@@ -1125,8 +1237,9 @@ exit 97
     $CommitsEvents = Read-Events -Path $CommitsStdout
     Assert-Equal (
         "wrapper.run.start,wrapper.iteration.start," +
-        "wrapper.afk_ready.collected,wrapper.commit.recorded," +
-        "wrapper.commit.recorded,wrapper.iteration.end,wrapper.run.end"
+        "wrapper.afk_ready.collected,agent.output,wrapper.commit.recorded," +
+        "wrapper.commit.recorded,wrapper.issue.activated," +
+        "wrapper.iteration.end,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
         "commit events precede the Iteration end that closes their Iteration"
     )
@@ -1150,6 +1263,67 @@ exit 97
             [string]$Commit["date"] -match '^\d{4}-\d{2}-\d{2}$'
         ) "commit event carries an ISO date"
     }
+    $SingleMemberBindings = @(
+        $CommitsEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $SingleMemberBindings.Count (
+        "single-member Pool produces one Active-issue binding"
+    )
+    Assert-Equal 41 $SingleMemberBindings[0]["issue"] (
+        "single-member Pool Active issue"
+    )
+    Assert-Equal "single_member_pool" $SingleMemberBindings[0]["binding_source"] (
+        "single-member Pool binding source"
+    )
+    $CommitsIterationEnd = @(
+        $CommitsEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "advanced" $CommitsIterationEnd["outcome"] (
+        "commit Iteration outcome"
+    )
+    Assert-True (
+        $CommitsIterationEnd["duration_seconds"] -ge 0
+    ) "commit Iteration duration"
+    Assert-Equal 2 $CommitsIterationEnd["summary"]["commits"] (
+        "commit Iteration Summary commits"
+    )
+    Assert-Equal 0 $CommitsIterationEnd["summary"]["auto_closures"] (
+        "commit Iteration Summary closures"
+    )
+    Assert-Equal 0 $CommitsIterationEnd["summary"]["strikes"] (
+        "commit Iteration Summary Strikes"
+    )
+    Assert-Equal 1 $CommitsIterationEnd["issues"].Count (
+        "commit Iteration issue contribution count"
+    )
+    $CommitContribution = $CommitsIterationEnd["issues"][0]
+    Assert-Equal 41 $CommitContribution["issue"] "commit contribution issue"
+    Assert-Equal "advanced" $CommitContribution["status"] (
+        "commit contribution status"
+    )
+    Assert-Equal (
+        $SingleMemberBindings[0]["activated_at"]
+    ) $CommitContribution["first_started_at"] (
+        "commit contribution first activation"
+    )
+    Assert-True (
+        $null -eq $CommitContribution["closed_at"] -and
+        $null -eq $CommitContribution["issue_elapsed_seconds"]
+    ) "advanced contribution has no closure-only facts"
+    Assert-True (
+        $CommitContribution["active_seconds"] -ge 0 -and
+        $CommitContribution["cumulative_active_seconds"] -eq
+            $CommitContribution["active_seconds"]
+    ) "fallback contribution carries monotonic Active time"
+    Assert-True (
+        $null -eq $CommitContribution["consumption"]["model"] -and
+        $null -eq $CommitContribution["consumption"]["tokens_in"] -and
+        $null -eq $CommitContribution["consumption"]["tokens_out"] -and
+        $null -eq $CommitContribution["cost_usd"] -and
+        $null -eq $CommitContribution["peak_context_window"]
+    ) "commit contribution does not guess unavailable telemetry"
     Assert-Equal "iteration_cap" (
         $CommitsEvents[-1]["outcome"]
     ) "agent-commit Run outcome"
@@ -1549,6 +1723,24 @@ Read outside the worktree.
     )
     Assert-Equal 1 $AutoCloseEvents.Count "exactly one auto_close event"
     Assert-Equal 41 $AutoCloseEvents[0]["issue"] "auto_close targets the Pool issue"
+    $AutoBindings = @(
+        $AutoEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $AutoBindings.Count "closure produces one Active-issue binding"
+    Assert-Equal 41 $AutoBindings[0]["issue"] "closure Active issue"
+    Assert-Equal "closure" $AutoBindings[0]["binding_source"] (
+        "closure binding source"
+    )
+    Assert-True (
+        [Array]::IndexOf(
+            @($AutoEvents | ForEach-Object { $_["type"] }),
+            "wrapper.issue.activated"
+        ) -lt [Array]::IndexOf(
+            @($AutoEvents | ForEach-Object { $_["type"] }),
+            "wrapper.auto_close"
+        )
+    ) "closure binding precedes auto-close"
     Assert-Equal 2 (
         $AutoCloseEvents[0]["shas"].Count
     ) "auto_close attributes both referencing SHAs"
@@ -1565,6 +1757,46 @@ Read outside the worktree.
     Assert-Equal 0 (
         @($AutoEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }).Count
     ) "a progress Iteration records no Strike"
+    $AutoIterationEnd = @(
+        $AutoEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "closed" $AutoIterationEnd["outcome"] (
+        "auto-close Iteration outcome"
+    )
+    Assert-Equal 2 $AutoIterationEnd["summary"]["commits"] (
+        "auto-close Summary commits"
+    )
+    Assert-Equal 1 $AutoIterationEnd["summary"]["auto_closures"] (
+        "auto-close Summary closures"
+    )
+    Assert-Equal 0 $AutoIterationEnd["summary"]["strikes"] (
+        "auto-close Summary Strikes"
+    )
+    Assert-Equal 1 $AutoIterationEnd["issues"].Count (
+        "auto-close issue contribution count"
+    )
+    $ClosedContribution = $AutoIterationEnd["issues"][0]
+    Assert-Equal 41 $ClosedContribution["issue"] "closed contribution issue"
+    Assert-Equal "closed" $ClosedContribution["status"] (
+        "closed contribution status"
+    )
+    Assert-Equal (
+        $AutoBindings[0]["activated_at"]
+    ) $ClosedContribution["first_started_at"] (
+        "closed contribution first activation"
+    )
+    Assert-Equal (
+        $AutoCloseEvents[0]["ts"]
+    ) $ClosedContribution["closed_at"] (
+        "closed contribution authoritative closure time"
+    )
+    Assert-True (
+        $ClosedContribution["issue_elapsed_seconds"] -ge 0 -and
+        $ClosedContribution["active_seconds"] -ge 0 -and
+        $ClosedContribution["cumulative_active_seconds"] -eq
+            $ClosedContribution["active_seconds"]
+    ) "closed contribution uses monotonic lifecycle durations"
     Assert-Equal "iteration_cap" $AutoEvents[-1]["outcome"] "auto-close Run outcome"
     $CloseComment = [IO.File]::ReadAllText(
         (Join-Path $env:FAKE_GH_CLOSE_DIR "41.comment")
@@ -1577,6 +1809,77 @@ Read outside the worktree.
     )
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSE_DIR", $null)
+
+    # An agent may perform the required source closure itself before the
+    # Orchestrator reaches its closing-keyword backstop. The source's CLOSED
+    # state is still authoritative lifecycle evidence, but it is not an
+    # auto-closure and must not cause a duplicate `gh issue close`.
+    $AgentClosedRepo = Join-Path $TempDir "agent-closed"
+    $AgentClosedBin = Join-Path $TempDir "agent-closed-bin"
+    New-RealTestRepo -Root $AgentClosedRepo
+    Write-TurnTools -BinDir $AgentClosedBin
+    $AgentClosedList = Join-Path $TempDir "agent-closed-list.json"
+    [IO.File]::Copy($CapList, $AgentClosedList, $true)
+    $AgentClosedViews = Join-Path $TempDir "agent-closed-views"
+    [IO.Directory]::CreateDirectory($AgentClosedViews) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $AgentClosedViews "41.json"), @'
+{
+  "number": 41,
+  "state": "CLOSED",
+  "url": "https://example.invalid/issues/41"
+}
+'@)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-closed-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-closed-list.count"
+    $env:FAKE_GH_LIST_JSON = $AgentClosedList
+    $env:FAKE_GH_VIEW_DIR = $AgentClosedViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "agent-closed-closed.log"
+    Set-CopilotEnv -Prefix "agent-closed"
+    $AgentClosedPlan = Join-Path $TempDir "agent-closed-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $AgentClosedPlan "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $AgentClosedPlan "1/1.msg"),
+        "feat: close at the source`n`nCloses #41`n"
+    )
+    $env:FAKE_COPILOT_PLAN_DIR = $AgentClosedPlan
+    $AgentClosedStdout = Join-Path $TempDir "agent-closed.stdout"
+    $AgentClosedStderr = Join-Path $TempDir "agent-closed.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $AgentClosedRepo `
+        -FakeBin $AgentClosedBin `
+        -StdoutPath $AgentClosedStdout `
+        -StderrPath $AgentClosedStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+    Assert-Equal 0 $Status "agent-closed turn Run exit"
+    Assert-True (
+        -not [IO.File]::Exists((Join-Path $TempDir "agent-closed-closed.log"))
+    ) "an already-closed source issue was closed again"
+    $AgentClosedEvents = Read-Events -Path $AgentClosedStdout
+    Assert-Equal 0 (
+        @(
+            $AgentClosedEvents |
+                Where-Object { $_["type"] -ceq "wrapper.auto_close" }
+        ).Count
+    ) "agent source closure was mislabeled as an auto-close"
+    $AgentClosedIterationEnd = @(
+        $AgentClosedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "closed" $AgentClosedIterationEnd["outcome"] (
+        "agent source closure Iteration outcome"
+    )
+    Assert-Equal 0 $AgentClosedIterationEnd["summary"]["auto_closures"] (
+        "agent source closure Summary auto-closures"
+    )
+    Assert-Equal "closed" $AgentClosedIterationEnd["issues"][0]["status"] (
+        "agent source closure contribution status"
+    )
+    Assert-True (
+        $null -ne $AgentClosedIterationEnd["issues"][0]["closed_at"] -and
+        $null -ne $AgentClosedIterationEnd["issues"][0]["issue_elapsed_seconds"]
+    ) "agent source closure omitted closure-only facts"
 
     # Progress resets the Strike counter: a no-progress Iteration records a
     # Strike, the next Iteration's agent commit clears it, and a following
@@ -1626,6 +1929,44 @@ Read outside the worktree.
     Assert-Equal 0 (
         @($ResetEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
     ) "no closing keyword means no auto-close"
+    $ResetIterationEnds = @(
+        $ResetEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )
+    Assert-Equal "no_progress,advanced,no_progress" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["outcome"] }
+        ))
+    ) "Strike-reset Iteration outcomes"
+    Assert-Equal "1,0,1" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["summary"]["strikes"] }
+        ))
+    ) "Strike-reset normalized Summary"
+    Assert-Equal "no-progress,advanced,no-progress" (
+        [string]::Join(",", @(
+            $ResetIterationEnds | ForEach-Object { $_["issues"][0]["status"] }
+        ))
+    ) "Strike-reset contribution statuses"
+    foreach ($IterationEnd in $ResetIterationEnds) {
+        Assert-True (
+            $null -eq $IterationEnd["issues"][0]["closed_at"] -and
+            $null -eq $IterationEnd["issues"][0]["issue_elapsed_seconds"]
+        ) "non-closure contribution leaves closure facts unknown"
+    }
+    Assert-Equal 1 (
+        @(
+            $ResetIterationEnds |
+                ForEach-Object { $_["issues"][0]["first_started_at"] } |
+                Sort-Object -Unique
+        ).Count
+    ) "repeated issue keeps its first activation"
+    Assert-True (
+        $ResetIterationEnds[0]["issues"][0]["cumulative_active_seconds"] -le
+            $ResetIterationEnds[1]["issues"][0]["cumulative_active_seconds"] -and
+        $ResetIterationEnds[1]["issues"][0]["cumulative_active_seconds"] -le
+            $ResetIterationEnds[2]["issues"][0]["cumulative_active_seconds"]
+    ) "repeated issue accumulates monotonic Active time"
     Assert-Equal "iteration_cap" $ResetEvents[-1]["outcome"] "strike-reset Run outcome"
     Assert-Equal 3 $ResetEvents[-1]["iterations_run"] "strike-reset ran every Iteration"
     Assert-True (
@@ -1677,6 +2018,22 @@ Read outside the worktree.
     Assert-Equal "wrapper.run.end" $StuckEvents[-1]["type"] "stuck Run ends with run.end"
     Assert-Equal "stuck" $StuckEvents[-1]["outcome"] "stuck Run outcome"
     Assert-Equal 3 $StuckEvents[-1]["iterations_run"] "stuck Run iterations"
+    $StuckIterationEnds = @(
+        $StuckEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )
+    Assert-Equal "no_progress,no_progress,aborted" (
+        [string]::Join(",", @(
+            $StuckIterationEnds | ForEach-Object { $_["outcome"] }
+        ))
+    ) "stuck Iteration outcomes"
+    Assert-Equal "aborted" $StuckIterationEnds[-1]["issues"][0]["status"] (
+        "threshold Strike contribution status"
+    )
+    Assert-True (
+        $null -eq $StuckIterationEnds[-1]["issues"][0]["closed_at"] -and
+        $null -eq $StuckIterationEnds[-1]["issues"][0]["issue_elapsed_seconds"]
+    ) "aborted contribution leaves closure facts unknown"
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
     ) "stuck Run closed no issue"
@@ -1848,9 +2205,10 @@ Read outside the worktree.
     [IO.Directory]::CreateDirectory((Join-Path $PushPlan "1")) | Out-Null
     [IO.File]::WriteAllText(
         (Join-Path $PushPlan "1/1.msg"),
-        "feat: real work`n`nRefs #41`n"
+        "feat: real work`n`nCloses #41`n"
     )
     $env:FAKE_COPILOT_PLAN_DIR = $PushPlan
+    $env:FAKE_GH_CLOSE_STATUS = "1"
     $PushStdout = Join-Path $TempDir "agent-commit-push.stdout"
     $PushStderr = Join-Path $TempDir "agent-commit-push.stderr"
     $Status = Invoke-Entrypoint `
@@ -1860,6 +2218,7 @@ Read outside the worktree.
         -StderrPath $PushStderr `
         -Arguments @("1")
     [Environment]::SetEnvironmentVariable("FAKE_COPILOT_PLAN_DIR", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSE_STATUS", $null)
     Assert-Equal 0 $Status "agent-commit-push Run exit"
     $PushEvents = Read-Events -Path $PushStdout
     Assert-Equal "feat: real work" (
@@ -1880,11 +2239,20 @@ Read outside the worktree.
     ) "a progress Iteration records no Strike"
     Assert-Equal 0 (
         @($PushEvents | Where-Object { $_["type"] -ceq "wrapper.auto_close" }).Count
-    ) "a Refs-only commit closes no issue"
+    ) "a failed closure records no auto-close"
+    $CommitBindings = @(
+        $PushEvents |
+            Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $CommitBindings.Count "commit produces one Active-issue binding"
+    Assert-Equal 41 $CommitBindings[0]["issue"] "commit Active issue"
+    Assert-Equal "commit" $CommitBindings[0]["binding_source"] (
+        "commit binding source"
+    )
     Assert-Equal "iteration_cap" $PushEvents[-1]["outcome"] "agent-commit-push Run outcome"
     Assert-True (
         -not [IO.File]::Exists($env:FAKE_GH_CLOSED)
-    ) "a Refs-only commit closed no issue"
+    ) "a failed closure was not recorded as closed"
     $PushBranch = ([string](& git -C $PushRepo rev-parse --abbrev-ref HEAD)).Trim()
     Assert-Equal (
         ([string](& git -C $PushRepo rev-parse HEAD)).Trim()
@@ -2082,6 +2450,39 @@ Start-Sleep -Seconds $Sleep
     Assert-Equal "iteration_cap" $SendTimeoutEvents[-1]["outcome"] "send-timeout Run outcome"
     Assert-Equal 1 $SendTimeoutEvents[-1]["iterations_run"] "send-timeout ran one Iteration"
     [Environment]::SetEnvironmentVariable("FAKE_GH_CLOSED", $null)
+
+    # UTC timestamps are durable facts, not a duration clock. A backwards
+    # wall-clock adjustment therefore preserves native monotonic lifecycle
+    # durations while retaining both authoritative timestamps verbatim.
+    $WallAdjusted = Get-GitLoopyIterationRollup `
+        -IterationStartedMonotonic 10 `
+        -FinishedMonotonic 15 `
+        -ActiveIssue 41 `
+        -ActiveStartedAt "2026-05-16T00:00:10.000Z" `
+        -ActiveStartedMonotonic 10 `
+        -FirstStartedAt "2026-05-16T00:00:10.000Z" `
+        -FirstStartedMonotonic 10 `
+        -ActiveClosedAt "2026-05-16T00:00:01.000Z" `
+        -ActiveClosedMonotonic 12 `
+        -AutoClosures 1
+    Assert-Equal "closed" $WallAdjusted["outcome"] (
+        "wall-adjusted closure outcome"
+    )
+    Assert-Equal 5 $WallAdjusted["duration_seconds"] (
+        "wall-adjusted Iteration duration"
+    )
+    Assert-Equal 2 $WallAdjusted["issues"][0]["active_seconds"] (
+        "wall-adjusted Active duration"
+    )
+    Assert-Equal 2 $WallAdjusted["issues"][0]["issue_elapsed_seconds"] (
+        "wall-adjusted issue elapsed"
+    )
+    Assert-Equal "2026-05-16T00:00:10.000Z" (
+        $WallAdjusted["issues"][0]["first_started_at"]
+    ) "wall-adjusted first activation timestamp"
+    Assert-Equal "2026-05-16T00:00:01.000Z" (
+        $WallAdjusted["issues"][0]["closed_at"]
+    ) "wall-adjusted closure timestamp"
 }
 finally {
     foreach ($Name in @(
@@ -2093,11 +2494,14 @@ finally {
         "FAKE_GH_EMPTY_AFTER",
         "FAKE_GH_CLOSED",
         "FAKE_GH_CLOSE_DIR",
+        "FAKE_GH_CLOSE_STATUS",
         "FAKE_COPILOT_FLAGS",
         "FAKE_COPILOT_PROMPT",
         "FAKE_COPILOT_CALLS",
         "FAKE_COPILOT_COMMITS",
         "FAKE_COPILOT_EXIT",
+        "FAKE_COPILOT_OUTPUT_FILE",
+        "FAKE_COPILOT_STDERR_FILE",
         "FAKE_COPILOT_PLAN_DIR",
         "FAKE_COPILOT_SLEEP",
         "GIT_LOOPY_MODEL",

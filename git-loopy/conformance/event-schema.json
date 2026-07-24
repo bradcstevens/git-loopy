@@ -29,7 +29,7 @@
         "cost": false
       },
       "powershell": {
-        "agent_output": false,
+        "agent_output": true,
         "structured_agent_events": false,
         "token_usage": false,
         "context_window": false,
@@ -174,6 +174,228 @@
             "issue_elapsed_seconds": null,
             "active_seconds": 5,
             "cumulative_active_seconds": 7,
+            "consumption": {
+              "model": null,
+              "tokens_in": null,
+              "tokens_out": null
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "shell-gone-keeps-closure-fields-unknown",
+      "orchestrator": "shell",
+      "input": {
+        "iteration_started_monotonic": 30,
+        "finished_monotonic": 34,
+        "active_issue": 84,
+        "active_started_at": "2026-05-16T00:00:10.000Z",
+        "active_started_monotonic": 30,
+        "previous_cumulative_active_seconds": 6,
+        "commits": 0,
+        "auto_closures": 0,
+        "pr_advances": 0,
+        "strikes": 1,
+        "terminal_outcome": "gone"
+      },
+      "expected": {
+        "outcome": "gone",
+        "duration_seconds": 4,
+        "summary": {
+          "model": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "tool_count": null,
+          "skill_call_count": null,
+          "skills_consulted": null,
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 1,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 84,
+            "status": "gone",
+            "first_started_at": "2026-05-16T00:00:10.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4,
+            "cumulative_active_seconds": 10,
+            "consumption": {
+              "model": null,
+              "tokens_in": null,
+              "tokens_out": null
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "powershell-unavailable-telemetry",
+      "orchestrator": "powershell",
+      "input": {
+        "iteration_started_monotonic": 10,
+        "finished_monotonic": 15,
+        "active_issue": 42,
+        "active_started_at": "2026-05-16T00:00:01.000Z",
+        "active_started_monotonic": 10,
+        "first_started_at": "2026-05-16T00:00:01.000Z",
+        "first_started_monotonic": 8,
+        "previous_cumulative_active_seconds": 2,
+        "commits": 1,
+        "auto_closures": 0,
+        "pr_advances": 0,
+        "strikes": 0
+      },
+      "expected": {
+        "outcome": "advanced",
+        "duration_seconds": 5,
+        "summary": {
+          "model": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "tool_count": null,
+          "skill_call_count": null,
+          "skills_consulted": null,
+          "commits": 1,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "advanced",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 5,
+            "cumulative_active_seconds": 7,
+            "consumption": {
+              "model": null,
+              "tokens_in": null,
+              "tokens_out": null
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "powershell-closure-ignores-wall-clock-adjustment",
+      "orchestrator": "powershell",
+      "input": {
+        "iteration_started_monotonic": 10,
+        "finished_monotonic": 15,
+        "active_issue": 42,
+        "active_started_at": "2026-05-16T00:00:10.000Z",
+        "active_started_monotonic": 10,
+        "first_started_at": "2026-05-16T00:00:10.000Z",
+        "first_started_monotonic": 8,
+        "previous_cumulative_active_seconds": 2,
+        "active_closed_at": "2026-05-16T00:00:01.000Z",
+        "active_closed_monotonic": 12,
+        "commits": 1,
+        "auto_closures": 1,
+        "pr_advances": 0,
+        "strikes": 0
+      },
+      "expected": {
+        "outcome": "closed",
+        "duration_seconds": 5,
+        "summary": {
+          "model": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "tool_count": null,
+          "skill_call_count": null,
+          "skills_consulted": null,
+          "commits": 1,
+          "auto_closures": 1,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "closed",
+            "first_started_at": "2026-05-16T00:00:10.000Z",
+            "closed_at": "2026-05-16T00:00:01.000Z",
+            "issue_elapsed_seconds": 4,
+            "active_seconds": 2,
+            "cumulative_active_seconds": 4,
+            "consumption": {
+              "model": null,
+              "tokens_in": null,
+              "tokens_out": null
+            },
+            "cost_usd": null,
+            "peak_context_window": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "powershell-gone-keeps-closure-fields-unknown",
+      "orchestrator": "powershell",
+      "input": {
+        "iteration_started_monotonic": 30,
+        "finished_monotonic": 34,
+        "active_issue": 84,
+        "active_started_at": "2026-05-16T00:00:10.000Z",
+        "active_started_monotonic": 30,
+        "first_started_at": "2026-05-16T00:00:10.000Z",
+        "first_started_monotonic": 20,
+        "previous_cumulative_active_seconds": 6,
+        "commits": 0,
+        "auto_closures": 0,
+        "pr_advances": 0,
+        "strikes": 1,
+        "terminal_outcome": "gone"
+      },
+      "expected": {
+        "outcome": "gone",
+        "duration_seconds": 4,
+        "summary": {
+          "model": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "tool_count": null,
+          "skill_call_count": null,
+          "skills_consulted": null,
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 1,
+          "peak_context_window": null
+        },
+        "issues": [
+          {
+            "issue": 84,
+            "status": "gone",
+            "first_started_at": "2026-05-16T00:00:10.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4,
+            "cumulative_active_seconds": 10,
             "consumption": {
               "model": null,
               "tokens_in": null,

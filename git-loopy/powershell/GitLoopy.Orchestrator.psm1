@@ -76,6 +76,16 @@ function Get-GitLoopyEnvironment {
     return $Environment
 }
 
+function Get-GitLoopyMonotonicSeconds {
+    [CmdletBinding()]
+    param()
+
+    return (
+        [Diagnostics.Stopwatch]::GetTimestamp() /
+        [double][Diagnostics.Stopwatch]::Frequency
+    )
+}
+
 function Get-GitLoopyEnvironmentValue {
     param(
         [Parameter(Mandatory)]
@@ -491,6 +501,120 @@ function Test-GitLoopyIterationProgress {
     # advance. Runner Checkpoints and the legacy no-more-tasks sentinel are
     # informational and never progress.
     return ($Commits -gt 0) -or ($AutoClosures -gt 0) -or ($PrAdvances -gt 0)
+}
+
+function Get-GitLoopyIterationRollup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$IterationStartedMonotonic,
+        [Parameter(Mandatory)]
+        [object]$FinishedMonotonic,
+        [AllowNull()]
+        [object]$ActiveIssue,
+        [AllowNull()]
+        [string]$ActiveStartedAt,
+        [object]$ActiveStartedMonotonic = 0,
+        [AllowNull()]
+        [string]$FirstStartedAt,
+        [object]$FirstStartedMonotonic = 0,
+        [object]$PreviousCumulativeActiveSeconds = 0,
+        [AllowNull()]
+        [string]$ActiveClosedAt,
+        [AllowNull()]
+        [object]$ActiveClosedMonotonic,
+        [int]$Commits = 0,
+        [int]$AutoClosures = 0,
+        [int]$PrAdvances = 0,
+        [int]$Strikes = 0,
+        [string]$TerminalOutcome
+    )
+
+    $Duration = $FinishedMonotonic - $IterationStartedMonotonic
+    if ($Duration -lt 0) {
+        $Duration = 0
+    }
+
+    $Outcome = "no_progress"
+    $Issues = [object[]]@()
+    if ($null -ne $ActiveIssue) {
+        $EndedMonotonic = $FinishedMonotonic
+        $Status = "no-progress"
+        if (-not [string]::IsNullOrEmpty($ActiveClosedAt)) {
+            $EndedMonotonic = $ActiveClosedMonotonic
+            $Status = "closed"
+        }
+        elseif ($TerminalOutcome -cin @("aborted", "gone")) {
+            $Status = $TerminalOutcome
+        }
+        elseif ($Commits -gt 0 -or $PrAdvances -gt 0) {
+            $Status = "advanced"
+        }
+
+        $ActiveSeconds = $EndedMonotonic - $ActiveStartedMonotonic
+        if ($ActiveSeconds -lt 0) {
+            $ActiveSeconds = 0
+        }
+        $CumulativeActiveSeconds = (
+            $PreviousCumulativeActiveSeconds + $ActiveSeconds
+        )
+        $ClosedAt = $null
+        $IssueElapsedSeconds = $null
+        if (-not [string]::IsNullOrEmpty($ActiveClosedAt)) {
+            $ClosedAt = $ActiveClosedAt
+            $IssueElapsedSeconds = (
+                $ActiveClosedMonotonic - $FirstStartedMonotonic
+            )
+            if ($IssueElapsedSeconds -lt 0) {
+                $IssueElapsedSeconds = 0
+            }
+        }
+        $Issues = [object[]]@(
+            [ordered]@{
+                issue = $ActiveIssue
+                status = $Status
+                first_started_at = $FirstStartedAt
+                closed_at = $ClosedAt
+                issue_elapsed_seconds = $IssueElapsedSeconds
+                active_seconds = $ActiveSeconds
+                cumulative_active_seconds = $CumulativeActiveSeconds
+                consumption = [ordered]@{
+                    model = $null
+                    tokens_in = $null
+                    tokens_out = $null
+                }
+                cost_usd = $null
+                peak_context_window = $null
+            }
+        )
+        $Outcome = if ($Status -ceq "no-progress") {
+            "no_progress"
+        }
+        else {
+            $Status
+        }
+    }
+
+    return [ordered]@{
+        outcome = $Outcome
+        duration_seconds = $Duration
+        summary = [ordered]@{
+            model = $null
+            tokens_in = $null
+            tokens_out = $null
+            observed_tokens = $null
+            cost_usd = $null
+            tool_count = $null
+            skill_call_count = $null
+            skills_consulted = $null
+            commits = $Commits
+            auto_closures = $AutoClosures
+            pr_advances = $PrAdvances
+            strikes = $Strikes
+            peak_context_window = $null
+        }
+        issues = $Issues
+    }
 }
 
 function Step-GitLoopyStrikeState {
@@ -1221,10 +1345,259 @@ function Build-GitLoopyPrompt {
     return "Previous commits: $CommitsBlock Issues: $IssuesBlock $PromptText"
 }
 
+function Test-GitLoopyPoolContainsRef {
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [Parameter(Mandatory)]
+        [string]$Ref
+    )
+
+    foreach ($Item in @($Pool)) {
+        $Candidate = if ($Item.Contains("number")) {
+            [string]$Item["number"]
+        }
+        else {
+            [string]$Item["ref"]
+        }
+        if ($Candidate -ceq $Ref) {
+            return $true
+        }
+    }
+    return $false
+}
+
+$script:GitLoopyActiveRef = $null
+$script:GitLoopyIterationStartedAt = $null
+$script:GitLoopyIterationStartedMonotonic = 0
+$script:GitLoopyActiveStartedAt = $null
+$script:GitLoopyActiveStartedMonotonic = 0
+$script:GitLoopyActiveClosedAt = $null
+$script:GitLoopyActiveClosedMonotonic = $null
+$script:GitLoopyIssueFirstStartedAt = @{}
+$script:GitLoopyIssueFirstStartedMonotonic = @{}
+$script:GitLoopyIssueCumulativeActiveSeconds = @{}
+$script:GitLoopyWarnedMarkerRefs = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::Ordinal
+)
+
+function Publish-GitLoopyActiveBinding {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [string]$Source,
+        [Parameter(Mandatory)]
+        [DateTimeOffset]$ObservedAt
+    )
+
+    if ($null -ne $script:GitLoopyActiveRef) {
+        return $false
+    }
+    $script:GitLoopyActiveRef = $Ref
+    $script:GitLoopyActiveStartedAt = Get-GitLoopyIsoTimestamp -Timestamp $ObservedAt
+    $script:GitLoopyActiveStartedMonotonic = if ($Source -ceq "working_marker") {
+        Get-GitLoopyMonotonicSeconds
+    }
+    else {
+        $script:GitLoopyIterationStartedMonotonic
+    }
+    if (-not $script:GitLoopyIssueFirstStartedAt.ContainsKey($Ref)) {
+        $script:GitLoopyIssueFirstStartedAt[$Ref] = $script:GitLoopyActiveStartedAt
+        $script:GitLoopyIssueFirstStartedMonotonic[$Ref] = (
+            $script:GitLoopyActiveStartedMonotonic
+        )
+    }
+    $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_ISSUE_ACTIVATED"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            activated_at = Get-GitLoopyIsoTimestamp -Timestamp $ObservedAt
+            binding_source = $Source
+            issue = $Issue
+        }) `
+        -Timestamp $ObservedAt
+    return $true
+}
+
+function Get-GitLoopyCurrentIterationRollup {
+    param(
+        [Parameter(Mandatory)]
+        [object]$FinishedMonotonic,
+        [int]$Commits = 0,
+        [int]$AutoClosures = 0,
+        [int]$PrAdvances = 0,
+        [int]$Strikes = 0,
+        [string]$TerminalOutcome
+    )
+
+    $Arguments = @{
+        IterationStartedMonotonic = $script:GitLoopyIterationStartedMonotonic
+        FinishedMonotonic = $FinishedMonotonic
+        ActiveIssue = $null
+        Commits = $Commits
+        AutoClosures = $AutoClosures
+        PrAdvances = $PrAdvances
+        Strikes = $Strikes
+        TerminalOutcome = $TerminalOutcome
+    }
+    if ($null -ne $script:GitLoopyActiveRef) {
+        $Ref = [string]$script:GitLoopyActiveRef
+        $Arguments["ActiveIssue"] = if ($Ref -match '^[0-9]+$') {
+            [int]$Ref
+        }
+        else {
+            $Ref
+        }
+        $Arguments["ActiveStartedAt"] = $script:GitLoopyActiveStartedAt
+        $Arguments["ActiveStartedMonotonic"] = (
+            $script:GitLoopyActiveStartedMonotonic
+        )
+        $Arguments["FirstStartedAt"] = $script:GitLoopyIssueFirstStartedAt[$Ref]
+        $Arguments["FirstStartedMonotonic"] = (
+            $script:GitLoopyIssueFirstStartedMonotonic[$Ref]
+        )
+        $Arguments["PreviousCumulativeActiveSeconds"] = if (
+            $script:GitLoopyIssueCumulativeActiveSeconds.ContainsKey($Ref)
+        ) {
+            $script:GitLoopyIssueCumulativeActiveSeconds[$Ref]
+        }
+        else {
+            0
+        }
+        $Arguments["ActiveClosedAt"] = $script:GitLoopyActiveClosedAt
+        $Arguments["ActiveClosedMonotonic"] = $script:GitLoopyActiveClosedMonotonic
+    }
+
+    $Rollup = Get-GitLoopyIterationRollup @Arguments
+    if ($null -ne $script:GitLoopyActiveRef -and $Rollup["issues"].Count -eq 1) {
+        $script:GitLoopyIssueCumulativeActiveSeconds[
+            [string]$script:GitLoopyActiveRef
+        ] = $Rollup["issues"][0]["cumulative_active_seconds"]
+    }
+    return $Rollup
+}
+
+function Set-GitLoopyActiveBinding {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [string]$Source,
+        [Parameter(Mandatory)]
+        [DateTimeOffset]$ObservedAt
+    )
+
+    if ($null -ne $script:GitLoopyActiveRef) {
+        if (
+            $Source -ceq "working_marker" -and
+            [string]$script:GitLoopyActiveRef -cne $Ref -and
+            $script:GitLoopyWarnedMarkerRefs.Add($Ref)
+        ) {
+            [Console]::Error.WriteLine(
+                "git-loopy: conflicting Active-issue marker for #$Ref ignored; " +
+                "Iteration is already bound to #$($script:GitLoopyActiveRef)"
+            )
+        }
+        return $false
+    }
+    if (
+        $Source -ceq "working_marker" -and
+        -not (Test-GitLoopyPoolContainsRef -Pool $Pool -Ref $Ref)
+    ) {
+        if ($script:GitLoopyWarnedMarkerRefs.Add($Ref)) {
+            [Console]::Error.WriteLine(
+                "git-loopy: Active-issue marker for #$Ref ignored; " +
+                "issue is not in the current Pool"
+            )
+        }
+        return $false
+    }
+    return Publish-GitLoopyActiveBinding `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Ref $Ref `
+        -Source $Source `
+        -ObservedAt $ObservedAt
+}
+
+function Write-GitLoopyAgentOutput {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Line
+    )
+
+    $ObservedAt = [DateTimeOffset]::UtcNow
+    [Console]::Error.WriteLine($Line)
+    $MarkerPattern = [regex]::new(
+        '<\s*working\s+issue\s*=\s*"?\#?(?<issue>[0-9]+)"?\s*>',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    foreach ($Match in $MarkerPattern.Matches($Line)) {
+        $MarkerRef = [string]$Match.Groups["issue"].Value
+        [int]$MarkerIssue = 0
+        if (
+            [int]::TryParse(
+                $MarkerRef,
+                [Globalization.NumberStyles]::None,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$MarkerIssue
+            )
+        ) {
+            $MarkerRef = $MarkerIssue.ToString(
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+        }
+        Set-GitLoopyActiveBinding `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Pool $Pool `
+            -Ref $MarkerRef `
+            -Source "working_marker" `
+            -ObservedAt $ObservedAt | Out-Null
+    }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["AGENT_OUTPUT"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            kind = "unclassified"
+            text = $Line
+        }) `
+        -Timestamp $ObservedAt
+}
+
 function Invoke-GitLoopyBoundedTurn {
-    # Run one already-assembled agent turn ("& $Command @Argv") with its own
-    # stdout folded to stderr — so stdout stays the JSONL Event stream
-    # (contract §4) — bounded by a wall-clock send timeout. The turn runs inside
+    # Run one already-assembled agent turn ("& $Command @Argv") with native CLI
+    # stdout represented as unclassified Events while remaining visible on
+    # stderr, bounded by a wall-clock send timeout. The turn runs inside
     # an inner pwsh launched as a child Process: the inner `& $Command` keeps
     # PowerShell's cross-platform command resolution (a `.cmd` shim on Windows, a
     # shebang script on Unix — neither of which a raw Process could launch by
@@ -1243,7 +1616,15 @@ function Invoke-GitLoopyBoundedTurn {
         [Parameter(Mandatory)]
         [string]$Command,
         [AllowEmptyCollection()]
-        [string[]]$Argv = @()
+        [string[]]$Argv = @(),
+        [AllowNull()]
+        [psobject]$Context,
+        [AllowNull()]
+        [Collections.IDictionary]$EventTypes,
+        [AllowNull()]
+        [Nullable[int]]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool = @()
     )
 
     # Embed $Command/$Argv as single-quoted PowerShell literals (every `'`
@@ -1259,8 +1640,8 @@ function Invoke-GitLoopyBoundedTurn {
         "@()"
     }
 
-    # The inner pwsh folds the agent's own stdout to stderr, preserves the turn's
-    # real exit status ($PSNativeCommandUseErrorActionPreference = $false keeps a
+    # The inner pwsh preserves the turn's real exit status
+    # ($PSNativeCommandUseErrorActionPreference = $false keeps a
     # non-zero copilot exit a captured status, not a thrown error), and reports a
     # launch failure as 126 — matching the prior in-process invocation exactly.
     $InnerScript = @"
@@ -1268,7 +1649,7 @@ function Invoke-GitLoopyBoundedTurn {
 `$PSNativeCommandUseErrorActionPreference = `$false
 `$Argv = $ArgvArray
 try {
-    & $CommandLiteral @Argv | ForEach-Object { [Console]::Error.WriteLine([string]`$_) }
+    & $CommandLiteral @Argv
 }
 catch {
     [Console]::Error.WriteLine("git-loopy: copilot turn could not launch: `$(`$_.Exception.Message)")
@@ -1283,7 +1664,8 @@ exit `$LASTEXITCODE
     # Launch the current pwsh (resolved without [Environment]::ProcessPath, which
     # is .NET 6+/pwsh 7.2+, to keep the port's pwsh 7.0 floor) with the encoded
     # turn. UseShellExecute = $false lets the inner pwsh inherit our stdout (the
-    # Event stream, which it never writes to) and stderr (where it folds output).
+    # Event stream, which receives only the parent Orchestrator's records) and
+    # stderr (where native CLI diagnostics remain visible).
     $PwshPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $StartInfo = [Diagnostics.ProcessStartInfo]::new()
     $StartInfo.FileName = $PwshPath
@@ -1291,6 +1673,7 @@ exit `$LASTEXITCODE
         $StartInfo.ArgumentList.Add($Flag)
     }
     $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardOutput = $true
 
     $Process = [Diagnostics.Process]::new()
     $Process.StartInfo = $StartInfo
@@ -1304,11 +1687,41 @@ exit `$LASTEXITCODE
         return 126
     }
 
-    $TimeoutMs = [int][Math]::Ceiling($TimeoutSeconds * 1000)
-    if ($Process.WaitForExit($TimeoutMs)) {
-        # Drain any pending async output before reading the exit status.
-        $Process.WaitForExit()
-        return $Process.ExitCode
+    $Timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $RemainingMs = [int][Math]::Ceiling(
+            ($TimeoutSeconds - $Timer.Elapsed.TotalSeconds) * 1000
+        )
+        if ($RemainingMs -le 0) {
+            break
+        }
+        $ReadTask = $Process.StandardOutput.ReadLineAsync()
+        $Completed = [Threading.Tasks.Task]::WhenAny(
+            $ReadTask,
+            [Threading.Tasks.Task]::Delay($RemainingMs)
+        ).GetAwaiter().GetResult()
+        if ($Completed -ne $ReadTask) {
+            break
+        }
+        $Line = $ReadTask.GetAwaiter().GetResult()
+        if ($null -eq $Line) {
+            if ($Process.WaitForExit($RemainingMs)) {
+                $Process.WaitForExit()
+                return $Process.ExitCode
+            }
+            break
+        }
+        if ($null -ne $Context -and $null -ne $EventTypes -and $null -ne $Iteration) {
+            Write-GitLoopyAgentOutput `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration `
+                -Pool $Pool `
+                -Line $Line
+        }
+        else {
+            [Console]::Error.WriteLine($Line)
+        }
     }
 
     # The turn overran its bound: reclaim the whole tree (inner pwsh + copilot)
@@ -1327,7 +1740,15 @@ function Invoke-GitLoopyAgentTurn {
         [Parameter(Mandatory)]
         [psobject]$Config,
         [Parameter(Mandatory)]
-        [string]$Prompt
+        [string]$Prompt,
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool
     )
 
     $Argv = [Collections.Generic.List[string]]::new()
@@ -1357,7 +1778,11 @@ function Invoke-GitLoopyAgentTurn {
     return Invoke-GitLoopyBoundedTurn `
         -TimeoutSeconds ([double]$Config.SendTimeoutSeconds) `
         -Command "copilot" `
-        -Argv @($Argv)
+        -Argv @($Argv) `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Pool $Pool
 }
 
 # The first Pool issue this Iteration actually closed (OPEN -> closed), in
@@ -1444,6 +1869,24 @@ function Invoke-GitLoopyCloseOneIssue {
         return $false
     }
 
+    if ($null -eq $script:GitLoopyFirstClosedRef) {
+        $script:GitLoopyFirstClosedRef = $Issue
+    }
+    Set-GitLoopyActiveBinding `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Pool @() `
+        -Ref ([string]$Issue) `
+        -Source "closure" `
+        -ObservedAt $script:GitLoopyIterationStartedAt | Out-Null
+    $ClosedAt = [DateTimeOffset]::UtcNow
+    $ClosedMonotonic = Get-GitLoopyMonotonicSeconds
+    if ([string]$script:GitLoopyActiveRef -ceq [string]$Issue) {
+        $script:GitLoopyActiveClosedAt = Get-GitLoopyIsoTimestamp `
+            -Timestamp $ClosedAt
+        $script:GitLoopyActiveClosedMonotonic = $ClosedMonotonic
+    }
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_AUTO_CLOSE"] `
@@ -1452,10 +1895,8 @@ function Invoke-GitLoopyCloseOneIssue {
             issue = $Issue
             sha = $RefShas[0]
             shas = [string[]]$RefShas.ToArray()
-        })
-    if ($null -eq $script:GitLoopyFirstClosedRef) {
-        $script:GitLoopyFirstClosedRef = $Issue
-    }
+        }) `
+        -Timestamp $ClosedAt
     return $true
 }
 
@@ -1547,13 +1988,17 @@ function Get-GitLoopyActiveRef {
 
     # Best-effort attribution of the Iteration's Active issue for a Checkpoint,
     # mirroring the Python reference `_infer_active_ref` and the shell port. In
-    # priority order: the first Pool issue this Iteration actually auto-closed (the
+    # priority order: the immutable published binding; then the first Pool issue
+    # this Iteration actually auto-closed (the
     # strongest signal of what was worked, `completions[0].ref` in the reference);
     # then an actionable Pool-issue close-ref named in this Iteration's agent
     # commits (the agent named the issue it worked, even if the closure did not
     # fire); then a single-member Pool (the only candidate); else nothing
     # (unattributed). Returns the ref (an issue number or a PRDs/PR string) or
     # $null.
+    if ($null -ne $script:GitLoopyActiveRef) {
+        return [string]$script:GitLoopyActiveRef
+    }
     if ($null -ne $script:GitLoopyFirstClosedRef) {
         return [string]$script:GitLoopyFirstClosedRef
     }
@@ -1567,6 +2012,47 @@ function Get-GitLoopyActiveRef {
             return [string]$Only["number"]
         }
         return [string]$Only["ref"]
+    }
+    return $null
+}
+
+function Get-GitLoopyFallbackBinding {
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool,
+        [AllowEmptyCollection()]
+        [object[]]$Commits
+    )
+
+    if ($null -ne $script:GitLoopyFirstClosedRef) {
+        return [pscustomobject]@{
+            Ref = [string]$script:GitLoopyFirstClosedRef
+            Source = "closure"
+        }
+    }
+    $Actionable = @(
+        Get-GitLoopyPoolActionableCloseReferences -Pool $Pool -Commits $Commits
+    )
+    if (
+        $Actionable.Count -gt 0 -and
+        -not [string]::IsNullOrEmpty([string]$Actionable[0])
+    ) {
+        return [pscustomobject]@{
+            Ref = [string]$Actionable[0]
+            Source = "commit"
+        }
+    }
+    if (@($Pool).Count -eq 1) {
+        $Only = @($Pool)[0]
+        return [pscustomobject]@{
+            Ref = if ($Only.Contains("number")) {
+                [string]$Only["number"]
+            }
+            else {
+                [string]$Only["ref"]
+            }
+            Source = "single_member_pool"
+        }
     }
     return $null
 }
@@ -1739,6 +2225,9 @@ function Invoke-GitLoopyDiscovery {
     $Outcome = "iteration_cap"
     [int]$Strikes = 0
     $StrikeOutcome = "running"
+    $script:GitLoopyIssueFirstStartedAt = @{}
+    $script:GitLoopyIssueFirstStartedMonotonic = @{}
+    $script:GitLoopyIssueCumulativeActiveSeconds = @{}
     while ($true) {
         $NextIteration = $Iteration + 1
         if (
@@ -1750,10 +2239,19 @@ function Invoke-GitLoopyDiscovery {
         }
         $Iteration = $NextIteration
 
+        $script:GitLoopyIterationStartedAt = [DateTimeOffset]::UtcNow
+        $script:GitLoopyIterationStartedMonotonic = Get-GitLoopyMonotonicSeconds
+        $script:GitLoopyActiveRef = $null
+        $script:GitLoopyActiveStartedAt = $null
+        $script:GitLoopyActiveStartedMonotonic = 0
+        $script:GitLoopyActiveClosedAt = $null
+        $script:GitLoopyActiveClosedMonotonic = $null
+        $script:GitLoopyWarnedMarkerRefs.Clear()
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_START"] `
-            -Iteration $Iteration
+            -Iteration $Iteration `
+            -Timestamp $script:GitLoopyIterationStartedAt
 
         $Pool = @(Get-GitLoopyPool `
             -Config $Config `
@@ -1775,10 +2273,14 @@ function Invoke-GitLoopyDiscovery {
             -Payload ([ordered]@{ issues = [object[]]$Refs })
 
         if ($Pool.Count -eq 0) {
+            $Rollup = Get-GitLoopyCurrentIterationRollup `
+                -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
+                -Strikes $Strikes
             Write-GitLoopyEvent `
                 -Context $Context `
                 -Type $EventTypes["WRAPPER_ITERATION_END"] `
-                -Iteration $Iteration
+                -Iteration $Iteration `
+                -Payload $Rollup
             $IterationsRun = $Iteration
             $Outcome = "empty_pool"
             break
@@ -1794,7 +2296,13 @@ function Invoke-GitLoopyDiscovery {
             -Pool $Pool `
             -PromptPath $Preflight.PromptPath
         $PreSha = Get-GitLoopyHeadSha -RepoRoot $Preflight.RepoRoot
-        $AgentStatus = Invoke-GitLoopyAgentTurn -Config $Config -Prompt $Prompt
+        $AgentStatus = Invoke-GitLoopyAgentTurn `
+            -Config $Config `
+            -Prompt $Prompt `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Pool $Pool
         if ($AgentStatus -ne 0) {
             [Console]::Error.WriteLine(
                 "git-loopy: copilot turn exited with status $AgentStatus; continuing."
@@ -1858,6 +2366,20 @@ function Invoke-GitLoopyDiscovery {
             -Iteration $Iteration `
             -Pool $Pool `
             -Commits $NewCommits
+        if ($null -eq $script:GitLoopyActiveRef) {
+            $FallbackBinding = Get-GitLoopyFallbackBinding `
+                -Pool $Pool `
+                -Commits $NewCommits
+            if ($null -ne $FallbackBinding) {
+                Publish-GitLoopyActiveBinding `
+                    -Context $Context `
+                    -EventTypes $EventTypes `
+                    -Iteration $Iteration `
+                    -Ref $FallbackBinding.Ref `
+                    -Source $FallbackBinding.Source `
+                    -ObservedAt $script:GitLoopyIterationStartedAt | Out-Null
+            }
+        }
 
         # Runner Checkpoint + auto-push (ADR-0004). Capture any dirty / untracked
         # work-in-progress in one close-keyword-free Checkpoint attributed to the
@@ -1916,10 +2438,24 @@ function Invoke-GitLoopyDiscovery {
                 })
         }
 
+        $TerminalOutcome = if ($StrikeOutcome -ceq "aborted") {
+            "aborted"
+        }
+        else {
+            ""
+        }
+        $Rollup = Get-GitLoopyCurrentIterationRollup `
+            -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
+            -Commits $AgentCommits `
+            -AutoClosures $AutoClosures `
+            -PrAdvances 0 `
+            -Strikes $Strikes `
+            -TerminalOutcome $TerminalOutcome
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_END"] `
-            -Iteration $Iteration
+            -Iteration $Iteration `
+            -Payload $Rollup
         $IterationsRun = $Iteration
         if ($StrikeOutcome -ceq "aborted") {
             $Outcome = "stuck"
@@ -2010,6 +2546,7 @@ function Invoke-GitLoopyMain {
 Export-ModuleMember -Function @(
     "Get-GitLoopyReleaseVersion",
     "Get-GitLoopyEnvironment",
+    "Get-GitLoopyMonotonicSeconds",
     "Resolve-GitLoopyConfig",
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyExitCode",
@@ -2018,6 +2555,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyActionableCloseReferences",
     "Get-GitLoopyPoolActionableCloseReferences",
     "Test-GitLoopyIterationProgress",
+    "Get-GitLoopyIterationRollup",
     "Step-GitLoopyStrikeState",
     "Test-GitLoopyCheckpointMessage",
     "Get-GitLoopyCheckpointMessage",

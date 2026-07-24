@@ -92,7 +92,8 @@ while IFS= read -r case_json; do
     "$(jq -r '.input.commits' <<<"$case_json")" \
     "$(jq -r '.input.auto_closures' <<<"$case_json")" \
     "$(jq -r '.input.pr_advances' <<<"$case_json")" \
-    "$(jq -r '.input.strikes' <<<"$case_json")"
+    "$(jq -r '.input.strikes' <<<"$case_json")" \
+    "$(jq -r '.input.terminal_outcome // ""' <<<"$case_json")"
   jq -e --argjson actual "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
     '.expected == $actual' <<<"$case_json" >/dev/null ||
     fail "normalized rollup fixture: $case_id"

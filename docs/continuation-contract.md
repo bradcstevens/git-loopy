@@ -67,8 +67,8 @@ tracker operation. The Python, shell, and PowerShell distributions now advertise
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. `record-dispatch-result`,
 terminal rendering, report mode, execute-frontier, and concurrent Dispatch remain unsupported.
-Python additionally advertises its trusted immutable-revision protocol and explicit `repair-index`;
-shell and PowerShell remain on their atomic-record capability subset. Mode is `off`.
+Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
+`repair-index`. Mode is `off`.
 
 ## 5. Event observations
 
@@ -186,9 +186,9 @@ still outstanding. Terminal and no-guidance records contribute no Action. The di
 index only: the Producer comment and current GitHub facts are authority, and no queue, journal,
 snapshot, or local cache is created.
 
-Python's immutable-revision Reconciliation discovers issues and pull requests with a complete,
-paginated all-state read rather than label-authoritative discovery: explicit closed coverage
-traverses every returned page regardless of index-label presence or staleness. Each durable read
+Python, shell, and PowerShell immutable-revision Reconciliation discover issues and pull requests with a
+complete, paginated all-state read rather than label-authoritative discovery: explicit closed
+coverage traverses every returned page regardless of index-label presence or staleness. Each durable read
 (issue, pull request, labels, sub-issues, commit, branch, review, comment) uses a source-specific
 validator and up to three bounded stable-read attempts; a definitive not-found is itself a stable
 negative fact, but persistent churn or an unavailable read yields a typed `unverified_completion` or
@@ -204,9 +204,9 @@ role, carrier, and revision. Incompatible semantics under one identity are never
 timestamp, discovery order, or recency; they surface as an `action_conflict` diagnostic and are
 excluded from guidance until one lineage retires.
 
-Python Reconciliation returns an opaque `sha256:` observation token over the repository, current
-Producer heads, and inspected comment validators. Immutable publication names exactly those
-observed heads. The append is deterministic and idempotent: an indeterminate retry finds the same
+Python, shell, and PowerShell Reconciliation return an opaque `sha256:` observation token over the
+repository, current Producer heads, and inspected comment validators. Immutable publication names
+exactly those observed heads. The append is deterministic and idempotent: an indeterminate retry finds the same
 revision. Equivalent concurrent heads deduplicate in guidance; non-equivalent stale appends remain
 visible as a fork until one fresh revision names every current head. Edited comments, missing
 predecessors, revoked authority, and unauthorized ancestry quarantine only their lineage. Recovery
@@ -215,14 +215,15 @@ or retire declaration naming every affected head. When a damaged comment cannot 
 revision identity, Reconciliation supplies a deterministic comment-scoped affected-head identity
 so the recovery ceremony remains explicit and satisfiable.
 
-Callers select Python's immutable-revision capability with `revision_protocol: true` on
-`reconcile`, then pass its exact `observation` and ordered `parents` to `publish`. Omitting those
-fields selects only the family-wide atomic-root capability subset. Supplying `parents` or
-`reattestation` without an observation is invalid rather than silently ignored.
+Callers select the Python, shell, or PowerShell immutable-revision capability with
+`revision_protocol: true` on `reconcile`, then pass the exact `observation` and ordered `parents` to
+`publish`. Omitting those fields selects only the family-wide atomic-root capability subset.
+Supplying `parents` or `reattestation` without an observation is invalid rather than silently
+ignored.
 
-Normal Reconciliation reports missing or stale index labels but never mutates them. Python
-`repair-index` is the only index mutation path: after authenticating the operator and every record
-author, it adds labels to trusted carriers and removes labels only from artifacts with no marked
-record. Publication still establishes the label before append and rereads the exact comment before
-commit. Any operational failure after the durable workflow transition returns `repair_required`;
-it never falls back to ephemeral guidance or a success-shaped receipt.
+Normal Reconciliation reports missing or stale index labels but never mutates them. Python, shell,
+and PowerShell `repair-index` are the only index mutation paths. Each command authenticates the
+operator and every record author, adds labels to trusted carriers, and removes labels only from
+artifacts with no marked record. Publication still establishes the label before append and rereads
+the exact comment before commit. Any operational failure after the durable workflow transition
+returns `repair_required`; it never falls back to ephemeral guidance or a success-shaped receipt.
