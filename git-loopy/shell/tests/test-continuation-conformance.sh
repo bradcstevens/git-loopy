@@ -1057,26 +1057,26 @@ while IFS= read -r scenario; do
     .expected.stdout == null and (.expected | has("stdout_exact") | not)
   ' <<<"$scenario" >/dev/null; then
     [[ ! -s "$stdout_path" ]] || fail "$id unexpectedly wrote stdout"
+  elif jq -e '.expected | has("stdout_exact")' <<<"$scenario" >/dev/null; then
+    expected_stdout_path="$tmp/$id-expected.stdout"
+    jq -jr '.expected.stdout_exact' <<<"$scenario" >"$expected_stdout_path"
+    cmp -s "$stdout_path" "$expected_stdout_path" ||
+      fail "$id exact stdout mismatch"
   else
     actual_json="$(jq -c . "$stdout_path")" ||
       fail "$id stdout is not one JSON object"
-    if jq -e '.expected | has("stdout_exact")' <<<"$scenario" >/dev/null; then
-      expected_stdout="$(jq -r '.expected.stdout_exact' <<<"$scenario")"
-      [[ "$(<"$stdout_path")" == "$expected_stdout" ]] ||
-        fail "$id exact stdout mismatch"
-    else
-      expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
-      jq -e --argjson expected "$expected_json" \
-        '. == $expected' "$stdout_path" >/dev/null ||
-        fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
-    fi
+    expected_json="$(jq -c '.expected.stdout' <<<"$scenario")"
+    jq -e --argjson expected "$expected_json" \
+      '. == $expected' "$stdout_path" >/dev/null ||
+      fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
     [[ "$(wc -l <"$stdout_path" | tr -d ' ')" == "1" ]] ||
       fail "$id stdout is not exactly one line"
   fi
 
   if jq -e '.expected | has("stderr_exact")' <<<"$scenario" >/dev/null; then
-    expected_stderr="$(jq -r '.expected.stderr_exact' <<<"$scenario")"
-    [[ "$(<"$stderr_path")" == "$expected_stderr" ]] ||
+    expected_stderr_path="$tmp/$id-expected.stderr"
+    jq -jr '.expected.stderr_exact' <<<"$scenario" >"$expected_stderr_path"
+    cmp -s "$stderr_path" "$expected_stderr_path" ||
       fail "$id exact stderr mismatch"
   else
     stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$scenario")"
@@ -1135,16 +1135,15 @@ while IFS= read -r workflow; do
     expected_status="$(jq -r '.expected.exit_code' <<<"$command")"
     [[ "$status" == "$expected_status" ]] ||
       fail "$id exit: expected $expected_status, got $status"
-    expected_json="$(jq -c '.expected.stdout' <<<"$command")"
-    actual_json="$(jq -c . "$stdout_path")" ||
-      fail "$id stdout is not one JSON object"
     if jq -e '.expected | has("stdout_exact")' <<<"$command" >/dev/null; then
-      expected_stdout="$(jq -r '.expected.stdout_exact' <<<"$command")"
-      [[ "$(<"$stdout_path")" == "$expected_stdout" ]] ||
+      expected_stdout_path="$tmp/$id-expected.stdout"
+      jq -jr '.expected.stdout_exact' <<<"$command" >"$expected_stdout_path"
+      cmp -s "$stdout_path" "$expected_stdout_path" ||
         fail "$id exact stdout mismatch"
-      [[ "$(wc -l <"$stdout_path" | tr -d ' ')" == "1" ]] ||
-        fail "$id exact stdout is not one newline-terminated line"
     else
+      expected_json="$(jq -c '.expected.stdout' <<<"$command")"
+      actual_json="$(jq -c . "$stdout_path")" ||
+        fail "$id stdout is not one JSON object"
       jq -e --argjson expected "$expected_json" \
         '. == $expected' "$stdout_path" >/dev/null ||
         fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"

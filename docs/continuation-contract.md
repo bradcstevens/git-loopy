@@ -65,12 +65,11 @@ flag, or authority to publish or Dispatch.
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
-manifest remains the declaration of its other capabilities. `record-dispatch-result`, report mode,
-execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python and PowerShell
-advertise `terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
-and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
-lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
-`repair-index`. Mode is `off`.
+manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
+concurrent Dispatch remain unsupported everywhere, and `record-dispatch-result` is supported only
+where §9 is advertised. Python, shell, and PowerShell now all advertise `terminal_rendering: true`;
+no family member fails closed on `reconcile --terminal` any longer. Python, shell, and PowerShell
+advertise their trusted immutable-revision protocol and explicit `repair-index`. Mode is `off`.
 
 Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A distribution
 advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
@@ -82,11 +81,11 @@ operation. Python advertises `fixed_frontier_authorization: true`; shell and Pow
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
 implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
-reference. Python and PowerShell advertise `prospective_projection: true`; shell advertises `false`
-and fails closed rather than ignoring the gated fields: `completion.retirements` is a structural
-`publish` rejection, and `previous_actions` or `handoff` on `reconcile` returns
-`unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
-ordering rule and every family member implements it.
+reference. Python, shell, and PowerShell all advertise `prospective_projection: true`. A
+distribution that does not advertise it fails closed rather than ignoring the gated fields:
+`completion.retirements` is a structural `publish` rejection, and `previous_actions` or `handoff` on
+`reconcile` returns `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it
+is the contract's ordering rule and every family member implements it.
 
 A distribution advertises the contract versions whose records it accepts. Python advertises
 `["1.0", "1.1", "1.2"]`; shell and PowerShell advertise `["1.0", "1.1"]`. Each added version
@@ -371,8 +370,9 @@ refresh delta when present. Each remainder group states both its full count and 
 withheld — `Ready (N more, H hidden)` — and points at plain `reconcile` to see the rest, so the
 rendering stays bounded no matter how large the projection is. `--terminal` is accepted only by
 `reconcile`; any other operation rejects it as a malformed invocation and exits `2` per §3. It is
-never mixed with machine JSON on the same invocation. Independent verified guidance remains usable
-even while unrelated occurrences sit in Needs attention.
+never mixed with machine JSON on the same invocation. A terminal-mode Reconciliation failure
+preserves its typed machine JSON and exit `1` rather than rendering human guidance. Independent
+verified guidance remains usable even while unrelated occurrences sit in Needs attention.
 
 
 ## 9. Fixed-frontier Automation authorization

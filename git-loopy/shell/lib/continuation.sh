@@ -81,7 +81,7 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":false,"concurrent_dispatch":false,"prospective_projection":false,"fixed_frontier_authorization":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
 }
@@ -1033,6 +1033,80 @@ _git_loopy_continuation_validate_completion_request() {
                 $repository; true
               )
           );
+      def retirement($value; $name; $repository):
+        object($value; $name)
+        and fields(
+          $value; $name;
+          ["predecessor_revision_id", "action_key", "reason", "evidence"];
+          ["replacement", "advisory_extensions"]
+        )
+        and string(
+          $value.predecessor_revision_id;
+          $name + ".predecessor_revision_id"
+        )
+        and (if ($value.predecessor_revision_id | test("^[0-9a-f]{64}$")) then true
+               else fail(
+                 $name
+                 + ".predecessor_revision_id must be a sha256 revision identity"
+               ) end)
+        and string($value.action_key; $name + ".action_key")
+        and string($value.reason; $name + ".reason")
+        and (if [
+          "completed", "lost-basis", "workstream-outcome", "supersession"
+        ] | index($value.reason)
+               then true
+               else fail($name + ".reason is unsupported") end)
+        and array($value.evidence; $name + ".evidence"; true)
+        and all(
+          $value.evidence[];
+          durable(.; $name + ".evidence item"; $repository; [])
+        )
+        and (
+          if ($value | has("replacement")) then
+              if $value.reason != "supersession" then
+                fail($name + ".replacement is valid only when reason is supersession")
+              else
+                object($value.replacement; $name + ".replacement")
+                and fields(
+                  $value.replacement; $name + ".replacement";
+                  ["workstream_anchor", "kind", "target", "occurrence"];
+                  ["advisory_extensions"]
+                )
+                and durable(
+                  $value.replacement.workstream_anchor;
+                  $name + ".replacement.workstream_anchor";
+                  $repository; []
+                )
+                and string(
+                  $value.replacement.kind;
+                  $name + ".replacement.kind"
+                )
+                and (if [
+                  "Address review findings", "Authorize operation",
+                  "Chart workstream", "Close parent", "Decompose spec",
+                  "Implement ticket", "Perform manual validation",
+                  "Prototype evidence", "Provide information", "Publish head",
+                  "Publish spec", "Research fact", "Resolve conflict",
+                  "Resolve decision", "Review and merge PR", "Review head",
+                  "Triage item"
+                ] | index($value.replacement.kind)
+                     then true
+                     else fail($name + ".replacement.kind is unsupported") end)
+                and durable(
+                  $value.replacement.target;
+                  $name + ".replacement.target";
+                  $repository; []
+                )
+                and string(
+                  $value.replacement.occurrence;
+                  $name + ".replacement.occurrence"
+                )
+              end
+          elif $value.reason == "supersession" then
+              fail($name + " with reason supersession must declare a replacement")
+          else true
+          end
+        );
       def validate_request($request):
         object($request; "request")
         and fields(
@@ -1053,7 +1127,7 @@ _git_loopy_continuation_validate_completion_request() {
             "disposition", "workstream", "transition", "producer"
           ];
           [
-            "carrier", "actions", "outcome", "no_guidance",
+            "carrier", "actions", "outcome", "no_guidance", "retirements",
             "advisory_extensions"
           ] + (if $reading then ["retirements"] else [] end)
         )
@@ -1367,7 +1441,36 @@ _git_loopy_continuation_validate_completion_request() {
                    $request.repository; []
                  )
                )
-             end);
+             end)
+        and (
+          if ($request.completion | has("retirements")) then
+            array($request.completion.retirements; "completion.retirements"; false)
+            and all(
+             range(0; ($request.completion.retirements | length));
+             . as $index
+             | retirement(
+                 $request.completion.retirements[$index];
+                 "completion.retirements[" + ($index | tostring) + "]";
+                 $request.repository
+               )
+            )
+            and (
+             [
+               $request.completion.retirements[]
+               | [
+                   .predecessor_revision_id,
+                   (.action_key | tostring)
+                 ]
+             ] as $pairs
+             | if ($pairs | unique | length) == ($pairs | length) then true
+               else fail(
+                 "completion.retirements contains duplicate predecessor_revision_id/action_key pair"
+               )
+               end
+            )
+          else true
+          end
+        );
       try (
         validate_request($request),
         {ok: true}
@@ -2522,6 +2625,887 @@ _git_loopy_continuation_resolve_completion() {
   fi
 }
 
+_git_loopy_continuation_validate_previous_actions() {
+  local value="$1"
+  local name="$2"
+  local validation
+  validation="$(
+    jq -cn --argjson value "$value" --arg name "$name" '
+      def fail($message): error($message);
+      def fields($value; $name; $required; $optional):
+        ($required - ($value | keys) | sort) as $missing
+        | (($value | keys) - ($required + $optional) | sort) as $unknown
+        | if ($missing | length) > 0 then
+            fail($name + " is missing required field: " + $missing[0])
+          elif ($unknown | length) > 0 then
+            fail($name + " contains unknown field: " + $unknown[0])
+          else true end;
+      def string($value; $name):
+        if ($value | type) == "string"
+          and (($value | gsub("^\\s+|\\s+$"; "")) | length) > 0
+        then $value
+        else fail($name + " must be a non-empty string") end;
+      if ($value | type) != "array" then
+        fail($name + " must be an array")
+      else
+        [
+          range(0; $value | length) as $index
+          | ($name + "[" + ($index | tostring) + "]") as $item_name
+          | ($value[$index]) as $entry
+          | if ($entry | type) != "object" then
+              fail($item_name + " must be an object")
+            else
+              fields($entry; $item_name; ["identity", "semantic_fingerprint"]; [])
+              | {
+                  identity: string($entry.identity; $item_name + ".identity"),
+                  semantic_fingerprint: string(
+                    $entry.semantic_fingerprint;
+                    $item_name + ".semantic_fingerprint"
+                  )
+                }
+            end
+        ]
+      end
+    ' 2>/dev/null
+  )" || {
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(
+      jq -nr --argjson value "$value" --arg name "$name" '
+        def fail($message): error($message);
+        def fields($value; $name; $required; $optional):
+          ($required - ($value | keys) | sort) as $missing
+          | (($value | keys) - ($required + $optional) | sort) as $unknown
+          | if ($missing | length) > 0 then
+              fail($name + " is missing required field: " + $missing[0])
+            elif ($unknown | length) > 0 then
+              fail($name + " contains unknown field: " + $unknown[0])
+            else true end;
+        def string($value; $name):
+          if ($value | type) == "string"
+            and (($value | gsub("^\\s+|\\s+$"; "")) | length) > 0
+          then $value
+          else fail($name + " must be a non-empty string") end;
+        try (
+          if ($value | type) != "array" then
+            fail($name + " must be an array")
+          else
+            [
+              range(0; $value | length) as $index
+              | ($name + "[" + ($index | tostring) + "]") as $item_name
+              | ($value[$index]) as $entry
+              | if ($entry | type) != "object" then
+                  fail($item_name + " must be an object")
+                else
+                  fields($entry; $item_name; ["identity", "semantic_fingerprint"]; [])
+                  | {
+                      identity: string($entry.identity; $item_name + ".identity"),
+                      semantic_fingerprint: string(
+                        $entry.semantic_fingerprint;
+                        $item_name + ".semantic_fingerprint"
+                      )
+                    }
+                end
+            ] | ""
+          end
+        ) catch .
+      '
+    )"
+    return 1
+  }
+  GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS="$validation"
+}
+
+_git_loopy_continuation_actions_delta() {
+  local actions="$1"
+  local previous_actions="$2"
+  jq -cn \
+    --argjson actions "$actions" \
+    --argjson previous_actions "$previous_actions" '
+      ($actions | map({key:.identity, value:.semantic_fingerprint}) | from_entries)
+        as $current
+      | (
+          $previous_actions
+          | map({key:.identity, value:.semantic_fingerprint})
+          | from_entries
+        ) as $previous
+      | {
+          added: (
+            [
+              $current
+              | keys[] as $identity
+              | select($previous | has($identity) | not)
+              | $identity
+            ]
+            | sort
+          ),
+          retired: (
+            [
+              $previous
+              | keys[] as $identity
+              | select($current | has($identity) | not)
+              | $identity
+            ]
+            | sort
+          ),
+          changed: (
+            [
+              $current
+              | keys[] as $identity
+              | select(
+                  ($previous | has($identity))
+                  and $current[$identity] != $previous[$identity]
+                )
+              | $identity
+            ]
+            | sort
+          )
+        }'
+}
+
+_git_loopy_continuation_validate_handoff() {
+  local value="$1"
+  local name="$2"
+  local validation
+  validation="$(
+    jq -cn --argjson value "$value" --arg name "$name" '
+      def fail($message): error($message);
+      def fields($value; $name; $required; $optional):
+        ($required - ($value | keys) | sort) as $missing
+        | (($value | keys) - ($required + $optional) | sort) as $unknown
+        | if ($missing | length) > 0 then
+            fail($name + " is missing required field: " + $missing[0])
+          elif ($unknown | length) > 0 then
+            fail($name + " contains unknown field: " + $unknown[0])
+          else true end;
+      def string($value; $name):
+        if ($value | type) == "string"
+          and (($value | gsub("^\\s+|\\s+$"; "")) | length) > 0
+        then $value
+        else fail($name + " must be a non-empty string") end;
+      if ($value | type) != "object" then
+        fail($name + " must be an object")
+      else
+        fields($value; $name; ["action_identity", "context_available"]; ["reference", "note"])
+        | if ($value.context_available | type) != "boolean" then
+            fail($name + ".context_available must be a boolean")
+          else {
+            action_identity: string($value.action_identity; $name + ".action_identity"),
+            context_available: $value.context_available
+          } + (
+            if $value.context_available then
+              {reference: string($value.reference; $name + ".reference")}
+            elif ($value | has("reference")) then
+              fail($name + ".reference requires available machine-local context")
+            else {}
+            end
+          ) + (
+            if ($value | has("note")) then
+              {note: string($value.note; $name + ".note")}
+            else {}
+            end
+          )
+          end
+      end
+    ' 2>/dev/null
+  )" || {
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(
+      jq -nr --argjson value "$value" --arg name "$name" '
+        def fail($message): error($message);
+        def fields($value; $name; $required; $optional):
+          ($required - ($value | keys) | sort) as $missing
+          | (($value | keys) - ($required + $optional) | sort) as $unknown
+          | if ($missing | length) > 0 then
+              fail($name + " is missing required field: " + $missing[0])
+            elif ($unknown | length) > 0 then
+              fail($name + " contains unknown field: " + $unknown[0])
+            else true end;
+        def string($value; $name):
+          if ($value | type) == "string"
+            and (($value | gsub("^\\s+|\\s+$"; "")) | length) > 0
+          then $value
+          else fail($name + " must be a non-empty string") end;
+        try (
+          if ($value | type) != "object" then
+            fail($name + " must be an object")
+          else
+            fields($value; $name; ["action_identity", "context_available"]; ["reference", "note"])
+            | if ($value.context_available | type) != "boolean" then
+                fail($name + ".context_available must be a boolean")
+              else {
+                action_identity: string($value.action_identity; $name + ".action_identity"),
+                context_available: $value.context_available
+              } + (
+                if $value.context_available then
+                  {reference: string($value.reference; $name + ".reference")}
+                elif ($value | has("reference")) then
+                  fail($name + ".reference requires available machine-local context")
+                else {}
+                end
+              ) + (
+                if ($value | has("note")) then
+                  {note: string($value.note; $name + ".note")}
+                else {}
+                end
+              ) | ""
+              end
+          end
+        ) catch .
+      '
+    )"
+    return 1
+  }
+  GIT_LOOPY_CONTINUATION_HANDOFF="$validation"
+}
+
+_git_loopy_continuation_apply_handoff() {
+  local actions="$1"
+  local handoff="$2"
+  if [[ "$(jq -r '.context_available' <<<"$handoff")" != "true" ]]; then
+    GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS="$actions"
+    GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS="$(
+      jq -cn \
+        --arg action_identity "$(jq -r '.action_identity' <<<"$handoff")" \
+        '[{
+          code:"handoff_context_unavailable",
+          action_identity:$action_identity
+        }]'
+    )"
+    return 0
+  fi
+  if ! jq -e --arg identity "$(jq -r '.action_identity' <<<"$handoff")" '
+    any(.[]; .identity == $identity)
+  ' <<<"$actions" >/dev/null; then
+    GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS="$actions"
+    GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS="$(
+      jq -cn \
+        --arg action_identity "$(jq -r '.action_identity' <<<"$handoff")" \
+        '[{
+          code:"handoff_action_unavailable",
+          action_identity:$action_identity
+        }]'
+    )"
+    return 0
+  fi
+  GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS="$(
+    jq -c \
+      --arg identity "$(jq -r '.action_identity' <<<"$handoff")" \
+      --arg reference "$(jq -r '.reference' <<<"$handoff")" \
+      --arg note "$(jq -r '.note // empty' <<<"$handoff")" '
+      map(
+        if .identity == $identity then
+          .handoff_reference = (
+            {available:true, reference:$reference}
+            + (if $note != "" then {note:$note} else {} end)
+          )
+        else .
+        end
+      )' <<<"$actions"
+  )"
+  GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS="[]"
+}
+
+_git_loopy_continuation_action_identity_from_parts() {
+  local anchor="$1"
+  local kind="$2"
+  local target="$3"
+  local occurrence="$4"
+  local source
+  source="$(
+    jq -cn \
+      --argjson anchor "$anchor" \
+      --arg kind "$kind" \
+      --argjson target "$target" \
+      --arg occurrence "$occurrence" \
+      '{
+        anchor:$anchor,
+        kind:$kind,
+        target:$target,
+        occurrence:$occurrence
+      }'
+  )"
+  printf '%s' "$(jq -cS . <<<"$source")" | _git_loopy_continuation_sha256
+}
+
+_git_loopy_continuation_action_identity() {
+  local record="$1"
+  local action="$2"
+  _git_loopy_continuation_action_identity_from_parts \
+    "$(jq -c '.workstream.anchor' <<<"$record")" \
+    "$(jq -r '.kind' <<<"$action")" \
+    "$(jq -c '.target' <<<"$action")" \
+    "$(jq -r '.occurrence' <<<"$action")"
+}
+
+_git_loopy_continuation_record_has_parent() {
+  local record="$1"
+  local parent_id="$2"
+  jq -e --arg parent "$parent_id" '
+    (.parents // []) | index($parent) != null
+  ' <<<"$record" >/dev/null
+}
+
+_git_loopy_continuation_live_revision_entries() {
+  local entries="$1"
+  jq -c '
+    [.[] | .record.parents[]?] as $referenced
+    | [
+        .[]
+        | select(
+            (.record.revision_id as $id | $referenced | index($id)) == null
+          )
+      ]
+  ' <<<"$entries"
+}
+
+_git_loopy_continuation_retirement_relationship() {
+  local record="$1"
+  local receipt="$2"
+  local predecessor_record="$3"
+  local action_key retired_action retired_identity current_identities action
+  local reason replacement replacement_identity
+  action_key="$(jq -r '.action_key' <<<"$receipt")"
+  retired_action="$(
+    jq -c --arg key "$action_key" '
+      first((.actions // [])[] | select((.key | tostring) == $key)) // null
+    ' <<<"$predecessor_record"
+  )"
+  [[ "$retired_action" != "null" ]] || {
+    printf 'null'
+    return 0
+  }
+  retired_identity="$(
+    _git_loopy_continuation_action_identity "$predecessor_record" "$retired_action"
+  )"
+  current_identities="[]"
+  while IFS= read -r action; do
+    current_identities="$(
+      jq -cn \
+        --argjson current "$current_identities" \
+        --arg identity "$(
+          _git_loopy_continuation_action_identity "$record" "$action"
+        )" \
+        '$current + [$identity]'
+    )"
+  done < <(jq -c '.actions[]?' <<<"$record")
+  if jq -e --arg identity "$retired_identity" '
+    index($identity) != null
+  ' <<<"$current_identities" >/dev/null; then
+    printf 'null'
+    return 0
+  fi
+  reason="$(jq -r '.reason' <<<"$receipt")"
+  replacement_identity="null"
+  if [[ "$reason" == "supersession" ]]; then
+    replacement="$(jq -c '.replacement' <<<"$receipt")"
+    # A supersession replacement must repeat the *same* operation -- identical
+    # Workstream Anchor, Action kind, and durable Target -- under a genuinely
+    # new occurrence discriminator. Anything else is an unrelated Action and
+    # proves no Retirement.
+    if ! jq -e -n \
+      --argjson replacement "$replacement" \
+      --argjson retired_action "$retired_action" \
+      --argjson predecessor_record "$predecessor_record" '
+        ($replacement.workstream_anchor
+          == $predecessor_record.workstream.anchor)
+        and ($replacement.kind == $retired_action.kind)
+        and ($replacement.target == $retired_action.target)
+        and ($replacement.occurrence != $retired_action.occurrence)
+      ' >/dev/null; then
+      printf 'null'
+      return 0
+    fi
+    replacement_identity="$(
+      _git_loopy_continuation_action_identity_from_parts \
+        "$(jq -c '.workstream_anchor' <<<"$replacement")" \
+        "$(jq -r '.kind' <<<"$replacement")" \
+        "$(jq -c '.target' <<<"$replacement")" \
+        "$(jq -r '.occurrence' <<<"$replacement")"
+    )"
+    if [[ "$replacement_identity" == "$retired_identity" ]] ||
+      ! jq -e --arg identity "$replacement_identity" '
+        index($identity) != null
+      ' <<<"$current_identities" >/dev/null; then
+      printf 'null'
+      return 0
+    fi
+  fi
+  jq -cn \
+    --arg retired_identity "$retired_identity" \
+    --arg replacement_identity "$replacement_identity" \
+    '{
+      retired_identity:$retired_identity,
+      replacement_identity:(
+        if $replacement_identity == "null" then null else $replacement_identity end
+      )
+    }'
+}
+
+_git_loopy_continuation_proven_retired_identities() {
+  local record="$1"
+  local lineage_entries="$2"
+  local retired receipt predecessor_id predecessor_entry predecessor_record
+  local relationship
+  retired="[]"
+  while IFS= read -r receipt; do
+    predecessor_id="$(jq -r '.predecessor_revision_id' <<<"$receipt")"
+    predecessor_entry="$(
+      jq -c --arg revision_id "$predecessor_id" '
+        first(.[] | select(.record.revision_id == $revision_id)) // null
+      ' <<<"$lineage_entries"
+    )"
+    [[ "$predecessor_entry" != "null" ]] || continue
+    _git_loopy_continuation_record_has_parent "$record" "$predecessor_id" || continue
+    predecessor_record="$(jq -c '.record' <<<"$predecessor_entry")"
+    relationship="$(
+      _git_loopy_continuation_retirement_relationship \
+        "$record" "$receipt" "$predecessor_record"
+    )"
+    [[ "$relationship" != "null" ]] || continue
+    retired="$(
+      jq -cn \
+        --argjson current "$retired" \
+        --arg identity "$(jq -r '.retired_identity' <<<"$relationship")" \
+        '($current + [$identity]) | unique'
+    )"
+  done < <(jq -c '.retirements[]?' <<<"$record")
+  printf '%s' "$retired"
+}
+
+# Retirement binds the whole descendant chain, not just the revision that
+# proved it: a completed or invalidated occurrence stays retired however many
+# revisions later it is re-declared. Walking the full ancestry already read
+# this Reconciliation is what makes that durable without a tombstone ledger.
+_git_loopy_continuation_resurrected_identities() {
+  local record="$1"
+  local lineage_entries="$2"
+  local retired seen frontier revision_id ancestor_entry ancestor current
+  retired="[]"
+  seen="[]"
+  frontier="$(jq -c '[(.parents // [])[] | tostring]' <<<"$record")"
+  while (($(jq 'length' <<<"$frontier") > 0)); do
+    revision_id="$(jq -r '.[-1]' <<<"$frontier")"
+    frontier="$(jq -c '.[0:-1]' <<<"$frontier")"
+    if jq -e --arg id "$revision_id" 'index($id) != null' <<<"$seen" >/dev/null; then
+      continue
+    fi
+    seen="$(
+      jq -cn --argjson current "$seen" --arg id "$revision_id" '$current + [$id]'
+    )"
+    ancestor_entry="$(
+      jq -c --arg revision_id "$revision_id" '
+        first(.[] | select(.record.revision_id == $revision_id)) // null
+      ' <<<"$lineage_entries"
+    )"
+    [[ "$ancestor_entry" != "null" ]] || continue
+    ancestor="$(jq -c '.record' <<<"$ancestor_entry")"
+    current="$(
+      _git_loopy_continuation_proven_retired_identities "$ancestor" "$lineage_entries"
+    )"
+    retired="$(
+      jq -cn --argjson current "$retired" --argjson added "$current" \
+        '($current + $added) | unique'
+    )"
+    frontier="$(
+      jq -cn --argjson current "$frontier" --argjson record "$ancestor" \
+        '$current + [($record.parents // [])[] | tostring]'
+    )"
+  done
+  if (($(jq 'length' <<<"$retired") == 0)); then
+    printf '[]'
+    return 0
+  fi
+  local identities action
+  identities="[]"
+  while IFS= read -r action; do
+    identities="$(
+      jq -cn \
+        --argjson current "$identities" \
+        --arg identity "$(
+          _git_loopy_continuation_action_identity "$record" "$action"
+        )" \
+        '$current + [$identity]'
+    )"
+  done < <(jq -c '.actions[]?' <<<"$record")
+  jq -cn --argjson identities "$identities" --argjson retired "$retired" \
+    '[$identities[] | select(. as $identity | $retired | index($identity) != null)]
+     | unique'
+}
+
+_git_loopy_continuation_missing_retirement_receipts() {
+  local record="$1"
+  local lineage_entries="$2"
+  local current_identities declared missing predecessor_id predecessor_entry
+  local predecessor_record action action_identity receipt relationship action_key
+  current_identities="[]"
+  while IFS= read -r action; do
+    current_identities="$(
+      jq -cn \
+        --argjson current "$current_identities" \
+        --arg identity "$(
+          _git_loopy_continuation_action_identity "$record" "$action"
+        )" \
+        '$current + [$identity]'
+    )"
+  done < <(jq -c '.actions[]?' <<<"$record")
+  declared="[]"
+  while IFS= read -r receipt; do
+    predecessor_id="$(jq -r '.predecessor_revision_id' <<<"$receipt")"
+    predecessor_entry="$(
+      jq -c --arg revision_id "$predecessor_id" '
+        first(.[] | select(.record.revision_id == $revision_id)) // null
+      ' <<<"$lineage_entries"
+    )"
+    [[ "$predecessor_entry" != "null" ]] || continue
+    predecessor_record="$(jq -c '.record' <<<"$predecessor_entry")"
+    _git_loopy_continuation_record_has_parent "$record" "$predecessor_id" || continue
+    relationship="$(
+      _git_loopy_continuation_retirement_relationship \
+        "$record" "$receipt" "$predecessor_record"
+    )"
+    [[ "$relationship" != "null" ]] || continue
+    action_key="$(jq -r '.action_key' <<<"$receipt")"
+    declared="$(
+      jq -cn \
+        --argjson current "$declared" \
+        --arg predecessor_revision_id "$predecessor_id" \
+        --arg action_key "$action_key" \
+        '$current + [{
+          predecessor_revision_id:$predecessor_revision_id,
+          action_key:$action_key
+        }]'
+    )"
+  done < <(jq -c '.retirements[]?' <<<"$record")
+  missing="[]"
+  while IFS= read -r predecessor_id; do
+    predecessor_entry="$(
+      jq -c --arg revision_id "$predecessor_id" '
+        first(.[] | select(.record.revision_id == $revision_id)) // null
+      ' <<<"$lineage_entries"
+    )"
+    [[ "$predecessor_entry" != "null" ]] || continue
+    predecessor_record="$(jq -c '.record' <<<"$predecessor_entry")"
+    while IFS= read -r action; do
+      action_key="$(jq -r '.key' <<<"$action")"
+      action_identity="$(
+        _git_loopy_continuation_action_identity "$predecessor_record" "$action"
+      )"
+      if jq -e --arg identity "$action_identity" '
+        index($identity) != null
+      ' <<<"$current_identities" >/dev/null; then
+        continue
+      fi
+      if jq -e \
+        --arg predecessor_revision_id "$predecessor_id" \
+        --arg action_key "$action_key" '
+        any(
+          .[];
+          .predecessor_revision_id == $predecessor_revision_id
+          and .action_key == $action_key
+        )
+      ' <<<"$declared" >/dev/null; then
+        continue
+      fi
+      missing="$(
+        jq -cn \
+          --argjson current "$missing" \
+          --arg predecessor_revision_id "$predecessor_id" \
+          --arg action_key "$action_key" \
+          '$current + [{
+            predecessor_revision_id:$predecessor_revision_id,
+            action_key:$action_key
+          }]'
+      )"
+    done < <(jq -c '.actions[]?' <<<"$predecessor_record")
+  done < <(jq -r '.parents[]?' <<<"$record")
+  jq -c '
+    sort_by(.predecessor_revision_id, .action_key)
+  ' <<<"$missing"
+}
+
+_git_loopy_continuation_apply_retirement_receipts() {
+  local live_entries="$1"
+  local lineage_entries="$2"
+  local retirements diagnostics entry record comment receipt predecessor_id
+  local predecessor_entry predecessor_record relationship action_key replacement_identity
+  retirements="[]"
+  diagnostics="[]"
+  while IFS= read -r entry; do
+    record="$(jq -c '.record' <<<"$entry")"
+    comment="$(jq -c '.comment' <<<"$entry")"
+    while IFS= read -r receipt; do
+      predecessor_id="$(jq -r '.predecessor_revision_id' <<<"$receipt")"
+      action_key="$(jq -r '.action_key' <<<"$receipt")"
+      predecessor_entry="$(
+        jq -c --arg revision_id "$predecessor_id" '
+          first(.[] | select(.record.revision_id == $revision_id)) // null
+        ' <<<"$lineage_entries"
+      )"
+      if [[ "$predecessor_entry" != "null" ]]; then
+        predecessor_record="$(jq -c '.record' <<<"$predecessor_entry")"
+        relationship="$(
+          _git_loopy_continuation_retirement_relationship \
+            "$record" "$receipt" "$predecessor_record"
+        )"
+      else
+        relationship="null"
+      fi
+      if [[ "$relationship" == "null" ]] ||
+        ! _git_loopy_continuation_record_has_parent "$record" "$predecessor_id"; then
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson comment_id "$(jq '.id' <<<"$comment")" \
+            --arg revision_id "$(jq -r '.revision_id' <<<"$record")" \
+            --arg predecessor_revision_id "$predecessor_id" \
+            --arg action_key "$action_key" \
+            '$current + [{
+              code:"invalid_retirement_receipt",
+              comment_id:$comment_id,
+              revision_id:$revision_id,
+              predecessor_revision_id:$predecessor_revision_id,
+              action_key:$action_key
+            }]'
+        )"
+        continue
+      fi
+      retirements="$(
+        jq -cn \
+          --argjson current "$retirements" \
+          --argjson workstream_anchor "$(jq -c '.workstream.anchor' <<<"$record")" \
+          --arg action_identity "$(jq -r '.retired_identity' <<<"$relationship")" \
+          --arg predecessor_revision_id "$predecessor_id" \
+          --arg reason "$(jq -r '.reason' <<<"$receipt")" \
+          --argjson evidence "$(jq -c '.evidence' <<<"$receipt")" \
+          --arg replacement_identity "$(jq -r '.replacement_identity // empty' <<<"$relationship")" \
+          '$current + [({
+            workstream_anchor:$workstream_anchor,
+            action_identity:$action_identity,
+            predecessor_revision_id:$predecessor_revision_id,
+            reason:$reason,
+            evidence:$evidence
+          } + (
+            if $replacement_identity != ""
+            then {replacement_identity:$replacement_identity}
+            else {}
+            end
+          ))]'
+      )"
+    done < <(jq -c '.retirements[]?' <<<"$record")
+  done < <(jq -c '.[]' <<<"$live_entries")
+  jq -cn \
+    --argjson retirements "$retirements" \
+    --argjson diagnostics "$diagnostics" \
+    '{retirements:$retirements, diagnostics:$diagnostics}'
+}
+
+_git_loopy_continuation_workstream_outcomes() {
+  local guidance_entries="$1"
+  jq -c '
+    [
+      .[]
+      | .record as $record
+      | select($record.disposition == "terminal")
+      | ($record.outcome) as $outcome
+      | {
+          workstream_anchor: $record.workstream.anchor,
+          kind: $outcome.kind,
+          destination_satisfied: $outcome.destination_satisfied,
+          effective_at: $outcome.effective_at,
+          evidence: $outcome.evidence,
+          summary: $outcome.summary
+        }
+      | if ($outcome | has("successor"))
+        then .successor = $outcome.successor
+        else .
+        end
+    ]
+    | sort_by(.workstream_anchor | tojson)
+  ' <<<"$guidance_entries"
+}
+
+_git_loopy_continuation_guidance_status() {
+  local guidance_entries="$1"
+  local actions="$2"
+  local outcomes="$3"
+  local closed_coverage="$4"
+  jq -nr \
+    --argjson guidance_entries "$guidance_entries" \
+    --argjson actions "$actions" \
+    --argjson outcomes "$outcomes" \
+    --argjson closed_coverage "$closed_coverage" '
+      if ($actions | length) > 0 then
+        "guidance"
+      else
+        ($guidance_entries | length > 0 and all(
+          $guidance_entries[];
+          .record.disposition == "terminal"
+        )) as $every_lineage_terminal
+        | if $closed_coverage
+            and $every_lineage_terminal
+            and all(
+              $outcomes[];
+              .kind == "complete" and .destination_satisfied
+            )
+          then "complete"
+          else "waiting"
+          end
+      end
+    '
+}
+
+_git_loopy_continuation_render_locator() {
+  local reference="$1"
+  local kind repository
+  kind="$(jq -r '.kind' <<<"$reference")"
+  repository="$(jq -r '.repository' <<<"$reference")"
+  case "$kind" in
+    issue)
+      printf 'https://github.com/%s/issues/%s' \
+        "$repository" "$(jq -r '.number' <<<"$reference")"
+      ;;
+    pull-request)
+      printf 'https://github.com/%s/pull/%s' \
+        "$repository" "$(jq -r '.number' <<<"$reference")"
+      ;;
+    commit)
+      printf 'https://github.com/%s/commit/%s' \
+        "$repository" "$(jq -r '.sha' <<<"$reference")"
+      ;;
+    branch)
+      printf 'https://github.com/%s/tree/%s' \
+        "$repository" "$(jq -r '.sha' <<<"$reference")"
+      ;;
+    issue-comment)
+      printf 'https://github.com/%s/issues/%s#issuecomment-%s' \
+        "$repository" \
+        "$(jq -r '.issue' <<<"$reference")" \
+        "$(jq -r '.comment_id' <<<"$reference")"
+      ;;
+    pull-request-review)
+      printf 'https://github.com/%s/pull/%s#pullrequestreview-%s' \
+        "$repository" \
+        "$(jq -r '.pull_request' <<<"$reference")" \
+        "$(jq -r '.review_id' <<<"$reference")"
+      ;;
+    *)
+      printf '%s' "$kind"
+      ;;
+  esac
+}
+
+_GIT_LOOPY_CONTINUATION_TERMINAL_REMAINDER_ROWS=3
+
+# Render one bounded remainder group whose hidden count is truthful. At most
+# _GIT_LOOPY_CONTINUATION_TERMINAL_REMAINDER_ROWS compact rows are printed and
+# the count of Actions actually withheld is stated, so the human projection
+# never claims to hide rows it just printed. Nothing is dropped silently --
+# the machine projection remains the expansion.
+_git_loopy_continuation_render_remainder() {
+  local title="$1" remainder="$2"
+  local total shown hidden action
+  GIT_LOOPY_CONTINUATION_REMAINDER=""
+  total="$(jq 'length' <<<"$remainder")"
+  [[ "$total" == "0" ]] && return 0
+  shown="$total"
+  if ((shown > _GIT_LOOPY_CONTINUATION_TERMINAL_REMAINDER_ROWS)); then
+    shown=$_GIT_LOOPY_CONTINUATION_TERMINAL_REMAINDER_ROWS
+  fi
+  hidden=$((total - shown))
+  GIT_LOOPY_CONTINUATION_REMAINDER+=$'\n'"$title ($total more, $hidden hidden):"$'\n'
+  while IFS= read -r action; do
+    GIT_LOOPY_CONTINUATION_REMAINDER+="  - $(jq -r '.summary' <<<"$action") [$(
+      _git_loopy_continuation_render_locator "$(jq -c '.target' <<<"$action")"
+    )]"$'\n'
+  done < <(jq -c --argjson rows "$shown" '.[:$rows][]' <<<"$remainder")
+  if ((hidden > 0)); then
+    GIT_LOOPY_CONTINUATION_REMAINDER+="  … expand the remaining $hidden with reconcile without --terminal."$'\n'
+  fi
+}
+
+_git_loopy_continuation_render_terminal() {
+  local result="$1"
+  local status_key status_title repository
+  local primary ready_remainder blocked_remainder diagnostics outcomes retirements delta
+  local output=""
+  status_key="$(jq -r '.status' <<<"$result")"
+  case "$status_key" in
+    guidance) status_title="Guidance" ;;
+    waiting) status_title="Waiting" ;;
+    complete) status_title="Complete" ;;
+    *) status_title="$status_key" ;;
+  esac
+  repository="$(jq -r '.observed.repository' <<<"$result")"
+  output+="Continuation: $repository — $status_title"$'\n'$'\n'
+  if [[ "$(jq '(.actions // []) | length' <<<"$result")" == "0" ]]; then
+    output+="$status_title"$'\n'
+  else
+    primary="$(jq -c '.actions[0]' <<<"$result")"
+    output+="Primary Action ($(jq -r '.readiness' <<<"$primary")): $(jq -r '.summary' <<<"$primary")"$'\n'
+    output+="  Interaction: $(jq -r '.interaction.classification' <<<"$primary")"$'\n'
+    output+="  Instruction ($(jq -r '.instruction.mode' <<<"$primary")):"$'\n'
+    output+="$(jq -r '.instruction.value' <<<"$primary")"$'\n'
+    output+="  Target: $(
+      _git_loopy_continuation_render_locator "$(jq -c '.target' <<<"$primary")"
+    )"$'\n'
+    local basis_line=""
+    while IFS= read -r basis_item; do
+      local locator
+      locator="$(_git_loopy_continuation_render_locator "$basis_item")"
+      if [[ -z "$basis_line" ]]; then
+        basis_line="$locator"
+      else
+        basis_line+=", $locator"
+      fi
+    done < <(jq -c '.basis[]' <<<"$primary")
+    output+="  Basis: $basis_line"$'\n'
+    if jq -e 'has("handoff_reference")' <<<"$primary" >/dev/null; then
+      output+="  Handoff: $(jq -r '.handoff_reference.reference' <<<"$primary")"$'\n'
+    fi
+    ready_remainder="$(jq -c '[.actions[1:][]? | select(.readiness == "Ready")]' <<<"$result")"
+    blocked_remainder="$(jq -c '[.actions[1:][]? | select(.readiness == "Blocked")]' <<<"$result")"
+    _git_loopy_continuation_render_remainder "Ready" "$ready_remainder"
+    output+="$GIT_LOOPY_CONTINUATION_REMAINDER"
+    _git_loopy_continuation_render_remainder "Blocked" "$blocked_remainder"
+    output+="$GIT_LOOPY_CONTINUATION_REMAINDER"
+  fi
+  diagnostics="$(jq -c '.diagnostics // []' <<<"$result")"
+  if [[ "$(jq 'length' <<<"$diagnostics")" != "0" ]]; then
+    output+=$'\n'"Needs attention ($(jq -r 'length' <<<"$diagnostics")):"$'\n'
+    while IFS= read -r diagnostic; do
+      output+="  - $(jq -r '.code' <<<"$diagnostic")"$'\n'
+    done < <(jq -c '.[]' <<<"$diagnostics")
+  fi
+  outcomes="$(jq -c '.outcomes // []' <<<"$result")"
+  if [[ "$(jq 'length' <<<"$outcomes")" != "0" ]]; then
+    output+=$'\n'"Outcomes:"$'\n'
+    while IFS= read -r outcome; do
+      local satisfaction
+      if [[ "$(jq -r '.destination_satisfied' <<<"$outcome")" == "true" ]]; then
+        satisfaction="destination satisfied"
+      else
+        satisfaction="destination not satisfied"
+      fi
+      output+="  - $(
+        _git_loopy_continuation_render_locator \
+          "$(jq -c '.workstream_anchor' <<<"$outcome")"
+      ): $(jq -r '.kind' <<<"$outcome") ($satisfaction)"$'\n'
+    done < <(jq -c '.[]' <<<"$outcomes")
+  fi
+  retirements="$(jq -c '.retirements // []' <<<"$result")"
+  if [[ "$(jq 'length' <<<"$retirements")" != "0" ]]; then
+    output+=$'\n'"Retired this refresh ($(jq -r 'length' <<<"$retirements")):"$'\n'
+    while IFS= read -r retirement; do
+      output+="  - $(jq -r '.reason' <<<"$retirement") (predecessor $(
+        jq -r '.predecessor_revision_id[:12]' <<<"$retirement"
+      )…)"$'\n'
+    done < <(jq -c '.[]' <<<"$retirements")
+  fi
+  delta="$(jq -c '.delta // null' <<<"$result")"
+  if [[ "$delta" != "null" ]]; then
+    output+=$'\n'"Refresh delta: +$(jq -r '.added | length' <<<"$delta") added, -$(jq -r '.retired | length' <<<"$delta") retired, ~$(jq -r '.changed | length' <<<"$delta") changed"$'\n'
+  fi
+  printf '%s' "$output"
+}
+
 _git_loopy_continuation_load_all_carriers() {
   local repository="$1"
   local page response item comment_page comments labels normalized
@@ -2838,120 +3822,249 @@ _git_loopy_continuation_reconcile_revision_protocol() {
       '.[] | select(.labels | index($label) != null) | .number' <<<"$carriers"
   )
 
-  local missing_predecessors live_entries guidance_entries forks
+  local live_entries guidance_entries observed_head_entries retirements
   local heads validators actions
-  missing_predecessors="$(
-    jq -c '
-      sort_by(.lineage)
-      | group_by(.lineage)
-      | map(
-          . as $lineage
-          | [$lineage[].record.revision_id] as $ids
-          | [
-              $lineage[]
-              | (
-                  [
-                    .record.parents[]?
-                    | select(. as $parent | $ids | index($parent) == null)
-                  ] | sort
-                ) as $missing
-              | select(($missing | length) > 0)
-              | {
-                  code:"missing_predecessor",
-                  comment_id:.comment.id,
-                  revision_id:.record.revision_id,
-                  missing:$missing
-                }
-            ]
-        )
-      | add // []
-    ' <<<"$entries"
-  )"
-  diagnostics="$(
-    jq -cn \
-      --argjson diagnostics "$diagnostics" \
-      --argjson missing "$missing_predecessors" \
-      '$diagnostics + $missing'
-  )"
-  live_entries="$(
-    jq -c '
-      sort_by(.lineage)
-      | group_by(.lineage)
-      | map(
-          . as $lineage
-          | [$lineage[].record.revision_id] as $ids
-          | [
-              $lineage[]
-              | select(any(
-                  .record.parents[]?;
-                  . as $parent | $ids | index($parent) == null
-                ))
-              | .record.revision_id
-            ] as $direct_taint
-          | (
-              reduce range(0; ($lineage | length)) as $iteration (
-                $direct_taint;
-                . as $tainted
-                | (
-                    . + [
-                      $lineage[]
-                      | select(any(
-                          .record.parents[]?;
-                          . as $parent | $tainted | index($parent) != null
-                        ))
-                      | .record.revision_id
-                    ]
-                    | unique
-                  )
+  observed_head_entries="[]"
+  guidance_entries="[]"
+  retirements="[]"
+  while IFS= read -r lineage_entries; do
+    local tainted missing record comment revision_id changed predecessor_id
+    local usable_entries semantics_count receipt_state resurrected
+    tainted="[]"
+    while IFS= read -r entry; do
+      record="$(jq -c '.record' <<<"$entry")"
+      comment="$(jq -c '.comment' <<<"$entry")"
+      revision_id="$(jq -r '.revision_id' <<<"$record")"
+      missing="$(
+        jq -cn \
+          --argjson lineage_entries "$lineage_entries" \
+          --argjson record "$record" '
+          [
+            ($record.parents // [])[]
+            | select(
+                . as $parent
+                | ($lineage_entries | any(.record.revision_id == $parent)) | not
               )
-            ) as $tainted
-          | [
-              $lineage[]
-              | select(
-                  .record.revision_id as $id
-                  | $tainted
-                  | index($id) == null
-                )
-            ] as $usable
-          | [$usable[].record.parents[]?] as $referenced
-          | [
-              $usable[]
-              | select(
-                  (.record.revision_id as $id | $referenced | index($id)) == null
-                )
-            ]
-        )
-      | add // []
-      | sort_by(.carrier,.record.revision_id)
-    ' <<<"$entries"
+          ] | sort'
+      )"
+      if (($(jq 'length' <<<"$missing") > 0)); then
+        tainted="$(
+          jq -cn \
+            --argjson current "$tainted" \
+            --arg revision_id "$revision_id" \
+            '($current + [$revision_id]) | unique'
+        )"
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson comment_id "$(jq '.id' <<<"$comment")" \
+            --arg revision_id "$revision_id" \
+            --argjson missing "$missing" \
+            '$current + [{
+              code:"missing_predecessor",
+              comment_id:$comment_id,
+              revision_id:$revision_id,
+              missing:$missing
+            }]'
+        )"
+        continue
+      fi
+      missing="$(_git_loopy_continuation_missing_retirement_receipts "$record" "$lineage_entries")"
+      if (($(jq 'length' <<<"$missing") > 0)); then
+        tainted="$(
+          jq -cn \
+            --argjson current "$tainted" \
+            --arg revision_id "$revision_id" \
+            '($current + [$revision_id]) | unique'
+        )"
+        while IFS= read -r receipt; do
+          predecessor_id="$(jq -r '.predecessor_revision_id' <<<"$receipt")"
+          local predecessor_entry predecessor_record relationship action_key
+          predecessor_entry="$(
+            jq -c --arg revision_id "$predecessor_id" '
+              first(.[] | select(.record.revision_id == $revision_id)) // null
+            ' <<<"$lineage_entries"
+          )"
+          if [[ "$predecessor_entry" != "null" ]]; then
+            predecessor_record="$(jq -c '.record' <<<"$predecessor_entry")"
+            relationship="$(
+              _git_loopy_continuation_retirement_relationship \
+                "$record" "$receipt" "$predecessor_record"
+            )"
+          else
+            relationship="null"
+          fi
+          action_key="$(jq -r '.action_key' <<<"$receipt")"
+          if [[ "$predecessor_entry" == "null" ]] ||
+            ! _git_loopy_continuation_record_has_parent "$record" "$predecessor_id" ||
+            [[ "$relationship" == "null" ]]; then
+            diagnostics="$(
+              jq -cn \
+                --argjson current "$diagnostics" \
+                --argjson comment_id "$(jq '.id' <<<"$comment")" \
+                --arg revision_id "$revision_id" \
+                --arg predecessor_revision_id "$predecessor_id" \
+                --arg action_key "$action_key" \
+                '$current + [{
+                  code:"invalid_retirement_receipt",
+                  comment_id:$comment_id,
+                  revision_id:$revision_id,
+                  predecessor_revision_id:$predecessor_revision_id,
+                  action_key:$action_key
+                }]'
+            )"
+          fi
+        done < <(jq -c '.retirements[]?' <<<"$record")
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson comment_id "$(jq '.id' <<<"$comment")" \
+            --arg revision_id "$revision_id" \
+            --argjson missing "$missing" \
+            '$current + [{
+              code:"missing_retirement_receipt",
+              comment_id:$comment_id,
+              revision_id:$revision_id,
+              missing:$missing
+            }]'
+        )"
+      fi
+      resurrected="$(
+        _git_loopy_continuation_resurrected_identities "$record" "$lineage_entries"
+      )"
+      if (($(jq 'length' <<<"$resurrected") > 0)); then
+        tainted="$(
+          jq -cn \
+            --argjson current "$tainted" \
+            --arg revision_id "$revision_id" \
+            '($current + [$revision_id]) | unique'
+        )"
+        diagnostics="$(
+          jq -cn \
+            --argjson current "$diagnostics" \
+            --argjson comment_id "$(jq '.id' <<<"$comment")" \
+            --arg revision_id "$revision_id" \
+            --argjson identities "$resurrected" \
+            '$current + [{
+              code:"retired_occurrence_resurrected",
+              comment_id:$comment_id,
+              revision_id:$revision_id,
+              identities:$identities
+            }]'
+        )"
+      fi
+    done < <(jq -c '.[]' <<<"$lineage_entries")
+    changed=1
+    while ((changed)); do
+      changed=0
+      while IFS= read -r entry; do
+        record="$(jq -c '.record' <<<"$entry")"
+        revision_id="$(jq -r '.revision_id' <<<"$record")"
+        if jq -e --arg revision_id "$revision_id" '
+          index($revision_id) != null
+        ' <<<"$tainted" >/dev/null; then
+          continue
+        fi
+        if jq -e --argjson tainted "$tainted" '
+          any((.parents // [])[]?; . as $parent | $tainted | index($parent) != null)
+        ' <<<"$record" >/dev/null; then
+          tainted="$(
+            jq -cn \
+              --argjson current "$tainted" \
+              --arg revision_id "$revision_id" \
+              '($current + [$revision_id]) | unique'
+          )"
+          changed=1
+        fi
+      done < <(jq -c '.[]' <<<"$lineage_entries")
+    done
+    usable_entries="$(
+      jq -c --argjson tainted "$tainted" '
+        [
+          .[]
+          | select(
+              (.record.revision_id as $id | $tainted | index($id)) == null
+            )
+        ]
+      ' <<<"$lineage_entries"
+    )"
+    live_entries="$(_git_loopy_continuation_live_revision_entries "$usable_entries")"
+    observed_head_entries="$(
+      jq -cn \
+        --argjson current "$observed_head_entries" \
+        --argjson live_entries "$live_entries" \
+        '$current + $live_entries'
+    )"
+    semantics_count="$(
+      jq '
+        [
+          .[]
+          | .record
+          | {
+              disposition,
+              actions:(
+                .semantic_fingerprints
+                | to_entries
+                | sort_by(.key)
+                | map([.key,.value])
+              ),
+              outcome:(.outcome // null),
+              no_guidance:(.no_guidance // null)
+            }
+        ] | unique | length
+      ' <<<"$live_entries"
+    )"
+    if ((semantics_count > 1)); then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --argjson carrier "$(jq '.[0].carrier' <<<"$live_entries")" \
+          --argjson heads "$(
+            jq -c '[.[].record.revision_id] | sort' <<<"$live_entries"
+          )" \
+          '$current + [{
+            code:"revision_fork",
+            carrier:$carrier,
+            heads:$heads
+          }]'
+      )"
+    elif (($(jq 'length' <<<"$live_entries") > 0)); then
+      guidance_entries="$(
+        jq -cn \
+          --argjson current "$guidance_entries" \
+          --argjson entry "$(jq -c 'min_by(.record.revision_id)' <<<"$live_entries")" \
+          '$current + [$entry]'
+      )"
+    fi
+    receipt_state="$(
+      _git_loopy_continuation_apply_retirement_receipts \
+        "$live_entries" \
+        "$lineage_entries"
+    )"
+    retirements="$(
+      jq -cn \
+        --argjson current "$retirements" \
+        --argjson added "$(jq -c '.retirements' <<<"$receipt_state")" \
+        '$current + $added'
+    )"
+    diagnostics="$(
+      jq -cn \
+        --argjson current "$diagnostics" \
+        --argjson added "$(jq -c '.diagnostics' <<<"$receipt_state")" \
+        '$current + $added'
+    )"
+  done < <(jq -c 'sort_by(.lineage) | group_by(.lineage)[]' <<<"$entries")
+  live_entries="$(
+    jq -c 'sort_by(.carrier, .record.revision_id)' <<<"$observed_head_entries"
   )"
-  forks="$(
+  guidance_entries="$(jq -c '.' <<<"$guidance_entries")"
+  retirements="$(
     jq -c '
-      sort_by(.lineage)
-      | group_by(.lineage)
-      | map(select([.[].semantics] | unique | length > 1))
-      | map({
-          code:"revision_fork",
-          carrier:.[0].carrier,
-          heads:([.[].record.revision_id] | sort)
-        })
-    ' <<<"$live_entries"
-  )"
-  diagnostics="$(
-    jq -cn \
-      --argjson diagnostics "$diagnostics" \
-      --argjson forks "$forks" \
-      '$diagnostics + $forks'
-  )"
-  guidance_entries="$(
-    jq -c '
-      sort_by(.lineage)
-      | group_by(.lineage)
-      | map(
-          select([.[].semantics] | unique | length == 1)
-          | min_by(.record.revision_id)
-        )
-    ' <<<"$live_entries"
+      sort_by(
+        (.workstream_anchor | tojson),
+        .predecessor_revision_id
+      )
+    ' <<<"$retirements"
   )"
   heads="$(
     jq -c '[.[] | {
@@ -2981,7 +4094,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
   while IFS= read -r candidate; do
     local action action_key revision_id completion_status
     local prerequisite prerequisite_status prerequisite_unverified conflicted
-    local unsatisfied identity_source identity projection
+    local unsatisfied identity projection
     action="$(jq -c '.action' <<<"$candidate")"
     action_key="$(jq -r '.key' <<<"$action")"
     revision_id="$(jq -r '.record.revision_id' <<<"$candidate")"
@@ -3071,16 +4184,10 @@ _git_loopy_continuation_reconcile_revision_protocol() {
       continue
     fi
 
-    identity_source="$(
-      jq -cS '{
-        anchor:.record.workstream.anchor,
-        kind:.action.kind,
-        target:.action.target,
-        occurrence:.action.occurrence
-      }' <<<"$candidate"
-    )"
     identity="$(
-      printf '%s' "$identity_source" | _git_loopy_continuation_sha256
+      _git_loopy_continuation_action_identity \
+        "$(jq -c '.record' <<<"$candidate")" \
+        "$action"
     )"
     projection="$(
       jq -cn \
@@ -3196,7 +4303,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
     ' <<<"$actions"
   )"
 
-  local observation_source token
+  local observation_source token outcomes closed_coverage status delta
   observation_source="$(
     jq -cn \
       --arg repository "$repository" \
@@ -3208,6 +4315,66 @@ _git_loopy_continuation_reconcile_revision_protocol() {
     printf '%s' "$(jq -cS . <<<"$observation_source")" |
       _git_loopy_continuation_sha256
   )"
+  outcomes="$(_git_loopy_continuation_workstream_outcomes "$guidance_entries")"
+  closed_coverage="$(
+    jq -cn --argjson diagnostics "$diagnostics" '
+      [
+        $diagnostics[]?
+        | select(
+            .code == "invalid_revision"
+            or .code == "missing_predecessor"
+            or .code == "missing_retirement_receipt"
+            or .code == "mutated_revision"
+            or .code == "retired_occurrence_resurrected"
+            or .code == "revision_fork"
+          )
+      ] | length == 0
+    '
+  )"
+  status="$(
+    _git_loopy_continuation_guidance_status \
+      "$guidance_entries" \
+      "$actions" \
+      "$outcomes" \
+      "$closed_coverage"
+  )"
+  delta="null"
+  if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_previous_actions \
+      "$(jq -c '.previous_actions' <<<"$request")" \
+      "previous_actions"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    delta="$(
+      _git_loopy_continuation_actions_delta \
+        "$actions" \
+        "$GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS"
+    )"
+  fi
+  if jq -e 'has("handoff")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_handoff \
+      "$(jq -c '.handoff' <<<"$request")" \
+      "handoff"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
+    actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
+    diagnostics="$(
+      jq -cn \
+        --argjson current "$diagnostics" \
+        --argjson handoff_diagnostics \
+          "$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS" \
+        '$current + $handoff_diagnostics'
+    )"
+  fi
   jq -cn \
     --arg repository "$repository" \
     --argjson indexed_carriers "$indexed_carriers" \
@@ -3217,18 +4384,24 @@ _git_loopy_continuation_reconcile_revision_protocol() {
     --argjson validators "$validators" \
     --argjson producer_revisions "$(jq 'length' <<<"$entries")" \
     --argjson actions "$actions" \
+    --argjson outcomes "$outcomes" \
+    --argjson retirements "$retirements" \
+    --argjson delta "$delta" \
+    --arg status "$status" \
     '{
       ok: true,
       operation: "reconcile",
       result: {
-        status: (if ($actions | length) > 0 then "guidance" else "waiting" end),
+        status: $status,
         observed: {
           repository: $repository,
           indexed_carriers: $indexed_carriers,
           producer_revisions: $producer_revisions
         },
         actions: $actions,
-        retirements: [],
+        outcomes: $outcomes,
+        retirements: $retirements,
+        delta: $delta,
         diagnostics: $diagnostics,
         observation: {
           heads: $heads,
@@ -3236,7 +4409,15 @@ _git_loopy_continuation_reconcile_revision_protocol() {
           validators: $validators
         }
       }
-    }'
+    }
+    | if ($outcomes | length) > 0
+      then .
+      else del(.result.outcomes)
+      end
+    | if $delta != null
+      then .
+      else del(.result.delta)
+      end'
 }
 
 _git_loopy_continuation_reconcile() {
@@ -3262,20 +4443,13 @@ _git_loopy_continuation_reconcile() {
       "request is outside the supported trusted Reconciliation contract"
     return 1
   fi
-  if jq -e 'has("previous_actions") or has("handoff")' \
-    <<<"$request" >/dev/null 2>&1; then
-    _git_loopy_continuation_error \
-      "reconcile" \
-      "unsupported_operation" \
-      "prospective projection is not supported by this distribution"
-    return 1
-  fi
   if [[ "$(jq -r '.revision_protocol // false' <<<"$request")" == "true" ]]; then
     _git_loopy_continuation_reconcile_revision_protocol "$request"
     return $?
   fi
 
-  local repository carriers actions revision_count
+  local repository carriers actions revision_count delta diagnostics
+  local gated_retirements guidance_entries outcomes
   repository="$(jq -r '.repository' <<<"$request")"
   if ! carriers="$(
     gh issue list \
@@ -3304,6 +4478,8 @@ _git_loopy_continuation_reconcile() {
   fi
   actions="[]"
   revision_count=0
+  gated_retirements="[]"
+  guidance_entries="[]"
 
   local comment
   while IFS= read -r comment; do
@@ -3349,6 +4525,26 @@ _git_loopy_continuation_reconcile() {
     _git_loopy_continuation_validate_completion_request "$validation_request" true ||
       continue
     revision_count=$((revision_count + 1))
+    guidance_entries="$(
+      jq -c \
+        --argjson current "$guidance_entries" \
+        '$current + [{record: .}]' <<<"$record"
+    )"
+
+    # Retirement legitimacy is proven only against an immutable revision
+    # chain. Label-indexed discovery is deliberately lineage-free, so it can
+    # neither prove nor project a Retirement. The `retirements` key is still
+    # always emitted, so its absence never carries meaning; empty here is not
+    # the claim "nothing was retired". This diagnostic is the sole
+    # discriminator, and it names every revision whose receipts went
+    # unevaluated.
+    if jq -e '(.retirements // []) | length > 0' <<<"$record" >/dev/null 2>&1; then
+      gated_retirements="$(
+        jq -c \
+          --argjson current "$gated_retirements" \
+          '$current + [.revision_id | tostring]' <<<"$record"
+      )"
+    fi
 
     local action
     while IFS= read -r action; do
@@ -3381,19 +4577,9 @@ _git_loopy_continuation_reconcile() {
       fi
       [[ "$(jq -r '.state' <<<"$target")" == "OPEN" ]] || continue
 
-      local identity_source identity comment_id projection
-      identity_source="$(
-        jq -cS \
-          --argjson action "$action" \
-          '{
-            anchor: .workstream.anchor,
-            kind: $action.kind,
-            target: $action.target,
-            occurrence: $action.occurrence
-          }' <<<"$record"
-      )"
+      local identity comment_id projection
       identity="$(
-        printf '%s' "$identity_source" | _git_loopy_continuation_sha256
+        _git_loopy_continuation_action_identity "$record" "$action"
       )"
       comment_id="$(_git_loopy_continuation_comment_id "$comment")"
       projection="$(
@@ -3441,11 +4627,58 @@ _git_loopy_continuation_reconcile() {
     jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'continuation_view_order' \
       <<<"$actions"
   )"
+  delta="null"
+  if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_previous_actions \
+      "$(jq -c '.previous_actions' <<<"$request")" \
+      "previous_actions"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    delta="$(
+      _git_loopy_continuation_actions_delta \
+        "$actions" \
+        "$GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS"
+    )"
+  fi
+  if jq -e 'has("handoff")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_handoff \
+      "$(jq -c '.handoff' <<<"$request")" \
+      "handoff"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
+    actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
+    diagnostics="$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS"
+  else
+    diagnostics="[]"
+  fi
+  if [[ "$(jq 'length' <<<"$gated_retirements")" != "0" ]]; then
+    diagnostics="$(
+      jq -c \
+        --argjson diagnostics "$diagnostics" \
+        '$diagnostics + [{
+          code: "retirements_require_revision_protocol",
+          revision_ids: sort
+        }]' <<<"$gated_retirements"
+    )"
+  fi
+  outcomes="$(_git_loopy_continuation_workstream_outcomes "$guidance_entries")"
   jq -cn \
     --arg repository "$repository" \
     --argjson indexed_carriers "$(jq 'length' <<<"$carriers")" \
     --argjson producer_revisions "$revision_count" \
     --argjson actions "$actions" \
+    --argjson outcomes "$outcomes" \
+    --argjson delta "$delta" \
+    --argjson diagnostics "$diagnostics" \
     '{
       ok: true,
       operation: "reconcile",
@@ -3457,10 +4690,20 @@ _git_loopy_continuation_reconcile() {
           producer_revisions: $producer_revisions
         },
         actions: $actions,
+        outcomes: $outcomes,
         retirements: [],
-        diagnostics: []
+        delta: $delta,
+        diagnostics: $diagnostics
       }
-    }'
+    }
+    | if ($outcomes | length) > 0
+      then .
+      else del(.result.outcomes)
+      end
+    | if $delta != null
+      then .
+      else del(.result.delta)
+      end'
 }
 
 _git_loopy_continuation_repair_index() {
@@ -3715,10 +4958,12 @@ git_loopy_continuation_main() {
       ;;
     reconcile)
       if ((terminal)); then
-        _git_loopy_continuation_error \
-          "$operation" \
-          "unsupported_operation" \
-          "terminal rendering is not supported by this distribution"
+        local rendered
+        if ! rendered="$(_git_loopy_continuation_reconcile "$request")"; then
+          printf '%s\n' "$rendered"
+          return 1
+        fi
+        _git_loopy_continuation_render_terminal "$(jq -c '.result' <<<"$rendered")"
       else
         _git_loopy_continuation_reconcile "$request"
       fi

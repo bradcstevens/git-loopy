@@ -164,34 +164,75 @@ distributions that do project receipts the `retirements_require_revision_protoco
 distinguishes "nothing was retired" from "not computed here"; for the rest the capability manifest
 is the discriminator, since they never emit that diagnostic.
 
-`retirement-bearing-record-is-readable-without-prospective-projection` replays the same world as the
-shared retirement scenario through shell. It pins the split between reading and
-authoring receipts: a reading distribution must project the successor's Action and leave
-`retirements` empty, and must not quarantine the record. Without it, a distribution that rejected
-`completion.retirements` as an unknown field would silently resurface the retired predecessor as
-live guidance.
-
 `malformed-retirement-receipt-is-quarantined-in-every-distribution` is the matching fail-closed
 control, shared by all three. Reading a receipt is not the same as waving it through: a receipt with
 an unsupported `reason` must quarantine its revision as `invalid_revision` with an identical
 diagnostic message everywhere, so accepting the field can never become accepting anything named
 `retirements`.
 
-The retirement, HITL-stop, genuine-completion, out-of-order-completion, and Handoff families are
-scoped `["python", "powershell"]` rather than shared. That gap is deliberate and capability-derived,
-not an oversight: shell advertises `prospective_projection: false` and
-`terminal_rendering: false`, never projects `outcomes` or a `complete` status, and holds no retirement
-vocabulary at all, so it cannot run these scenarios as written. Companion scenarios assert that
-gap instead of merely declaring it — shell fails closed on `handoff` and
-`previous_actions` with `unsupported_operation`, so a distribution that silently started accepting
-either would break the fixture.
+The retirement, HITL-stop, genuine-completion, out-of-order-completion, refresh-delta, Workstream
+outcome, Handoff, and terminal-rendering families no longer name a subset of the family. Every
+distribution now advertises `prospective_projection` and `terminal_rendering`, so the scenarios that
+used to be scoped to whichever members held the capability are shared, and the companion scenarios
+that asserted the gap — the `handoff` and `previous_actions` `unsupported_operation` controls, and
+the read-without-authoring split in
+`retirement-bearing-record-is-readable-without-prospective-projection` — are gone with it. They
+asserted the absence of what every member now implements, and no member is left to demonstrate them.
+The §8 rules they encoded stay written down in the contract, so a fourth distribution arriving
+without the capability still knows what failing closed means.
+
+`retired-occurrence-cannot-resurrect-later-in-the-chain` is the ancestor-chain control for the
+distributions that do project receipts. A revision that re-declares an Action identity its own
+ancestry proved retired taints itself and reports `retired_occurrence_resurrected`, so guidance
+falls back to the last untainted head. Enforcing this only against the immediate parents would let
+a retired occurrence reappear one revision later, which is exactly what having no tombstone ledger
+must not cost.
+
+`resurrection-keeps-coverage-open-so-completion-is-not-claimed` is its safety twin. The tainted
+head falls back to a terminal ancestor carrying a satisfied `complete` outcome and no live Action —
+every surface ingredient of a finished project. Because an unresolved resurrection means coverage is
+not closed, the correct projection is `waiting`, not `complete`. A distribution that omits
+`retired_occurrence_resurrected` from its coverage-uncertainty codes passes every other retirement
+scenario and still reports a Workstream terminal on evidence it has just contradicted.
+
+`supersession-replacement-must-repeat-the-retired-operation` pins the one receipt reason that names
+its own successor. A `supersession` replacement must repeat the retired operation — same Workstream
+Anchor, Action kind, and durable Target — under a new `occurrence`. Here the named replacement is a
+live but unrelated Action, so the receipt proves nothing and surfaces as
+`invalid_retirement_receipt`. Checking only that the replacement is live and distinct would let any
+Producer retire any Action by pointing at whatever it happened to publish alongside it.
+
+`terminal-remainder-is-bounded-with-truthful-hidden-counts` covers the remainder groups that the
+one-primary-Action scenarios never reach. Six Ready Actions leave a five-strong remainder, of which
+at most three rows may be rendered; the heading states both the full count and how many rows were
+actually withheld. It is a byte-exact case because "bounded" and "truthful" are claims about the
+rendered text, not about the machine projection behind it.
+
+`label-indexed-projects-workstream-outcomes` and
+`label-indexed-retirement-receipts-are-gated-not-silently-empty` cover the lineage-free discovery
+path, which the `revision_protocol: true` scenarios skip entirely. Label-indexed discovery still
+projects Workstream outcomes, but it can neither prove nor project a Retirement — so a record
+carrying receipts must raise `retirements_require_revision_protocol` and name the revisions left
+unevaluated. Since `retirements` is always emitted, that diagnostic is the only thing distinguishing
+"nothing was retired" from "not computed on this path".
+
+`handoff-reference-must-be-a-non-empty-string` guards the request validators the
+prospective-projection families reach. A blank or whitespace-only identity, reference, or note is a
+typed `invalid_request`, not an accepted value that quietly renders as an empty line of human
+guidance.
+
+`shell-reconcile-terminal-preserves-invalid-request` pins that a terminal-mode failure still writes
+its typed machine JSON to stdout and exits 1 — `--terminal` selects a rendering, not a second error
+channel. It is scoped `["shell"]` rather than shared because the three families do not yet agree on
+which `invalid_request` message an empty request produces, and this scenario is byte-exact.
 
 `reconcile-reads-a-lineage-record-from-the-label-index` pins the label-indexed path against a record
 carrying `parents`. A revision identity over a lineage record is a digest of `{completion, parents}`,
 not of the completion alone, so a reader that recomputed it the flat way silently discards every
 lineage record it finds through the label index — reporting zero Producer revisions rather than a
-rejection. It is scoped `["python", "powershell"]` because it also pins the
-`retirements_require_revision_protocol` gate that only a projecting distribution emits.
+rejection. It is scoped `["python", "powershell"]` because shell carries the same defect on its own
+label-indexed reader — tracked by #300 — and widening the scenario before that lands would pin a
+failure rather than a contract.
 
 `reconcile-terminal-bounds-the-ready-and-blocked-remainder` is the only scenario that exercises the
 terminal renderer's bounding arithmetic. A seven-Action projection produces
@@ -199,8 +240,7 @@ terminal renderer's bounding arithmetic. A seven-Action projection produces
 renderer that printed the whole remainder — or miscounted what it withheld — fails here rather than
 on an operator's terminal.
 
-`reconcile-projects-the-refresh-delta` is the positive counterpart to the shell-only
-`previous_actions` fail-closed scenario. It pins all three delta groups at once — five `added`, one
+`reconcile-projects-the-refresh-delta` pins all three delta groups at once — five `added`, one
 `retired`, one `changed` — because a delta that reported only the groups it happened to populate
 would still look correct against a world where two of them are empty.
 
