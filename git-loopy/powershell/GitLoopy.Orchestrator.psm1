@@ -1396,6 +1396,97 @@ $script:GitLoopyWarnedMarkerRefs = [Collections.Generic.HashSet[string]]::new(
 # produce — never a wrapper auto-closure.
 $script:GitLoopySourceClosedRefs = [Collections.Generic.List[string]]::new()
 
+function Reset-GitLoopyIterationLifecycleState {
+    [CmdletBinding()]
+    param()
+
+    # Begin a fresh Run's lifecycle accounting. Per-issue first activation and
+    # cumulative Active time deliberately outlive a single Iteration, so they are
+    # Run-scoped and only a new Run may clear them.
+    $script:GitLoopyActiveRef = $null
+    $script:GitLoopyIterationStartedAt = $null
+    $script:GitLoopyIterationStartedMonotonic = 0
+    $script:GitLoopyActiveStartedAt = $null
+    $script:GitLoopyActiveStartedMonotonic = 0
+    $script:GitLoopyActiveClosedAt = $null
+    $script:GitLoopyActiveClosedMonotonic = $null
+    $script:GitLoopyIssueFirstStartedAt = @{}
+    $script:GitLoopyIssueFirstStartedMonotonic = @{}
+    $script:GitLoopyIssueCumulativeActiveSeconds = @{}
+    $script:GitLoopyWarnedMarkerRefs.Clear()
+    $script:GitLoopySourceClosedRefs.Clear()
+}
+
+function ConvertTo-GitLoopyLifecycleInstant {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    # Normalize one inbound lifecycle timestamp to the contract's RFC3339 UTC
+    # form. The accumulator turns an Event's activation instant into a *durable
+    # string fact* that every later Iteration end republishes, so this is the
+    # seam that owns the format guarantee -- not each producer.
+    #
+    # A normalized lifecycle Event may legitimately carry that instant as a
+    # decoded date value rather than a string; a JSON reader hands back
+    # `DateTime`, an Orchestrator hands back `DateTimeOffset`, and the native Run
+    # loop hands back an already-formatted string. Casting a date value straight
+    # to string yields .NET's general pattern (`05/16/2026 00:00:10`), which is
+    # not RFC3339 in any culture, so the cast has to be a deliberate conversion.
+    #
+    # Returns `$null` for anything that is not a resolvable instant. An
+    # activation without one is not a valid activation: binding it would publish
+    # a contract-violating timestamp, so the caller leaves the Iteration unbound
+    # exactly as it does for a missing one, and the Run continues.
+    if ($null -eq $Value) {
+        return $null
+    }
+    if ($Value -is [DateTimeOffset]) {
+        return Get-GitLoopyIsoTimestamp -Timestamp $Value
+    }
+    if ($Value -is [DateTime]) {
+        # An unspecified Kind comes from a reader that dropped the zone rather
+        # than from a producer asserting local time. Every lifecycle timestamp
+        # the contract defines is UTC, so read it as the UTC instant it was.
+        $Instant = if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
+            [DateTimeOffset]::new(
+                [DateTime]::SpecifyKind($Value, [DateTimeKind]::Utc)
+            )
+        }
+        else {
+            [DateTimeOffset]::new($Value)
+        }
+        return Get-GitLoopyIsoTimestamp -Timestamp $Instant
+    }
+
+    $Text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $null
+    }
+    $Parsed = [DateTimeOffset]::MinValue
+    $Styles = (
+        [Globalization.DateTimeStyles]::AdjustToUniversal -bor
+        [Globalization.DateTimeStyles]::AssumeUniversal
+    )
+    # Parse invariantly and explicitly. PowerShell's implicit string-to-date
+    # coercion would resolve against the ambient culture's calendar, which turns
+    # a durable UTC fact into a Hijri or Buddhist year on a perfectly ordinary
+    # operator machine.
+    if (
+        -not [DateTimeOffset]::TryParse(
+            $Text,
+            [Globalization.CultureInfo]::InvariantCulture,
+            $Styles,
+            [ref]$Parsed
+        )
+    ) {
+        return $null
+    }
+    return Get-GitLoopyIsoTimestamp -Timestamp $Parsed
+}
+
 function Update-GitLoopyIterationLifecycle {
     [CmdletBinding()]
     param(
@@ -1433,8 +1524,9 @@ function Update-GitLoopyIterationLifecycle {
                 return
             }
             $Issue = $LifecycleEvent["issue"]
-            $ActivatedAt = [string]$LifecycleEvent["activated_at"]
-            if ($null -eq $Issue -or [string]::IsNullOrEmpty($ActivatedAt)) {
+            $ActivatedAt = ConvertTo-GitLoopyLifecycleInstant `
+                -Value $LifecycleEvent["activated_at"]
+            if ($null -eq $Issue -or $null -eq $ActivatedAt) {
                 return
             }
             $Ref = [string]$Issue
@@ -2379,9 +2471,7 @@ function Invoke-GitLoopyDiscovery {
     $Outcome = "iteration_cap"
     [int]$Strikes = 0
     $StrikeOutcome = "running"
-    $script:GitLoopyIssueFirstStartedAt = @{}
-    $script:GitLoopyIssueFirstStartedMonotonic = @{}
-    $script:GitLoopyIssueCumulativeActiveSeconds = @{}
+    Reset-GitLoopyIterationLifecycleState
     while ($true) {
         $NextIteration = $Iteration + 1
         if (
@@ -2726,6 +2816,7 @@ Export-ModuleMember -Function @(
     "Test-GitLoopyIterationProgress",
     "Get-GitLoopyIterationRollup",
     "Update-GitLoopyIterationLifecycle",
+    "Reset-GitLoopyIterationLifecycleState",
     "Get-GitLoopyCurrentIterationRollup",
     "Step-GitLoopyStrikeState",
     "Test-GitLoopyCheckpointMessage",

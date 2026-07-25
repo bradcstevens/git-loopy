@@ -90,6 +90,17 @@ gap instead of merely declaring it — shell and PowerShell fail closed on `hand
 `previous_actions` with `unsupported_operation`, so a distribution that silently started accepting
 either would break the fixture.
 
+The `event-schema.json` normalized rollup cases are production-seam cases in the
+same sense. A case whose input is a list of `iterations` drives the Orchestrator's
+stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather
+than a single rollup call, so per-issue first activation, retroactive fallback
+binding, and cumulative Active time are pinned *across* Iterations. Each such case
+is one Run: an adapter must reset the accumulator between cases, or per-issue
+history leaks forward and the fixture silently pins case order instead of
+behavior. Because the adapter feeds decoded fixture values straight to the seam,
+these cases also pin that nested lifecycle timestamps are republished as RFC3339
+UTC regardless of how a producer represented the instant.
+
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root
 `VERSION` authority for family adapters; `expected_python_distribution_version`

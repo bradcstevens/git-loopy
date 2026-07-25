@@ -2483,6 +2483,81 @@ Start-Sleep -Seconds $Sleep
     Assert-Equal "2026-05-16T00:00:01.000Z" (
         $WallAdjusted["issues"][0]["closed_at"]
     ) "wall-adjusted closure timestamp"
+
+    # `first_started_at` is a durable RFC3339 UTC lifecycle fact, so the
+    # accumulator owns that guarantee rather than trusting each producer to have
+    # pre-formatted it. A normalized lifecycle Event may carry its activation
+    # instant as a decoded date value -- every JSON reader in the family does
+    # exactly that -- and .NET's general date pattern (`05/16/2026 00:00:10`) is
+    # not RFC3339 in any culture, so an unnormalized value would silently emit a
+    # contract-violating timestamp on every Iteration end that followed.
+    foreach ($Representation in @(
+        @{
+            Name = "RFC3339 string"
+            Value = "2026-05-16T00:00:10.000Z"
+        },
+        @{
+            Name = "decoded UTC DateTime"
+            Value = [DateTime]::new(2026, 5, 16, 0, 0, 10, [DateTimeKind]::Utc)
+        },
+        @{
+            Name = "offset DateTimeOffset"
+            Value = [DateTimeOffset]::new(
+                2026, 5, 16, 2, 0, 10, 0, [TimeSpan]::FromHours(2)
+            )
+        }
+    )) {
+        Reset-GitLoopyIterationLifecycleState
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{ type = "wrapper.iteration.start" }) `
+            -ObservedMonotonic 30
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{
+                type = "wrapper.issue.activated"
+                issue = 84
+                activated_at = $Representation["Value"]
+                binding_source = "working_marker"
+            }) `
+            -ObservedMonotonic 30
+        $Normalized = Get-GitLoopyCurrentIterationRollup `
+            -FinishedMonotonic 32 `
+            -Strikes 1
+        Assert-Equal 1 $Normalized["issues"].Count (
+            "$($Representation["Name"]) activation binds one contribution"
+        )
+        Assert-Equal "2026-05-16T00:00:10.000Z" (
+            $Normalized["issues"][0]["first_started_at"]
+        ) "$($Representation["Name"]) normalizes to RFC3339 UTC"
+    }
+
+    # An activation the accumulator cannot resolve to an instant is not a valid
+    # activation. Binding it would publish a non-RFC3339 lifecycle fact, so the
+    # Iteration stays unbound -- the same disposition as a missing timestamp --
+    # and the Run continues rather than failing on unusable telemetry.
+    foreach ($Unusable in @("", "   ", "not-a-timestamp", $null)) {
+        Reset-GitLoopyIterationLifecycleState
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{ type = "wrapper.iteration.start" }) `
+            -ObservedMonotonic 30
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{
+                type = "wrapper.issue.activated"
+                issue = 84
+                activated_at = $Unusable
+                binding_source = "working_marker"
+            }) `
+            -ObservedMonotonic 30
+        $Unbound = Get-GitLoopyCurrentIterationRollup `
+            -FinishedMonotonic 32 `
+            -Strikes 1
+        Assert-Equal 0 $Unbound["issues"].Count (
+            "unusable activation '$Unusable' binds no contribution"
+        )
+        Assert-Equal "no_progress" $Unbound["outcome"] (
+            "unusable activation '$Unusable' still reports an Iteration outcome"
+        )
+    }
+    Reset-GitLoopyIterationLifecycleState
 }
 finally {
     foreach ($Name in @(
