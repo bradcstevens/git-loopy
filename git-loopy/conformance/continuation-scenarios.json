@@ -10990,9 +10990,10 @@
       }
     },
     {
-      "id": "reconcile-reports-genuine-completion-python",
+      "id": "reconcile-reports-genuine-completion",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
