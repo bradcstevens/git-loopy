@@ -1054,6 +1054,178 @@ assert_contains \
   "linked prds root is not allowed" \
   "linked local-PRD root warning"
 
+# Closed-world Skill policy (contract §17.6): the shell port has no native
+# `enabled_skills` support, so every policy surface the family fixture names must
+# abort *before* the Pool is collected and before Copilot is invoked. Silently
+# running a wider capability set than the operator configured is the one outcome
+# this fails closed to prevent. The surfaces come from the shared fixture, so a
+# surface added to the contract fails here rather than leaking through.
+write_fail_closed_tools() {
+  local bin_dir="$1"
+  write_fake_tools "$bin_dir"
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_COPILOT_LOG"
+exit 0
+EOF
+  chmod +x "$bin_dir/copilot"
+}
+
+skill_policy_fixture="$port_dir/../conformance/skill-policy.json"
+
+assert_fail_closed() {
+  local label="$1"
+  local surface="$2"
+  local repo="$3"
+  local fake_bin="$4"
+  shift 4
+
+  set +e
+  run_entrypoint \
+    "$repo" "$fake_bin" \
+    "$temp_dir/$label.stdout" "$temp_dir/$label.stderr" "$@"
+  local status=$?
+  set -e
+
+  assert_equal "1" "$status" "fail-closed exit for $label"
+  assert_contains \
+    "$(<"$temp_dir/$label.stderr")" "$surface" \
+    "fail-closed diagnostic names the surface for $label"
+  assert_contains \
+    "$(<"$temp_dir/$label.stderr")" "Python Orchestrator" \
+    "fail-closed diagnostic directs the operator for $label"
+  [[ ! -s "$temp_dir/$label.stdout" ]] ||
+    fail "fail-closed run emitted Run events for $label"
+  [[ ! -e "$FAKE_COPILOT_LOG" ]] ||
+    fail "fail-closed run invoked Copilot for $label"
+  if [[ -e "$FAKE_GH_LOG" ]] && grep -q '^issue list ' "$FAKE_GH_LOG"; then
+    fail "fail-closed run reached Pool collection for $label"
+  fi
+}
+
+while IFS= read -r surface; do
+  label="fail-closed-${surface//[^a-zA-Z_]/-}"
+  repo="$temp_dir/$label"
+  fake_bin="$temp_dir/$label-bin"
+  make_repo "$repo"
+  write_fail_closed_tools "$fake_bin"
+  export FAKE_COPILOT_LOG="$temp_dir/$label-copilot.log"
+  export FAKE_GH_LOG="$temp_dir/$label-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/$label-list.count"
+  export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+  export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+
+  case "$surface" in
+    GIT_LOOPY_ENABLED_SKILLS)
+      # Explicitly empty: an exact empty replacement is a real policy, and the
+      # port must not read "empty" as "nothing configured".
+      export GIT_LOOPY_ENABLED_SKILLS=""
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin"
+      unset GIT_LOOPY_ENABLED_SKILLS
+      ;;
+    --enable-skill | --disable-skill)
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin" "$surface" tdd
+      ;;
+    enabled_skills)
+      printf 'enabled_skills = ["tdd"]\n' >"$repo/git-loopy/config.toml"
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin"
+      ;;
+    *)
+      fail "unhandled Skill-policy surface in the shared fixture: $surface"
+      ;;
+  esac
+  unset FAKE_COPILOT_LOG
+done < <(jq -r '.native_transition.policy_surfaces[]' "$skill_policy_fixture")
+
+# The global scope is a standard Config location too, so a global `enabled_skills`
+# fails closed from a repository that carries no Config of its own.
+repo="$temp_dir/fail-closed-global"
+fake_bin="$temp_dir/fail-closed-global-bin"
+make_repo "$repo"
+write_fail_closed_tools "$fake_bin"
+mkdir -p "$repo/xdg/git-loopy"
+printf 'enabled_skills = []\n' >"$repo/xdg/git-loopy/config.toml"
+export FAKE_COPILOT_LOG="$temp_dir/fail-closed-global-copilot.log"
+export FAKE_GH_LOG="$temp_dir/fail-closed-global-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/fail-closed-global-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+assert_fail_closed \
+  "fail-closed-global" "enabled_skills" "$repo" "$fake_bin"
+unset FAKE_COPILOT_LOG
+
+# Positive control (contract §17.2): legacy deny-only inputs are deprecated final
+# guards, not a closed-world surface, so they still resolve and reach the Pool.
+repo="$temp_dir/legacy-deny-runs"
+fake_bin="$temp_dir/legacy-deny-runs-bin"
+make_repo "$repo"
+write_fake_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/legacy-deny-runs-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/legacy-deny-runs-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+set +e
+export GIT_LOOPY_DENY_SKILLS="legacy-skill"
+run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/legacy-deny-runs.stdout" "$temp_dir/legacy-deny-runs.stderr" \
+  --deny-skill flag-skill
+status=$?
+unset GIT_LOOPY_DENY_SKILLS
+set -e
+assert_equal "0" "$status" "legacy deny-only invocation still runs"
+assert_contains \
+  "$(<"$FAKE_GH_LOG")" "issue list" \
+  "legacy deny-only invocation reached Pool collection"
+
+# The strongest form of "Copilot is never invoked on failure": drive the real
+# turn machinery — a real git repository and a Pool that would otherwise start an
+# Iteration — and prove the abort still lands before the agent process exists.
+repo="$temp_dir/fail-closed-turn"
+fake_bin="$temp_dir/fail-closed-turn-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+printf 'enabled_skills = ["tdd"]\n' >"$repo/git-loopy/config.toml"
+export FAKE_GH_LOG="$temp_dir/fail-closed-turn-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/fail-closed-turn-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "fail-closed-turn"
+export FAKE_COPILOT_COMMITS=0
+
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/fail-closed-turn.stdout" "$temp_dir/fail-closed-turn.stderr" 1
+status=$?
+set -e
+assert_equal "1" "$status" "a configured policy aborts a Run that had real work"
+assert_contains \
+  "$(<"$temp_dir/fail-closed-turn.stderr")" \
+  "enabled_skills" \
+  "the turn-level abort names the surface"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "fail-closed Run invoked the fake Copilot process"
+[[ ! -e "$FAKE_GH_LOG" ]] ||
+  fail "fail-closed Run reached the GitHub dependency checks"
+[[ ! -s "$temp_dir/fail-closed-turn.stdout" ]] ||
+  fail "fail-closed Run emitted Run events"
+
+# Control: the same repository, tools, and Pool without the Config key does start
+# the agent — so the assertions above can actually fail.
+rm -f "$repo/git-loopy/config.toml"
+setup_copilot_env "fail-closed-turn-control"
+export FAKE_COPILOT_COMMITS=0
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/fail-closed-control.stdout" "$temp_dir/fail-closed-control.stderr" 1; then
+  fail "control Run did not exit 0: $(<"$temp_dir/fail-closed-control.stderr")"
+fi
+[[ -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "control Run never invoked the fake Copilot process"
+unset FAKE_COPILOT_COMMITS
+
 repo="$temp_dir/missing-tracker"
 fake_bin="$temp_dir/missing-tracker-bin"
 mkdir -p "$repo/git-loopy"

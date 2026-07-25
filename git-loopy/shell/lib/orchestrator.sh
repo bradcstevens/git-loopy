@@ -21,6 +21,11 @@ source "$_git_loopy_orchestrator_dir/continuation.sh"
 
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()
+# Closed-world Skill-policy overlay flags seen on this invocation (contract
+# §17.6). The shell port recognises them so it can fail closed; it never applies
+# them. Recording the flag *names* (not their values) is deliberate: the abort
+# names the surface, and a Skill name is not the operator's problem here.
+declare -a GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN=()
 GIT_LOOPY_MAX_ITERATIONS=0
 # Public config variables remain untouched here because inherited values are
 # inputs to CLI-over-environment precedence resolution.
@@ -42,6 +47,10 @@ Options:
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
+  --enable-skill SKILL          Closed-world Skill policy; not yet supported by
+                                the shell Orchestrator (fails closed).
+  --disable-skill SKILL         Closed-world Skill policy; not yet supported by
+                                the shell Orchestrator (fails closed).
   --send-timeout-seconds N
   --version
   -h, --help
@@ -163,6 +172,90 @@ _git_loopy_add_unique_skill() {
   fi
 }
 
+_git_loopy_note_skill_policy_flag() {
+  local flag="$1"
+  if ! _git_loopy_array_contains "$flag" \
+    ${GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN[@]+"${GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN[@]}"}; then
+    GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN+=("$flag")
+  fi
+}
+
+# Resolve the global scope directory (`<config-home>/git-loopy`) the same way
+# every scope-aware lookup does: $XDG_CONFIG_HOME, else $HOME/.config, else the
+# expanded home directory. Prints nothing when no home is resolvable.
+_git_loopy_config_home() {
+  if [[ -n "${XDG_CONFIG_HOME:-}" ]] &&
+    [[ -n "$(_git_loopy_trim "$XDG_CONFIG_HOME")" ]]; then
+    printf '%s\n' "$XDG_CONFIG_HOME"
+    return 0
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "$HOME/.config"
+    return 0
+  fi
+  local fallback_home=""
+  fallback_home="$(cd ~ 2>/dev/null && pwd)" || true
+  [[ -n "$fallback_home" ]] || return 0
+  printf '%s\n' "$fallback_home/.config"
+}
+
+# Conservative detection of an `enabled_skills` key in one `config.toml`.
+#
+# The shell port has no TOML parser, and this decision only ever *widens the
+# abort*: a false positive costs an operator one diagnostic, while a false
+# negative runs an Iteration on a wider capability set than they configured
+# (contract §17.6). So any assignment of the key counts, including one nested
+# under a table that the Python resolver would ignore. Anchoring the match to the
+# start of the trimmed line is what keeps a commented example — including the
+# comment-only banner `write_config` generates — from reading as a policy.
+git_loopy_config_declares_enabled_skills() {
+  local path="$1"
+  [[ -f "$path" && -r "$path" ]] || return 1
+  local line trimmed
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(_git_loopy_trim "$line")"
+    if [[ "$trimmed" =~ ^(enabled_skills|\"enabled_skills\"|\'enabled_skills\')[[:space:]]*= ]]; then
+      return 0
+    fi
+  done <"$path"
+  return 1
+}
+
+# Every closed-world Skill-policy surface this Run carries that the shell port
+# cannot honour, one per line, in the canonical order of the family fixture's
+# `native_transition.policy_surfaces`. Empty output means nothing unsupported was
+# configured; legacy deny-only inputs are never a surface.
+git_loopy_detect_skill_policy_surfaces() {
+  local repo_root="${1:-}"
+
+  # Presence, not content: an explicit empty replacement is a real policy.
+  [[ -n "${GIT_LOOPY_ENABLED_SKILLS+x}" ]] &&
+    printf '%s\n' 'GIT_LOOPY_ENABLED_SKILLS'
+
+  local flag
+  for flag in '--enable-skill' '--disable-skill'; do
+    _git_loopy_array_contains "$flag" \
+      ${GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN[@]+"${GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN[@]}"} &&
+      printf '%s\n' "$flag"
+  done
+
+  local -a config_paths=()
+  [[ -n "$repo_root" ]] && config_paths+=("$repo_root/git-loopy/config.toml")
+  local config_home
+  config_home="$(_git_loopy_config_home)"
+  [[ -n "$config_home" ]] && config_paths+=("$config_home/git-loopy/config.toml")
+
+  local path
+  for path in ${config_paths[@]+"${config_paths[@]}"}; do
+    if git_loopy_config_declares_enabled_skills "$path"; then
+      printf '%s\n' 'enabled_skills'
+      break
+    fi
+  done
+
+  return 0
+}
+
 git_loopy_resolve_config() {
   local env_model="${GIT_LOOPY_MODEL:-}"
   local env_effort="${GIT_LOOPY_REASONING_EFFORT:-}"
@@ -191,6 +284,7 @@ git_loopy_resolve_config() {
   local positional_seen=0
   local -a cli_tools=()
   local -a cli_skills=()
+  GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN=()
 
   while (($# > 0)); do
     case "$1" in
@@ -254,6 +348,15 @@ git_loopy_resolve_config() {
         ;;
       --deny-skill=*)
         cli_skills+=("${1#*=}")
+        shift
+        ;;
+      --enable-skill | --disable-skill)
+        _git_loopy_require_option_value "$@" || return 2
+        _git_loopy_note_skill_policy_flag "$1"
+        shift 2
+        ;;
+      --enable-skill=* | --disable-skill=*)
+        _git_loopy_note_skill_policy_flag "${1%%=*}"
         shift
         ;;
       --send-timeout-seconds)
@@ -536,21 +639,7 @@ git_loopy_resolve_prompt() {
   local project_lower="$repo_root/git-loopy/prompt.md"
   local project_upper="$repo_root/git-loopy/PROMPT.md"
   local config_home
-
-  if [[ -n "${XDG_CONFIG_HOME:-}" ]] &&
-    [[ -n "$(_git_loopy_trim "$XDG_CONFIG_HOME")" ]]; then
-    config_home="$XDG_CONFIG_HOME"
-  elif [[ -n "${HOME:-}" ]]; then
-    config_home="$HOME/.config"
-  else
-    local fallback_home=""
-    fallback_home="$(cd ~ 2>/dev/null && pwd)" || true
-    if [[ -n "$fallback_home" ]]; then
-      config_home="$fallback_home/.config"
-    else
-      config_home=""
-    fi
-  fi
+  config_home="$(_git_loopy_config_home)"
 
   local -a candidates=("$project_lower" "$project_upper")
   [[ -n "$config_home" ]] &&
@@ -564,6 +653,33 @@ git_loopy_resolve_prompt() {
       return 0
     fi
   done
+  return 1
+}
+
+# Fail closed on any closed-world Skill-policy surface this port cannot honour
+# (contract §17.6). This runs before the issue tracker, dependency, and GitHub
+# checks — and therefore before source collection and before Copilot exists — so
+# a configured policy can never be silently widened into an Iteration.
+git_loopy_assert_skill_policy_supported() {
+  local repo_root="$1"
+  local -a surfaces=()
+  local surface
+  while IFS= read -r surface; do
+    [[ -n "$surface" ]] && surfaces+=("$surface")
+  done < <(git_loopy_detect_skill_policy_surfaces "$repo_root")
+
+  ((${#surfaces[@]} > 0)) || return 0
+
+  printf '%s\n' \
+    'git-loopy: the shell Orchestrator does not yet support the closed-world Skill policy.' \
+    >&2
+  for surface in "${surfaces[@]}"; do
+    printf 'git-loopy: unsupported Skill-policy surface: %s\n' "$surface" >&2
+  done
+  printf '%s\n' \
+    'git-loopy: run the Python Orchestrator, or wait for a shell release with native config parity.' \
+    'git-loopy: legacy --deny-skill / GIT_LOOPY_DENY_SKILLS invocations continue to run unchanged.' \
+    >&2
   return 1
 }
 
@@ -584,6 +700,8 @@ git_loopy_preflight() {
     printf 'git-loopy: git returned an empty repository root.\n' >&2
     return 1
   }
+
+  git_loopy_assert_skill_policy_supported "$repo_root" || return 1
 
   if [[ ! -f "$repo_root/docs/agents/issue-tracker.md" ]]; then
     printf '%s\n' \
