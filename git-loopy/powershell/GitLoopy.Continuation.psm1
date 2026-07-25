@@ -6479,14 +6479,10 @@ function Invoke-GitLoopyContinuationReconcile {
         throw [GitLoopyContinuationGitHubException]::new("decoding indexed carriers")
     }
 
-    $Actions = [Collections.Generic.List[object]]::new()
     $Diagnostics = [Collections.Generic.List[object]]::new()
     $GuidanceEntries = [Collections.Generic.List[object]]::new()
     $DispatchEvidence = [Collections.Generic.List[object]]::new()
     $RevisionCount = 0
-    $LayerCache = [Collections.Specialized.OrderedDictionary]::new(
-        [StringComparer]::Ordinal
-    )
     foreach ($Carrier in $Carriers) {
         if (
             $Carrier -isnot [Collections.IDictionary] -or
@@ -6538,92 +6534,22 @@ function Invoke-GitLoopyContinuationReconcile {
                 comment = $Comment
                 record = $Record
             })
-
-            if (-not $Record.Contains("actions")) {
-                continue
-            }
-            foreach ($Action in $Record["actions"]) {
-                $CompletionCondition = $Action["completion_condition"]
-                $Prerequisites = $Action["prerequisites"]
-                if (
-                    $Action["target"]["kind"] -cne "issue" -or
-                    ($Prerequisites -is [Collections.IList] -and $Prerequisites.Count -gt 0) -or
-                    $CompletionCondition["kind"] -cne "issue-closed" -or
-                    $CompletionCondition["target"]["kind"] -cne "issue"
-                ) {
-                    $Diagnostics.Add([ordered]@{
-                        code = "unsupported_reconciliation_semantics"
-                        revision_id = $Record["revision_id"]
-                        action_key = $Action["key"]
-                    })
-                    continue
-                }
-                $Target = Invoke-GitLoopyGitHub `
-                    -Arguments @(
-                        "issue", "view", [string]$Action["target"]["number"],
-                        "--repo", $Repository, "--json", "number,state,url"
-                    ) `
-                    -Context "reading an Action Target"
-                if (
-                    $Target -isnot [Collections.IDictionary] -or
-                    $Target["state"] -isnot [string]
-                ) {
-                    throw [GitLoopyContinuationGitHubException]::new("decoding an Action Target")
-                }
-                if ($Target["state"] -cne "OPEN") {
-                    continue
-                }
-
-                $IdentitySource = [ordered]@{
-                    anchor = $Record["workstream"]["anchor"]
-                    kind = $Action["kind"]
-                    target = $Action["target"]
-                    occurrence = $Action["occurrence"]
-                }
-                $Identity = Get-GitLoopySha256 (
-                    ConvertTo-GitLoopyCanonicalJson $IdentitySource
-                )
-                $CommentId = Get-GitLoopyCommentId $Comment
-                if ($null -eq $CommentId) {
-                    continue
-                }
-                $ProducerEntry = [ordered]@{}
-                foreach ($Entry in $ProducerObject.GetEnumerator()) {
-                    $ProducerEntry[$Entry.Key] = $Entry.Value
-                }
-                $ProducerEntry["carrier"] = $Record["carrier"]
-                $ProducerEntry["revision_id"] = $Record["revision_id"]
-                $ProducerEntry["comment_id"] = $CommentId
-                $ProducerEntry["comment_url"] = $Comment["url"]
-                $LabelItem = [ordered]@{
-                    identity = $Identity
-                    semantic_fingerprint =
-                        $Record["semantic_fingerprints"][$Action["key"]]
-                    workstream_anchor = $Record["workstream"]["anchor"]
-                    summary = $Action["summary"]
-                    kind = $Action["kind"]
-                    readiness = "Ready"
-                    instruction = $Action["instruction"]
-                    target = $Action["target"]
-                    basis = $Action["basis"]
-                    producer = $ProducerEntry
-                    prerequisites = $Action["prerequisites"]
-                    interaction = $Action["interaction"]
-                    completion_condition = $Action["completion_condition"]
-                }
-                Add-GitLoopyContinuationOrderKey `
-                    -Item $LabelItem `
-                    -Record $Record `
-                    -Action $Action `
-                    -LayerCache $LayerCache
-                if ($Action.Contains("safety_case")) {
-                    $LabelItem["safety_case"] = $Action["safety_case"]
-                }
-                $Actions.Add($LabelItem)
-            }
         }
     }
-    $OrderedActions = Get-GitLoopyContinuationViewOrder -Actions $Actions
+    # Label-indexed discovery reaches the *same* Action derivation the revision
+    # protocol reaches. The path decides which carriers are visible; it never
+    # decides what an Action means. A private, narrower derivation here would
+    # leave a Prerequisite unevaluated and -- worse -- let two disagreeing
+    # Producers each contribute a healthy-looking Action that §9 would then
+    # authorize, where the shared derivation raises `action_conflict` and the
+    # guidance fault refuses the Dispatch outright.
+    $Derived = Get-GitLoopyDerivedActions `
+        -GuidanceEntries $GuidanceEntries `
+        -Repository $Repository
+    $OrderedActions = [object[]]@($Derived["actions"])
+    foreach ($Diagnostic in $Derived["diagnostics"]) {
+        $Diagnostics.Add($Diagnostic)
+    }
     foreach ($Diagnostic in (
             Get-GitLoopyDispatchEvidenceDiagnostics -Evidence $DispatchEvidence
         )) {
