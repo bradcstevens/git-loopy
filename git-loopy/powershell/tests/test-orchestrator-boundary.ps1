@@ -2558,6 +2558,214 @@ Start-Sleep -Seconds $Sleep
         )
     }
     Reset-GitLoopyIterationLifecycleState
+
+    # --- Closed-world Skill policy fails closed (contract §17.6) ---------------
+    # This port has no `config.toml` tier yet, so it cannot honour a configured
+    # policy — and running an Iteration on a *wider* capability set than the
+    # operator configured is the one outcome this prevents. The surfaces come
+    # from the shared fixture, so a surface added to the contract fails here
+    # rather than leaking through.
+    $SkillPolicyFixture = Get-Content `
+        -LiteralPath (
+            Join-Path (Split-Path -Parent $PortDir) "conformance/skill-policy.json"
+        ) `
+        -Raw |
+        ConvertFrom-Json -AsHashtable
+
+    function Write-FailClosedTools {
+        param(
+            [Parameter(Mandatory)]
+            [string]$BinDir
+        )
+
+        Write-FakeTools -BinDir $BinDir
+        # Unlike the discovery fake, this one *records* that it ran, so "Copilot
+        # was never invoked" is proven rather than inferred from an exit code.
+        Write-FakeCommand -BinDir $BinDir -Name "copilot" -DirectPowerShell -Body @'
+[IO.File]::AppendAllText($env:FAKE_COPILOT_LOG, ($args -join " ") + [Environment]::NewLine)
+'@
+    }
+
+    # `Invoke-Entrypoint` inherits this process's environment, and PowerShell
+    # deletes a variable assigned the empty string — so an *explicitly empty*
+    # replacement cannot be handed to a child that way. Building the child
+    # environment explicitly is what makes that case reachable at all.
+    function Invoke-FailClosedEntrypoint {
+        param(
+            [Parameter(Mandatory)]
+            [string]$Repo,
+            [Parameter(Mandatory)]
+            [string]$FakeBin,
+            [Parameter(Mandatory)]
+            [string]$Label,
+            [Collections.IDictionary]$ExtraEnvironment = @{},
+            [string[]]$Arguments = @()
+        )
+
+        $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+        $StartInfo.FileName = $Pwsh
+        $StartInfo.WorkingDirectory = $Repo
+        $StartInfo.UseShellExecute = $false
+        $StartInfo.RedirectStandardOutput = $true
+        $StartInfo.RedirectStandardError = $true
+        $StartInfo.Environment["PATH"] = (
+            $FakeBin + [IO.Path]::PathSeparator + $env:PATH
+        )
+        $StartInfo.Environment["HOME"] = "$Repo-home"
+        $StartInfo.Environment["XDG_CONFIG_HOME"] = Join-Path $Repo "xdg"
+        $StartInfo.Environment["FAKE_REPO_ROOT"] = $Repo
+        $StartInfo.Environment["FAKE_COPILOT_LOG"] = Join-Path `
+            $TempDir "$Label-copilot.log"
+        $StartInfo.Environment["FAKE_GH_LOG"] = Join-Path $TempDir "$Label-gh.log"
+        $StartInfo.Environment["FAKE_GH_LIST_COUNT"] = Join-Path `
+            $TempDir "$Label-list.count"
+        $StartInfo.Environment["FAKE_GH_LIST_JSON"] = Join-Path `
+            $TempDir "$Label-list.json"
+        $StartInfo.Environment["FAKE_GH_VIEW_DIR"] = Join-Path `
+            $TempDir "$Label-views"
+        foreach ($Name in @(
+            "GIT_LOOPY_ENABLED_SKILLS", "GIT_LOOPY_DENY_SKILLS"
+        )) {
+            $StartInfo.Environment.Remove($Name) | Out-Null
+        }
+        foreach ($Name in $ExtraEnvironment.Keys) {
+            $StartInfo.Environment[[string]$Name] = [string]$ExtraEnvironment[$Name]
+        }
+        [IO.File]::WriteAllText(
+            $StartInfo.Environment["FAKE_GH_LIST_JSON"],
+            "[]"
+        )
+        foreach ($Argument in @("-NoLogo", "-NoProfile", "-File", $Entrypoint)) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
+        foreach ($Argument in $Arguments) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
+
+        $Process = [Diagnostics.Process]::Start($StartInfo)
+        $Stdout = $Process.StandardOutput.ReadToEnd()
+        $Stderr = $Process.StandardError.ReadToEnd()
+        $Process.WaitForExit()
+        return [pscustomobject]@{
+            Code = $Process.ExitCode
+            Stdout = $Stdout
+            Stderr = $Stderr
+            CopilotLog = $StartInfo.Environment["FAKE_COPILOT_LOG"]
+            GhLog = $StartInfo.Environment["FAKE_GH_LOG"]
+        }
+    }
+
+    function Assert-FailedClosed {
+        param(
+            [Parameter(Mandatory)]
+            [psobject]$Result,
+            [Parameter(Mandatory)]
+            [string]$Surface,
+            [Parameter(Mandatory)]
+            [string]$Label
+        )
+
+        Assert-Equal 1 $Result.Code "fail-closed exit for $Label"
+        Assert-Contains `
+            $Result.Stderr $Surface "fail-closed diagnostic names the surface for $Label"
+        Assert-Contains `
+            $Result.Stderr "Python Orchestrator" `
+            "fail-closed diagnostic directs the operator for $Label"
+        Assert-Equal "" $Result.Stdout "fail-closed run emitted Run events for $Label"
+        Assert-True (
+            -not [IO.File]::Exists($Result.CopilotLog)
+        ) "fail-closed run invoked Copilot for $Label"
+        $Reached = [IO.File]::Exists($Result.GhLog) -and (
+            [IO.File]::ReadAllText($Result.GhLog).Contains(
+                "issue list", [StringComparison]::Ordinal
+            )
+        )
+        Assert-True (-not $Reached) "fail-closed run reached Pool collection for $Label"
+    }
+
+    foreach (
+        $Surface in @($SkillPolicyFixture["native_transition"]["policy_surfaces"])
+    ) {
+        $Label = "fail-closed-" + ($Surface -creplace "[^a-zA-Z_]", "-")
+        $Repo = Join-Path $TempDir $Label
+        $FakeBin = Join-Path $TempDir "$Label-bin"
+        New-TestRepo -Root $Repo
+        Write-FailClosedTools -BinDir $FakeBin
+
+        switch -CaseSensitive ($Surface) {
+            "GIT_LOOPY_ENABLED_SKILLS" {
+                # Explicitly empty: an exact empty replacement is a real policy,
+                # and the port must not read "empty" as "nothing configured".
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -ExtraEnvironment @{ GIT_LOOPY_ENABLED_SKILLS = "" }
+            }
+            "--enable-skill" {
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -Arguments @($Surface, "tdd")
+            }
+            "--disable-skill" {
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -Arguments @("$Surface=tdd")
+            }
+            "enabled_skills" {
+                [IO.File]::WriteAllText(
+                    (Join-Path $Repo "git-loopy/config.toml"),
+                    "enabled_skills = [`"tdd`"]`n"
+                )
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label
+            }
+            default {
+                throw "unhandled Skill-policy surface in the shared fixture: $Surface"
+            }
+        }
+        Assert-FailedClosed -Result $Result -Surface $Surface -Label $Label
+    }
+
+    # The global scope is a standard Config location too, so a global
+    # `enabled_skills` fails closed from a repository carrying no Config.
+    $GlobalLabel = "fail-closed-global"
+    $GlobalRepo = Join-Path $TempDir $GlobalLabel
+    $GlobalBin = Join-Path $TempDir "$GlobalLabel-bin"
+    New-TestRepo -Root $GlobalRepo
+    Write-FailClosedTools -BinDir $GlobalBin
+    [IO.Directory]::CreateDirectory(
+        (Join-Path $GlobalRepo "xdg/git-loopy")
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $GlobalRepo "xdg/git-loopy/config.toml"),
+        "enabled_skills = []`n"
+    )
+    Assert-FailedClosed `
+        -Result (
+            Invoke-FailClosedEntrypoint `
+                -Repo $GlobalRepo -FakeBin $GlobalBin -Label $GlobalLabel
+        ) `
+        -Surface "enabled_skills" `
+        -Label $GlobalLabel
+
+    # Positive control (contract §17.2): legacy deny-only inputs are deprecated
+    # final guards, not a closed-world surface, so a Run carrying them still
+    # reaches Pool collection.
+    $LegacyLabel = "legacy-deny-runs"
+    $LegacyRepo = Join-Path $TempDir $LegacyLabel
+    $LegacyBin = Join-Path $TempDir "$LegacyLabel-bin"
+    New-TestRepo -Root $LegacyRepo
+    Write-FailClosedTools -BinDir $LegacyBin
+    $Legacy = Invoke-FailClosedEntrypoint `
+        -Repo $LegacyRepo -FakeBin $LegacyBin -Label $LegacyLabel `
+        -ExtraEnvironment @{ GIT_LOOPY_DENY_SKILLS = "legacy-skill" } `
+        -Arguments @("--deny-skill", "flag-skill")
+    Assert-Equal 0 $Legacy.Code "a legacy deny-only Run still exits cleanly"
+    Assert-True (
+        [IO.File]::Exists($Legacy.GhLog) -and
+        [IO.File]::ReadAllText($Legacy.GhLog).Contains(
+            "issue list", [StringComparison]::Ordinal
+        )
+    ) "a legacy deny-only Run still reached Pool collection"
 }
 finally {
     foreach ($Name in @(
