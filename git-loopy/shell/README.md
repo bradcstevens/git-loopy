@@ -165,6 +165,28 @@ This is the phase-1 core of the shared
 PR mode, the model picker, OTel, and Parallel-mode variables belong to later
 phases and are not read by this port yet.
 
+### The closed-world Skill policy fails closed here
+
+The Python Orchestrator implements the closed-world **Skill policy**
+([contract §17](../../docs/wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
+first. This port has no `config.toml` tier yet, so it cannot honour one — and
+running an Iteration on a *wider* capability set than the operator configured is
+the outcome §17.6 exists to prevent. Every policy surface therefore **aborts
+before source collection and before Copilot is invoked**, exiting `1` with a
+diagnostic naming the surface:
+
+| Surface | Detection |
+| --- | --- |
+| `GIT_LOOPY_ENABLED_SKILLS` | Present — including an explicit empty value, which is a real empty policy. |
+| `--enable-skill SKILL` | Recognised as a policy overlay, never as an unknown option and never applied. |
+| `--disable-skill SKILL` | Same. |
+| `enabled_skills` | Any assignment of the key in `<repo>/git-loopy/config.toml` or `<config-home>/git-loopy/config.toml`. Detection is deliberately conservative — this port has no TOML parser, and over-detecting costs one diagnostic while under-detecting widens a Run. A quoted key is escape-decoded first (`"enabled\u005fskills"` is the same key to `tomllib`), without relying on `printf %b`, whose `\u` support needs Bash 4.2. A commented example is not a policy. |
+
+The deprecated legacy guards — `GIT_LOOPY_DENY_SKILLS` and `--deny-skill` — are
+**not** a closed-world surface. They keep resolving and running unchanged.
+
+Use the Python Orchestrator until this port reaches native Config parity.
+
 ---
 
 ## Replay artifacts

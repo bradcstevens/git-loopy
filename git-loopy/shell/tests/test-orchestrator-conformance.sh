@@ -445,6 +445,32 @@ rm -f "$policy_global/git-loopy/config.toml"
 )
 rm -f "$policy_repo/git-loopy/config.toml"
 
+# A TOML quoted key may spell the same name with escapes, and `tomllib` resolves
+# `"enabled\u005fskills"` to `enabled_skills`. Detection must too, or a Config the
+# Python Orchestrator honours would run wide here.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  for spelling in \
+    '"enabled\u005fskills"' \
+    '"enabled\U0000005Fskills"' \
+    '"\u0065nabled\u005fskills"'; do
+    printf '%s = ["tdd"]\n' "$spelling" >"$policy_repo/git-loopy/config.toml"
+    assert_equal \
+      "enabled_skills" \
+      "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+      "skill-policy: an escaped TOML quoted key is detected ($spelling)"
+  done
+  # Decoding must not smear one key into another: a deprecated legacy guard
+  # spelled with the same escape is still not a closed-world surface.
+  printf '%s = ["tdd"]\n' '"deny\u005fskills"' >"$policy_repo/git-loopy/config.toml"
+  assert_equal \
+    "" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: an escaped unrelated key is not a policy"
+)
+rm -f "$policy_repo/git-loopy/config.toml"
+
 # Legacy deny-only invocations are explicitly *not* a closed-world surface
 # (contract §17.2 keeps them as deprecated final guards), so they must resolve
 # and run unchanged.

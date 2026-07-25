@@ -199,6 +199,41 @@ _git_loopy_config_home() {
   printf '%s\n' "$fallback_home/.config"
 }
 
+# Decode one TOML quoted key's escape sequences.
+#
+# `printf '%b'` would be shorter, but its `\uXXXX` / `\UXXXXXXXX` support arrived
+# in Bash 4.2 while this port supports Bash 4+ — and on an older Bash the escape
+# would survive undecoded, which is precisely the miss that widens a Run. So the
+# scan is explicit. Only the ASCII range is materialised: a canonical Skill-policy
+# key is `[a-z_]`, so any wider codepoint cannot spell one and is dropped.
+_git_loopy_decode_toml_key() {
+  local raw="$1"
+  local out="" index=0 length=${#raw} char hex width
+  while ((index < length)); do
+    char="${raw:index:1}"
+    if [[ "$char" != "\\" ]] || ((index + 1 >= length)); then
+      out+="$char"
+      index=$((index + 1))
+      continue
+    fi
+    case "${raw:index+1:1}" in
+      u) width=4 ;;
+      U) width=8 ;;
+      *)
+        out+="${raw:index+1:1}"
+        index=$((index + 2))
+        continue
+        ;;
+    esac
+    hex="${raw:index+2:width}"
+    index=$((index + 2 + width))
+    # Two hex digits after leading zeros keeps the format literal safe to build.
+    [[ "$hex" =~ ^0*([0-9a-fA-F]{2})$ ]] || continue
+    out+="$(printf "\\x${BASH_REMATCH[1]}")"
+  done
+  printf '%s' "$out"
+}
+
 # Conservative detection of an `enabled_skills` key in one `config.toml`.
 #
 # The shell port has no TOML parser, and this decision only ever *widens the
@@ -208,14 +243,25 @@ _git_loopy_config_home() {
 # under a table that the Python resolver would ignore. Anchoring the match to the
 # start of the trimmed line is what keeps a commented example — including the
 # comment-only banner `write_config` generates — from reading as a policy.
+#
+# A TOML *quoted* key is decoded before comparison: `tomllib` resolves
+# `"enabled\u005fskills"` to `enabled_skills`, so a Config the Python
+# Orchestrator honours would otherwise slip through this port unnoticed.
 git_loopy_config_declares_enabled_skills() {
   local path="$1"
   [[ -f "$path" && -r "$path" ]] || return 1
-  local line trimmed
+  local line trimmed key
   while IFS= read -r line || [[ -n "$line" ]]; do
     trimmed="$(_git_loopy_trim "$line")"
-    if [[ "$trimmed" =~ ^(enabled_skills|\"enabled_skills\"|\'enabled_skills\')[[:space:]]*= ]]; then
+    if [[ "$trimmed" =~ ^enabled_skills[[:space:]]*= ]]; then
       return 0
+    fi
+    if [[ "$trimmed" =~ ^(\"([^\"]*)\"|\'([^\']*)\')[[:space:]]*= ]]; then
+      # Exactly one alternative matched, so the other capture is empty.
+      # Decoding a literal (single-quoted) key too is harmless: TOML gives it no
+      # escapes, and the only possible effect is widening the abort.
+      key="$(_git_loopy_decode_toml_key "${BASH_REMATCH[2]}${BASH_REMATCH[3]}")"
+      [[ "$key" == "enabled_skills" ]] && return 0
     fi
   done <"$path"
   return 1

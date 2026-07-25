@@ -99,6 +99,14 @@ the distributions that resolve a policy, and `native_transition.fail_closed`
 lists the ones that must abort before source collection when they detect any
 `native_transition.policy_surfaces` entry.
 
+The shell adapter consumes that transition block directly: its conformance suite
+drives `git_loopy_detect_skill_policy_surfaces` — the seam Run preflight calls —
+and asserts the detected surfaces equal `policy_surfaces` in the fixture's own
+order, so a surface added to the contract turns the port red rather than leaking
+through it. Its boundary suite drives every surface through the real entrypoint
+and proves the Run exits `1` before Pool collection and before the fake Copilot
+process exists.
+
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
 adapter drives Python's normalized Iteration-rollup seam and the production
