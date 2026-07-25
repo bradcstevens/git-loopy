@@ -285,17 +285,38 @@ never persisted.
 
 Retirement legitimacy is provable only against an immutable revision chain. Label-indexed discovery
 is deliberately lineage-free (the atomic-root capability subset), so it can neither prove nor project
-a Retirement. When discovered records carry receipts, the label-indexed path reports
-`retirements_require_revision_protocol` naming those `revision_ids` rather than silently dropping
-them; `revision_protocol: true` is required to project `retirements`.
+a Retirement. In a distribution advertising `prospective_projection`, when discovered records carry
+receipts the label-indexed path reports `retirements_require_revision_protocol` naming those
+`revision_ids` rather than silently dropping them; `revision_protocol: true` is required to project
+`retirements`.
 
 Transient retirements are therefore a **revision-protocol guarantee, not a default-path one**. The
-`retirements` key is present only when something was actually retired, and its absence is
-unambiguous because the caller selects the path itself: under `revision_protocol: true` an absent
-key means nothing was retired, while on the label-indexed path it means Retirement was not
-computable at all and the gating diagnostic names every revision whose receipts went unevaluated. A
-Consumer that needs retirement evidence must request the revision protocol; one that does not may
-read the gate as "ask again with lineage".
+`retirements` key is nevertheless always present in a `reconcile` result, on every path and in every
+distribution, so its absence never carries silent meaning. Presence alone is not a claim. In a
+distribution advertising `prospective_projection`, under `revision_protocol: true` the list is the
+projection's own answer and an empty list means nothing was retired, while on its label-indexed path
+an empty list means only that Retirement was not computable, and the
+`retirements_require_revision_protocol` diagnostic — the discriminator there — names every revision
+whose receipts went unevaluated. A Consumer that needs retirement evidence must request the revision
+protocol from a projecting distribution and read the diagnostics; one that does not may read the gate
+as "ask again with lineage".
+
+A distribution that does not advertise `prospective_projection` never projects receipts, so it emits
+`retirements` as an empty list on every `reconcile` and never emits that diagnostic. For these
+distributions the capability manifest — not a result diagnostic — is what tells a Consumer the empty
+list is capability-derived rather than proven.
+
+Such a distribution must nevertheless **read** `completion.retirements` under the revision protocol:
+it accepts, structurally validates, and preserves receipts on discovered records rather than
+quarantining them, because rejecting a conformant successor would resurface the predecessor that
+successor retired as live guidance. Structural validation matches the authoring rules above, so a
+malformed receipt is an `invalid_revision` quarantine in every distribution alike. It refuses to
+**author** receipts it cannot project, so `completion.retirements` on a `publish` request is a
+structural rejection there.
+
+That read guarantee is scoped to revision-protocol reconciliation. A distribution's label-indexed
+path is only required to read atomic-root records; whether it can also read lineage-bearing records
+is a separate, independently advertised concern (tracked in #298).
 
 **Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
 entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other

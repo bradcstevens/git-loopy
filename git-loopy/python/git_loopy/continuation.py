@@ -2550,7 +2550,7 @@ def _continuation_view_order_key(
     )
 
 
-def _extract_outcome(record: dict[str, Any]) -> dict[str, Any] | None:
+def _project_outcome(record: dict[str, Any]) -> dict[str, Any] | None:
     """Project one durable Workstream outcome from a terminal-disposition head.
 
     ``continue`` and ``no-guidance`` records never carry ``outcome`` and
@@ -2577,7 +2577,7 @@ def _workstream_outcomes(
 ) -> list[dict[str, Any]]:
     outcomes = []
     for _carrier, _comment, record in guidance_entries:
-        outcome = _extract_outcome(record)
+        outcome = _project_outcome(record)
         if outcome is not None:
             outcomes.append(outcome)
     outcomes.sort(key=lambda outcome: _canonical_json(outcome["workstream_anchor"]))
@@ -2997,12 +2997,11 @@ def _reconcile_revision_protocol(
             },
             "actions": actions,
             **({"outcomes": outcomes} if outcomes else {}),
-            # Present only when something was actually retired. Absence is
-            # unambiguous for a caller because it chose this path itself:
-            # under the revision protocol absence means "nothing was
-            # retired", and on the label-indexed path it means "not
-            # computable here" (see the gating diagnostic in `_reconcile`).
-            **({"retirements": retirements} if retirements else {}),
+            # Always present, so absence never carries meaning. Here the list
+            # is the projection's own answer: empty means nothing was retired
+            # by this refresh. The label-indexed path emits the same key with
+            # a gating diagnostic that marks it as uncomputed instead.
+            "retirements": retirements,
             **({"delta": delta} if delta is not None else {}),
             "diagnostics": diagnostics,
             "observation": {
@@ -3269,10 +3268,9 @@ def _reconcile(
     # atomic-root capability subset), so it can neither prove nor project a
     # Retirement. Say so rather than silently dropping the receipts.
     #
-    # The `retirements` key is therefore absent from this path's result
-    # rather than empty: an empty list is the revision protocol's truthful
-    # "nothing was retired", and this path is not entitled to make that
-    # claim. Absence means "not computed here"; the diagnostic below names
+    # The `retirements` key is still always emitted, so its absence never
+    # carries meaning on any path. Empty here is not the claim "nothing was
+    # retired" — the diagnostic below is the sole discriminator, and it names
     # every revision whose receipts went unevaluated.
     gated_retirements = sorted(
         str(record["revision_id"])
@@ -3295,6 +3293,7 @@ def _reconcile(
         },
         "actions": actions,
         **({"outcomes": outcomes} if outcomes else {}),
+        "retirements": [],
         **({"delta": delta} if delta is not None else {}),
         "diagnostics": diagnostics,
     }

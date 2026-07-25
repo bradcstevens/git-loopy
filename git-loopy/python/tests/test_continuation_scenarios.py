@@ -3080,7 +3080,7 @@ def test_python_reconcile_revision_protocol_diagnoses_receipt_naming_an_unrelate
         "reconcile", reconcile_request, github, monkeypatch, capsys
     )
     assert exit_code == 0
-    assert "retirements" not in result["result"]
+    assert result["result"]["retirements"] == []
     assert any(
         diagnostic["code"] == "invalid_retirement_receipt"
         and diagnostic["predecessor_revision_id"] == unrelated_revision_id
@@ -3201,7 +3201,7 @@ def test_python_reconcile_revision_protocol_rejects_supersession_reusing_occurre
     assert [action["identity"] for action in result["result"]["actions"]] == [
         original_action["identity"]
     ]
-    assert "retirements" not in result["result"]
+    assert result["result"]["retirements"] == []
     assert any(
         diagnostic["code"] == "invalid_retirement_receipt"
         for diagnostic in result["result"]["diagnostics"]
@@ -3251,7 +3251,7 @@ def test_python_reconcile_revision_protocol_requires_occurrence_change_for_every
     assert [action["identity"] for action in result["result"]["actions"]] == [
         original_action["identity"]
     ]
-    assert "retirements" not in result["result"]
+    assert result["result"]["retirements"] == []
     assert any(
         diagnostic["code"] == "invalid_retirement_receipt"
         for diagnostic in result["result"]["diagnostics"]
@@ -3307,7 +3307,7 @@ def test_python_reconcile_revision_protocol_rejects_unrelated_supersession_repla
         "reconcile", reconcile_request, github, monkeypatch, capsys
     )
     assert exit_code == 0
-    assert "retirements" not in result["result"]
+    assert result["result"]["retirements"] == []
     assert any(
         diagnostic["code"] == "invalid_retirement_receipt"
         for diagnostic in result["result"]["diagnostics"]
@@ -3474,21 +3474,22 @@ def test_python_reconcile_label_path_gates_retirements_on_revision_protocol(
     ]
     assert gate["revision_ids"] == sorted(gate["revision_ids"])
     assert gate["revision_ids"]
-    assert "retirements" not in result["result"]
+    assert result["result"]["retirements"] == []
     assert stderr == ""
 
 
-def test_python_reconcile_absent_retirements_mean_none_under_revision_protocol(
+def test_python_reconcile_always_emits_retirements_with_the_gate_as_discriminator(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Absence is unambiguous because the caller picks the path.
+    """The key is always present, so its absence never carries meaning.
 
-    One lineage, reconciled both ways. Under the revision protocol the
-    receipts are projected, and the gating diagnostic never fires -- so an
-    absent ``retirements`` key there means "nothing was retired". On the
-    lineage-free label-indexed path the key is absent because Retirement is
-    not computable at all, and the gate says so.
+    One lineage, reconciled three ways. Under the revision protocol an empty
+    list is the projection's own answer ("nothing was retired") and a populated
+    one carries the receipts. On the lineage-free label-indexed path the list is
+    empty because Retirement is not computable at all -- identical JSON to the
+    first case, told apart only by the gating diagnostic, which is therefore the
+    sole discriminator rather than a redundant hint.
     """
     github = _RecordingGitHub()
     revision_request = {
@@ -3505,8 +3506,8 @@ def test_python_reconcile_absent_retirements_mean_none_under_revision_protocol(
         "reconcile", revision_request, github, monkeypatch, capsys
     )
     assert exit_code == 0, stderr
-    # Nothing has been retired yet, so the key is absent and unaccompanied.
-    assert "retirements" not in quiet["result"]
+    # Nothing has been retired yet: present, empty, and unaccompanied.
+    assert quiet["result"]["retirements"] == []
     assert not [
         diagnostic
         for diagnostic in quiet["result"]["diagnostics"]
@@ -3551,8 +3552,10 @@ def test_python_reconcile_absent_retirements_mean_none_under_revision_protocol(
         capsys,
     )
     assert exit_code == 0, stderr
-    # Same lineage, same receipts -- but this path may not claim either way.
-    assert "retirements" not in gated["result"]
+    # Same lineage, same receipts -- but this path did not compute them. The
+    # list matches the "nothing was retired" case above byte for byte, so only
+    # the gate distinguishes them.
+    assert gated["result"]["retirements"] == quiet["result"]["retirements"] == []
     assert [
         diagnostic
         for diagnostic in gated["result"]["diagnostics"]

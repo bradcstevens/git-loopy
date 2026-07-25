@@ -447,7 +447,7 @@ _git_loopy_continuation_validate_observation() {
   local result token_source expected_token
   result="$(
     jq -c '
-      def digest: test("^[0-9a-f]{64}$");
+      def digest: test("\\A[0-9a-f]{64}\\z");
       if (
         (.observation | type == "object")
         and ((.observation | keys | sort) == ["heads","token","validators"])
@@ -522,7 +522,7 @@ _git_loopy_continuation_validate_reattestation() {
     ])
     and (.reattestation.affected_heads | type == "array" and length > 0)
     and all(.reattestation.affected_heads[];
-      type == "string" and test("^[0-9a-f]{64}$")
+      type == "string" and test("\\A[0-9a-f]{64}\\z")
     )
     and (
       .reattestation.affected_heads as $heads
@@ -616,9 +616,17 @@ _git_loopy_continuation_authorize_producer() {
 
 _git_loopy_continuation_validate_completion_request() {
   local request="$1"
+  # Reading a discovered record is not the same as authoring one. This
+  # distribution does not advertise `prospective_projection`, so it refuses to
+  # author retirement receipts it cannot validate -- but it must still read
+  # every record valid under a contract version it advertises, or a Producer
+  # that does project receipts would be quarantined as unparseable and its
+  # retired predecessor would resurface as live guidance.
+  local reading="${2:-false}"
   local validation
   validation="$(
     jq -cn --argjson request "$request" \
+      --argjson reading "$reading" \
       --argjson supported_contract_versions \
       "$GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS" '
       def fail($message): error($message);
@@ -632,7 +640,8 @@ _git_loopy_continuation_validate_completion_request() {
         else fail($name + " must be a non-empty string")
         end;
       def positive_integer($value; $name):
-        if ($value | type) == "number" and $value > 0 then true
+        if ($value | type) == "number" and $value > 0 and $value == ($value | floor)
+        then true
         else fail($name + " must be a positive integer")
         end;
       def array($value; $name; $nonempty):
@@ -682,12 +691,62 @@ _git_loopy_continuation_validate_completion_request() {
           )
           and (if ($value.kind == "commit" or $value.kind == "branch") then
                  string($value.sha; $name + ".sha")
-                 and (if ($value.sha | test("^[0-9a-f]{40}$")) then true
+                 and (if ($value.sha | test("\\A[0-9a-f]{40}\\z")) then true
                       else fail($name + ".sha must be a lowercase 40-character SHA") end)
                else true end)
           and (if $value.kind == "branch"
                then string($value.name; $name + ".name")
                else true end);
+      def retirement($value; $name; $repository; $kinds):
+        object($value; $name)
+        and fields(
+          $value; $name;
+          ["predecessor_revision_id", "action_key", "reason", "evidence"];
+          ["replacement", "advisory_extensions"]
+        )
+        and string($value.predecessor_revision_id; $name + ".predecessor_revision_id")
+        and (if ($value.predecessor_revision_id | test("\\A[0-9a-f]{64}\\z")) then true
+             else fail(
+               $name + ".predecessor_revision_id must be a sha256 revision identity"
+             ) end)
+        and string($value.action_key; $name + ".action_key")
+        and string($value.reason; $name + ".reason")
+        and (if ["completed", "lost-basis", "workstream-outcome", "supersession"]
+                  | index($value.reason)
+             then true
+             else fail($name + ".reason is unsupported") end)
+        and array($value.evidence; $name + ".evidence"; true)
+        and all(
+          $value.evidence[];
+          durable(.; $name + ".evidence item"; $repository; [])
+        )
+        and (if ($value | has("replacement")) then
+               (if $value.reason != "supersession" then
+                  fail(
+                    $name + ".replacement is valid only when reason is supersession"
+                  )
+                else true end)
+               and object($value.replacement; $name + ".replacement")
+               and fields(
+                 $value.replacement; $name + ".replacement";
+                 ["workstream_anchor", "kind", "target", "occurrence"];
+                 ["advisory_extensions"]
+               )
+               and durable(
+                 $value.replacement.workstream_anchor;
+                 $name + ".replacement.workstream_anchor"; $repository; []
+               )
+               and string($value.replacement.kind; $name + ".replacement.kind")
+               and (if ($kinds | index($value.replacement.kind)) != null then true
+                    else fail($name + ".replacement.kind is unsupported") end)
+               and durable(
+                 $value.replacement.target; $name + ".replacement.target";
+                 $repository; []
+               )
+               and string($value.replacement.occurrence; $name + ".replacement.occurrence")
+             elif $value.reason == "supersession" then
+               fail($name + " with reason supersession must declare a replacement")
+             else true end);
       def condition($value; $name; $repository; $allow_local):
         {
           "action-completed": {
@@ -996,8 +1055,38 @@ _git_loopy_continuation_validate_completion_request() {
           [
             "carrier", "actions", "outcome", "no_guidance",
             "advisory_extensions"
-          ]
+          ] + (if $reading then ["retirements"] else [] end)
         )
+        and (if ($request.completion | has("retirements")) then
+               [
+                 "Address review findings", "Authorize operation",
+                 "Chart workstream", "Close parent", "Decompose spec",
+                 "Implement ticket", "Perform manual validation",
+                 "Prototype evidence", "Provide information", "Publish head",
+                 "Publish spec", "Research fact", "Resolve conflict",
+                 "Resolve decision", "Review and merge PR", "Review head",
+                 "Triage item"
+               ] as $kinds
+               | array($request.completion.retirements; "completion.retirements"; false)
+                 and all(
+                   $request.completion.retirements | to_entries[];
+                   retirement(
+                     .value;
+                     "completion.retirements[" + (.key | tostring) + "]";
+                     $request.repository;
+                     $kinds
+                   )
+                 )
+                 and (
+                   ($request.completion.retirements
+                    | map([.predecessor_revision_id, .action_key])) as $pairs
+                   | if ($pairs | unique | length) == ($pairs | length) then true
+                     else fail(
+                       "completion.retirements contains duplicate " +
+                       "predecessor_revision_id/action_key pair"
+                     ) end
+                 )
+             else true end)
         and (if $supported_contract_versions
                   | index($request.completion.continuation_contract_version)
              then true
@@ -1873,13 +1962,13 @@ _git_loopy_continuation_parse_revision_record() {
         completion:$completion
       }'
   )"
-  if ! _git_loopy_continuation_validate_completion_request "$validation_request"; then
+  if ! _git_loopy_continuation_validate_completion_request "$validation_request" true; then
     return 1
   fi
   if ! jq -e '
     (.parents // [] | type == "array")
     and all((.parents // [])[];
-      type == "string" and test("^[0-9a-f]{64}$")
+      type == "string" and test("\\A[0-9a-f]{64}\\z")
     )
     and (
       (.parents // []) as $parents
@@ -3139,6 +3228,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
           producer_revisions: $producer_revisions
         },
         actions: $actions,
+        retirements: [],
         diagnostics: $diagnostics,
         observation: {
           heads: $heads,
@@ -3256,7 +3346,7 @@ _git_loopy_continuation_reconcile() {
           completion: $completion
         }'
     )"
-    _git_loopy_continuation_validate_completion_request "$validation_request" ||
+    _git_loopy_continuation_validate_completion_request "$validation_request" true ||
       continue
     revision_count=$((revision_count + 1))
 
@@ -3367,6 +3457,7 @@ _git_loopy_continuation_reconcile() {
           producer_revisions: $producer_revisions
         },
         actions: $actions,
+        retirements: [],
         diagnostics: []
       }
     }'

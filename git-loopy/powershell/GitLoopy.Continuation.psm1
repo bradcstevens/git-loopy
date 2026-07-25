@@ -45,7 +45,10 @@ $Script:MaxArrayLength = 256
 $Script:MaxStringBytes = 8 * 1024
 $Script:MaxRecordBytes = 48 * 1024
 $Script:MaxCarrierBodyBytes = 64 * 1024
-$Script:DigestPattern = "^[0-9a-f]{64}$"
+# `\A`/`\z` rather than `^`/`$`: both jq's Oniguruma and .NET let `$` match
+# before a terminal newline, which would accept a digest with a trailing "\n"
+# that Python's `fullmatch` rejects.
+$Script:DigestPattern = "\A[0-9a-f]{64}\z"
 $Script:WritePermissions = @("ADMIN", "MAINTAIN", "WRITE")
 
 $Script:Publications = @("ephemeral", "shared")
@@ -114,6 +117,9 @@ $Script:InteractionEvidenceSchemas = [ordered]@{
     }
 }
 $Script:OutcomeKinds = @("complete", "rejected", "abandoned", "superseded")
+$Script:RetirementReasons = @(
+    "completed", "lost-basis", "workstream-outcome", "supersession"
+)
 $Script:NoGuidanceReasons = @("no-successor-created", "ephemeral-only")
 
 $Script:ConditionOptionalFields = @("advisory_extensions")
@@ -241,7 +247,7 @@ $Script:RequirementKinds = @(
     "access", "capability", "command", "evaluator", "policy", "skill"
 )
 $Script:TriggerKinds = $Script:HumanBoundaryReasons
-$Script:ShaPattern = "^[0-9a-f]{40}$"
+$Script:ShaPattern = "\A[0-9a-f]{40}\z"
 
 $Script:CapabilityManifest = [ordered]@{
     continuation_contract_versions =
@@ -1303,7 +1309,17 @@ function Test-GitLoopyAction {
 }
 
 function Test-GitLoopyCompletion {
-    param([Parameter(Mandatory)][Collections.IDictionary]$Request)
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Request,
+        # Reading a discovered record is not the same as authoring one. This
+        # distribution does not advertise `prospective_projection`, so it
+        # refuses to author retirement receipts it cannot validate -- but it
+        # must still read every record valid under a contract version it
+        # advertises, or a Producer that does project receipts would be
+        # quarantined as unparseable and its retired predecessor would
+        # resurface as live guidance.
+        [switch]$Reading
+    )
 
     Assert-GitLoopyFields `
         -Value $Request `
@@ -1316,6 +1332,12 @@ function Test-GitLoopyCompletion {
     $Repository = Get-GitLoopyRepository $Request
     $TrustedApps = Get-GitLoopyTrustedApps -Request $Request
     $Completion = Assert-GitLoopyObject $Request["completion"] "completion"
+    $OptionalCompletionFields = [object[]]@(
+        "carrier", "actions", "outcome", "no_guidance", "advisory_extensions"
+    )
+    if ($Reading) {
+        $OptionalCompletionFields += "retirements"
+    }
     Assert-GitLoopyFields `
         -Value $Completion `
         -Name "completion" `
@@ -1323,7 +1345,7 @@ function Test-GitLoopyCompletion {
             "continuation_contract_version", "record_format", "publication",
             "disposition", "workstream", "transition", "producer"
         ) `
-        -Optional @("carrier", "actions", "outcome", "no_guidance", "advisory_extensions")
+        -Optional $OptionalCompletionFields
     if ($Completion["continuation_contract_version"] -cnotin
         $Script:SupportedContinuationContractVersions) {
         throw (New-GitLoopyRejection "unsupported Continuation contract version")
@@ -1574,6 +1596,81 @@ function Test-GitLoopyCompletion {
                 -Value $Item `
                 -Name "completion.no_guidance.references item" `
                 -Repository $Repository
+        }
+    }
+
+    if ($Completion.Contains("retirements")) {
+        $SeenReceipts = [Collections.Generic.HashSet[string]]::new()
+        $Receipts = Assert-GitLoopyArray `
+            $Completion["retirements"] "completion.retirements"
+        for ($Index = 0; $Index -lt $Receipts.Count; $Index++) {
+            $Name = "completion.retirements[$Index]"
+            $Receipt = Assert-GitLoopyObject $Receipts[$Index] $Name
+            Assert-GitLoopyFields `
+                -Value $Receipt `
+                -Name $Name `
+                -Required @(
+                    "predecessor_revision_id", "action_key", "reason", "evidence"
+                ) `
+                -Optional @("replacement", "advisory_extensions")
+            $Predecessor = Assert-GitLoopyString `
+                $Receipt["predecessor_revision_id"] "$Name.predecessor_revision_id"
+            if ($Predecessor -cnotmatch $Script:DigestPattern) {
+                throw (New-GitLoopyRejection (
+                    "$Name.predecessor_revision_id must be a sha256 revision identity"
+                ))
+            }
+            $ActionKey = Assert-GitLoopyString $Receipt["action_key"] "$Name.action_key"
+            $Reason = Assert-GitLoopyString $Receipt["reason"] "$Name.reason"
+            if ($Reason -cnotin $Script:RetirementReasons) {
+                throw (New-GitLoopyRejection "$Name.reason is unsupported")
+            }
+            foreach ($Item in (Assert-GitLoopyArray `
+                        $Receipt["evidence"] "$Name.evidence" -NonEmpty)) {
+                $null = Assert-GitLoopyDurableReference `
+                    -Value $Item `
+                    -Name "$Name.evidence item" `
+                    -Repository $Repository
+            }
+            if ($Receipt.Contains("replacement")) {
+                if ($Reason -cne "supersession") {
+                    throw (New-GitLoopyRejection (
+                        "$Name.replacement is valid only when reason is supersession"
+                    ))
+                }
+                $Replacement = Assert-GitLoopyObject $Receipt["replacement"] "$Name.replacement"
+                Assert-GitLoopyFields `
+                    -Value $Replacement `
+                    -Name "$Name.replacement" `
+                    -Required @("workstream_anchor", "kind", "target", "occurrence") `
+                    -Optional @("advisory_extensions")
+                $null = Assert-GitLoopyDurableReference `
+                    -Value $Replacement["workstream_anchor"] `
+                    -Name "$Name.replacement.workstream_anchor" `
+                    -Repository $Repository
+                $ReplacementKind = Assert-GitLoopyString `
+                    $Replacement["kind"] "$Name.replacement.kind"
+                if ($ReplacementKind -cnotin $Script:ActionKinds) {
+                    throw (New-GitLoopyRejection "$Name.replacement.kind is unsupported")
+                }
+                $null = Assert-GitLoopyDurableReference `
+                    -Value $Replacement["target"] `
+                    -Name "$Name.replacement.target" `
+                    -Repository $Repository
+                $null = Assert-GitLoopyString `
+                    $Replacement["occurrence"] "$Name.replacement.occurrence"
+            }
+            elseif ($Reason -ceq "supersession") {
+                throw (New-GitLoopyRejection (
+                    "$Name with reason supersession must declare a replacement"
+                ))
+            }
+            if (-not $SeenReceipts.Add("$Predecessor`u{0}$ActionKey")) {
+                throw (New-GitLoopyRejection (
+                    "completion.retirements contains duplicate " +
+                    "predecessor_revision_id/action_key pair"
+                ))
+            }
         }
     }
 
@@ -2277,7 +2374,7 @@ function Get-GitLoopyTaintedLineageHeads {
                 [void]$Tainted.Add($RevisionId)
             }
             try {
-                $null = Test-GitLoopyCompletion ([ordered]@{
+                $null = Test-GitLoopyCompletion -Reading ([ordered]@{
                     repository = $Completion["carrier"]["repository"]
                     trusted_producers = [object[]]@($Producer)
                     completion = Get-GitLoopyRevisionCompletion $Record
@@ -3904,7 +4001,7 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
                     ))
                 }
                 $Completion = Get-GitLoopyRevisionCompletion $Record
-                $null = Test-GitLoopyCompletion ([ordered]@{
+                $null = Test-GitLoopyCompletion -Reading ([ordered]@{
                     repository = $Repository
                     trusted_producers = [object[]]@($Trusted)
                     trusted_apps = [object[]]@($TrustedApps)
@@ -4137,6 +4234,7 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
                 producer_revisions = $Entries.Count
             }
             actions = $OrderedActions
+            retirements = @()
             diagnostics = @($Diagnostics)
             observation = [ordered]@{
                 heads = $Heads
@@ -4221,7 +4319,7 @@ function Invoke-GitLoopyContinuationReconcile {
                 trusted_producers = $SortedTrusted
                 completion = $Completion
             }
-            $null = Test-GitLoopyCompletion $CompletionRequest
+            $null = Test-GitLoopyCompletion -Reading $CompletionRequest
             $RevisionCount++
 
             if (-not $Record.Contains("actions")) {
@@ -4317,6 +4415,7 @@ function Invoke-GitLoopyContinuationReconcile {
                 producer_revisions = $RevisionCount
             }
             actions = $OrderedActions
+            retirements = @()
             diagnostics = @($Diagnostics)
         }
     }
@@ -4404,7 +4503,7 @@ function Invoke-GitLoopyContinuationRepairIndex {
                 $AllTrusted = [object[]]@(
                     @($Trusted) + @($TrustedApps) | Sort-Object -Unique
                 )
-                $null = Test-GitLoopyCompletion ([ordered]@{
+                $null = Test-GitLoopyCompletion -Reading ([ordered]@{
                     repository = $Repository
                     trusted_producers = $AllTrusted
                     completion = Get-GitLoopyRevisionCompletion $Record
