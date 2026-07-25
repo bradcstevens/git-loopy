@@ -204,6 +204,24 @@ on an operator's terminal.
 `retired`, one `changed` — because a delta that reported only the groups it happened to populate
 would still look correct against a world where two of them are empty.
 
+Fixture schema 1.5 adds the fixed-frontier Automation vocabulary. The `automation` group pins the
+safety-case contract version, the assumption, retry, and Instruction-mode kinds, the ineligibility
+and report-only reasons, the locked stop precedence, and the two Dispatch-evidence classes and their
+comment marker. `automation-binds-one-dispatch`,
+`automation-refuses-an-afk-claim-without-a-safety-case`,
+`automation-quarantines-dispatched-semantics`,
+`record-dispatch-result-records-a-safety-case-violation`, and
+`record-dispatch-result-refuses-a-malformed-request-from-file` are scoped
+`["python", "powershell"]` — the two distributions advertising
+`fixed_frontier_authorization` — and pin the authorization, the stop, the quarantine, the exact
+Dispatch-evidence digest, and the request framing byte for byte across both.
+
+`record-dispatch-result-fails-closed-from-file` is scoped `["shell"]` for the same reason: it
+asserts the absence of what those five scenarios add, so it can only be demonstrated by a
+distribution that does not advertise the capability. Shell also refuses any record declaring
+contract 1.2 by the version rule it already had, so the safety case can never reach a reader that
+would drop it while keeping the AFK-safe claim.
+
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
 stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather

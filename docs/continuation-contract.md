@@ -65,8 +65,9 @@ flag, or authority to publish or Dispatch.
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
-manifest remains the declaration of its other capabilities. `record-dispatch-result`, report mode,
-execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python and PowerShell
+manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
+concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by Python
+and PowerShell and fails closed in shell. Python and PowerShell
 advertise `terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
 and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
 lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
@@ -76,8 +77,8 @@ Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A dist
 advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
 frontier, typed Performer eligibility, the single DispatchAuthorization, the locked stop
 precedence, and the two Dispatch-evidence classes — and supports the `record-dispatch-result`
-operation. Python advertises `fixed_frontier_authorization: true`; shell and PowerShell advertise
-`false` explicitly, accept no record declaring contract 1.2, and continue to fail closed on
+operation. Python and PowerShell advertise `fixed_frontier_authorization: true`; shell advertises
+`false` explicitly, accepts no record declaring contract 1.2, and continues to fail closed on
 `record-dispatch-result` with `unsupported_operation`.
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
@@ -89,7 +90,8 @@ and fails closed rather than ignoring the gated fields: `completion.retirements`
 ordering rule and every family member implements it.
 
 A distribution advertises the contract versions whose records it accepts. Python advertises
-`["1.0", "1.1", "1.2"]`; shell and PowerShell advertise `["1.0", "1.1"]`. Each added version
+`["1.0", "1.1", "1.2"]`; PowerShell advertises `["1.0", "1.1", "1.2"]`; shell advertises
+`["1.0", "1.1"]`. Each added version
 introduces only optional fields, so a record published under an earlier version stays valid
 without rewriting. A record whose Action carries a `safety_case` **must** declare `1.2`: the
 AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently

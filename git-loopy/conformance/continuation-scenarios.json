@@ -2295,20 +2295,25 @@
           "ok": true,
           "capabilities": {
             "release_version": "0.2.0-dev.0",
-            "continuation_contract_versions": ["1.0", "1.1"],
+            "continuation_contract_versions": ["1.0", "1.1", "1.2"],
             "record_formats": [1],
             "wrapper_contract_version": "1.4",
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
-                "operations": ["publish", "reconcile", "repair-index"]
+                "operations": [
+                  "publish",
+                  "reconcile",
+                  "record-dispatch-result",
+                  "repair-index"
+                ]
               }
             },
             "operations": {
               "capabilities": true,
               "publish": true,
               "reconcile": true,
-              "record-dispatch-result": false,
+              "record-dispatch-result": true,
               "repair-index": true
             },
             "instruction_handlers": [],
@@ -2320,7 +2325,7 @@
               "prospective_projection": true,
               "terminal_rendering": true,
               "concurrent_dispatch": false,
-              "fixed_frontier_authorization": false
+              "fixed_frontier_authorization": true
             },
             "continuation_modes": {
               "default": "off",
@@ -2456,7 +2461,7 @@
     },
     {
       "id": "record-dispatch-result-fails-closed-from-file",
-      "distributions": ["shell", "powershell"],
+      "distributions": ["shell"],
       "arguments": [
         "continuation",
         "record-dispatch-result",
@@ -2483,9 +2488,10 @@
       }
     },
     {
-      "id": "automation-binds-one-dispatch-python",
+      "id": "automation-binds-one-dispatch",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
@@ -2815,9 +2821,10 @@
       }
     },
     {
-      "id": "automation-refuses-an-afk-claim-without-a-safety-case-python",
+      "id": "automation-refuses-an-afk-claim-without-a-safety-case",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
@@ -3083,9 +3090,10 @@
       }
     },
     {
-      "id": "record-dispatch-result-records-a-safety-case-violation-python",
+      "id": "record-dispatch-result-records-a-safety-case-violation",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
@@ -3175,9 +3183,10 @@
       }
     },
     {
-      "id": "automation-quarantines-dispatched-semantics-python",
+      "id": "automation-quarantines-dispatched-semantics",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
@@ -3511,7 +3520,7 @@
     },
     {
       "id": "record-dispatch-result-refuses-a-malformed-request-from-file",
-      "distributions": ["python"],
+      "distributions": ["python", "powershell"],
       "arguments": [
         "continuation",
         "record-dispatch-result",

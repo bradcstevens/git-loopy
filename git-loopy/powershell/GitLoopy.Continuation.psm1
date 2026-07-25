@@ -31,8 +31,9 @@ class GitLoopyContinuationGitHubException : System.Exception {
     }
 }
 
-$Script:ContinuationContractVersion = "1.1"
-$Script:SupportedContinuationContractVersions = @("1.0", "1.1")
+$Script:ContinuationContractVersion = "1.2"
+$Script:SupportedContinuationContractVersions = @("1.0", "1.1", "1.2")
+$Script:SafetyCaseContractVersion = "1.2"
 $Script:RecordFormat = 1
 $Script:WrapperContractVersion = "1.4"
 $Script:EventSchemaVersion = "1.1"
@@ -259,7 +260,59 @@ $Script:RequirementKinds = @(
     "access", "capability", "command", "evaluator", "policy", "skill"
 )
 $Script:TriggerKinds = $Script:HumanBoundaryReasons
+# The typed safety assumptions an AFK safety case may declare. A Transition
+# owner states why unattended completion is safe; free prose would let a
+# Producer justify anything, so the vocabulary is closed and pinned by the
+# shared fixture.
+$Script:AssumptionKinds = @(
+    "bounded-effect-scope",
+    "durable-inputs-fixed",
+    "no-human-decision",
+    "noninteractive-environment",
+    "objective-completion",
+    "stable-external-state"
+)
+# How a Performer may repeat the Instruction after a failed attempt.
+# `at-most-once` is the honest answer for an effect that cannot be replayed;
+# it is what makes uncertain effect state a recordable Dispatch-evidence class
+# rather than an ordinary retry.
+$Script:RetryKinds = @("at-most-once", "idempotent", "resumable")
+$Script:InstructionModes = @("command", "manual", "skill")
 $Script:ShaPattern = "\A[0-9a-f]{40}\z"
+# The only two exceptional Dispatch outcomes that become durable evidence.
+# Ordinary success and ordinary execution failure stay in the Runner's
+# existing artifacts, Events, retry, and Strike paths.
+$Script:DispatchEvidenceClasses = @(
+    "safety-case-violation", "uncertain-effect-state"
+)
+$Script:DispatchMarker = "<!-- git-loopy-continuation-dispatch:1 -->"
+# The locked Automation stop precedence, strongest first. Exactly one stop is
+# returned and the first matching reason wins, so a Run that is both blocked on
+# a human boundary and waiting on a Prerequisite reports the human boundary --
+# the thing a person can act on -- rather than the more numerous barrier.
+$Script:AutomationStopPrecedence = @(
+    @("workstreams-terminal", "complete"),
+    @("safety-case-violation", "attention-required"),
+    @("uncertain-effect-state", "attention-required"),
+    @("guidance-fault", "attention-required"),
+    @("human-boundary", "expected-boundary"),
+    @("grant-missing", "expected-boundary"),
+    @("performer-ineligible", "expected-boundary"),
+    @("frontier-drained", "expected-boundary"),
+    @("awaiting-prerequisites", "expected-boundary")
+)
+# Which ineligibility reason raises which stop. Reasons absent from this map
+# describe an Action the Run was never entitled to consider (report-only,
+# out of coverage, already dispatched) and so cannot themselves stop a Run.
+$Script:IneligibilityStopReasons = [ordered]@{
+    "human-boundary" = "human-boundary"
+    "grant-missing" = "grant-missing"
+    "performer-ineligible" = "performer-ineligible"
+    "not-ready" = "awaiting-prerequisites"
+    # An AFK-safe claim with no safety case behind it is a defect in the
+    # guidance, not a property of the Performer or the Run's authority.
+    "safety-case-absent" = "guidance-fault"
+}
 
 $Script:CapabilityManifest = [ordered]@{
     continuation_contract_versions =
@@ -269,14 +322,16 @@ $Script:CapabilityManifest = [ordered]@{
     event_schema_version = $Script:EventSchemaVersion
     tracker_adapters = [ordered]@{
         github = [ordered]@{
-            operations = @("publish", "reconcile", "repair-index")
+            operations = @(
+                "publish", "reconcile", "record-dispatch-result", "repair-index"
+            )
         }
     }
     operations = [ordered]@{
         capabilities = $true
         publish = $true
         reconcile = $true
-        "record-dispatch-result" = $false
+        "record-dispatch-result" = $true
         "repair-index" = $true
     }
     instruction_handlers = @()
@@ -288,7 +343,7 @@ $Script:CapabilityManifest = [ordered]@{
         terminal_rendering = $true
         concurrent_dispatch = $false
         prospective_projection = $true
-        fixed_frontier_authorization = $false
+        fixed_frontier_authorization = $true
     }
     continuation_modes = [ordered]@{
         default = "off"
@@ -684,6 +739,11 @@ function Get-GitLoopySemanticFingerprint {
         effects = $Effects
         requirements = $Requirements
         triggers = $Triggers
+    }
+    # Conditional: a record published under 1.0 or 1.1 has no safety case, and
+    # its fingerprint must stay byte-identical across this contract bump.
+    if ($Action.Contains("safety_case")) {
+        $Semantics["safety_case"] = $Action["safety_case"]
     }
     $Canonical = ConvertTo-GitLoopyCanonicalJson (
         Copy-GitLoopyWithoutAdvisoryExtensions $Semantics
@@ -1185,11 +1245,82 @@ function Test-GitLoopyTriggers {
     return $LocalReferences
 }
 
+function Test-GitLoopySafetyCase {
+    <#
+        Structurally validate one positive versioned AFK safety case.
+
+        The safety case is the Transition owner's evidence-backed argument that
+        every permitted completion path of *this* Action occurrence is
+        unattended. It is therefore bound to the Action it justifies: the exact
+        Instruction variant, the exact Target, and the exact objective
+        completion condition must be restated here, so a later Instruction or
+        Target change invalidates the argument instead of silently inheriting
+        it.
+    #>
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][Collections.IDictionary]$Action
+    )
+
+    $Entry = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Entry `
+        -Name $Name `
+        -Required @(
+            "version", "instruction", "target", "completion_condition",
+            "effects", "assumptions", "requirements", "retry", "triggers"
+        ) `
+        -Optional @("advisory_extensions")
+    $null = Assert-GitLoopyString $Entry["version"] "$Name.version"
+    foreach ($Field in @("instruction", "target", "completion_condition")) {
+        if (
+            (ConvertTo-GitLoopyCanonicalJson $Entry[$Field]) -cne
+            (ConvertTo-GitLoopyCanonicalJson $Action[$Field])
+        ) {
+            throw (New-GitLoopyRejection (
+                "$Name.$Field must match the Action it justifies"
+            ))
+        }
+    }
+    Test-GitLoopyTypedSemantics `
+        -Value $Entry["effects"] `
+        -Name "$Name.effects" `
+        -Kinds $Script:EffectKinds `
+        -SecondField "scope"
+    Test-GitLoopyTypedSemantics `
+        -Value $Entry["assumptions"] `
+        -Name "$Name.assumptions" `
+        -Kinds $Script:AssumptionKinds `
+        -SecondField "statement"
+    Test-GitLoopyTypedSemantics `
+        -Value $Entry["requirements"] `
+        -Name "$Name.requirements" `
+        -Kinds $Script:RequirementKinds `
+        -SecondField "name"
+    $RetryName = "$Name.retry"
+    $Retry = Assert-GitLoopyObject $Entry["retry"] $RetryName
+    Assert-GitLoopyFields `
+        -Value $Retry `
+        -Name $RetryName `
+        -Required @("kind") `
+        -Optional @("advisory_extensions")
+    if ($Retry["kind"] -cnotin $Script:RetryKinds) {
+        throw (New-GitLoopyRejection "$RetryName.kind is unsupported")
+    }
+    return Test-GitLoopyTriggers `
+        -Value $Entry["triggers"] `
+        -Name "$Name.triggers" `
+        -Repository $Repository
+}
+
 function Test-GitLoopyAction {
     param(
         [AllowNull()][object]$Value,
         [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][string]$TransitionOwner
+        [Parameter(Mandatory)][string]$TransitionOwner,
+        [Parameter(Mandatory)][string]$ContractVersion
     )
     $Action = Assert-GitLoopyObject $Value "completion.actions item"
     Assert-GitLoopyFields `
@@ -1201,8 +1332,8 @@ function Test-GitLoopyAction {
             "completion_condition"
         ) `
         -Optional @(
-            "context_references", "effects", "requirements", "triggers",
-            "advisory_extensions"
+            "context_references", "effects", "requirements", "safety_case",
+            "triggers", "advisory_extensions"
         )
     foreach ($Field in @("key", "summary", "occurrence")) {
         $null = Assert-GitLoopyString $Action[$Field] "completion.actions item.$Field"
@@ -1312,6 +1443,38 @@ function Test-GitLoopyAction {
             -Name "completion.actions item.triggers" `
             -Repository $Repository
         foreach ($Reference in $TriggerReferences) {
+            $LocalReferences.Add($Reference)
+        }
+    }
+    if ($Action.Contains("safety_case")) {
+        # A 1.1 reader drops the unknown field and keeps the AFK-safe claim --
+        # precisely the half of the pair that authorizes unattended Dispatch.
+        # Dropping the justification while keeping the claim is worth a hard
+        # rejection, so the record must declare the version that carries it.
+        if ($ContractVersion -cne $Script:SafetyCaseContractVersion) {
+            throw (New-GitLoopyRejection (
+                "a safety case requires Continuation contract version " +
+                $Script:SafetyCaseContractVersion
+            ))
+        }
+        if ($Classification -cne "AFK-safe") {
+            throw (New-GitLoopyRejection (
+                "only AFK-safe Actions may carry a safety case"
+            ))
+        }
+        foreach ($Field in @("effects", "requirements", "triggers")) {
+            if ($Action.Contains($Field)) {
+                throw (New-GitLoopyRejection (
+                    "completion.actions item.safety_case owns $Field; declare it once"
+                ))
+            }
+        }
+        $CaseReferences = Test-GitLoopySafetyCase `
+            -Value $Action["safety_case"] `
+            -Name "completion.actions item.safety_case" `
+            -Repository $Repository `
+            -Action $Action
+        foreach ($Reference in $CaseReferences) {
             $LocalReferences.Add($Reference)
         }
     }
@@ -1477,7 +1640,8 @@ function Test-GitLoopyCompletion {
             $Validated = Test-GitLoopyAction `
                 -Value $Item `
                 -Repository $Repository `
-                -TransitionOwner $TransitionOwner
+                -TransitionOwner $TransitionOwner `
+                -ContractVersion ([string]$Completion["continuation_contract_version"])
             $Key = [string]$Validated.Action["key"]
             if ($Keys.Contains($Key)) {
                 throw (New-GitLoopyRejection (
@@ -2860,6 +3024,56 @@ function Get-GitLoopyCommentId {
         return $null
     }
     return [long]$Match.Groups["id"].Value
+}
+
+function ConvertTo-GitLoopyIndexedComment {
+    <#
+        Normalize one comment the discovery index returned.
+
+        `gh issue list --json comments` and the REST comment resource describe
+        the same comment with different field names. The rest of the family
+        normalizes both shapes before reading, so a record is either readable
+        through every distribution or through none of them.
+    #>
+    param([Parameter(Mandatory)][Collections.IDictionary]$Comment)
+
+    $Author = if ($Comment["author"] -is [Collections.IDictionary]) {
+        $Comment["author"]
+    }
+    else {
+        $Comment["user"]
+    }
+    if (
+        $Author -isnot [Collections.IDictionary] -or
+        $Author["login"] -isnot [string] -or
+        $Comment["body"] -isnot [string]
+    ) {
+        return $null
+    }
+    $Url = if ($Comment["url"] -is [string]) {
+        [string]$Comment["url"]
+    }
+    elseif ($Comment["html_url"] -is [string]) {
+        [string]$Comment["html_url"]
+    }
+    else {
+        ""
+    }
+    $Locator = [ordered]@{ url = $Url }
+    foreach ($Key in @("databaseId", "id")) {
+        if ($Comment.Contains($Key)) { $Locator[$Key] = $Comment[$Key] }
+    }
+    $CommentId = Get-GitLoopyCommentId $Locator
+    if ($null -eq $CommentId) {
+        return $null
+    }
+    return [ordered]@{
+        id = $CommentId
+        url = $Url
+        body = [string]$Comment["body"]
+        author = [string]$Author["login"]
+        author_type = [string]($Author["type"] ?? "User")
+    }
 }
 
 function Get-GitLoopyRevisionCompletion {
@@ -4832,11 +5046,946 @@ function Get-GitLoopyDerivedActions {
         if (@($Canonical["unsatisfied"]).Count -gt 0) {
             $Item["unsatisfied_prerequisites"] = $Canonical["unsatisfied"]
         }
+        if ($Action.Contains("safety_case")) {
+            # The positive AFK safety case is Action semantics a Consumer must
+            # be able to read; it is what an authorization is bound to.
+            $Item["safety_case"] = $Action["safety_case"]
+        }
         $Actions.Add($Item)
     }
     return [ordered]@{
         actions = Get-GitLoopyContinuationViewOrder -Actions $Actions
         diagnostics = $Diagnostics
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization
+#
+# Reconciliation derives what is true. This section decides, for one Performer
+# and one frozen Run boundary, which of those Actions that Performer could be
+# authorized to perform unattended -- and, when none can be, says exactly why.
+# It never performs an Action, and it never widens anything: every rule here
+# can only remove an Action from consideration.
+# ---------------------------------------------------------------------------
+
+function New-GitLoopyOrdinalSet {
+    param([string[]]$Items = @())
+
+    $Set = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($Item in $Items) { [void]$Set.Add($Item) }
+    # A bare `return` unrolls any IEnumerable, so an empty set would arrive as
+    # $null. The unary comma keeps every set whole.
+    return , $Set
+}
+
+function Get-GitLoopyPairKey {
+    param(
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)][string]$Value
+    )
+    return "$Kind`0$Value"
+}
+
+function Get-GitLoopyScopeEntries {
+    <#
+        Validate one typed effect-scope list and return its pair keys.
+    #>
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    Test-GitLoopyTypedSemantics `
+        -Value $Value `
+        -Name $Name `
+        -Kinds $Script:EffectKinds `
+        -SecondField "scope"
+    $Keys = New-GitLoopyOrdinalSet
+    foreach ($Entry in @($Value)) {
+        [void]$Keys.Add(
+            (Get-GitLoopyPairKey `
+                    -Kind ([string]$Entry["kind"]) `
+                    -Value ([string]$Entry["scope"]))
+        )
+    }
+    return , $Keys
+}
+
+function Get-GitLoopyRequirementEntries {
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    Test-GitLoopyTypedSemantics `
+        -Value $Value `
+        -Name $Name `
+        -Kinds $Script:RequirementKinds `
+        -SecondField "name"
+    $Keys = New-GitLoopyOrdinalSet
+    foreach ($Entry in @($Value)) {
+        [void]$Keys.Add(
+            (Get-GitLoopyPairKey `
+                    -Kind ([string]$Entry["kind"]) `
+                    -Value ([string]$Entry["name"]))
+        )
+    }
+    return , $Keys
+}
+
+function Get-GitLoopySortedPairs {
+    <#
+        Render a pair set as the deduplicated, ordinal-ordered typed list the
+        contract pins. Culture-aware ordering would ignore the hyphens every
+        effect and requirement kind carries.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Keys,
+        [Parameter(Mandatory)][string]$SecondField
+    )
+
+    $Unique = Get-GitLoopyOrdinalSortedStrings @(
+        (New-GitLoopyOrdinalSet $Keys)
+    )
+    $Result = [Collections.Generic.List[object]]::new()
+    foreach ($Key in $Unique) {
+        $Parts = $Key.Split([char]0, 2)
+        $Pair = [ordered]@{ kind = $Parts[0] }
+        $Pair[$SecondField] = $Parts[1]
+        $Result.Add($Pair)
+    }
+    return , [object[]]@($Result)
+}
+
+function Test-GitLoopyAutomation {
+    <#
+        Validate the caller's Automation scope, posture, and frozen frontier.
+    #>
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $Automation = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Automation `
+        -Name $Name `
+        -Required @("performer", "scope") `
+        -Optional @("frontier", "dispatched")
+
+    $PerformerName = "$Name.performer"
+    $Performer = Assert-GitLoopyObject $Automation["performer"] $PerformerName
+    Assert-GitLoopyFields `
+        -Value $Performer `
+        -Name $PerformerName `
+        -Required @("id", "posture")
+    $PerformerId = Assert-GitLoopyString $Performer["id"] "$PerformerName.id"
+    $PostureName = "$PerformerName.posture"
+    $Posture = Assert-GitLoopyObject $Performer["posture"] $PostureName
+    Assert-GitLoopyFields `
+        -Value $Posture `
+        -Name $PostureName `
+        -Required @("noninteractive", "satisfied_requirements", "instruction_modes")
+    if ($Posture["noninteractive"] -isnot [bool] -or -not $Posture["noninteractive"]) {
+        throw (New-GitLoopyRejection "$PostureName.noninteractive must be true")
+    }
+    $Satisfied = Get-GitLoopyRequirementEntries `
+        $Posture["satisfied_requirements"] "$PostureName.satisfied_requirements"
+    # Closed world: a Performer executes only the Instruction modes it declares
+    # a handler for. Silence is not a claim of universal competence.
+    $HandledModes = New-GitLoopyOrdinalSet
+    foreach ($Entry in (Assert-GitLoopyArray `
+                $Posture["instruction_modes"] "$PostureName.instruction_modes")) {
+        $Mode = Assert-GitLoopyString $Entry "$PostureName.instruction_modes item"
+        if ($Mode -cnotin $Script:InstructionModes) {
+            throw (New-GitLoopyRejection (
+                "$PostureName.instruction_modes item is unsupported"
+            ))
+        }
+        [void]$HandledModes.Add($Mode)
+    }
+
+    $ScopeName = "$Name.scope"
+    $Scope = Assert-GitLoopyObject $Automation["scope"] $ScopeName
+    Assert-GitLoopyFields `
+        -Value $Scope `
+        -Name $ScopeName `
+        -Required @("ceilings", "revocations") `
+        -Optional @("prior")
+    $Ceilings = Assert-GitLoopyArray $Scope["ceilings"] "$ScopeName.ceilings" -NonEmpty
+    $Sources = New-GitLoopyOrdinalSet
+    $Repositories = $null
+    $Granted = $null
+    $Denied = New-GitLoopyOrdinalSet
+    for ($Index = 0; $Index -lt $Ceilings.Count; $Index++) {
+        $CeilingName = "$ScopeName.ceilings[$Index]"
+        $Ceiling = Assert-GitLoopyObject $Ceilings[$Index] $CeilingName
+        Assert-GitLoopyFields `
+            -Value $Ceiling `
+            -Name $CeilingName `
+            -Required @("source", "coverage", "grants", "denials")
+        $Source = Assert-GitLoopyString $Ceiling["source"] "$CeilingName.source"
+        if ($Source -cnotin @("global", "project")) {
+            throw (New-GitLoopyRejection "$CeilingName.source is unsupported")
+        }
+        if (-not $Sources.Add($Source)) {
+            throw (New-GitLoopyRejection "$CeilingName.source is declared twice")
+        }
+        $CoverageName = "$CeilingName.coverage"
+        $Coverage = Assert-GitLoopyObject $Ceiling["coverage"] $CoverageName
+        Assert-GitLoopyFields `
+            -Value $Coverage `
+            -Name $CoverageName `
+            -Required @("repositories")
+        $CeilingRepositories = New-GitLoopyOrdinalSet
+        foreach ($Entry in (Assert-GitLoopyArray `
+                    $Coverage["repositories"] "$CoverageName.repositories" -NonEmpty)) {
+            [void]$CeilingRepositories.Add(
+                (Assert-GitLoopyString $Entry "$CoverageName.repositories item")
+            )
+        }
+        # Ceilings intersect: a Run observes only what every ceiling admits.
+        if ($null -eq $Repositories) {
+            $Repositories = $CeilingRepositories
+        }
+        else {
+            $Repositories.IntersectWith($CeilingRepositories)
+        }
+        $CeilingGrants = Get-GitLoopyScopeEntries `
+            $Ceiling["grants"] "$CeilingName.grants"
+        if ($null -eq $Granted) {
+            $Granted = $CeilingGrants
+        }
+        else {
+            $Granted.IntersectWith($CeilingGrants)
+        }
+        # Denials accumulate: one ceiling's refusal is the Run's refusal.
+        $Denied.UnionWith(
+            (Get-GitLoopyScopeEntries $Ceiling["denials"] "$CeilingName.denials")
+        )
+    }
+    # A revocation observed during the Run narrows immediately and is
+    # indistinguishable from a denial thereafter.
+    $Denied.UnionWith(
+        (Get-GitLoopyScopeEntries $Scope["revocations"] "$ScopeName.revocations")
+    )
+    if ($null -eq $Repositories) { $Repositories = New-GitLoopyOrdinalSet }
+    $EffectiveGrants = New-GitLoopyOrdinalSet @(
+        if ($null -eq $Granted) { @() } else { @($Granted) }
+    )
+    $EffectiveGrants.ExceptWith($Denied)
+
+    # The frozen scope of a Run is replayed alongside its frozen frontier, and
+    # the two must narrow together. Recomputing authority from whatever the
+    # caller supplies next would let a grant added mid-Run authorize an Action
+    # the Run was never entitled to.
+    if ($Scope.Contains("prior")) {
+        $PriorName = "$ScopeName.prior"
+        $Prior = Assert-GitLoopyObject $Scope["prior"] $PriorName
+        Assert-GitLoopyFields `
+            -Value $Prior `
+            -Name $PriorName `
+            -Required @("coverage", "grants", "denials") `
+            -Optional @("frozen")
+        $PriorCoverage = Assert-GitLoopyObject $Prior["coverage"] "$PriorName.coverage"
+        Assert-GitLoopyFields `
+            -Value $PriorCoverage `
+            -Name "$PriorName.coverage" `
+            -Required @("repositories")
+        $PriorRepositories = New-GitLoopyOrdinalSet
+        foreach ($Entry in (Assert-GitLoopyArray `
+                    $PriorCoverage["repositories"] "$PriorName.coverage.repositories")) {
+            [void]$PriorRepositories.Add(
+                (Assert-GitLoopyString $Entry "$PriorName.coverage.repositories item")
+            )
+        }
+        $PriorGrants = Get-GitLoopyScopeEntries $Prior["grants"] "$PriorName.grants"
+        $PriorDenials = Get-GitLoopyScopeEntries $Prior["denials"] "$PriorName.denials"
+        $Repositories.IntersectWith($PriorRepositories)
+        $EffectiveGrants.IntersectWith($PriorGrants)
+        $Denied.UnionWith($PriorDenials)
+        $EffectiveGrants.ExceptWith($Denied)
+    }
+
+    $Frontier = $null
+    if ($Automation.Contains("frontier")) {
+        $FrontierName = "$Name.frontier"
+        $Declared = Assert-GitLoopyObject $Automation["frontier"] $FrontierName
+        Assert-GitLoopyFields `
+            -Value $Declared `
+            -Name $FrontierName `
+            -Required @("actions")
+        $Frontier = Test-GitLoopyPreviousActions `
+            $Declared["actions"] "$FrontierName.actions"
+    }
+
+    $Dispatched = New-GitLoopyOrdinalSet
+    if ($Automation.Contains("dispatched")) {
+        foreach ($Entry in (Assert-GitLoopyArray `
+                    $Automation["dispatched"] "$Name.dispatched")) {
+            [void]$Dispatched.Add(
+                (Assert-GitLoopyString $Entry "$Name.dispatched item")
+            )
+        }
+    }
+
+    return [ordered]@{
+        PerformerId = $PerformerId
+        SatisfiedRequirements = $Satisfied
+        InstructionModes = $HandledModes
+        Repositories = $Repositories
+        Grants = $EffectiveGrants
+        Denials = $Denied
+        Frontier = $Frontier
+        Dispatched = $Dispatched
+    }
+}
+
+function Get-GitLoopyActionRepositories {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Action)
+
+    $Repositories = New-GitLoopyOrdinalSet
+    foreach ($Reference in @($Action["workstream_anchor"], $Action["target"])) {
+        if (
+            $Reference -is [Collections.IDictionary] -and
+            $Reference.Contains("repository")
+        ) {
+            [void]$Repositories.Add([string]$Reference["repository"])
+        }
+    }
+    return , $Repositories
+}
+
+function Get-GitLoopyAutomationIneligibility {
+    <#
+        Every typed reason this Action is not Automation-selectable.
+    #>
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Action,
+        [Parameter(Mandatory)][Collections.IDictionary]$Automation,
+        [Parameter(Mandatory)][Collections.IDictionary]$Frontier,
+        [Parameter(Mandatory)][Collections.IDictionary]$Quarantined
+    )
+
+    $Reasons = New-GitLoopyOrdinalSet
+    $Identity = [string]$Action["identity"]
+    $Fingerprint = [string]$Action["semantic_fingerprint"]
+    if (
+        -not (Get-GitLoopyActionRepositories $Action).IsSubsetOf(
+            $Automation["Repositories"]
+        )
+    ) {
+        [void]$Reasons.Add("outside-coverage")
+    }
+    if (
+        -not $Frontier.Contains($Identity) -or
+        [string]$Frontier[$Identity] -cne $Fingerprint
+    ) {
+        [void]$Reasons.Add("outside-frontier")
+    }
+    if ($Automation["Dispatched"].Contains($Identity)) {
+        [void]$Reasons.Add("already-dispatched")
+    }
+    if ($Quarantined.Contains((Get-GitLoopyPairKey -Kind $Identity -Value $Fingerprint))) {
+        [void]$Reasons.Add("quarantined")
+    }
+    if ([string]$Action["interaction"]["classification"] -cne "AFK-safe") {
+        [void]$Reasons.Add("human-boundary")
+    }
+    if ([string]$Action["readiness"] -cne "Ready") {
+        [void]$Reasons.Add("not-ready")
+    }
+    if (-not $Action.Contains("safety_case")) {
+        # An AFK-safe classification without its positive safety case is an
+        # assertion, not an argument. Absence is never upgraded to eligibility.
+        if (-not $Reasons.Contains("human-boundary")) {
+            [void]$Reasons.Add("safety-case-absent")
+        }
+    }
+    else {
+        $SafetyCase = $Action["safety_case"]
+        $Effects = Get-GitLoopyScopeEntries `
+            $SafetyCase["effects"] "safety_case.effects"
+        if (-not $Effects.IsSubsetOf($Automation["Grants"])) {
+            [void]$Reasons.Add("grant-missing")
+        }
+        $Requirements = Get-GitLoopyRequirementEntries `
+            $SafetyCase["requirements"] "safety_case.requirements"
+        if (
+            -not $Requirements.IsSubsetOf($Automation["SatisfiedRequirements"]) -or
+            -not $Automation["InstructionModes"].Contains(
+                [string]$Action["instruction"]["mode"]
+            )
+        ) {
+            [void]$Reasons.Add("performer-ineligible")
+        }
+    }
+    return Get-GitLoopyOrdinalSortedStrings @($Reasons)
+}
+
+function Get-GitLoopyAutomationProjection {
+    <#
+        Project one Performer's authorization decision over a frozen frontier.
+    #>
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Request,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Actions,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Outcomes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Diagnostics,
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Validators
+    )
+
+    $Automation = Test-GitLoopyAutomation $Request["automation"] "automation"
+
+    # The frontier freezes at the first stable Reconciliation of the Run and is
+    # replayed by the caller thereafter. Every in-coverage identity is frozen,
+    # including Blocked, HITL-required, ineligible, and quarantined members --
+    # otherwise a member that later became Ready would look like a newcomer.
+    if ($null -eq $Automation["Frontier"]) {
+        $Frozen = [Collections.Generic.List[object]]::new()
+        foreach ($Action in $Actions) {
+            if (
+                (Get-GitLoopyActionRepositories $Action).IsSubsetOf(
+                    $Automation["Repositories"]
+                )
+            ) {
+                $Frozen.Add([ordered]@{
+                    identity = [string]$Action["identity"]
+                    semantic_fingerprint = [string]$Action["semantic_fingerprint"]
+                })
+            }
+        }
+        $Frozen = [object[]]@($Frozen)
+    }
+    else {
+        $Frozen = [object[]]@($Automation["Frontier"])
+    }
+    $FrontierIndex = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($Entry in $Frozen) {
+        $FrontierIndex[[string]$Entry["identity"]] =
+            [string]$Entry["semantic_fingerprint"]
+    }
+
+    # Evidence names one *semantics*, not one identity forever: a Transition
+    # owner that publishes a repaired occurrence moves the fingerprint, and the
+    # evidence describing the broken one must stop holding the repaired one
+    # down. The class rides along so the stop can name the right problem.
+    $Quarantined = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    $GuidanceFault = $false
+    foreach ($Diagnostic in $Diagnostics) {
+        $Code = [string]$Diagnostic["code"]
+        if ($Code -ceq "dispatch_evidence_quarantine") {
+            foreach ($Identity in @($Diagnostic["identities"])) {
+                $Quarantined[
+                    (Get-GitLoopyPairKey `
+                            -Kind ([string]$Identity) `
+                            -Value ([string]$Diagnostic["semantic_fingerprint"]))
+                ] = [string]$Diagnostic["class"]
+            }
+        }
+        # A conflicted or unverifiable fragment never reaches `actions` at all,
+        # so a guidance fault is observed from the diagnostics rather than from
+        # any one Action. It must still stop the Run: the frontier it froze is
+        # not a trustworthy description of the project.
+        if (
+            $Code -cin $Script:CoverageUncertaintyCodes -or
+            $Code -cin @("action_conflict", "prerequisite_cycle")
+        ) {
+            $GuidanceFault = $true
+        }
+    }
+
+    $Eligibility = [Collections.Generic.List[object]]::new()
+    $ReportOnly = [Collections.Generic.List[object]]::new()
+    $QuarantineStops = New-GitLoopyOrdinalSet
+    $QuarantineIdentities = New-GitLoopyOrdinalSet
+    $Selected = $null
+    foreach ($Action in $Actions) {
+        $Reasons = Get-GitLoopyAutomationIneligibility `
+            -Action $Action `
+            -Automation $Automation `
+            -Frontier $FrontierIndex `
+            -Quarantined $Quarantined
+        $Identity = [string]$Action["identity"]
+        $Fingerprint = [string]$Action["semantic_fingerprint"]
+        $Entry = [ordered]@{
+            identity = $Identity
+            semantic_fingerprint = $Fingerprint
+            automation_selectable = ($Reasons.Count -eq 0)
+        }
+        if ($Reasons.Count -gt 0) {
+            $Entry["reasons"] = $Reasons
+        }
+        $Eligibility.Add($Entry)
+        if ($Reasons -ccontains "outside-frontier") {
+            $ReportOnly.Add([ordered]@{
+                identity = $Identity
+                semantic_fingerprint = $Fingerprint
+                reason = if ($FrontierIndex.Contains($Identity)) {
+                    "changed-semantics"
+                }
+                else {
+                    "newly-produced"
+                }
+            })
+        }
+        if ($Reasons -ccontains "quarantined") {
+            [void]$QuarantineStops.Add(
+                [string]$Quarantined[
+                    (Get-GitLoopyPairKey -Kind $Identity -Value $Fingerprint)
+                ]
+            )
+            [void]$QuarantineIdentities.Add($Identity)
+        }
+        if ($Reasons.Count -eq 0 -and $null -eq $Selected) {
+            $Selected = $Action
+        }
+    }
+
+    $Projection = [ordered]@{
+        performer = $Automation["PerformerId"]
+        scope = [ordered]@{
+            coverage = [ordered]@{
+                repositories = Get-GitLoopyOrdinalSortedStrings `
+                    @($Automation["Repositories"])
+            }
+            grants = Get-GitLoopySortedPairs `
+                -Keys @($Automation["Grants"]) -SecondField "scope"
+            denials = Get-GitLoopySortedPairs `
+                -Keys @($Automation["Denials"]) -SecondField "scope"
+            frozen = $true
+        }
+        frontier = [ordered]@{ actions = $Frozen }
+        validators = $Validators
+        eligibility = [object[]]@($Eligibility)
+        report_only = [object[]]@($ReportOnly)
+    }
+
+    # A guidance fault is not a property of the selected Action -- the
+    # conflicted or unverifiable fragment never reached `actions` at all. What
+    # it makes untrustworthy is the coverage the Run froze, so no Action inside
+    # that frozen description may be dispatched on the strength of it.
+    if ($null -ne $Selected -and -not $GuidanceFault) {
+        $SafetyCase = $Selected["safety_case"]
+        $Effects = Get-GitLoopyScopeEntries $SafetyCase["effects"] "safety_case.effects"
+        $Requirements = Get-GitLoopyRequirementEntries `
+            $SafetyCase["requirements"] "safety_case.requirements"
+        $Projection["authorization"] = [ordered]@{
+            action_identity = [string]$Selected["identity"]
+            semantic_fingerprint = [string]$Selected["semantic_fingerprint"]
+            performer = $Automation["PerformerId"]
+            workstream_anchor = $Selected["workstream_anchor"]
+            target = $Selected["target"]
+            safety_case_version = [string]$SafetyCase["version"]
+            completion_condition = $Selected["completion_condition"]
+            effects = Get-GitLoopySortedPairs -Keys @($Effects) -SecondField "scope"
+            requirements = Get-GitLoopySortedPairs `
+                -Keys @($Requirements) -SecondField "name"
+            retry = $SafetyCase["retry"]
+            triggers = $SafetyCase["triggers"]
+        }
+        return $Projection
+    }
+
+    $Projection["stop"] = Get-GitLoopyAutomationStop `
+        -Actions $Actions `
+        -Eligibility ([object[]]@($Eligibility)) `
+        -ReportOnly ([object[]]@($ReportOnly)) `
+        -Outcomes $Outcomes `
+        -Status $Status `
+        -Frontier $Frozen `
+        -GuidanceFault $GuidanceFault `
+        -QuarantineStops $QuarantineStops `
+        -QuarantineIdentities $QuarantineIdentities
+    return $Projection
+}
+
+function Get-GitLoopyAutomationStop {
+    <#
+        Explain, once and in typed terms, why nothing further can be selected.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Actions,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Eligibility,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$ReportOnly,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Outcomes,
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Frontier,
+        [Parameter(Mandatory)][bool]$GuidanceFault,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [Collections.Generic.HashSet[string]]$QuarantineStops,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [Collections.Generic.HashSet[string]]$QuarantineIdentities
+    )
+
+    $Observed = New-GitLoopyOrdinalSet
+    foreach ($Entry in $Eligibility) {
+        if (-not $Entry.Contains("reasons")) { continue }
+        foreach ($Reason in @($Entry["reasons"])) {
+            if ($Script:IneligibilityStopReasons.Contains([string]$Reason)) {
+                [void]$Observed.Add(
+                    [string]$Script:IneligibilityStopReasons[[string]$Reason]
+                )
+            }
+        }
+    }
+    $Observed.UnionWith($QuarantineStops)
+    if ($GuidanceFault) { [void]$Observed.Add("guidance-fault") }
+    if ($Status -ceq "complete") { [void]$Observed.Add("workstreams-terminal") }
+    if ($Frontier.Count -eq 0) { [void]$Observed.Add("frontier-drained") }
+
+    $Reason = "frontier-drained"
+    $Disposition = "expected-boundary"
+    foreach ($Candidate in $Script:AutomationStopPrecedence) {
+        if ($Observed.Contains($Candidate[0])) {
+            $Reason = $Candidate[0]
+            $Disposition = $Candidate[1]
+            break
+        }
+    }
+
+    $Decisive = [Collections.Generic.List[object]]::new()
+    foreach ($Entry in $Eligibility) {
+        if ($Reason -cin $Script:DispatchEvidenceClasses) {
+            if ($QuarantineIdentities.Contains([string]$Entry["identity"])) {
+                $Decisive.Add($Entry)
+            }
+            continue
+        }
+        if (-not $Entry.Contains("reasons")) { continue }
+        foreach ($Item in @($Entry["reasons"])) {
+            if (
+                $Script:IneligibilityStopReasons.Contains([string]$Item) -and
+                [string]$Script:IneligibilityStopReasons[[string]$Item] -ceq $Reason
+            ) {
+                $Decisive.Add($Entry)
+                break
+            }
+        }
+    }
+    $DecisiveIdentities = New-GitLoopyOrdinalSet @(
+        $Decisive | ForEach-Object { [string]$_["identity"] }
+    )
+    $Index = [Collections.Specialized.OrderedDictionary]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($Action in $Actions) {
+        $Index[[string]$Action["identity"]] = $Action
+    }
+    $Stop = [ordered]@{
+        disposition = $Disposition
+        reason = $Reason
+        nonterminal_status = $Status
+    }
+    if ($Decisive.Count -gt 0) {
+        $PrimaryIdentity = [string]$Decisive[0]["identity"]
+        if ($Index.Contains($PrimaryIdentity)) {
+            $Primary = $Index[$PrimaryIdentity]
+            $Next = [ordered]@{
+                kind = "action"
+                identity = $PrimaryIdentity
+                summary = $Primary["summary"]
+                readiness = $Primary["readiness"]
+            }
+            if (
+                $Primary.Contains("unsatisfied_prerequisites") -and
+                @($Primary["unsatisfied_prerequisites"]).Count -gt 0
+            ) {
+                $Next["condition"] = @($Primary["unsatisfied_prerequisites"])[0]
+            }
+            $Stop["next"] = $Next
+        }
+    }
+    $Evidence = [Collections.Generic.List[object]]::new()
+    foreach ($Identity in (Get-GitLoopyOrdinalSortedStrings @($DecisiveIdentities))) {
+        if ($Index.Contains($Identity)) {
+            $Evidence.Add($Index[$Identity]["target"])
+        }
+    }
+    $Stop["evidence"] = [object[]]@($Evidence)
+    $Secondary = [Collections.Generic.List[object]]::new()
+    foreach ($Entry in $Eligibility) {
+        if (
+            $Entry.Contains("reasons") -and
+            -not $DecisiveIdentities.Contains([string]$Entry["identity"])
+        ) {
+            $Secondary.Add([ordered]@{
+                identity = $Entry["identity"]
+                reasons = $Entry["reasons"]
+            })
+        }
+    }
+    $Stop["secondary_barriers"] = [object[]]@($Secondary)
+    $Stop["report_only_successors"] = $ReportOnly
+    $Stop["outcomes"] = $Outcomes
+    $Stop["successor_executed"] = $false
+    $Stop["statement"] =
+        "No successor Action was executed by this Reconciliation."
+    return $Stop
+}
+
+function Test-GitLoopyDispatch {
+    <#
+        Validate one exceptional Dispatch-evidence record before it is written.
+
+        Only two classes exist, and neither carries an Instruction: ordinary
+        success and ordinary execution failure stay in the Runner's existing
+        artifacts, Events, retry, and Strike paths. The record's shape is what
+        keeps a runnable Instruction or a secret out of a durable comment --
+        there is no field to put one in.
+    #>
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Repository
+    )
+
+    $Dispatch = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Dispatch `
+        -Name $Name `
+        -Required @(
+            "action_identity", "semantic_fingerprint", "performer", "carrier",
+            "class", "summary", "evidence"
+        ) `
+        -Optional @("reason")
+    foreach ($Field in @("action_identity", "semantic_fingerprint")) {
+        $Digest = Assert-GitLoopyString $Dispatch[$Field] "$Name.$Field"
+        if ($Digest -cnotmatch $Script:DigestPattern) {
+            throw (New-GitLoopyRejection "$Name.$Field must be a sha256 digest")
+        }
+    }
+    $null = Assert-GitLoopyString $Dispatch["performer"] "$Name.performer"
+    $Summary = Assert-GitLoopyString $Dispatch["summary"] "$Name.summary"
+    if ($Summary.Contains("`n") -or $Summary.Contains("`r")) {
+        throw (New-GitLoopyRejection "$Name.summary must be one line")
+    }
+    $EvidenceClass = Assert-GitLoopyString $Dispatch["class"] "$Name.class"
+    if ($EvidenceClass -cnotin $Script:DispatchEvidenceClasses) {
+        throw (New-GitLoopyRejection "$Name.class is unsupported")
+    }
+    if ($EvidenceClass -ceq "safety-case-violation") {
+        $Reason = Assert-GitLoopyString $Dispatch["reason"] "$Name.reason"
+        if ($Reason -cnotin $Script:HumanBoundaryReasons) {
+            throw (New-GitLoopyRejection "$Name.reason is unsupported")
+        }
+    }
+    elseif ($Dispatch.Contains("reason")) {
+        throw (New-GitLoopyRejection (
+            "$Name.reason belongs only to a safety-case-violation"
+        ))
+    }
+    $Carrier = Assert-GitLoopyDurableReference `
+        -Value $Dispatch["carrier"] `
+        -Name "$Name.carrier" `
+        -Repository $Repository `
+        -AllowedKinds @("issue")
+    $Evidence = Assert-GitLoopyArray $Dispatch["evidence"] "$Name.evidence" -NonEmpty
+    for ($Index = 0; $Index -lt $Evidence.Count; $Index++) {
+        $null = Assert-GitLoopyDurableReference `
+            -Value $Evidence[$Index] `
+            -Name "$Name.evidence[$Index]" `
+            -Repository $Repository
+    }
+    return [ordered]@{
+        Dispatch = $Dispatch
+        Carrier = $Carrier
+    }
+}
+
+function New-GitLoopyDispatchEvidenceBody {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Record)
+
+    $Canonical = ConvertTo-GitLoopyCanonicalJson $Record
+    return "$Script:DispatchMarker`n``````json`n$Canonical`n``````"
+}
+
+function Get-GitLoopyDispatchEvidenceFromComment {
+    <#
+        Read one durable Dispatch-evidence record, or `$null`.
+
+        Dispatch evidence is deliberately *not* a Producer revision: it carries
+        no lineage, creates and retires nothing, and is read only to
+        quarantine. That is exactly why reading applies the *whole* closed
+        schema the writer applied and the same Performer binding: a quarantine
+        is a change of authority, and a fragment naming an identity is not
+        enough to make one.
+    #>
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Comment,
+        [Parameter(Mandatory)][string]$Repository
+    )
+
+    $Body = $Comment["body"]
+    if ($Body -isnot [string] -or -not $Body.Contains($Script:DispatchMarker)) {
+        return $null
+    }
+    $Remainder = $Body.Substring(
+        $Body.IndexOf($Script:DispatchMarker, [StringComparison]::Ordinal) +
+        $Script:DispatchMarker.Length
+    )
+    $Opening = "``````json`n"
+    $FenceStart = $Remainder.IndexOf($Opening, [StringComparison]::Ordinal)
+    if ($FenceStart -lt 0) {
+        return $null
+    }
+    $Fenced = $Remainder.Substring($FenceStart + $Opening.Length)
+    $FenceEnd = $Fenced.IndexOf("`n``````", [StringComparison]::Ordinal)
+    $Raw = if ($FenceEnd -lt 0) { $Fenced } else { $Fenced.Substring(0, $FenceEnd) }
+    try {
+        $Record = $Raw | ConvertFrom-Json -AsHashtable -DateKind String
+    }
+    catch {
+        return $null
+    }
+    if ($Record -isnot [Collections.IDictionary]) {
+        return $null
+    }
+    try {
+        $Validated = Test-GitLoopyDispatch `
+            -Value $Record `
+            -Name "dispatch evidence" `
+            -Repository $Repository
+    }
+    catch [GitLoopyContinuationRejection] {
+        return $null
+    }
+    # Anyone with write access can leave a comment; only the Performer named in
+    # the record can have performed the Dispatch it describes.
+    if ($Validated.Dispatch["performer"] -cne [string]$Comment["author"]) {
+        return $null
+    }
+    return $Validated.Dispatch
+}
+
+function Get-GitLoopyDispatchEvidenceDiagnostics {
+    <#
+        Quarantine the smallest justified scope named by Dispatch evidence.
+
+        The record is immutable and non-Producer: it never retires the Action
+        or creates a replacement. Only the Transition owner can do that, so
+        until it does, the named semantics stay visible and stay unselectable.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [Collections.Generic.List[object]]$Evidence
+    )
+
+    $Ordered = @(
+        $Evidence | Sort-Object -Property { [long]$_["comment_id"] }
+    )
+    $Diagnostics = [Collections.Generic.List[object]]::new()
+    foreach ($Entry in $Ordered) {
+        $Record = $Entry["record"]
+        $Diagnostics.Add([ordered]@{
+            code = "dispatch_evidence_quarantine"
+            comment_id = [long]$Entry["comment_id"]
+            class = $Record["class"]
+            identities = [object[]]@($Record["action_identity"])
+            semantic_fingerprint = $Record["semantic_fingerprint"]
+        })
+    }
+    return , [object[]]@($Diagnostics)
+}
+
+function Invoke-GitLoopyContinuationRecordDispatchResult {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Request)
+
+    Assert-GitLoopyFields `
+        -Value $Request `
+        -Name "request" `
+        -Required @("repository", "trusted_producers", "dispatch") `
+        -Optional @("trusted_apps")
+    $Repository = Get-GitLoopyRepository $Request
+    $null = Get-GitLoopyTrustedProducers -Request $Request
+    $null = Get-GitLoopyTrustedApps -Request $Request
+    $Validated = Test-GitLoopyDispatch `
+        -Value $Request["dispatch"] `
+        -Name "dispatch" `
+        -Repository $Repository
+    $Dispatch = $Validated.Dispatch
+    $Carrier = $Validated.Carrier
+    $Actor = Invoke-GitLoopyGitHub `
+        -Arguments @("api", "user") `
+        -Context "reading the authenticated GitHub actor"
+    if (
+        $Actor -isnot [Collections.IDictionary] -or
+        $Actor["login"] -isnot [string] -or
+        $Actor["type"] -isnot [string]
+    ) {
+        throw [GitLoopyContinuationGitHubException]::new(
+            "decoding the authenticated GitHub actor"
+        )
+    }
+    # Anyone with write access can leave a comment; only the Performer named in
+    # the record can have performed the Dispatch it describes.
+    if ($Actor["login"] -cne $Dispatch["performer"]) {
+        throw (New-GitLoopyRejection (
+            "dispatch.performer must be the authenticated actor writing the record"
+        ))
+    }
+    $Record = [ordered]@{}
+    foreach ($Key in (Get-GitLoopyOrdinalSortedStrings @($Dispatch.Keys))) {
+        $Record[$Key] = $Dispatch[$Key]
+    }
+    $CanonicalRecord = ConvertTo-GitLoopyCanonicalJson $Record
+    $Document = [Text.Json.JsonDocument]::Parse($CanonicalRecord)
+    try {
+        Test-GitLoopyPortablePhase $Document.RootElement "Dispatch evidence"
+    }
+    finally {
+        $Document.Dispose()
+    }
+    $EvidenceId = Get-GitLoopySha256 $CanonicalRecord
+    $Committed = Invoke-GitLoopyGitHub `
+        -Arguments @(
+            "api", "--method", "POST",
+            "repos/$Repository/issues/$($Carrier["number"])/comments",
+            "--input", "-"
+        ) `
+        -InputValue ([ordered]@{ body = (New-GitLoopyDispatchEvidenceBody $Record) }) `
+        -Context "recording the Dispatch result"
+    if ($Committed -isnot [Collections.IDictionary]) {
+        throw [GitLoopyContinuationGitHubException]::new(
+            "decoding the recorded Dispatch result"
+        )
+    }
+    $CommentId = Get-GitLoopyCommentId $Committed
+    $CommentUrl = if ($Committed.Contains("url")) {
+        $Committed["url"]
+    }
+    else {
+        $Committed["html_url"]
+    }
+    if ($null -eq $CommentId -or $CommentUrl -isnot [string]) {
+        throw [GitLoopyContinuationGitHubException]::new(
+            "decoding the recorded Dispatch result"
+        )
+    }
+    return [ordered]@{
+        ok = $true
+        operation = "record-dispatch-result"
+        receipt = [ordered]@{
+            status = "committed"
+            dispatch_evidence_id = $EvidenceId
+            class = $Record["class"]
+            action_identity = $Record["action_identity"]
+            semantic_fingerprint = $Record["semantic_fingerprint"]
+            carrier = $Carrier
+            comment = [ordered]@{
+                id = $CommentId
+                url = $CommentUrl
+            }
+        }
     }
 }
 
@@ -4853,6 +6002,7 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
     $Indexed = [Collections.Generic.HashSet[long]]::new()
     $TrustedMarkerCarriers = [Collections.Generic.HashSet[long]]::new()
     $RecordCarriers = [Collections.Generic.HashSet[long]]::new()
+    $DispatchEvidence = [Collections.Generic.List[object]]::new()
     foreach ($Carrier in $Carriers) {
         if (@($Carrier["labels"]) -ccontains $Script:IndexLabel) {
             [void]$Indexed.Add([long]$Carrier["number"])
@@ -4923,6 +6073,16 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
                     code = "mutated_revision"
                     carrier = [long]$Carrier["number"]
                     comment_id = [long]$Comment["id"]
+                })
+                continue
+            }
+            $Evidence = Get-GitLoopyDispatchEvidenceFromComment `
+                -Comment $Comment `
+                -Repository $Repository
+            if ($null -ne $Evidence) {
+                $DispatchEvidence.Add([ordered]@{
+                    comment_id = [long]$Comment["id"]
+                    record = $Evidence
                 })
                 continue
             }
@@ -5202,6 +6362,11 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
         $Diagnostics.Add($Diagnostic)
     }
     $OrderedActions = [object[]]@($Derived["actions"])
+    foreach ($Diagnostic in (
+            Get-GitLoopyDispatchEvidenceDiagnostics -Evidence $DispatchEvidence
+        )) {
+        $Diagnostics.Add($Diagnostic)
+    }
     $Outcomes = Get-GitLoopyWorkstreamOutcomes -GuidanceEntries $GuidanceEntries
     # A complete all-state read establishes closed coverage only when every
     # discovered lineage remains trustworthy. A malformed, incomplete, or forked
@@ -5267,6 +6432,15 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
         )
         validators = $Validators
     }
+    if ($Request.Contains("automation")) {
+        $Result["automation"] = Get-GitLoopyAutomationProjection `
+            -Request $Request `
+            -Actions $OrderedActions `
+            -Outcomes ([object[]]@($Outcomes)) `
+            -Diagnostics ([object[]]@($Diagnostics)) `
+            -Status $Status `
+            -Validators ([object[]]@($Validators))
+    }
     return [ordered]@{
         ok = $true
         operation = "reconcile"
@@ -5308,6 +6482,7 @@ function Invoke-GitLoopyContinuationReconcile {
     $Actions = [Collections.Generic.List[object]]::new()
     $Diagnostics = [Collections.Generic.List[object]]::new()
     $GuidanceEntries = [Collections.Generic.List[object]]::new()
+    $DispatchEvidence = [Collections.Generic.List[object]]::new()
     $RevisionCount = 0
     $LayerCache = [Collections.Specialized.OrderedDictionary]::new(
         [StringComparer]::Ordinal
@@ -5319,14 +6494,25 @@ function Invoke-GitLoopyContinuationReconcile {
         ) {
             throw [GitLoopyContinuationGitHubException]::new("decoding indexed carriers")
         }
-        foreach ($Comment in $Carrier["comments"]) {
-            if (
-                $Comment -isnot [Collections.IDictionary] -or
-                $Comment["author"] -isnot [Collections.IDictionary]
-            ) {
+        foreach ($RawComment in $Carrier["comments"]) {
+            if ($RawComment -isnot [Collections.IDictionary]) {
                 continue
             }
-            $Author = [string]$Comment["author"]["login"]
+            $Comment = ConvertTo-GitLoopyIndexedComment $RawComment
+            if ($null -eq $Comment) {
+                continue
+            }
+            $Evidence = Get-GitLoopyDispatchEvidenceFromComment `
+                -Comment $Comment `
+                -Repository $Repository
+            if ($null -ne $Evidence) {
+                $DispatchEvidence.Add([ordered]@{
+                    comment_id = [long]$Comment["id"]
+                    record = $Evidence
+                })
+                continue
+            }
+            $Author = [string]$Comment["author"]
             if ($Author -cnotin $TrustedArray) {
                 continue
             }
@@ -5430,11 +6616,19 @@ function Invoke-GitLoopyContinuationReconcile {
                     -Record $Record `
                     -Action $Action `
                     -LayerCache $LayerCache
+                if ($Action.Contains("safety_case")) {
+                    $LabelItem["safety_case"] = $Action["safety_case"]
+                }
                 $Actions.Add($LabelItem)
             }
         }
     }
     $OrderedActions = Get-GitLoopyContinuationViewOrder -Actions $Actions
+    foreach ($Diagnostic in (
+            Get-GitLoopyDispatchEvidenceDiagnostics -Evidence $DispatchEvidence
+        )) {
+        $Diagnostics.Add($Diagnostic)
+    }
     $Outcomes = Get-GitLoopyWorkstreamOutcomes -GuidanceEntries $GuidanceEntries
     # Label-indexed discovery is not a complete, paginated all-state read, so it
     # never has closed coverage and must never claim project-wide "complete"
@@ -5502,6 +6696,25 @@ function Invoke-GitLoopyContinuationReconcile {
         $Result["delta"] = $Delta
     }
     $Result["diagnostics"] = @($Diagnostics)
+    if ($Request.Contains("automation")) {
+        $Validators = [Collections.Generic.List[object]]::new()
+        foreach ($Entry in (
+                $GuidanceEntries |
+                    Sort-Object -Property { [long]$_["comment"]["id"] }
+            )) {
+            $Validators.Add([ordered]@{
+                comment_id = [long]$Entry["comment"]["id"]
+                sha256 = Get-GitLoopySha256 ([string]$Entry["comment"]["body"])
+            })
+        }
+        $Result["automation"] = Get-GitLoopyAutomationProjection `
+            -Request $Request `
+            -Actions $OrderedActions `
+            -Outcomes ([object[]]@($Outcomes)) `
+            -Diagnostics ([object[]]@($Diagnostics)) `
+            -Status $Status `
+            -Validators ([object[]]@($Validators))
+    }
     return [ordered]@{
         ok = $true
         operation = "reconcile"
@@ -5737,6 +6950,9 @@ function Invoke-GitLoopyContinuationMain {
         }
         elseif ($Operation -ceq "repair-index") {
             $Result = Invoke-GitLoopyContinuationRepairIndex $Request
+        }
+        elseif ($Operation -ceq "record-dispatch-result") {
+            $Result = Invoke-GitLoopyContinuationRecordDispatchResult $Request
         }
         else {
             $Result = $null
