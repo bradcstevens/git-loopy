@@ -66,10 +66,10 @@ At the 1.0 foundation gate, every family member advertised the GitHub Adapter bu
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. `record-dispatch-result`, report mode,
-execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python advertises
-`terminal_rendering: true`; shell and PowerShell continue to advertise `terminal_rendering: false`
-and fail closed on `reconcile --terminal` with `unsupported_operation` until their native renderers
-land. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
+execute-frontier, and concurrent Dispatch remain unsupported everywhere. Python and PowerShell
+advertise `terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
+and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
+lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
 
 Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A distribution
@@ -82,8 +82,8 @@ operation. Python advertises `fixed_frontier_authorization: true`; shell and Pow
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
 implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
-reference. Python advertises `prospective_projection: true`; shell and PowerShell advertise `false`
-and fail closed rather than ignoring the gated fields: `completion.retirements` is a structural
+reference. Python and PowerShell advertise `prospective_projection: true`; shell advertises `false`
+and fails closed rather than ignoring the gated fields: `completion.retirements` is a structural
 `publish` rejection, and `previous_actions` or `handoff` on `reconcile` returns
 `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
 ordering rule and every family member implements it.

@@ -165,10 +165,11 @@ distinguishes "nothing was retired" from "not computed here"; for the rest the c
 is the discriminator, since they never emit that diagnostic.
 
 `retirement-bearing-record-is-readable-without-prospective-projection` replays the same world as the
-Python retirement scenario through shell and PowerShell. It pins the split between reading and
-authoring receipts: both must project the successor's Action and leave `retirements` empty, and
-neither may quarantine the record. Without it, a distribution that rejected `completion.retirements`
-as an unknown field would silently resurface the retired predecessor as live guidance.
+shared retirement scenario through shell. It pins the split between reading and
+authoring receipts: a reading distribution must project the successor's Action and leave
+`retirements` empty, and must not quarantine the record. Without it, a distribution that rejected
+`completion.retirements` as an unknown field would silently resurface the retired predecessor as
+live guidance.
 
 `malformed-retirement-receipt-is-quarantined-in-every-distribution` is the matching fail-closed
 control, shared by all three. Reading a receipt is not the same as waving it through: a receipt with
@@ -177,13 +178,31 @@ diagnostic message everywhere, so accepting the field can never become accepting
 `retirements`.
 
 The retirement, HITL-stop, genuine-completion, out-of-order-completion, and Handoff families are
-scoped `["python"]` rather than shared. That gap is deliberate and capability-derived, not an
-oversight: shell and PowerShell advertise `prospective_projection: false` and
-`terminal_rendering: false`, never project `outcomes` or a `complete` status, and hold no retirement
-vocabulary at all, so they cannot run these scenarios as written. Companion scenarios assert that
-gap instead of merely declaring it — shell and PowerShell fail closed on `handoff` and
+scoped `["python", "powershell"]` rather than shared. That gap is deliberate and capability-derived,
+not an oversight: shell advertises `prospective_projection: false` and
+`terminal_rendering: false`, never projects `outcomes` or a `complete` status, and holds no retirement
+vocabulary at all, so it cannot run these scenarios as written. Companion scenarios assert that
+gap instead of merely declaring it — shell fails closed on `handoff` and
 `previous_actions` with `unsupported_operation`, so a distribution that silently started accepting
 either would break the fixture.
+
+`reconcile-reads-a-lineage-record-from-the-label-index` pins the label-indexed path against a record
+carrying `parents`. A revision identity over a lineage record is a digest of `{completion, parents}`,
+not of the completion alone, so a reader that recomputed it the flat way silently discards every
+lineage record it finds through the label index — reporting zero Producer revisions rather than a
+rejection. It is scoped `["python", "powershell"]` because it also pins the
+`retirements_require_revision_protocol` gate that only a projecting distribution emits.
+
+`reconcile-terminal-bounds-the-ready-and-blocked-remainder` is the only scenario that exercises the
+terminal renderer's bounding arithmetic. A seven-Action projection produces
+`Ready (4 more, 1 hidden)`, the expand line, and a separate `Blocked (2 more, 0 hidden)` group, so a
+renderer that printed the whole remainder — or miscounted what it withheld — fails here rather than
+on an operator's terminal.
+
+`reconcile-projects-the-refresh-delta` is the positive counterpart to the shell-only
+`previous_actions` fail-closed scenario. It pins all three delta groups at once — five `added`, one
+`retired`, one `changed` — because a delta that reported only the groups it happened to populate
+would still look correct against a world where two of them are empty.
 
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
