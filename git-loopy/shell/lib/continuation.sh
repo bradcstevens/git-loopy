@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.0"
+GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.1"
+GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1"]'
 GIT_LOOPY_CONTINUATION_RECORD_FORMAT=1
 GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION="1.4"
 GIT_LOOPY_CONTINUATION_EVENT_SCHEMA_VERSION="1.1"
@@ -8,6 +9,59 @@ GIT_LOOPY_CONTINUATION_INDEX_LABEL="git-loopy-continuation"
 GIT_LOOPY_CONTINUATION_RECORD_MARKER="<!-- git-loopy-continuation:1 -->"
 GIT_LOOPY_CONTINUATION_REQUEST=""
 GIT_LOOPY_CONTINUATION_VALIDATION_ERROR=""
+
+# Single source of the family's Continuation view order. Prepended to any jq
+# program that projects or orders Actions so the label-indexed and
+# revision-protocol paths can never drift from each other or from the other
+# distributions.
+# shellcheck disable=SC2016  # $nodes/$keys/$layers are jq variables, not shell.
+_GIT_LOOPY_CONTINUATION_ORDER_JQ='
+def local_layers($actions):
+  ([$actions[] | {
+      key:(.key | tostring),
+      deps:([(.prerequisites // [])[]
+             | select(.kind == "action-completed")
+             | (.action_key | tostring)] | unique)
+    }]) as $nodes
+  | ([$nodes[].key]) as $keys
+  | (reduce range(0; ($nodes | length) + 1) as $_ ({};
+      . as $resolved
+      | reduce $nodes[] as $node (.;
+          if ($resolved | has($node.key)) then .
+          elif ([$node.deps[] as $dep
+                 | select(($keys | index($dep)) != null)
+                 | select(($resolved | has($dep)) | not)]
+                | length) > 0 then .
+          elif ($node.deps | length) == 0 then .[$node.key] = 0
+          else .[$node.key] =
+            (1 + ([$node.deps[] as $dep | ($resolved[$dep] // 0)] | max))
+          end
+        )
+    )) as $layers
+  | reduce $keys[] as $key ({}; .[$key] = ($layers[$key] // 0));
+def canonical_json:
+  walk(
+    if type == "object"
+    then to_entries | sort_by(.key) | from_entries
+    else .
+    end
+  )
+  | tojson;
+def ordering_fields($record; $action):
+  ($record.actions // []) as $local
+  | ($action.key | tostring) as $key
+  | ._topological_layer = ((local_layers($local))[$key] // 0)
+  | ._local_order_index = (([$local[].key | tostring] | index($key)) // 0);
+def continuation_view_order:
+  sort_by([
+    (if .readiness == "Ready" then 0 else 1 end),
+    ._topological_layer,
+    (.workstream_anchor | canonical_json),
+    ._local_order_index,
+    .identity
+  ])
+  | map(del(._topological_layer, ._local_order_index));
+'
 
 git_loopy_continuation_usage() {
   cat <<'EOF'
@@ -27,7 +81,7 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":false,"concurrent_dispatch":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":false,"concurrent_dispatch":false,"prospective_projection":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
 }
@@ -393,7 +447,7 @@ _git_loopy_continuation_validate_observation() {
   local result token_source expected_token
   result="$(
     jq -c '
-      def digest: test("^[0-9a-f]{64}$");
+      def digest: test("\\A[0-9a-f]{64}\\z");
       if (
         (.observation | type == "object")
         and ((.observation | keys | sort) == ["heads","token","validators"])
@@ -468,7 +522,7 @@ _git_loopy_continuation_validate_reattestation() {
     ])
     and (.reattestation.affected_heads | type == "array" and length > 0)
     and all(.reattestation.affected_heads[];
-      type == "string" and test("^[0-9a-f]{64}$")
+      type == "string" and test("\\A[0-9a-f]{64}\\z")
     )
     and (
       .reattestation.affected_heads as $heads
@@ -562,9 +616,19 @@ _git_loopy_continuation_authorize_producer() {
 
 _git_loopy_continuation_validate_completion_request() {
   local request="$1"
+  # Reading a discovered record is not the same as authoring one. This
+  # distribution does not advertise `prospective_projection`, so it refuses to
+  # author retirement receipts it cannot validate -- but it must still read
+  # every record valid under a contract version it advertises, or a Producer
+  # that does project receipts would be quarantined as unparseable and its
+  # retired predecessor would resurface as live guidance.
+  local reading="${2:-false}"
   local validation
   validation="$(
-    jq -cn --argjson request "$request" '
+    jq -cn --argjson request "$request" \
+      --argjson reading "$reading" \
+      --argjson supported_contract_versions \
+      "$GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS" '
       def fail($message): error($message);
       def object($value; $name):
         if ($value | type) == "object" then true
@@ -576,7 +640,8 @@ _git_loopy_continuation_validate_completion_request() {
         else fail($name + " must be a non-empty string")
         end;
       def positive_integer($value; $name):
-        if ($value | type) == "number" and $value > 0 then true
+        if ($value | type) == "number" and $value > 0 and $value == ($value | floor)
+        then true
         else fail($name + " must be a positive integer")
         end;
       def array($value; $name; $nonempty):
@@ -626,12 +691,62 @@ _git_loopy_continuation_validate_completion_request() {
           )
           and (if ($value.kind == "commit" or $value.kind == "branch") then
                  string($value.sha; $name + ".sha")
-                 and (if ($value.sha | test("^[0-9a-f]{40}$")) then true
+                 and (if ($value.sha | test("\\A[0-9a-f]{40}\\z")) then true
                       else fail($name + ".sha must be a lowercase 40-character SHA") end)
                else true end)
           and (if $value.kind == "branch"
                then string($value.name; $name + ".name")
                else true end);
+      def retirement($value; $name; $repository; $kinds):
+        object($value; $name)
+        and fields(
+          $value; $name;
+          ["predecessor_revision_id", "action_key", "reason", "evidence"];
+          ["replacement", "advisory_extensions"]
+        )
+        and string($value.predecessor_revision_id; $name + ".predecessor_revision_id")
+        and (if ($value.predecessor_revision_id | test("\\A[0-9a-f]{64}\\z")) then true
+             else fail(
+               $name + ".predecessor_revision_id must be a sha256 revision identity"
+             ) end)
+        and string($value.action_key; $name + ".action_key")
+        and string($value.reason; $name + ".reason")
+        and (if ["completed", "lost-basis", "workstream-outcome", "supersession"]
+                  | index($value.reason)
+             then true
+             else fail($name + ".reason is unsupported") end)
+        and array($value.evidence; $name + ".evidence"; true)
+        and all(
+          $value.evidence[];
+          durable(.; $name + ".evidence item"; $repository; [])
+        )
+        and (if ($value | has("replacement")) then
+               (if $value.reason != "supersession" then
+                  fail(
+                    $name + ".replacement is valid only when reason is supersession"
+                  )
+                else true end)
+               and object($value.replacement; $name + ".replacement")
+               and fields(
+                 $value.replacement; $name + ".replacement";
+                 ["workstream_anchor", "kind", "target", "occurrence"];
+                 ["advisory_extensions"]
+               )
+               and durable(
+                 $value.replacement.workstream_anchor;
+                 $name + ".replacement.workstream_anchor"; $repository; []
+               )
+               and string($value.replacement.kind; $name + ".replacement.kind")
+               and (if ($kinds | index($value.replacement.kind)) != null then true
+                    else fail($name + ".replacement.kind is unsupported") end)
+               and durable(
+                 $value.replacement.target; $name + ".replacement.target";
+                 $repository; []
+               )
+               and string($value.replacement.occurrence; $name + ".replacement.occurrence")
+             elif $value.reason == "supersession" then
+               fail($name + " with reason supersession must declare a replacement")
+             else true end);
       def condition($value; $name; $repository; $allow_local):
         {
           "action-completed": {
@@ -940,9 +1055,40 @@ _git_loopy_continuation_validate_completion_request() {
           [
             "carrier", "actions", "outcome", "no_guidance",
             "advisory_extensions"
-          ]
+          ] + (if $reading then ["retirements"] else [] end)
         )
-        and (if $request.completion.continuation_contract_version == "1.0"
+        and (if ($request.completion | has("retirements")) then
+               [
+                 "Address review findings", "Authorize operation",
+                 "Chart workstream", "Close parent", "Decompose spec",
+                 "Implement ticket", "Perform manual validation",
+                 "Prototype evidence", "Provide information", "Publish head",
+                 "Publish spec", "Research fact", "Resolve conflict",
+                 "Resolve decision", "Review and merge PR", "Review head",
+                 "Triage item"
+               ] as $kinds
+               | array($request.completion.retirements; "completion.retirements"; false)
+                 and all(
+                   $request.completion.retirements | to_entries[];
+                   retirement(
+                     .value;
+                     "completion.retirements[" + (.key | tostring) + "]";
+                     $request.repository;
+                     $kinds
+                   )
+                 )
+                 and (
+                   ($request.completion.retirements
+                    | map([.predecessor_revision_id, .action_key])) as $pairs
+                   | if ($pairs | unique | length) == ($pairs | length) then true
+                     else fail(
+                       "completion.retirements contains duplicate " +
+                       "predecessor_revision_id/action_key pair"
+                     ) end
+                 )
+             else true end)
+        and (if $supported_contract_versions
+                  | index($request.completion.continuation_contract_version)
              then true
              else fail("unsupported Continuation contract version") end)
         and (if $request.completion.record_format == 1 then true
@@ -1816,13 +1962,13 @@ _git_loopy_continuation_parse_revision_record() {
         completion:$completion
       }'
   )"
-  if ! _git_loopy_continuation_validate_completion_request "$validation_request"; then
+  if ! _git_loopy_continuation_validate_completion_request "$validation_request" true; then
     return 1
   fi
   if ! jq -e '
     (.parents // [] | type == "array")
     and all((.parents // [])[];
-      type == "string" and test("^[0-9a-f]{64}$")
+      type == "string" and test("\\A[0-9a-f]{64}\\z")
     )
     and (
       (.parents // []) as $parents
@@ -2941,7 +3087,8 @@ _git_loopy_continuation_reconcile_revision_protocol() {
         --arg identity "$identity" \
         --argjson candidate "$candidate" \
         --argjson unsatisfied "$unsatisfied" \
-        '($candidate.record) as $record
+        "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
+        ($candidate.record) as $record
         | ($candidate.action) as $action
         | {
             identity:$identity,
@@ -2968,6 +3115,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
             interaction:$action.interaction,
             completion_condition:$action.completion_condition
           }
+        | ordering_fields($record; $action)
         | if ($unsatisfied | length) > 0
           then .unsatisfied_prerequisites = $unsatisfied
           else .
@@ -3013,7 +3161,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
       '$current + $conflicts'
   )"
   actions="$(
-    jq -c '
+    jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
       sort_by(.identity)
       | group_by(.identity)
       | map(
@@ -3044,7 +3192,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
             else .
             end
         )
-      | sort_by(.identity)
+      | continuation_view_order
     ' <<<"$actions"
   )"
 
@@ -3080,6 +3228,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
           producer_revisions: $producer_revisions
         },
         actions: $actions,
+        retirements: [],
         diagnostics: $diagnostics,
         observation: {
           heads: $heads,
@@ -3111,6 +3260,14 @@ _git_loopy_continuation_reconcile() {
       "reconcile" \
       "invalid_request" \
       "request is outside the supported trusted Reconciliation contract"
+    return 1
+  fi
+  if jq -e 'has("previous_actions") or has("handoff")' \
+    <<<"$request" >/dev/null 2>&1; then
+    _git_loopy_continuation_error \
+      "reconcile" \
+      "unsupported_operation" \
+      "prospective projection is not supported by this distribution"
     return 1
   fi
   if [[ "$(jq -r '.revision_protocol // false' <<<"$request")" == "true" ]]; then
@@ -3189,7 +3346,7 @@ _git_loopy_continuation_reconcile() {
           completion: $completion
         }'
     )"
-    _git_loopy_continuation_validate_completion_request "$validation_request" ||
+    _git_loopy_continuation_validate_completion_request "$validation_request" true ||
       continue
     revision_count=$((revision_count + 1))
 
@@ -3246,7 +3403,7 @@ _git_loopy_continuation_reconcile() {
           --argjson action "$action" \
           --argjson comment_id "$comment_id" \
           --arg comment_url "$(jq -r '.url' <<<"$comment")" \
-          '{
+          "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'{
             identity: $identity,
             semantic_fingerprint:
               $record.semantic_fingerprints[$action.key],
@@ -3268,7 +3425,8 @@ _git_loopy_continuation_reconcile() {
             prerequisites: $action.prerequisites,
             interaction: $action.interaction,
             completion_condition: $action.completion_condition
-          }'
+          }
+          | ordering_fields($record; $action)'
       )"
       actions="$(
         jq -cn \
@@ -3279,7 +3437,10 @@ _git_loopy_continuation_reconcile() {
     done < <(jq -c '.actions[]?' <<<"$record")
   done < <(jq -c '.[] | .comments[]' <<<"$carriers")
 
-  actions="$(jq -c 'sort_by(.identity)' <<<"$actions")"
+  actions="$(
+    jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'continuation_view_order' \
+      <<<"$actions"
+  )"
   jq -cn \
     --arg repository "$repository" \
     --argjson indexed_carriers "$(jq 'length' <<<"$carriers")" \
@@ -3296,6 +3457,7 @@ _git_loopy_continuation_reconcile() {
           producer_revisions: $producer_revisions
         },
         actions: $actions,
+        retirements: [],
         diagnostics: []
       }
     }'

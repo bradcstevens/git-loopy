@@ -139,6 +139,41 @@ traverses complete issue and comment pagination without treating the discovery
 label as authority, and must reproduce the same shared Reconciliation result
 once the extra pages carry only unindexed carriers and ordinary discussion.
 
+Fixture schema 1.4 adds the prospective-projection vocabulary. `revision_protocol.diagnostic_codes`
+pins the family's complete `reconcile` diagnostic vocabulary — the union across every distribution,
+not one member's subset — so emitting an unregistered code is a fixture change rather than a silent
+addition. Scenarios may pin the `retirements`, `outcomes`, `delta`, and `handoff_reference` result
+fields and the exact Continuation view order. Ordering scenarios name every distribution because the
+ordering rule is ungated; scenarios exercising the gated request fields name only distributions
+advertising `prospective_projection`.
+
+Every `reconcile` result pins `retirements`, because the key is always emitted and its absence
+therefore never carries meaning. A distribution without `prospective_projection` pins it empty. For
+distributions that do project receipts the `retirements_require_revision_protocol` diagnostic
+distinguishes "nothing was retired" from "not computed here"; for the rest the capability manifest
+is the discriminator, since they never emit that diagnostic.
+
+`retirement-bearing-record-is-readable-without-prospective-projection` replays the same world as the
+Python retirement scenario through shell and PowerShell. It pins the split between reading and
+authoring receipts: both must project the successor's Action and leave `retirements` empty, and
+neither may quarantine the record. Without it, a distribution that rejected `completion.retirements`
+as an unknown field would silently resurface the retired predecessor as live guidance.
+
+`malformed-retirement-receipt-is-quarantined-in-every-distribution` is the matching fail-closed
+control, shared by all three. Reading a receipt is not the same as waving it through: a receipt with
+an unsupported `reason` must quarantine its revision as `invalid_revision` with an identical
+diagnostic message everywhere, so accepting the field can never become accepting anything named
+`retirements`.
+
+The retirement, HITL-stop, genuine-completion, out-of-order-completion, and Handoff families are
+scoped `["python"]` rather than shared. That gap is deliberate and capability-derived, not an
+oversight: shell and PowerShell advertise `prospective_projection: false` and
+`terminal_rendering: false`, never project `outcomes` or a `complete` status, and hold no retirement
+vocabulary at all, so they cannot run these scenarios as written. Companion scenarios assert that
+gap instead of merely declaring it — shell and PowerShell fail closed on `handoff` and
+`previous_actions` with `unsupported_operation`, so a distribution that silently started accepting
+either would break the fixture.
+
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
 stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather
