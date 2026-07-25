@@ -1646,3 +1646,234 @@ def test_ui_module_imports_are_constrained(path: Path) -> None:
                 f"{path.name} imports disallowed module {module_name!r}; "
                 f"UI allowlist is {sorted(_ALLOWED_UI_IMPORTS)} plus rich.*."
             )
+
+
+def _null_telemetry_rollup() -> dict:
+    """A native-Orchestrator Iteration end whose telemetry is unavailable."""
+    return {
+        "type": WRAPPER_ITERATION_END,
+        "iter": 1,
+        "outcome": "advanced",
+        "duration_seconds": 29.5,
+        "summary": {
+            "model": None,
+            "tokens_in": None,
+            "tokens_out": None,
+            "observed_tokens": None,
+            "cost_usd": None,
+            "tool_count": None,
+            "skill_call_count": None,
+            "skills_consulted": None,
+            "commits": 2,
+            "auto_closures": 0,
+            "pr_advances": 1,
+            "strikes": 0,
+            "peak_context_window": None,
+        },
+        "issues": [
+            {
+                "issue": 7,
+                "status": "advanced",
+                "first_started_at": "2026-05-16T00:00:01.000Z",
+                "closed_at": None,
+                "issue_elapsed_seconds": None,
+                "active_seconds": 29.0,
+                "cumulative_active_seconds": 29.0,
+                "consumption": {
+                    "model": None,
+                    "tokens_in": None,
+                    "tokens_out": None,
+                },
+                "cost_usd": None,
+                "peak_context_window": None,
+            }
+        ],
+    }
+
+
+def test_unavailable_normalized_measurements_are_not_reported_as_observed() -> None:
+    """Null telemetry must render the unknown em dash, never a fabricated 0.
+
+    The shell and PowerShell Orchestrators emit a normalized rollup whose token,
+    Cost, tool, Skill, and Context-fill measurements are ``null``. The Wrapper
+    contract forbids reporting those as ``0`` or ``[]``, so the rollup band
+    shows the unknown em dash and the counters the Orchestrator *can* observe
+    (commits, closures, PR advances, Strikes) stay exact.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+
+    snap = summary.completed[0]
+    assert snap.unavailable_measurements == frozenset(
+        {
+            "model",
+            "tokens_in",
+            "tokens_out",
+            "observed_tokens",
+            "cost_usd",
+            "tool_count",
+            "skill_call_count",
+            "skills_consulted",
+            "peak_context_window",
+        }
+    )
+
+    totals = summary.totals()
+    assert totals.observed_tokens is None
+
+    text = summary.build_rollup_band().plain
+    assert "Observed tokens —" in text
+    assert "Skills consulted —" in text
+    assert "commits 2" in text
+    assert "PR advances 1" in text
+
+
+def test_unavailable_token_totals_render_the_em_dash_not_zero() -> None:
+    """Null token Consumption must not surface as an observed ``in=0 out=0``."""
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+
+    totals = summary.totals()
+    assert totals.tokens_in_observed is False
+    assert totals.tokens_out_observed is False
+
+    text = summary.build_rollup_band().plain
+    assert "Observed tokens — (in=— out=—)" in text
+
+
+def test_a_run_with_no_completed_iterations_has_observed_nothing_not_unknown() -> None:
+    """Unavailability is a *declaration*, not merely an absence of data.
+
+    Before the first Iteration finishes nothing has declared a measurement
+    unavailable, so the cumulative band shows the observed-none ``0`` / empty
+    Skill set rather than the unknown em dash.
+    """
+    _renderer, summary, _buf = _make_renderer()
+
+    totals = summary.totals()
+    assert totals.observed_tokens == 0
+    assert totals.skills_observed is True
+    assert totals.tokens_in_observed is True
+
+    text = summary.build_rollup_band().plain
+    assert "Observed tokens 0 (in=0 out=0)" in text
+    assert "Skills consulted none" in text
+
+
+def test_mixed_availability_totals_sum_only_the_observed_iterations() -> None:
+    """One unavailable Iteration must not erase another's observed totals."""
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 2, "issue": 7})
+    renderer.render(
+        {
+            "type": WRAPPER_ITERATION_END,
+            "iter": 2,
+            "outcome": "closed",
+            "duration_seconds": 4.0,
+            "summary": {
+                "model": "known-model",
+                "tokens_in": 100,
+                "tokens_out": 50,
+                "observed_tokens": 150,
+                "cost_usd": None,
+                "tool_count": 0,
+                "skill_call_count": 1,
+                "skills_consulted": ["tdd"],
+                "commits": 1,
+                "auto_closures": 1,
+                "pr_advances": 0,
+                "strikes": 0,
+                "peak_context_window": None,
+            },
+            "issues": [{"issue": 7, "status": "closed"}],
+        }
+    )
+
+    totals = summary.totals()
+    assert totals.observed_tokens == 150
+    assert totals.tokens_in == 100
+    assert totals.tokens_in_observed is True
+    assert totals.skills_observed is True
+    assert totals.skills_seen == ("tdd",)
+
+
+def test_frozen_iteration_panel_renders_unavailable_measurements_as_unknown() -> None:
+    """The frozen per-Iteration Panel obeys the same declaration rule as the band.
+
+    ``build_iteration_panel`` is the run-stream twin of the Dashboard's Summary
+    band. A native Orchestrator that declares its telemetry unavailable must not
+    have that rendered back as an observed ``in=0 out=0`` / ``Tools: 0``.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+
+    panel = summary.build_iteration_panel(summary.completed[0]).renderable.plain
+    assert "Tokens: in=—  out=—" in panel
+    assert "Observed tokens: —" in panel
+    assert "Tools: —" in panel
+    assert "Skill calls: —" in panel
+    assert "Commits: 2" in panel
+    assert "PR advances: 1" in panel
+
+
+def test_frozen_run_table_renders_unavailable_token_cells_and_footers_as_unknown() -> (
+    None
+):
+    """Per-row cells and the totals footer both respect declared unavailability.
+
+    The mixed run below proves the footer sums only the observed Iteration
+    rather than collapsing to unknown, while the unavailable row keeps its own
+    em dashes.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 2, "issue": 7})
+    renderer.render(
+        {
+            "type": WRAPPER_ITERATION_END,
+            "iter": 2,
+            "outcome": "closed",
+            "duration_seconds": 4.0,
+            "summary": {
+                "model": "known-model",
+                "tokens_in": 100,
+                "tokens_out": 50,
+                "observed_tokens": 150,
+                "cost_usd": None,
+                "tool_count": 0,
+                "skill_call_count": 1,
+                "skills_consulted": ["tdd"],
+                "commits": 1,
+                "auto_closures": 1,
+                "pr_advances": 0,
+                "strikes": 0,
+                "peak_context_window": None,
+            },
+            "issues": [{"issue": 7, "status": "closed"}],
+        }
+    )
+
+    table = summary.build_run_table()
+    rows_in = list(table.columns[4].cells)
+    rows_out = list(table.columns[5].cells)
+    assert rows_in == ["—", "100"]
+    assert rows_out == ["—", "50"]
+    assert table.columns[4].footer == "100"
+    assert table.columns[5].footer == "50"
+
+
+def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens() -> None:
+    """When every completed Iteration declares tokens unavailable, so is the total."""
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
+    renderer.render(_null_telemetry_rollup())
+
+    table = summary.build_run_table()
+    assert table.columns[4].footer == "—"
+    assert table.columns[5].footer == "—"

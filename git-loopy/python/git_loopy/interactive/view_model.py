@@ -139,20 +139,28 @@ def _summary_row(
     pricing: Pricing,
 ) -> dict[str, Any]:
     cost_value = snapshot.cost_usd(pricing)
+    unavailable = snapshot.unavailable_measurements
+
+    def observed(key: str, value: Any) -> Any:
+        """Project a declared-unavailable measurement as unknown, not zero."""
+        return None if key in unavailable else value
+
     return {
         "kind": "iteration",
         "iteration": snapshot.iter_num,
         "lane": None,
         "outcome": snapshot.outcome,
         "duration_seconds": snapshot.duration_seconds,
-        "model": snapshot.model,
-        "tokens_in": snapshot.tokens_in,
-        "tokens_out": snapshot.tokens_out,
-        "observed_tokens": snapshot.context_used,
+        "model": observed("model", snapshot.model),
+        "tokens_in": observed("tokens_in", snapshot.tokens_in),
+        "tokens_out": observed("tokens_out", snapshot.tokens_out),
+        "observed_tokens": observed("observed_tokens", snapshot.context_used),
         "cost_usd": _decimal_float(cost_value),
-        "tool_count": snapshot.tool_count,
-        "skill_call_count": snapshot.skill_count,
-        "skills_consulted": sorted(snapshot.skills_consulted),
+        "tool_count": observed("tool_count", snapshot.tool_count),
+        "skill_call_count": observed("skill_call_count", snapshot.skill_count),
+        "skills_consulted": observed(
+            "skills_consulted", sorted(snapshot.skills_consulted)
+        ),
         "commits": snapshot.commits,
         "auto_closures": snapshot.auto_closures,
         "pr_advances": snapshot.pr_advances,
@@ -192,12 +200,18 @@ def _contribution_row(contribution: IssueContribution) -> dict[str, Any]:
         "kind": contribution.kind,
         "iteration": contribution.iteration,
         "lane": contribution.lane,
+        "outcome": contribution.outcome,
+        "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
         "active_seconds": contribution.active_seconds,
         "consumption": {
-            "model": contribution.usage.model,
-            "tokens_in": contribution.usage.tokens_in,
-            "tokens_out": contribution.usage.tokens_out,
+            "model": contribution.usage.model if contribution.usage_observed else None,
+            "tokens_in": (
+                contribution.usage.tokens_in if contribution.usage_observed else None
+            ),
+            "tokens_out": (
+                contribution.usage.tokens_out if contribution.usage_observed else None
+            ),
         },
         "cost_usd": contribution.cost_usd,
         "peak_context_window": (

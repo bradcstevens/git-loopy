@@ -108,6 +108,34 @@ def _consulted_skills(tool_name: str, arguments: Any) -> set[str]:
     return names
 
 
+def _rollup_int(value: Any) -> int:
+    """Coerce a normalized-rollup counter, treating unavailable as neutral.
+
+    Unavailability is recorded separately in
+    :attr:`IterationSnapshot.unavailable_measurements`; this only keeps the
+    legacy integer counters usable for renderers that predate that flag.
+    """
+    return int(value) if isinstance(value, (int, float)) and not isinstance(
+        value, bool
+    ) else 0
+
+
+def _rollup_float(value: Any) -> float:
+    """Coerce a normalized-rollup duration, treating unavailable as ``0.0``."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(
+        value, bool
+    ) else 0.0
+
+
+def _observed_text(observed: bool, rendered: str) -> str:
+    """Show ``rendered`` only when its producer observed the measurement.
+
+    A measurement the Orchestrator declared unavailable renders as the unknown
+    em dash; the Wrapper contract forbids re-reporting it as an observed value.
+    """
+    return rendered if observed else "—"
+
+
 # ---------------------------------------------------------------------------
 # IterationSnapshot
 # ---------------------------------------------------------------------------
@@ -147,6 +175,17 @@ class IterationSnapshot:
     normalized_observed_tokens: Optional[int] = None
     normalized_cost_usd: Optional[Decimal] = None
     has_normalized_rollup: bool = False
+    #: Normalized-rollup measurement keys the producing Orchestrator declared
+    #: unavailable (sent as ``null``). Renderers project these as the unknown
+    #: em dash; an observed none stays ``0`` / ``[]`` and never appears here.
+    unavailable_measurements: frozenset[str] = frozenset()
+
+    def measurement_observed(self, key: str) -> bool:
+        """Whether this Iteration's producer actually observed ``key``.
+
+        The run-level twin is :meth:`RunSummary._measurement_observed`.
+        """
+        return key not in self.unavailable_measurements
 
     @property
     def model(self) -> Optional[str]:
@@ -244,7 +283,15 @@ class RunTotals:
     iterations: int
     tokens_in: int
     tokens_out: int
-    observed_tokens: int
+    #: ``None`` only when every completed Iteration declared the measurement
+    #: unavailable; otherwise the sum over the Iterations that observed it.
+    observed_tokens: Optional[int]
+    #: ``False`` only when every completed Iteration declared the matching
+    #: measurement unavailable. Unavailability is a producer *declaration*, so a
+    #: Run with no completed Iterations has observed none rather than unknown.
+    tokens_in_observed: bool
+    tokens_out_observed: bool
+    skills_observed: bool
     cost_usd: Optional[Decimal]
     commits: int
     auto_closures: int
@@ -324,32 +371,53 @@ class RunSummary:
         issues = rollup.get("issues")
         if not isinstance(summary, Mapping) or not isinstance(issues, list):
             return
+        # An Orchestrator that cannot observe a measurement sends it as `null`.
+        # The Wrapper contract forbids re-reporting that as `0` or `[]`, so
+        # every null key is recorded as unavailable and the legacy counter
+        # falls back to its neutral default for existing renderers.
+        unavailable = frozenset(
+            key
+            for key in (
+                "model",
+                "tokens_in",
+                "tokens_out",
+                "observed_tokens",
+                "cost_usd",
+                "tool_count",
+                "skill_call_count",
+                "skills_consulted",
+                "peak_context_window",
+            )
+            if summary.get(key, 0) is None
+        )
+        snap.unavailable_measurements = unavailable
         model = summary.get("model")
         snap.usage = UsageTally(
             model=model if isinstance(model, str) else None,
-            tokens_in=int(summary.get("tokens_in", 0)),
-            tokens_out=int(summary.get("tokens_out", 0)),
+            tokens_in=_rollup_int(summary.get("tokens_in")),
+            tokens_out=_rollup_int(summary.get("tokens_out")),
         )
-        snap.normalized_duration_seconds = float(
-            rollup.get("duration_seconds", 0.0)
+        snap.normalized_duration_seconds = _rollup_float(
+            rollup.get("duration_seconds")
         )
-        snap.normalized_observed_tokens = int(
-            summary.get("observed_tokens", 0)
+        observed_tokens = summary.get("observed_tokens")
+        snap.normalized_observed_tokens = (
+            None if observed_tokens is None else _rollup_int(observed_tokens)
         )
         cost = summary.get("cost_usd")
         snap.normalized_cost_usd = (
             Decimal(str(cost)) if cost is not None else None
         )
         snap.has_normalized_rollup = True
-        snap.tool_count = int(summary.get("tool_count", 0))
-        snap.skill_count = int(summary.get("skill_call_count", 0))
+        snap.tool_count = _rollup_int(summary.get("tool_count"))
+        snap.skill_count = _rollup_int(summary.get("skill_call_count"))
         snap.skills_consulted = {
-            str(skill) for skill in summary.get("skills_consulted", [])
+            str(skill) for skill in (summary.get("skills_consulted") or ())
         }
-        snap.commits = int(summary.get("commits", 0))
-        snap.auto_closures = int(summary.get("auto_closures", 0))
-        snap.pr_advances = int(summary.get("pr_advances", 0))
-        snap.strikes = int(summary.get("strikes", 0))
+        snap.commits = _rollup_int(summary.get("commits"))
+        snap.auto_closures = _rollup_int(summary.get("auto_closures"))
+        snap.pr_advances = _rollup_int(summary.get("pr_advances"))
+        snap.strikes = _rollup_int(summary.get("strikes"))
         snap.outcome = str(rollup.get("outcome", "no_progress"))
         peak = summary.get("peak_context_window")
         snap.peak_context_window = (
@@ -404,6 +472,18 @@ class RunSummary:
 
     # -- rollup -------------------------------------------------------------
 
+    def _measurement_observed(self, key: str) -> bool:
+        """Did any completed Iteration observe ``key``?
+
+        Unavailability is a producer *declaration*: an Orchestrator marks a
+        measurement unavailable by sending it as ``null``. A Run with no
+        completed Iterations has therefore declared nothing, so its cumulative
+        aggregate is an observed none rather than an unknown.
+        """
+        return not self.completed or any(
+            key not in snap.unavailable_measurements for snap in self.completed
+        )
+
     def totals(self) -> RunTotals:
         """Aggregate counters across :attr:`completed` iterations.
 
@@ -418,7 +498,19 @@ class RunSummary:
         """
         tokens_in = sum(s.tokens_in for s in self.completed)
         tokens_out = sum(s.tokens_out for s in self.completed)
-        observed_tokens = sum(s.context_used for s in self.completed)
+        observed_snapshots = [
+            s
+            for s in self.completed
+            if "observed_tokens" not in s.unavailable_measurements
+        ]
+        observed_tokens = (
+            sum(s.context_used for s in observed_snapshots)
+            if observed_snapshots or not self.completed
+            else None
+        )
+        tokens_in_observed = self._measurement_observed("tokens_in")
+        tokens_out_observed = self._measurement_observed("tokens_out")
+        skills_observed = self._measurement_observed("skills_consulted")
         commits = sum(s.commits for s in self.completed)
         auto_closures = sum(s.auto_closures for s in self.completed)
         pr_advances = sum(s.pr_advances for s in self.completed)
@@ -452,6 +544,9 @@ class RunSummary:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             observed_tokens=observed_tokens,
+            tokens_in_observed=tokens_in_observed,
+            tokens_out_observed=tokens_out_observed,
+            skills_observed=skills_observed,
             cost_usd=cost_usd,
             commits=commits,
             auto_closures=auto_closures,
@@ -490,9 +585,22 @@ class RunSummary:
         # Consumption and Observed tokens are cumulative accounting. Keep the
         # distinct peak Context-fill gauge on its own line.
         body.append("Tokens: ", style=STYLES["meta"])
-        body.append(f"in={snap.tokens_in:,}  out={snap.tokens_out:,}")
+        body.append(
+            "in="
+            + _observed_text(
+                snap.measurement_observed("tokens_in"), f"{snap.tokens_in:,}"
+            )
+            + "  out="
+            + _observed_text(
+                snap.measurement_observed("tokens_out"), f"{snap.tokens_out:,}"
+            )
+        )
         body.append("    Observed tokens: ", style=STYLES["meta"])
-        body.append(f"{snap.context_used:,}")
+        body.append(
+            _observed_text(
+                snap.measurement_observed("observed_tokens"), f"{snap.context_used:,}"
+            )
+        )
         body.append("\n")
         body.append("Peak Context fill: ", style=STYLES["meta"])
         body.append_text(self._format_peak_context_line(snap))
@@ -506,12 +614,23 @@ class RunSummary:
 
         # Tool / explicit skill-call counts
         body.append("Tools: ", style=STYLES["meta"])
-        body.append(str(snap.tool_count))
+        body.append(
+            _observed_text(snap.measurement_observed("tool_count"), str(snap.tool_count))
+        )
         body.append("    Skill calls: ", style=STYLES["meta"])
-        body.append(str(snap.skill_count))
+        body.append(
+            _observed_text(
+                snap.measurement_observed("skill_call_count"), str(snap.skill_count)
+            )
+        )
         body.append("\n")
         body.append("Skills consulted: ", style=STYLES["meta"])
-        body.append(", ".join(sorted(snap.skills_consulted)) or "—")
+        body.append(
+            _observed_text(
+                snap.measurement_observed("skills_consulted"),
+                ", ".join(sorted(snap.skills_consulted)) or "—",
+            )
+        )
         body.append("\n")
 
         # Commits / auto-closures / strikes
@@ -559,12 +678,12 @@ class RunSummary:
         table.add_column(
             "Tokens in",
             justify="right",
-            footer=f"{totals.tokens_in:,}",
+            footer=_observed_text(totals.tokens_in_observed, f"{totals.tokens_in:,}"),
         )
         table.add_column(
             "Tokens out",
             justify="right",
-            footer=f"{totals.tokens_out:,}",
+            footer=_observed_text(totals.tokens_out_observed, f"{totals.tokens_out:,}"),
         )
         table.add_column(
             "Cost USD",
@@ -602,8 +721,12 @@ class RunSummary:
                 issue_str,
                 model_str,
                 f"{snap.duration_seconds:.1f}s",
-                f"{snap.tokens_in:,}",
-                f"{snap.tokens_out:,}",
+                _observed_text(
+                    snap.measurement_observed("tokens_in"), f"{snap.tokens_in:,}"
+                ),
+                _observed_text(
+                    snap.measurement_observed("tokens_out"), f"{snap.tokens_out:,}"
+                ),
                 cost_str,
                 str(snap.commits),
                 str(snap.auto_closures),
@@ -628,19 +751,29 @@ class RunSummary:
         text = Text()
         text.append("Summary", style=STYLES["meta"])
         text.append(f"  •  iters {totals.iterations}")
+        observed = (
+            f"{totals.observed_tokens:,}"
+            if totals.observed_tokens is not None
+            else "—"
+        )
+        tokens_in = f"{totals.tokens_in:,}" if totals.tokens_in_observed else "—"
+        tokens_out = f"{totals.tokens_out:,}" if totals.tokens_out_observed else "—"
         text.append(
-            f"  •  Observed tokens {totals.observed_tokens:,}"
-            f" (in={totals.tokens_in:,} out={totals.tokens_out:,})"
+            f"  •  Observed tokens {observed}"
+            f" (in={tokens_in} out={tokens_out})"
         )
         text.append(f"  •  cost {_format_decimal_footer(totals.cost_usd)}")
         text.append(f"  •  commits {totals.commits}")
         text.append(f"  •  closures {totals.auto_closures}")
         text.append(f"  •  PR advances {totals.pr_advances}")
         text.append(f"  •  strikes {totals.final_strikes}")
-        text.append(
-            "  •  Skills consulted "
-            + (", ".join(totals.skills_seen) if totals.skills_seen else "none")
-        )
+        if not totals.skills_observed:
+            skills = "—"
+        elif totals.skills_seen:
+            skills = ", ".join(totals.skills_seen)
+        else:
+            skills = "none"
+        text.append(f"  •  Skills consulted {skills}")
         return text
 
     # -- internal -----------------------------------------------------------

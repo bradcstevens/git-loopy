@@ -17,8 +17,10 @@ plus the unchanged exit model — **Stop** (``q`` / ``Ctrl+C``) and **Detach**
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +33,7 @@ from git_loopy import events as events_module  # noqa: E402
 from git_loopy.interactive.app import (  # noqa: E402
     GitLoopyApp,
     _Dashboard,
+    _IterationBreakdown,
     _LogScroll,
     _LogView,
 )
@@ -629,6 +632,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         {
             "type": events_module.WRAPPER_ITERATION_END,
             "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 6.0,
             "issues": [
                 {
                     "issue": 42,
@@ -669,6 +674,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
     assert "iters 1" in header
     assert [str(column.label) for column in breakdown.columns.values()] == [
         "Contribution",
+        "Outcome",
+        "Duration",
         "Status",
         "Active",
         "Tokens in",
@@ -678,6 +685,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
     ]
     assert breakdown.get_row_at(0) == [
         "Iteration 1",
+        "closed",
+        "0:00:06",
         "closed",
         "0:00:04",
         "100",
@@ -839,3 +848,137 @@ async def test_esc_on_dashboard_is_a_noop() -> None:
         await pilot.pause()
         assert app.query_one("#dashboard", _Dashboard).display is True
         assert app.query_one("#log", _LogView).display is False
+
+
+async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -> None:
+    """A native-Orchestrator contribution shows unknown, never a fabricated 0."""
+    state = LiveRunState(
+        run_id="01E",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 30.0,
+        wall_clock=lambda: datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc),
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "max_nmt_strikes": 3,
+            "insight_capabilities": {
+                "agent_output": True,
+                "structured_agent_events": False,
+                "token_usage": False,
+                "context_window": False,
+                "skill_consultation": False,
+                "cost": False,
+            },
+        }
+    )
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [7]})
+    state.stream_message("<working issue=7>\nadvancing\n")
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "advanced",
+            "duration_seconds": 29.5,
+            "issues": [
+                {
+                    "issue": 7,
+                    "status": "advanced",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 29.0,
+                    "cumulative_active_seconds": 29.0,
+                    "consumption": {
+                        "model": None,
+                        "tokens_in": None,
+                        "tokens_out": None,
+                    },
+                    "cost_usd": None,
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        breakdown = app.query_one("#iteration-breakdown", DataTable)
+        queue = app.query_one("#queue", DataTable)
+
+    assert breakdown.get_row_at(0) == [
+        "Iteration 1",
+        "advanced",
+        "0:00:29",
+        "advanced",
+        "0:00:29",
+        "—",
+        "—",
+        "—",
+        "—",
+    ]
+    assert queue.get_row_at(0)[6:9] == ["—", "—", "—"]
+
+
+async def test_band_order_matches_the_language_neutral_semantic_contract() -> None:
+    """Both levels stack in the order the shared Dashboard fixture pins.
+
+    ``dashboard-insights.json`` is the family-wide semantic seam, so the Textual
+    renderer's band order is asserted against it rather than against a second
+    hand-maintained list that could drift.
+    """
+    contract = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "conformance"
+            / "dashboard-insights.json"
+        ).read_text(encoding="utf-8")
+    )["semantic_contract"]
+    widget_band = {
+        "#header": "header",
+        "#queue": "queue",
+        "#activity": "activity",
+        "#summary-band": "summary",
+        "#log-header": "detail_header",
+        "#iteration-breakdown": "iteration_breakdown",
+        "#log-scroll": "log",
+    }
+
+    state = LiveRunState(run_id="01B", model="m", reasoning_effort="x")
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test():
+        dashboard = app.query_one("#dashboard", _Dashboard)
+        log_view = app.query_one("#log", _LogView)
+        dashboard_bands = [
+            widget_band[f"#{child.id}"]
+            for child in dashboard.children
+            if f"#{child.id}" in widget_band
+        ]
+        drill_in_bands = [
+            widget_band[f"#{child.id}"]
+            for child in log_view.children
+            if f"#{child.id}" in widget_band
+        ]
+        queue_columns = [
+            str(column.label)
+            for column in app.query_one("#queue", DataTable).columns.values()
+        ]
+        breakdown_columns = [
+            str(column.label)
+            for column in app.query_one(
+                "#iteration-breakdown", _IterationBreakdown
+            ).columns.values()
+        ]
+
+    assert dashboard_bands == contract["dashboard_band_order"]
+    assert drill_in_bands == contract["drill_in_band_order"]
+    assert queue_columns == [
+        column["label"] for column in contract["queue_columns"]
+    ]
+    assert breakdown_columns == [
+        column["label"] for column in contract["iteration_breakdown_columns"]
+    ]

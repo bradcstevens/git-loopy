@@ -128,6 +128,11 @@ def _format_queue_cost(
     return f"${cost:.4f}" if cost is not None else "—"
 
 
+def _format_optional_tokens(value: int | None) -> str:
+    """Render a token counter, or the unknown em dash when unavailable."""
+    return f"{value:,}" if value is not None else "—"
+
+
 class _Dashboard(Vertical):
     """Level 1: the header band, the live Queue, and the Summary rollup band."""
 
@@ -242,6 +247,8 @@ class _IterationBreakdown(DataTable):
 
     def on_mount(self) -> None:
         self.add_column("Contribution", key="contribution")
+        self.add_column("Outcome", key="outcome")
+        self.add_column("Duration", key="duration")
         self.add_column("Status", key="status")
         self.add_column("Active", key="active")
         self.add_column("Tokens in", key="tokens_in")
@@ -652,10 +659,16 @@ class GitLoopyApp(App[None]):
                 )
             breakdown.add_row(
                 identity,
+                contribution["outcome"] or "—",
+                (
+                    format_duration(contribution["duration_seconds"])
+                    if contribution["duration_seconds"] is not None
+                    else "—"
+                ),
                 contribution["status"],
                 format_duration(contribution["active_seconds"]),
-                f"{contribution['consumption']['tokens_in']:,}",
-                f"{contribution['consumption']['tokens_out']:,}",
+                _format_optional_tokens(contribution["consumption"]["tokens_in"]),
+                _format_optional_tokens(contribution["consumption"]["tokens_out"]),
                 (
                     f"${contribution['cost_usd']:.4f}"
                     if contribution["cost_usd"] is not None

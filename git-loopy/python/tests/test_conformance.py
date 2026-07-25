@@ -284,7 +284,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.0"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.1"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -327,6 +327,17 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "tokens_in",
         "tokens_out",
         "cost_usd",
+    ]
+    assert [column["label"] for column in contract["iteration_breakdown_columns"]] == [
+        "Contribution",
+        "Outcome",
+        "Duration",
+        "Status",
+        "Active",
+        "Tokens in",
+        "Tokens out",
+        "Cost",
+        "Peak Context fill",
     ]
     assert contract["placeholders"] == {
         "unknown": "\u2014",
@@ -403,6 +414,10 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert queue_row["iteration_count"] == len(breakdown) == 1
     assert queue_row["closed_at"] == "2026-05-15T18:00:05-06:00"
     assert expected["drill_in"]["detail_header"]["issue_elapsed_seconds"] == 4.0
+    # AC5: a contribution row carries its Iteration's own outcome and monotonic
+    # duration alongside the issue-scoped Status and Active time.
+    assert breakdown[0]["outcome"] == "closed"
+    assert breakdown[0]["duration_seconds"] == 4.0
 
 
 def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None:
@@ -658,3 +673,99 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
 
     assert result == (case["expected"]["model"], case["expected"]["effort"])
     assert bool(warnings) is case["warns"]
+
+
+def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
+    """The fixture separates an unavailable measurement from an observed none.
+
+    A native Orchestrator declares token, Context-fill, Skill, and Cost
+    telemetry unavailable in its Run-start capability manifest and sends those
+    normalized measurements as ``null``. The semantic view must project them as
+    unknown while the counters it *can* observe stay exact, and while the
+    SDK-backed baseline case keeps its observed-empty ``[]`` Skills list.
+    """
+    baseline, native = _DASHBOARD_INSIGHTS["cases"]
+    assert baseline["id"] == "baseline-closed-iteration"
+    assert native["id"] == "native-orchestrator-unavailable-capabilities"
+
+    capabilities = native["events"][0]["insight_capabilities"]
+    # Exactly the family contract's native-Orchestrator manifest.
+    assert (
+        capabilities
+        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["shell"]
+        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["powershell"]
+    )
+    assert set(capabilities) == set(_EVENT_SCHEMA["insight_capabilities"]["names"])
+    assert capabilities["token_usage"] is False
+    assert capabilities["context_window"] is False
+    assert capabilities["skill_consultation"] is False
+    assert capabilities["cost"] is False
+
+    # A half-hour display zone proves localization is a real conversion rather
+    # than an hour-granular offset.
+    assert native["inputs"]["local_utc_offset_minutes"] == 330
+
+    live, final = native["snapshots"]
+    assert live["expected"]["dashboard"]["header"]["context_fill"] == {
+        "availability": "unavailable",
+        "current_tokens": None,
+        "token_limit": None,
+        "percentage": None,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+    # Queue ordering: the active issue first, then queued, then history.
+    assert [row["status"] for row in live["expected"]["dashboard"]["queue"]["rows"]] == [
+        "active",
+        "queued",
+    ]
+    expected = final["expected"]
+    assert [row["status"] for row in expected["dashboard"]["queue"]["rows"]] == [
+        "queued",
+        "closed",
+    ]
+
+    closed_row = expected["dashboard"]["queue"]["rows"][1]
+    assert closed_row["issue"] == 7
+    # Unavailable Consumption stays unknown; Iters and Active time do not.
+    assert closed_row["tokens_in"] is None
+    assert closed_row["tokens_out"] is None
+    assert closed_row["cost_usd"] is None
+    assert closed_row["iteration_count"] == 2
+    assert closed_row["active_seconds"] == 48.0
+
+    summary_rows = expected["dashboard"]["summary"]["rows"]
+    breakdown = expected["drill_in"]["iteration_breakdown"]["rows"]
+    # The Iteration breakdown is the same contribution set counted by Iters.
+    assert len(summary_rows) == len(breakdown) == closed_row["iteration_count"]
+    for row in summary_rows:
+        for unavailable in (
+            "model",
+            "tokens_in",
+            "tokens_out",
+            "observed_tokens",
+            "cost_usd",
+            "tool_count",
+            "skill_call_count",
+            "skills_consulted",
+            "peak_context_window",
+        ):
+            assert row[unavailable] is None, unavailable
+    # Observed counters stay exact, including an observed zero.
+    assert [(row["commits"], row["auto_closures"], row["pr_advances"]) for row in summary_rows] == [
+        (2, 0, 1),
+        (1, 1, 0),
+    ]
+    assert [(row["outcome"], row["duration_seconds"]) for row in breakdown] == [
+        ("advanced", 29.5),
+        ("closed", 19.5),
+    ]
+    assert all(
+        row["consumption"] == {"model": None, "tokens_in": None, "tokens_out": None}
+        for row in breakdown
+    )
+
+    # Observed-empty is not unavailable: the SDK-backed case keeps `[]`.
+    baseline_summary = baseline["snapshots"][-1]["expected"]["dashboard"]["summary"]
+    assert baseline_summary["rows"][0]["skills_consulted"] == []
+    assert baseline_summary["rows"][0]["tool_count"] == 0

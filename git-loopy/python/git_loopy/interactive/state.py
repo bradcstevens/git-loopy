@@ -301,9 +301,12 @@ class IssueContribution:
     kind: str
     iteration: int | None
     lane: int | str | None
+    outcome: str | None
+    duration_seconds: float | None
     status: str
     active_seconds: float
     usage: UsageTally
+    usage_observed: bool
     cost_usd: float | None
     peak_context_window: ContextWindowSnapshot | None
 
@@ -1336,6 +1339,14 @@ class LiveRunState:
         if not isinstance(issues, list):
             return
         iter_num = _optional_nonnegative_int(event.get("iter"))
+        raw_outcome = event.get("outcome")
+        outcome = str(raw_outcome) if isinstance(raw_outcome, str) else None
+        raw_duration = event.get("duration_seconds")
+        duration_seconds = (
+            max(0.0, float(raw_duration))
+            if isinstance(raw_duration, (int, float)) and not isinstance(raw_duration, bool)
+            else None
+        )
         for payload in issues:
             if not isinstance(payload, Mapping) or payload.get("issue") is None:
                 continue
@@ -1350,13 +1361,22 @@ class LiveRunState:
                 self.ledger[key] = entry
             consumption = payload.get("consumption")
             usage = UsageTally()
+            # An Orchestrator without token telemetry sends a `consumption`
+            # record whose token counters are null. The Wrapper contract
+            # forbids reporting that as an observed `0`, so the contribution
+            # stays unknown until at least one token counter is a real number.
+            usage_observed = False
             if isinstance(consumption, Mapping):
-                model = consumption.get("model")
-                usage.add(
-                    str(model) if isinstance(model, str) and model else None,
-                    max(0, _coerce_int(consumption.get("tokens_in"), 0)),
-                    max(0, _coerce_int(consumption.get("tokens_out"), 0)),
-                )
+                tokens_in = _optional_nonnegative_int(consumption.get("tokens_in"))
+                tokens_out = _optional_nonnegative_int(consumption.get("tokens_out"))
+                usage_observed = tokens_in is not None or tokens_out is not None
+                if usage_observed:
+                    model = consumption.get("model")
+                    usage.add(
+                        str(model) if isinstance(model, str) and model else None,
+                        tokens_in or 0,
+                        tokens_out or 0,
+                    )
             cost = payload.get("cost_usd")
             cost_usd = float(cost) if isinstance(cost, (int, float)) else None
             is_lane = key in self._iter_lane_refs
@@ -1364,18 +1384,23 @@ class LiveRunState:
                 kind="lane" if is_lane else "iteration",
                 iteration=None if is_lane else iter_num,
                 lane=key if is_lane else None,
+                outcome=outcome,
+                duration_seconds=duration_seconds,
                 status=str(payload.get("status") or STATUS_NO_PROGRESS),
                 active_seconds=max(
                     0.0, _coerce_float(payload.get("active_seconds"), 0.0)
                 ),
                 usage=usage,
+                usage_observed=usage_observed,
                 cost_usd=cost_usd,
                 peak_context_window=_context_window_snapshot(
                     payload.get("peak_context_window")
                 ),
             )
             entry.contributions.append(contribution)
-            entry.usage_observed = True
+            entry.usage_observed = any(
+                item.usage_observed for item in entry.contributions
+            )
             entry.status = contribution.status
             entry.active_duration = max(
                 0.0,
