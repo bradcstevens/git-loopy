@@ -2363,7 +2363,10 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
-        return 1
+        # Skill preflight is preflight: it answers to the Wrapper contract's
+        # `preflight_failed` reason rather than to a literal that merely
+        # happens to equal it today.
+        return exit_code_for("preflight_failed")
     except RuntimeError as exc:
         diag.error(
             "CopilotClient start or Skill catalog preflight failed: %s: %s",
@@ -2384,7 +2387,10 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
-        return 1
+        # Skill preflight is preflight: it answers to the Wrapper contract's
+        # `preflight_failed` reason rather than to a literal that merely
+        # happens to equal it today.
+        return exit_code_for("preflight_failed")
 
     # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
     # Wave/Lane orchestrator with the injected runner-side Integration gate

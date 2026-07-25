@@ -322,8 +322,24 @@ function ConvertTo-GitLoopyJsonLine {
     return $Scrubbed + "`n"
 }
 
-function Write-GitLoopyEvent {
+# Where a serialized Event goes *live*. `$null` means stdout, which is the only
+# destination this port had before the shared TUI helper and remains the one it
+# falls back to. The replay log is written unconditionally and first, so it stays
+# the authoritative record no matter what the live destination does; this
+# indirection only decides who else sees the same bytes.
+$script:LiveSink = $null
+
+function Set-GitLoopyLiveSink {
     [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [scriptblock]$Sink
+    )
+
+    $script:LiveSink = $Sink
+}
+
+function Write-GitLoopyEvent {    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [psobject]$Context,
@@ -344,7 +360,11 @@ function Write-GitLoopyEvent {
         $Line,
         [Text.UTF8Encoding]::new($false)
     )
-    [Console]::Out.Write($Line)
+    if ($null -eq $script:LiveSink) {
+        [Console]::Out.Write($Line)
+        return
+    }
+    & $script:LiveSink $Line
 }
 
 Export-ModuleMember -Function @(
@@ -357,5 +377,6 @@ Export-ModuleMember -Function @(
     "New-GitLoopyEvent",
     "Protect-GitLoopyJson",
     "ConvertTo-GitLoopyJsonLine",
+    "Set-GitLoopyLiveSink",
     "Write-GitLoopyEvent"
 )

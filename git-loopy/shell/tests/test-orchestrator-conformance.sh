@@ -368,4 +368,143 @@ bounded_stdout="$(git_loopy_run_bounded_turn 30 bash -c 'printf agent-marker' 2>
 assert_equal "" "$bounded_stdout" \
   "the turn's own stdout is folded to stderr, never onto the Event stream"
 
+# Closed-world Skill policy (contract §17.6): the shell port has no native
+# `enabled_skills` support yet, so every policy surface the family contract names
+# must be *detected*, not ignored. The fixture's `native_transition` block is the
+# input — the surface names and their canonical order come from it rather than
+# being restated here, so a fifth surface added to the contract fails this test
+# instead of silently widening a shell Run's capability set.
+skill_policy_fixture="$conformance_dir/skill-policy.json"
+
+assert_equal \
+  "true" \
+  "$(jq -r '.native_transition.fail_closed | index("shell") != null' \
+    "$skill_policy_fixture")" \
+  "skill-policy fixture: shell is a fail-closed port"
+assert_equal \
+  "false" \
+  "$(jq -r '.native_transition.implemented | index("shell") != null' \
+    "$skill_policy_fixture")" \
+  "skill-policy fixture: shell does not implement the policy natively"
+
+policy_repo="$temp_dir/skill-policy-repo"
+policy_global="$temp_dir/skill-policy-global"
+mkdir -p "$policy_repo/git-loopy" "$policy_global/git-loopy"
+
+# Every surface at once: the detector must name all four, in the fixture's order.
+(
+  export XDG_CONFIG_HOME="$policy_global"
+  export GIT_LOOPY_ENABLED_SKILLS="tdd"
+  printf 'enabled_skills = ["tdd"]\n' >"$policy_repo/git-loopy/config.toml"
+  git_loopy_resolve_config --enable-skill tdd --disable-skill prototype
+  assert_equal \
+    "$(jq -r '.native_transition.policy_surfaces | join(",")' \
+      "$skill_policy_fixture")" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: every unsupported surface is detected in fixture order"
+)
+rm -f "$policy_repo/git-loopy/config.toml"
+
+# An explicit empty replacement is a real policy, so presence — not content —
+# is what the detector reads.
+(
+  export XDG_CONFIG_HOME="$policy_global"
+  export GIT_LOOPY_ENABLED_SKILLS=""
+  git_loopy_resolve_config
+  assert_equal \
+    "GIT_LOOPY_ENABLED_SKILLS" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: an explicit empty environment replacement is a surface"
+)
+
+# The global scope is a standard Config location too.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  printf 'enabled_skills = []\n' >"$policy_global/git-loopy/config.toml"
+  git_loopy_resolve_config
+  assert_equal \
+    "enabled_skills" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: a global Config key is detected"
+)
+rm -f "$policy_global/git-loopy/config.toml"
+
+# A Config that predates the key stays runnable: the generated banner is
+# comment-only, and a commented example is not a configured policy.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  printf '# enabled_skills = ["tdd"]\nmodel = "claude-opus-4.8"\n' \
+    >"$policy_repo/git-loopy/config.toml"
+  git_loopy_resolve_config
+  assert_equal \
+    "" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: a commented key is not a configured policy"
+)
+rm -f "$policy_repo/git-loopy/config.toml"
+
+# A TOML quoted key may spell the same name with escapes, and `tomllib` resolves
+# `"enabled\u005fskills"` to `enabled_skills`. Detection must too, or a Config the
+# Python Orchestrator honours would run wide here.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  for spelling in \
+    '"enabled\u005fskills"' \
+    '"enabled\U0000005Fskills"' \
+    '"\u0065nabled\u005fskills"'; do
+    printf '%s = ["tdd"]\n' "$spelling" >"$policy_repo/git-loopy/config.toml"
+    assert_equal \
+      "enabled_skills" \
+      "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+      "skill-policy: an escaped TOML quoted key is detected ($spelling)"
+  done
+  # Decoding must not smear one key into another: a deprecated legacy guard
+  # spelled with the same escape is still not a closed-world surface.
+  printf '%s = ["tdd"]\n' '"deny\u005fskills"' >"$policy_repo/git-loopy/config.toml"
+  assert_equal \
+    "" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: an escaped unrelated key is not a policy"
+)
+rm -f "$policy_repo/git-loopy/config.toml"
+
+# Legacy deny-only invocations are explicitly *not* a closed-world surface
+# (contract §17.2 keeps them as deprecated final guards), so they must resolve
+# and run unchanged.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  export GIT_LOOPY_DENY_SKILLS="legacy-skill"
+  git_loopy_resolve_config --deny-skill flag-skill --deny-tool flag-tool
+  assert_equal \
+    "" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: legacy deny-only inputs are not an unsupported surface"
+  assert_equal \
+    "flag-skill legacy-skill" \
+    "${GIT_LOOPY_DENY_SKILLS_RESOLVED[*]}" \
+    "skill-policy: legacy Skill denials still resolve unchanged"
+)
+
+# Recognition is not application: the port records the surface and applies
+# nothing, so a Run that aborts never carried an overlay into the denylists.
+(
+  unset GIT_LOOPY_ENABLED_SKILLS
+  export XDG_CONFIG_HOME="$policy_global"
+  unset GIT_LOOPY_DENY_SKILLS
+  git_loopy_resolve_config --disable-skill=prototype
+  assert_equal \
+    "--disable-skill" \
+    "$(git_loopy_detect_skill_policy_surfaces "$policy_repo" | paste -sd, -)" \
+    "skill-policy: the =VALUE overlay form is recognised"
+  assert_equal \
+    "0" \
+    "$(array_count \
+      ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"})" \
+    "skill-policy: a recognised overlay is never applied as a legacy denial"
+)
+
 printf 'shell Orchestrator conformance: ok\n'

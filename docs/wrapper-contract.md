@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.3 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.4 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -171,7 +171,8 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | `0` disables the live interface (CI-safe).                     |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
-| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Denylist of skills (set *union* across config tiers).          |
+| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§17). |
+| `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§17). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
 | `GIT_LOOPY_PRICING_FILE`       | 3     | packaged         | Override pricing table for cost estimation.                   |
@@ -205,8 +206,9 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
 observations only and never carry authoritative fragments, secrets, or runnable Instructions.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
-`agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is also a recognized
-wrapper event. Producing these additive events is capability-dependent.
+`agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
+Run-scoped record of the frozen **Effective Skill policy** (§17). Producing these additive events
+is capability-dependent.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
 segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`), and two that are
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
@@ -329,6 +331,9 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 - **Dashboard Insights** — normalized Event prefixes and expected renderer-neutral Dashboard and
   drill-in projections, including inventory, Queue order, scopes, placeholders, and localization
   (§12).
+- **Skill policy** — base-scope selection, explicit empty policy, environment replacement, Run
+  overlays, disable-wins, legacy subtraction, Minimal fallback, the four validation failures, and
+  the redacted resolved-policy projection (§17).
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
@@ -380,7 +385,7 @@ constant equals `model-roster.json`. Native-port implementation of routing is fu
 
 The separately versioned [Continuation contract](continuation-contract.md) governs Producer
 publication, Reconciliation, Dispatch evidence, capability declarations, and future Automation.
-Wrapper contract 1.3 requires every supported Orchestrator distribution to expose the same public
+Wrapper contract 1.4 requires every supported Orchestrator distribution to expose the same public
 namespace without making Continuation part of the Run loop:
 
 ```text
@@ -420,7 +425,125 @@ remain usable when Event-schema and capability negotiation prove compatibility, 
 Orchestrator MUST warn that the Release versions differ. Release equality alone MUST NOT establish
 cross-release compatibility.
 
-## 17. Changing this contract
+## 17. Closed-world Skill policy (Skill-policy rollout, MUST)
+
+A Run's capability set is a **contract**, not an accident of the operator's machine. Every
+Orchestrator MUST resolve exactly which canonical Skill names a Run may load, freeze that answer
+before the first Iteration, and record it. See
+[ADR-0015](adr/0015-closed-world-skill-policy.md) for the decision. The language-neutral cases are
+pinned by [`skill-policy.json`](../git-loopy/conformance/skill-policy.json).
+
+### 17.1 Vocabulary
+
+| Term | Meaning |
+| --- | --- |
+| **Skill catalog** | The inventory of Skills an operator may inspect and select, with one **winner** per canonical name carrying a `source_kind`. Discovery reads metadata only; catalog membership never makes a Skill available to a Run. |
+| **Skill policy** | The git-loopy-owned closed-world set of names one scope persists or supplies, e.g. `enabled_skills`. |
+| **Skill baseline** | The initial enabled/disabled selection copied once from the external agent client when the first policy is established. It seeds a policy and is never a live authority. |
+| **Effective Skill policy** | The single immutable resolution of every policy source for one Run: enabled names, Required Skills, legacy denials, resolved source kinds, base scope, and fallback reason. |
+| **Minimal Skill policy** | Exactly the **Required Skills** and nothing else. The answer whenever no base policy is in effect. |
+| **Required Skill** | A name the active Run instructions declare in their `required-skills` metadata. A Run whose effective set omits one is invalid. |
+
+A Skill is identified by **canonical name** — never by absolute path or content digest — so a
+project policy stays portable. Canonical names match `[a-z][a-z0-9]*(-[a-z0-9]+)*`. The
+`source_kind` vocabulary is exactly `project`, `inherited`, `personal`, `plugin`, `custom`,
+`builtin`, and `packaged`. Source precedence when resolving a catalog winner is: the
+Orchestrator's explicit project source (`<repo>/.copilot/skills`), then the Copilot CLI's own
+project/personal/plugin/built-in/custom precedence, then the packaged fallback catalog. Enabling a
+plugin-provided Skill MUST NOT activate the rest of its owning plugin.
+
+### 17.2 Source precedence and scope replacement
+
+The base policy is selected from **one** scope, never merged across scopes:
+
+1. **project** — the project Config's `enabled_skills`, when the key is present.
+2. **global** — the global Config's `enabled_skills`, when no project key is present.
+3. **minimal** — the Minimal Skill policy when neither key is present.
+
+A present-but-empty list is a real empty policy, **not** inheritance: absence and explicit empty
+MUST remain distinguishable all the way from Config parsing to the resolver.
+
+`GIT_LOOPY_ENABLED_SKILLS` is an **exact replacement** of the selected base policy for one Run
+(including an explicit empty value). Replacement changes the *names*, not the *selection*:
+`base_scope` and `fallback` describe which scope the base came from, so an environment
+replacement over a project policy still reports `project`, and an environment replacement with no
+configured scope at all still reports `minimal`. §17.6's startup classification — not
+`base_scope` — is what answers "was this installation ever configured".
+
+The repeatable `--enable-skill` and `--disable-skill` flags are temporary Run **overlays** applied
+after replacement: enable adds, disable subtracts, and **disable wins** over both the base policy
+and a same-Run enable.
+
+`deny_skills`, `GIT_LOOPY_DENY_SKILLS`, and `--deny-skill` are **deprecated final guards**. They
+may only subtract from the effective set, are applied last, are reported verbatim even when they
+name nothing enabled, and MUST NOT be silently dropped or weakened. A legacy denial that would
+remove a Required Skill is a validation failure, not a quiet subtraction.
+
+### 17.3 Validation failures (preflight, MUST)
+
+Resolution MUST fail before any work begins, and MUST NOT rewrite persisted policy, when:
+
+| Failure | Condition |
+| --- | --- |
+| Inventory unavailable | The catalog could not be resolved and the policy was explicitly configured. |
+| Missing enabled Skills | An enabled name has no catalog winner. |
+| Missing Required Skills | A Required Skill is not in the effective enabled set. |
+| Untracked project Skills | An enabled winner whose `source_kind` is `project` is not git-tracked. |
+
+Each failure MUST name the offending canonical names, sorted and deduplicated. A Run with **no**
+explicit policy still resolves the Minimal Skill policy even when external inventory is
+unavailable, because Required Skills come from the packaged catalog.
+
+### 17.4 Freeze semantics (MUST)
+
+The Effective Skill policy is resolved **once** at Run preflight, before source collection and
+before any agent session exists, and is frozen for the entire Run: every Iteration and every
+parallel **Lane** shares that one immutable boundary. Later catalog changes, Copilot CLI state
+changes, or Config edits MUST NOT alter a Run in flight. Disabled Skills are omitted from the
+session-visible catalog *and* denied again at the permission gate.
+
+### 17.5 `wrapper.skill_policy.resolved` (MUST when the policy surface is implemented)
+
+One Run-scoped Event (`iter: null`) records the frozen boundary, with exactly these payload keys:
+
+| Key | Value |
+| --- | --- |
+| `base_scope` | `project`, `global`, or `minimal`. |
+| `enabled` | Sorted deduplicated canonical names. |
+| `fallback` | `minimal`, `migration`, or `null` when a base scope was in effect. |
+| `legacy_denied` | Sorted deprecated denial names. |
+| `migration_warning` | `true` when the active prompt declared no `required-skills` and inherited the packaged list. |
+| `required` | Sorted Required Skill names. |
+| `source_kinds` | Enabled name → resolved `source_kind`. |
+
+Every collection projection is sorted, so two Runs with the same boundary produce byte-identical
+payloads. The Event is **redacted**: it carries canonical names only. Absolute paths, home
+directories, the Run-scoped exposure directory, and Skill content MUST NOT appear. Serialization
+follows §12 — envelope keys first, payload keys sorted.
+
+### 17.6 Startup state and the Python-first native transition
+
+Before resolution an Orchestrator MUST classify what the Run found: `unconfigured` (no Config
+resolves anywhere), `legacy` (Config exists but the selected scope predates `enabled_skills`), or
+`configured` (a base policy is in effect from a scope or an environment replacement). A Run
+overlay alone does **not** make a legacy base configured — it is temporary and persists nothing.
+
+Skill policy is a family requirement, but the Python reference Orchestrator implements it first.
+Until a port reaches Config parity it MUST **fail closed** rather than silently ignore a
+configured policy: detecting `GIT_LOOPY_ENABLED_SKILLS` (including an explicit empty value),
+`--enable-skill`, `--disable-skill`, or an `enabled_skills` key in a standard Config location MUST
+abort before source collection and before the agent is invoked, naming the unsupported surface.
+Legacy deny-only invocations continue to resolve and run unchanged. Silently proceeding with a
+wider capability set than the operator configured is the one outcome this section exists to
+prevent.
+
+### 17.7 Consulted Skills are a different fact
+
+`skill-consultation.json` measures which Skills an Iteration actually *used*; this section governs
+which Skills a Run *may* use. A consulted name is per-Iteration observed behaviour, a policy name
+is Run-level availability, and neither may be derived from the other.
+
+## 18. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).

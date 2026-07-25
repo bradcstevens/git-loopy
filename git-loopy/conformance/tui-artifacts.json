@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "command_name": "git-loopy-tui",
+  "cargo_dist_version": "0.32.0",
+  "archive_name_template": "{command}-{target}.{extension}",
+  "checksum_name_template": "{archive}.sha256",
+  "checksum_algorithm": "sha256",
+  "release_download_url_template": "https://github.com/bradcstevens/git-loopy/releases/download/v{version}/{artifact}",
+  "archive_formats": {
+    "macos": {
+      "extension": "tar.xz",
+      "executable_suffix": ""
+    },
+    "linux": {
+      "extension": "tar.xz",
+      "executable_suffix": ""
+    },
+    "windows": {
+      "extension": "zip",
+      "executable_suffix": ".exe"
+    }
+  },
+  "host_aliases": {
+    "systems": {
+      "darwin": "macos",
+      "macos": "macos",
+      "linux": "linux",
+      "windows": "windows",
+      "win32": "windows"
+    },
+    "machines": {
+      "aarch64": "arm64",
+      "arm64": "arm64",
+      "amd64": "x64",
+      "x64": "x64",
+      "x86_64": "x64",
+      "armv7": "armv7",
+      "armv7l": "armv7"
+    }
+  },
+  "targets": [
+    {
+      "triple": "aarch64-apple-darwin",
+      "os": "macos",
+      "arch": "arm64",
+      "libc": null,
+      "runner": "macos-14",
+      "build": "native",
+      "container": null,
+      "packages_install": null,
+      "requires_tool": null
+    },
+    {
+      "triple": "x86_64-apple-darwin",
+      "os": "macos",
+      "arch": "x64",
+      "libc": null,
+      "runner": "macos-15-intel",
+      "build": "native",
+      "container": null,
+      "packages_install": null,
+      "requires_tool": null
+    },
+    {
+      "triple": "x86_64-pc-windows-msvc",
+      "os": "windows",
+      "arch": "x64",
+      "libc": null,
+      "runner": "windows-2022",
+      "build": "native",
+      "container": null,
+      "packages_install": null,
+      "requires_tool": null
+    },
+    {
+      "triple": "aarch64-unknown-linux-gnu",
+      "os": "linux",
+      "arch": "arm64",
+      "libc": "gnu",
+      "runner": "ubuntu-22.04",
+      "build": "cross",
+      "container": "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
+      "packages_install": "pip3 install cargo-zigbuild",
+      "requires_tool": "cargo-zigbuild"
+    },
+    {
+      "triple": "x86_64-unknown-linux-gnu",
+      "os": "linux",
+      "arch": "x64",
+      "libc": "gnu",
+      "runner": "ubuntu-22.04",
+      "build": "native",
+      "container": null,
+      "packages_install": null,
+      "requires_tool": null
+    },
+    {
+      "triple": "aarch64-unknown-linux-musl",
+      "os": "linux",
+      "arch": "arm64",
+      "libc": "musl",
+      "runner": "ubuntu-22.04",
+      "build": "cross",
+      "container": "messense/rust-musl-cross:aarch64-musl",
+      "packages_install": "pip3 install cargo-zigbuild",
+      "requires_tool": "cargo-zigbuild"
+    },
+    {
+      "triple": "x86_64-unknown-linux-musl",
+      "os": "linux",
+      "arch": "x64",
+      "libc": "musl",
+      "runner": "ubuntu-22.04",
+      "build": "native",
+      "container": null,
+      "packages_install": "sudo apt-get update && sudo apt-get install -y musl-tools",
+      "requires_tool": "musl-tools"
+    }
+  ],
+  "deferred_targets": [
+    {
+      "triple": "aarch64-pc-windows-msvc",
+      "os": "windows",
+      "arch": "arm64",
+      "reason": "Windows arm64 is deferred beyond Phase 2; run the x64 helper under emulation or keep plain output"
+    },
+    {
+      "triple": "armv7-unknown-linux-gnueabihf",
+      "os": "linux",
+      "arch": "armv7",
+      "reason": "32-bit ARM Linux is deferred beyond Phase 2"
+    }
+  ],
+  "selection_cases": [
+    {
+      "id": "apple-silicon",
+      "system": "Darwin",
+      "machine": "arm64",
+      "libc": null,
+      "target": "aarch64-apple-darwin",
+      "error": null
+    },
+    {
+      "id": "intel-mac",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "libc": null,
+      "target": "x86_64-apple-darwin",
+      "error": null
+    },
+    {
+      "id": "windows-x64",
+      "system": "Windows",
+      "machine": "AMD64",
+      "libc": null,
+      "target": "x86_64-pc-windows-msvc",
+      "error": null
+    },
+    {
+      "id": "windows-x64-reporting-a-libc-anyway",
+      "system": "Windows",
+      "machine": "AMD64",
+      "libc": "musl",
+      "target": "x86_64-pc-windows-msvc",
+      "error": null
+    },
+    {
+      "id": "glibc-linux-x64",
+      "system": "Linux",
+      "machine": "x86_64",
+      "libc": "gnu",
+      "target": "x86_64-unknown-linux-gnu",
+      "error": null
+    },
+    {
+      "id": "glibc-linux-arm64",
+      "system": "Linux",
+      "machine": "aarch64",
+      "libc": "gnu",
+      "target": "aarch64-unknown-linux-gnu",
+      "error": null
+    },
+    {
+      "id": "musl-linux-x64",
+      "system": "Linux",
+      "machine": "x86_64",
+      "libc": "musl",
+      "target": "x86_64-unknown-linux-musl",
+      "error": null
+    },
+    {
+      "id": "musl-linux-arm64",
+      "system": "Linux",
+      "machine": "aarch64",
+      "libc": "musl",
+      "target": "aarch64-unknown-linux-musl",
+      "error": null
+    },
+    {
+      "id": "linux-without-a-known-libc-takes-the-portable-build",
+      "system": "Linux",
+      "machine": "x86_64",
+      "libc": null,
+      "target": "x86_64-unknown-linux-musl",
+      "error": null
+    },
+    {
+      "id": "windows-arm64-is-deferred-by-name",
+      "system": "Windows",
+      "machine": "ARM64",
+      "libc": null,
+      "target": null,
+      "error": "Windows arm64 is deferred beyond Phase 2"
+    },
+    {
+      "id": "armv7-linux-is-deferred-by-name",
+      "system": "Linux",
+      "machine": "armv7l",
+      "libc": "gnu",
+      "target": null,
+      "error": "32-bit ARM Linux is deferred beyond Phase 2"
+    },
+    {
+      "id": "an-unpublished-operating-system-is-refused",
+      "system": "SunOS",
+      "machine": "x86_64",
+      "libc": null,
+      "target": null,
+      "error": "no git-loopy-tui artifact is published"
+    },
+    {
+      "id": "an-unpublished-architecture-is-refused",
+      "system": "Linux",
+      "machine": "riscv64",
+      "libc": "gnu",
+      "target": null,
+      "error": "no git-loopy-tui artifact is published"
+    }
+  ]
+}

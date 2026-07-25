@@ -16,6 +16,7 @@ from typing import Sequence
 
 from git_loopy.release_version import (
     ReleaseVersionError,
+    is_prerelease,
     validate_repository_release_version,
 )
 
@@ -162,8 +163,7 @@ def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
             f"edited release notes must be committed before tagging: {notes_path}"
         )
 
-    version_without_build = version.split("+", 1)[0]
-    prerelease = "-" in version_without_build
+    prerelease = is_prerelease(version)
     return SourceRelease(
         version=version,
         tag=tag,

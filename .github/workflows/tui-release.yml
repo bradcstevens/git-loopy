@@ -1,0 +1,727 @@
+name: Release the TUI helper
+
+# The seven Phase 2 artifacts for the shared `git-loopy-tui` helper (PRD #173).
+#
+# Source publication (`source-release.yml`) creates the GitHub Release for a tag;
+# this pipeline builds, verifies, attests, and attaches the compiled helper to
+# that same Release. They are separate workflows because they fail for different
+# reasons: a cross-compilation failure must not stop a source Release, and a
+# missing Release note must not strand seven built archives.
+#
+# Nothing here is generated. cargo-dist is pinned exactly and driven from this
+# one reviewed file, so a toolchain that would decide the artifact set
+# differently fails the pin instead of quietly re-planning the release. The
+# matrix, the archive names, and the deferred targets are pinned against
+# `git-loopy/conformance/tui-artifacts.json` by
+# `git-loopy/python/tests/test_tui_release_workflow.py`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Verify Release identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # One Release version, proven before anything is built: the root VERSION,
+      # the helper's own Cargo.toml — which is what `--version` and the
+      # `--schema-version` probe answer with — and, when tagging, the tag itself.
+      - name: Prove one Release version across the distribution
+        id: identity
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release identity
+          --repository-root .
+          ${{ startsWith(github.ref, 'refs/tags/v') && format('--tag-ref {0}', github.ref) || '' }}
+          --github-output "$GITHUB_OUTPUT"
+
+  plan:
+    name: Prove the release plan
+    needs: identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Install the pinned release toolchain
+        shell: bash
+        env:
+          CARGO_DIST_VERSION: "0.32.0"
+        run: |
+          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          dist --version | grep -q "$CARGO_DIST_VERSION"
+
+      # cargo-dist decides two things this repository cannot commit: whether it
+      # can see the helper package at all, and which runner and container each
+      # target actually needs. Both are proven against VERSION, the helper
+      # manifest, and the shared artifact metadata before a byte is compiled —
+      # and on pull requests too, where this is the whole of "validate".
+      - name: Refuse a plan that disagrees with the declared Release
+        shell: bash
+        env:
+          TAG_REF: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref || '' }}
+        run: |
+          ( cd git-loopy/tui && dist plan --output-format=json ) > plan.json
+          uv run --project git-loopy/python --all-extras \
+            python -m git_loopy.tui_release verify-plan \
+            --repository-root . \
+            --plan plan.json \
+            ${TAG_REF:+--tag-ref "$TAG_REF"}
+
+  family-conformance:
+    name: Prove Runner-family Conformance
+    needs: identity
+    uses: ./.github/workflows/runner-family-gate.yml
+
+  build:
+    name: build / ${{ matrix.target }}
+    needs:
+      - identity
+      - plan
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    # A tagged Release enters the protected environment that holds the signing
+    # credentials; every pull request enters one that holds none. The boundary
+    # is the platform's, not a step's `if:` — a job that never sees a secret
+    # cannot leak one, however it is edited later.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'validation' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            build: native
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            build: native
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            build: native
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            build: cross
+            container: ghcr.io/rust-cross/manylinux2014-cross:aarch64
+            packages_install: pip3 install cargo-zigbuild
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            build: native
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04
+            build: cross
+            container: messense/rust-musl-cross:aarch64-musl
+            packages_install: pip3 install cargo-zigbuild
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+            build: native
+            packages_install: sudo apt-get update && sudo apt-get install -y musl-tools
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # Three of the seven targets cannot link on a bare runner: both arm64
+      # Linux builds go through cargo-zigbuild inside their cross container, and
+      # x64 musl needs `musl-tools`. `dist plan` is what says so, and the plan
+      # job refuses this list the moment it stops matching. The Rust target
+      # itself is not added here — cargo-dist runs rustup for it.
+      - name: Provision the target toolchain
+        if: matrix.packages_install != ''
+        shell: bash
+        run: ${{ matrix.packages_install }}
+
+      # Installed from source at an exact version rather than through a
+      # per-platform installer script, so one line covers every runner and the
+      # pin is the same string everywhere. The version check is a refusal, not a
+      # report: a different cargo-dist may plan a different artifact set.
+      - name: Install the pinned release toolchain
+        shell: bash
+        env:
+          CARGO_DIST_VERSION: "0.32.0"
+        run: |
+          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          dist --version
+          dist --version | grep -q "$CARGO_DIST_VERSION"
+
+      - name: Build the release artifact
+        shell: bash
+        working-directory: git-loopy/tui
+        env:
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          # cargo-dist signs inside this step, which is the only place signing
+          # can happen: it writes each `.sha256` afterwards, so a published
+          # checksum is a checksum of the *signed* artifact. Both signers
+          # degrade to a warning when their credentials are absent — which is
+          # what keeps a pull request buildable, and exactly why the trust gate
+          # asks the artifact instead of trusting this step's exit code.
+          CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+          CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          CODESIGN_OPTIONS: runtime
+          SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+          SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+          SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+          SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+        run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
+
+      - name: Publish the artifact checksum alongside it
+        shell: bash
+        working-directory: git-loopy/tui/target/distrib
+        run: ls -- *.sha256
+
+      # A native runner can ask the artifact itself: does it claim this Release,
+      # does it accept this Event schema, can it drain a whole Run and exit
+      # cleanly.
+      - name: Smoke-test the native artifact
+        id: smoke-test
+        if: matrix.build == 'native'
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-artifact
+          --repository-root .
+          --artifact-dir git-loopy/tui/target/distrib
+          --target "${{ matrix.target }}"
+          --smoke-test
+
+      # A cross-built artifact cannot execute here, so its job proves what it
+      # can — that the archive is named, checksummed, and shaped as declared —
+      # and says so rather than pretending it ran.
+      - name: Check the cross-built artifact's build and metadata
+        id: cross-metadata
+        if: matrix.build == 'cross'
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-artifact
+          --repository-root .
+          --artifact-dir git-loopy/tui/target/distrib
+          --target "${{ matrix.target }}"
+
+      # Apple's verdict, and only Apple's. cargo-dist signs but does not
+      # notarize, so the signed helper is submitted here and the notary's own
+      # answer is carried into the trust receipt. A ticket cannot be stapled
+      # into a bare Mach-O — stapling needs a bundle, .dmg, or .pkg — so
+      # Gatekeeper resolves this one online, and `release-trust.json` records
+      # that by name rather than leaving it to look like an oversight.
+      - name: Notarize the signed macOS artifact
+        id: notarize
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+          ARCHIVE: git-loopy/tui/target/distrib/git-loopy-tui-${{ matrix.target }}.tar.xz
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          staged="$RUNNER_TEMP/notarize"
+          umask 077
+          # Armed before the key exists, not sequenced after it: every `run:`
+          # here is `bash -e`, so a trailing `rm` would be skipped on exactly
+          # the path that already went wrong and left a signing key on disk.
+          trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$key"
+          mkdir -p "$staged"
+          tar -xJf "$ARCHIVE" -C "$staged"
+          ditto -c -k --keepParent "$staged" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --key "$key" \
+            --wait --output-format json > "$RUNNER_TEMP/notary.json"
+          python3 -c 'import json,os,sys; print("status=" + json.load(open(os.environ["RUNNER_TEMP"] + "/notary.json"))["status"])' >> "$GITHUB_OUTPUT"
+
+      # Written where the evidence exists: a macOS runner is the only machine
+      # that can ask `codesign` what it just signed, and a Windows runner the
+      # only one that can read an Authenticode publisher. A cross-built target
+      # observes nothing and says so, rather than recording an absence that
+      # looks like a pass.
+      - name: Record what this runner can prove about its own artifact
+        shell: bash
+        env:
+          NOTARIZATION_STATUS: ${{ steps.notarize.outputs.status }}
+          OBSERVE: ${{ matrix.build == 'native' && '--observe' || '' }}
+        run: |
+          flags=()
+          if [ -n "$OBSERVE" ]; then
+            flags+=("$OBSERVE")
+          fi
+          if [ -n "$NOTARIZATION_STATUS" ]; then
+            flags+=(--notarization-status "$NOTARIZATION_STATUS")
+          fi
+          uv run --project git-loopy/python --all-extras \
+            python -m git_loopy.release_trust record \
+            --repository-root . \
+            --artifact-dir git-loopy/tui/target/distrib \
+            --target "${{ matrix.target }}" \
+            --release-version "${{ needs.identity.outputs.version }}" \
+            "${flags[@]}"
+
+      - name: Hand the artifact to publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-loopy-tui-${{ matrix.target }}
+          path: |
+            git-loopy/tui/target/distrib/*.tar.xz
+            git-loopy/tui/target/distrib/*.zip
+            git-loopy/tui/target/distrib/*.sha256
+            git-loopy/tui/target/distrib/*.trust.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified helper artifacts
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - identity
+      - plan
+      - family-conformance
+      - build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Collect every built artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: git-loopy-tui-*
+          merge-multiple: true
+
+      # All or nothing. A Release that shipped six of seven archives leaves one
+      # platform's installer resolving a name that 404s, so the complete set is
+      # verified — names, checksums, and Release identity — before a single file
+      # is attached.
+      - name: Refuse an incomplete or altered release set
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-set
+          --repository-root .
+          --artifact-dir release-artifacts
+          --require-complete-set
+
+      - name: Attest the built artifacts
+        id: attest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-artifacts/*.tar.xz
+            release-artifacts/*.zip
+
+      # `source-release.yml` creates the Release for this tag from the same push,
+      # so the two can be in flight together. Waiting for it is bounded and
+      # explicit; failing to find it is a failure, not a silent skip.
+      #
+      # Its prerelease marking is read here rather than assumed, because the
+      # marking is the whole of "clearly marked": the unsigned Windows
+      # allowance belongs to the prerelease channel alone, the workflow that
+      # applies the marking is deliberately a separate one, and the flag stays
+      # editable afterwards.
+      - name: Wait for the tagged Release and read how it is marked
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          for attempt in $(seq 1 30); do
+            if marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease); then
+              echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "no GitHub Release exists for $RELEASE_TAG" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+
+      # The last thing that can stop an untrusted Release. Every artifact's
+      # signature, hardened runtime, notary verdict, publisher, and checksum is
+      # proven against the channel this version publishes on, and that channel
+      # is proven against the marking the Release itself carries — so an
+      # unsigned Windows archive reaches operators only through a Release that
+      # says prerelease, and a stable Release that lost any one of them is
+      # refused rather than uploaded and withdrawn.
+      - name: Refuse a Release that cannot prove its platform trust
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.release_trust verify
+          --repository-root .
+          --artifact-dir release-artifacts
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --attestation "${{ steps.attest.outputs.bundle-path }}"
+
+      - name: Attach the artifacts to the tagged Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
+
+  # The Homebrew channel. It publishes no bytes of its own: the tap points at
+  # the archives `publish` just verified, attested, and attached, and at the
+  # `.sha256` files that Release published beside them.
+  #
+  # Stable only, and proven twice. `needs.identity` says which channel this
+  # version is on, and the formula generator reads the marking back off the
+  # completed Release — because "the stable Release" is what an operator running
+  # `brew install` resolves, and that is the flag, not the version string.
+  homebrew:
+    name: Update the Homebrew tap
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # The completed Release is the source. Only the checksum manifests are
+      # downloaded: the tap needs the digests, and pulling the archives to
+      # recompute them would be a second chance to write down a different number
+      # than the one operators will verify against.
+      - name: Read the completed Release's checksums and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tap
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/homebrew-git-loopy
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Generate the formula this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.homebrew render
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --tap-root tap
+
+      # The generator and the gate are deliberately two commands over the same
+      # file. What reaches operators is whatever is committed to the tap, so the
+      # thing proven is the committed text — including one a human edited.
+      - name: Refuse a formula that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.homebrew verify
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --tap-root tap
+
+      - name: Open or update the tap's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: tap
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Staged, not `git diff`: the tap's first Release has no formula to
+          # differ from, and an untracked file is not a diff -- so an unstaged
+          # check would report "already published" and open nothing at all.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the tap already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          # The tap is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.homebrew\`. Every URL and digest is verified against that Release." \
+            --head "$branch" \
+            --base "$base" \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+
+  # The two Windows channels install the one signed `x86_64-pc-windows-msvc`
+  # archive between them, so they read the same completed Release and differ
+  # only in the format they write it down in. Both download the artifact's
+  # `.trust.json` as well as its `.sha256`: on Windows an operator is shown a
+  # publisher rather than a digest, and that name is the Authenticode subject
+  # the release runner observed on the artifact it had just signed.
+  winget:
+    name: Update the winget manifests
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Read the completed Release's checksums, receipts, and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.trust.json' --dir release-receipts
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the winget manifests
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/winget-pkgs
+          token: ${{ secrets.WINGET_MANIFESTS_TOKEN }}
+          path: channel
+
+      - name: Generate the manifests this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels render
+          --channel winget
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Refuse manifests that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels verify
+          --channel winget
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Open or update the channel's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_MANIFESTS_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: channel
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Staged, not `git diff`: a winget version directory is new on every
+          # Release, and an untracked file is not a diff -- so an unstaged check
+          # would report "already published" and open nothing at all.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the channel already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          # The channel is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The installer URL, digest, and publisher are verified against that Release." \
+            --head "$branch" \
+            --base "$base" \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+
+  scoop:
+    name: Update the Scoop bucket
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Read the completed Release's checksums, receipts, and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.trust.json' --dir release-receipts
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the bucket
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/scoop-git-loopy
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: channel
+
+      - name: Generate the manifest this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels render
+          --channel scoop
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Refuse a manifest that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels verify
+          --channel scoop
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Open or update the channel's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: channel
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Staged, not `git diff`: the bucket's first Release has no manifest to
+          # differ from, and an untracked file is not a diff -- so an unstaged
+          # check would report "already published" and open nothing at all.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the channel already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          # The channel is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The download URL and hash are verified against that Release." \
+            --head "$branch" \
+            --base "$base" \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"

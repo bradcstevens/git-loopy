@@ -140,7 +140,11 @@ def test_bare_first_run_on_tty_runs_wizard_then_loop(
         calls.append(kwargs)
         cfg_dir = tmp_path / "git-loopy"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / "config.toml").write_text('model = "gpt-5.4"\n')
+        # The real wizard always persists a Skill policy, so the fake must too;
+        # a Config without one is legacy and would route to migration instead.
+        (cfg_dir / "config.toml").write_text(
+            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+        )
         return 0
 
     monkeypatch.setattr("git_loopy.init.run_init", fake_run_init)
@@ -236,7 +240,9 @@ def test_bare_run_with_project_config_skips_wizard(
     _clear_run_env(monkeypatch)
     cfg_dir = tmp_path / "git-loopy"
     cfg_dir.mkdir(parents=True)
-    (cfg_dir / "config.toml").write_text('model = "gpt-5.4"\n')
+    (cfg_dir / "config.toml").write_text(
+        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+    )
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
@@ -263,7 +269,9 @@ def test_bare_run_with_global_config_skips_wizard(
     _clear_run_env(monkeypatch)
     xdg = tmp_path / "xdg"
     (xdg / "git-loopy").mkdir(parents=True)
-    (xdg / "git-loopy" / "config.toml").write_text('model = "gpt-5.4"\n')
+    (xdg / "git-loopy" / "config.toml").write_text(
+        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+    )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)

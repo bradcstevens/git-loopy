@@ -63,6 +63,16 @@ def read_release_version(path: Path) -> str:
     return _read_release_value(path, "Release version authority")
 
 
+def is_prerelease(version: str) -> bool:
+    """Whether ``version`` publishes as a prerelease rather than a stable Release.
+
+    One rule, read by everything that has an opinion about a Release's channel.
+    A second copy is how a Release ends up marked prerelease on GitHub while a
+    signing gate holds it to stable requirements — or, far worse, the reverse.
+    """
+    return "-" in version.split("+", 1)[0]
+
+
 def read_runtime_release_version(path: Path | None = None) -> str:
     """Read the exact Release version shipped with the Python distribution."""
     runtime_path = path or Path(__file__).with_name("VERSION")

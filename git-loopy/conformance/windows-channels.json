@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "helper_command": "git-loopy-tui",
+  "published_channel": "stable",
+  "installed_target": "x86_64-pc-windows-msvc",
+  "trusted_artifact_url_prefix": "https://github.com/bradcstevens/git-loopy/releases/download/",
+  "project_url": "https://github.com/bradcstevens/git-loopy",
+  "license": "MIT",
+  "license_url": "https://github.com/bradcstevens/git-loopy/blob/main/LICENSE",
+  "release_notes_url_template": "https://github.com/bradcstevens/git-loopy/releases/tag/v{version}",
+  "short_description": "Live Dashboard helper for the git-loopy autonomous runner family",
+  "host": {
+    "system": "windows",
+    "machine": "x64",
+    "libc": null
+  },
+  "excluded_targets": [
+    {
+      "triple": "aarch64-apple-darwin",
+      "reason": "winget and Scoop are Windows package managers; Homebrew carries macOS"
+    },
+    {
+      "triple": "x86_64-apple-darwin",
+      "reason": "winget and Scoop are Windows package managers; Homebrew carries macOS"
+    },
+    {
+      "triple": "aarch64-unknown-linux-gnu",
+      "reason": "winget and Scoop are Windows package managers; Homebrew and install.sh carry Linux"
+    },
+    {
+      "triple": "x86_64-unknown-linux-gnu",
+      "reason": "winget and Scoop are Windows package managers; Homebrew and install.sh carry Linux"
+    },
+    {
+      "triple": "aarch64-unknown-linux-musl",
+      "reason": "winget and Scoop are Windows package managers; Homebrew and install.sh carry Linux"
+    },
+    {
+      "triple": "x86_64-unknown-linux-musl",
+      "reason": "winget and Scoop are Windows package managers; Homebrew and install.sh carry Linux"
+    }
+  ],
+  "channels": [
+    {
+      "id": "winget",
+      "channel_job": "winget",
+      "repository": "bradcstevens/winget-pkgs",
+      "package_identifier": "bradcstevens.git-loopy-tui",
+      "package_name": "git-loopy-tui",
+      "publisher_url": "https://github.com/bradcstevens",
+      "manifest_version": "1.6.0",
+      "default_locale": "en-US",
+      "installer_architecture": "x64",
+      "files": [
+        "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.yaml",
+        "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.installer.yaml",
+        "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.locale.en-US.yaml"
+      ]
+    },
+    {
+      "id": "scoop",
+      "channel_job": "scoop",
+      "repository": "bradcstevens/scoop-git-loopy",
+      "package_identifier": "git-loopy-tui",
+      "package_name": "git-loopy-tui",
+      "publisher_url": "https://github.com/bradcstevens",
+      "manifest_version": null,
+      "default_locale": null,
+      "installer_architecture": "64bit",
+      "files": [
+        "bucket/git-loopy-tui.json"
+      ]
+    }
+  ],
+  "unavailable_claims": [
+    {
+      "channel": "winget",
+      "claim": "version_probe",
+      "reason": "winget runs no post-install hook a manifest can supply, so the pinned digest is the whole of the binding between the installed bytes and the Release whose --version publication already proved; Scoop's post_install runs the probe and winget cannot"
+    },
+    {
+      "channel": "scoop",
+      "claim": "publisher",
+      "reason": "a Scoop manifest has no publisher field, so the signing identity is proven at the gate for both channels -- the Release's Windows trust receipt must carry a signature and a publisher_identity before either manifest is written -- and pinned in the committed text only where winget has a field an operator is shown"
+    }
+  ],
+  "publication_cases": [
+    {
+      "id": "a-stable-release-updates-both-channels",
+      "version": "1.2.3",
+      "marked_prerelease": false,
+      "published": true,
+      "error": null
+    },
+    {
+      "id": "a-release-candidate-never-reaches-a-windows-channel",
+      "version": "1.2.3-rc.1",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    },
+    {
+      "id": "a-development-release-never-reaches-a-windows-channel",
+      "version": "1.2.3-dev.0",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    },
+    {
+      "id": "a-stable-version-on-a-release-the-operator-sees-as-prerelease",
+      "version": "1.2.3",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "the completed Release is marked prerelease"
+    },
+    {
+      "id": "a-prerelease-version-on-a-release-marked-stable",
+      "version": "1.2.3-rc.1",
+      "marked_prerelease": false,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    }
+  ],
+  "signing_cases": [
+    {
+      "id": "a-signed-windows-artifact-reaches-both-channels",
+      "receipt": "signed",
+      "published": true,
+      "error": null
+    },
+    {
+      "id": "an-unsigned-windows-artifact-reaches-neither",
+      "receipt": "unsigned",
+      "published": false,
+      "error": "is not signed"
+    },
+    {
+      "id": "a-signed-artifact-with-no-verifiable-publisher-reaches-neither",
+      "receipt": "no-publisher-identity",
+      "published": false,
+      "error": "publisher_identity"
+    },
+    {
+      "id": "a-receipt-issued-for-another-release-reaches-neither",
+      "receipt": "version-drift",
+      "published": false,
+      "error": "trust receipt names Release version"
+    },
+    {
+      "id": "a-windows-artifact-with-no-trust-receipt-reaches-neither",
+      "receipt": "missing",
+      "published": false,
+      "error": "no trust receipt was published"
+    }
+  ],
+  "drift_cases": [
+    {
+      "id": "a-winget-manifest-declaring-another-releases-version",
+      "channel": "winget",
+      "field": "version",
+      "value": "9.9.9",
+      "error": "declares version '9.9.9'"
+    },
+    {
+      "id": "a-winget-installer-url-from-another-release",
+      "channel": "winget",
+      "field": "url",
+      "value": "https://github.com/bradcstevens/git-loopy/releases/download/v9.9.9/git-loopy-tui-x86_64-pc-windows-msvc.zip",
+      "error": "is not this Release's Windows artifact"
+    },
+    {
+      "id": "a-winget-installer-url-for-another-platform",
+      "channel": "winget",
+      "field": "url",
+      "value": "https://github.com/bradcstevens/git-loopy/releases/download/v1.2.3/git-loopy-tui-x86_64-apple-darwin.tar.xz",
+      "error": "is not this Release's Windows artifact"
+    },
+    {
+      "id": "a-winget-installer-served-from-an-untrusted-host",
+      "channel": "winget",
+      "field": "url",
+      "value": "https://mirror.invalid/v1.2.3/git-loopy-tui-x86_64-pc-windows-msvc.zip",
+      "error": "untrusted artifact host"
+    },
+    {
+      "id": "a-winget-digest-that-is-not-the-published-one",
+      "channel": "winget",
+      "field": "digest",
+      "value": "0000000000000000000000000000000000000000000000000000000000000000",
+      "error": "is not the one the Release published"
+    },
+    {
+      "id": "a-winget-manifest-crediting-another-publisher",
+      "channel": "winget",
+      "field": "publisher",
+      "value": "Someone Else Ltd",
+      "error": "credits publisher 'Someone Else Ltd'"
+    },
+    {
+      "id": "a-winget-package-identifier-nobody-tapped",
+      "channel": "winget",
+      "field": "identifier",
+      "value": "someoneelse.git-loopy-tui",
+      "error": "declares package identifier"
+    },
+    {
+      "id": "a-scoop-manifest-declaring-another-releases-version",
+      "channel": "scoop",
+      "field": "version",
+      "value": "9.9.9",
+      "error": "declares version '9.9.9'"
+    },
+    {
+      "id": "a-scoop-url-from-another-release",
+      "channel": "scoop",
+      "field": "url",
+      "value": "https://github.com/bradcstevens/git-loopy/releases/download/v9.9.9/git-loopy-tui-x86_64-pc-windows-msvc.zip",
+      "error": "is not this Release's Windows artifact"
+    },
+    {
+      "id": "a-scoop-url-served-from-an-untrusted-host",
+      "channel": "scoop",
+      "field": "url",
+      "value": "https://mirror.invalid/v1.2.3/git-loopy-tui-x86_64-pc-windows-msvc.zip",
+      "error": "untrusted artifact host"
+    },
+    {
+      "id": "a-scoop-hash-that-is-not-the-published-one",
+      "channel": "scoop",
+      "field": "digest",
+      "value": "0000000000000000000000000000000000000000000000000000000000000000",
+      "error": "is not the one the Release published"
+    },
+    {
+      "id": "a-scoop-manifest-that-stopped-proving-the-installed-version",
+      "channel": "scoop",
+      "field": "version_probe",
+      "value": null,
+      "error": "never proves the installed helper reports"
+    }
+  ]
+}

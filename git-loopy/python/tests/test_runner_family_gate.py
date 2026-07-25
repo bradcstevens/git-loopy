@@ -16,7 +16,9 @@ workflow's shape so the gate cannot silently regress:
   (``tests/test_conformance.py``) on the Linux reference platform;
 * a **shell** job runs the shell Conformance + boundary suites on ubuntu + macos;
 * a **PowerShell** job runs the PowerShell Conformance + boundary suites on
-  ubuntu + macos + windows.
+  ubuntu + macos + windows;
+* a **Rust** job runs the Rust Dashboard core's suite, which drives the shared
+  ``dashboard-insights.json`` semantic fixture, on ubuntu.
 
 If any family member's job is deleted, or an OS is dropped from a matrix, or the
 Conformance step is removed, this guard fails -- so a contributor can only evolve
@@ -56,6 +58,10 @@ PYTHON_CONFORMANCE = "test_conformance.py"
 FAMILY_RELEASE_CONFORMANCE = "test_release_identity_conformance.py"
 PYTHON_CONTINUATION = "test_continuation_scenarios.py"
 PYTHON_TEST_TREE = "git-loopy/python/tests"
+# The Rust Dashboard core is a family member too: its suite drives the same
+# shared semantic fixture Python does, so it must not drift unwatched.
+RUST_MANIFEST = "git-loopy/tui/Cargo.toml"
+RUST_SUITE = "cargo test"
 
 # The operating systems each member claims to support (ADR-0013 "Runtime floors";
 # ``docs/runners.md``). Normalised to the runner-image family (image label minus
@@ -190,6 +196,12 @@ def _is_powershell_gate(job: _Job) -> bool:
     )
 
 
+def _is_rust_gate(job: _Job) -> bool:
+    """Runs the Rust Dashboard core's suite against the shared fixture."""
+    text = _job_run_text(job)
+    return RUST_SUITE in text and RUST_MANIFEST in text
+
+
 def _loaded_workflows() -> list[tuple[Path, _Workflow]]:
     """Shared setup: the parsed gate workflows, or a skip when unavailable."""
     repo_root = _find_repo_root()
@@ -273,11 +285,41 @@ def test_ci_gates_powershell_port_across_the_os_matrix() -> None:
     )
 
 
+def test_ci_gates_the_rust_dashboard_core() -> None:
+    """The Rust semantic core is gated on the Linux reference platform.
+
+    The Rust reducer consumes ``dashboard-insights.json`` -- the *same* semantic
+    fixture ``test_conformance.py`` drives -- so an unwatched Rust suite would let
+    the family's Dashboard semantics diverge silently (ADR-0013, issue #185).
+    """
+    workflows = _loaded_workflows()
+
+    rust_jobs = [
+        (path, name) for path, name, job in _all_jobs(workflows) if _is_rust_gate(job)
+    ]
+    assert rust_jobs, (
+        "no CI job runs the Rust Dashboard core's suite "
+        f"({RUST_SUITE} --manifest-path {RUST_MANIFEST}). The Runner-family gate "
+        "must run every member that consumes a shared Conformance fixture."
+    )
+
+    platforms = _gate_platforms(workflows, _is_rust_gate)
+    assert LINUX in platforms, (
+        "the Rust Dashboard core must be gated on the Linux reference platform; "
+        f"found {sorted(platforms)}"
+    )
+
+
 def test_ci_gate_runs_on_every_push_and_pull_request() -> None:
     """AC6: every workflow hosting a family-gate job triggers on push and PR."""
     workflows = _loaded_workflows()
 
-    gate_predicates = (_is_python_gate, _is_shell_gate, _is_powershell_gate)
+    gate_predicates = (
+        _is_python_gate,
+        _is_shell_gate,
+        _is_powershell_gate,
+        _is_rust_gate,
+    )
     hosting = [
         (path, workflow)
         for path, workflow in workflows

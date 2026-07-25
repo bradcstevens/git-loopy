@@ -176,6 +176,7 @@ If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft 
 
 **Next:**
 - [`docs/workflow.md`](workflow.md) — the complete loop-engineering workflow.
+- [`docs/skill-policy.md`](skill-policy.md) — the closed-world Skill policy that decides which Skills a Run may load.
 - [`docs/runners.md`](runners.md) — the Runner family reference; [`docs/wrapper-contract.md`](wrapper-contract.md) — the Wrapper contract every Orchestrator implements.
 - [`docs/concepts.md`](concepts.md) — the mental models behind the design.
 - Back to [`README.md`](../README.md).

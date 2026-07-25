@@ -14,13 +14,18 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and future renderer #143 |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
+| `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
+| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
+| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
+| `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
+| `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -28,6 +33,85 @@ version axis explicitly: fixture schema, Continuation contract, record format,
 Wrapper contract, and Event schema. Fixture content is data only: do not add
 host-language expressions, executable hooks, or implementation-specific
 expected-value generation.
+
+`tui-artifacts.json` is the one fixture whose consumers are not Orchestrators:
+release automation builds exactly the target set it declares, and the shell and
+PowerShell installers resolve their own artifact through its host aliases and
+selection cases. Everything about a published helper that more than one of them
+has to agree on — the toolchain pin, the target list, the archive and checksum
+names — is stated once there, so a renamed artifact cannot leave one consumer
+resolving a name that no longer exists. `git-loopy/tui/Cargo.toml` is what
+actually builds; `git-loopy/python/tests/test_tui_release.py` fails when the two
+disagree.
+
+`release_download_url_template` is there for the same reason the names are: the
+installers, the Homebrew tap, and the winget/Scoop manifests all download the
+same bytes, and a channel that resolves its own URL is a channel that can
+install a different Release. It is pinned against the helper manifest's
+`repository`, so a fork or a rename cannot leave every channel downloading from
+the old repository's Releases. The shell adapter is
+[`shell/tests/test-tui-install.sh`](../shell/tests/test-tui-install.sh), which
+drives the same `selection_cases` and installs a fake published Release over
+`file://` — a real transfer, with no network.
+
+Three of the seven targets cannot link on a bare runner, so each target also
+declares the container it builds inside and the packages that container needs.
+That provisioning is cargo-dist's answer rather than this repository's, so the
+release pipeline proves it: `dist plan --output-format=json` is checked against
+this fixture before a byte is compiled, and a plan that would build on another
+runner, in another container, or under another toolchain fails the release
+instead of the linker.
+
+`release-trust.json` is the other half of that story: `tui-artifacts.json` says
+*what* is published, and `release-trust.json` says what publishing it has to
+prove. Signing happens inside `dist build`, because cargo-dist writes each
+`.sha256` afterwards and a published checksum must be a checksum of the *signed*
+artifact. Both of its signers degrade to a warning when their credentials are
+absent — which is what keeps a pull request buildable, and exactly why the gate
+proves a signature by unpacking the artifact and asking it, rather than by
+trusting a step that did not fail. Evidence a platform cannot carry is recorded
+by name and reason, the same way targets are deferred by name: an absent
+requirement and an impossible one look identical from the outside, and only one
+of them is a decision.
+
+Each of its `publication_cases` also states the prerelease flag the GitHub
+Release carries, alongside the version being published. The version decides
+which evidence is *required*; the marking is what an operator, and every package
+channel that resolves "the stable Release", actually sees. The unsigned Windows
+allowance belongs to the prerelease channel alone, so a case where the two
+disagree is a refusal in both directions rather than a preference for the
+version string.
+
+`homebrew-tap.json` is the third of that set, and the one furthest from the
+bytes. A package channel is the only distribution path where nobody reads what
+they installed: `brew install git-loopy-tui` resolves a URL and a digest that
+release automation wrote into a formula, and an operator cannot tell a formula
+naming the Release it claims from one naming a different build. So the formula is
+*generated* from the completed Release and then read back by a separate gate —
+version, per-platform artifact, trusted host, published digest, complete
+coverage, and the `brew test` version probe are each proven independently, and
+each drift is refused by its own name. The tap credential is not declared here:
+`release-trust.json` is the pipeline's one credential registry, and a channel
+that carried its own list could add one nothing reviewed.
+
+`windows-channels.json` is the fourth, and it holds **two** channels rather than
+one because winget and Scoop install the same single artifact — the signed
+`x86_64-pc-windows-msvc` archive — and differ only in the format they write it
+down in. Splitting them would give one fact two homes that could disagree
+without either failing.
+
+Three things distinguish it from the tap fixture. It records a **signing
+identity**: on Windows an operator is shown a publisher rather than a digest, so
+both channels read that artifact's own `.trust.json` receipt before writing
+anything, and the required evidence is read from `release-trust.json` rather than
+restated — a second list is a second place to relax it. It records **what each
+format cannot carry**, by name and reason, because the two ecosystems are not
+symmetric: Scoop has no publisher field, winget has no post-install hook, and
+left absent each channel would quietly be held to the weaker bar of whichever
+format has fewer fields. And its gate finishes with **canonical equality** —
+each committed file must be byte-for-byte the text this Release generates — so
+reading the claims is what earns each drift its own refusal rather than what
+makes the gate sound.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered
@@ -121,10 +205,46 @@ tool call names it or any tool-call argument references
 `.copilot/skills/<name>/SKILL.md`. Consulted names are deduplicated and sorted;
 catalog globs that do not identify a concrete `<name>` do not count.
 
+`skill-policy.json` is a different fact from `skill-consultation.json`:
+consultation is what one Iteration *used*, policy is what the whole Run *may
+use*. Its `resolution_cases` drive the production resolver seam — the same one
+Run preflight calls — so an adapter passes only by resolving, never by
+restating; `startup_cases` drive the production startup classifier that decides
+whether a Run offers a one-time migration; and `event_payload_cases` drive the
+production redacted audit projection. Because Skill policy is Python-first, the
+fixture names its own transition state: `native_transition.implemented` lists
+the distributions that resolve a policy, and `native_transition.fail_closed`
+lists the ones that must abort before source collection when they detect any
+`native_transition.policy_surfaces` entry.
+
+The shell adapter consumes that transition block directly: its conformance suite
+drives `git_loopy_detect_skill_policy_surfaces` — the seam Run preflight calls —
+and asserts the detected surfaces equal `policy_surfaces` in the fixture's own
+order, so a surface added to the contract turns the port red rather than leaking
+through it. Its boundary suite drives every surface through the real entrypoint
+and proves the Run exits `1` before Pool collection and before the fake Copilot
+process exists.
+
+The PowerShell adapter reads the same block the same way: its conformance suite
+drives `Get-GitLoopySkillPolicySurfaces` and its boundary suite drives every
+surface through the real entrypoint. Both ports also assert their own name is in
+`fail_closed` and absent from `implemented`, so the day either gains native
+support the stale expectation fails loudly instead of passing by omission.
+
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
 adapter drives Python's normalized Iteration-rollup seam and the production
-Dashboard semantic projection through every fixture snapshot. The
+Dashboard semantic projection through every fixture snapshot. The Rust Dashboard
+core drives the *same* `dashboard-insights.json` snapshots through its production
+reducer and projection from
+[`tui/tests/dashboard_conformance.rs`](../tui/tests/dashboard_conformance.rs), so
+the two renderers' semantics cannot diverge: `dashboard-insights.json` is the only
+place a Dashboard decision is stated, and neither member is the other's oracle. The
+Rust terminal rendering tests in
+[`tui/tests/dashboard_render.rs`](../tui/tests/dashboard_render.rs) and
+[`tui/tests/drill_in_render.rs`](../tui/tests/drill_in_render.rs) read their
+expected cell values back out of the same fixture rather than restating them, so a
+drawn band — on either screen — cannot disagree with the projection it draws. The
 native discovery adapters call their production discriminator, Checkpoint-message,
 and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
@@ -179,6 +299,7 @@ uv run --project git-loopy/python --all-extras \
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
 bash git-loopy/shell/tests/test-continuation-conformance.sh
+bash git-loopy/shell/tests/test-tui-install.sh
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-orchestrator-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-continuation-conformance.ps1

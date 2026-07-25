@@ -16,6 +16,22 @@ if TYPE_CHECKING:
 
 _SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
+#: The exact ``source_kind`` vocabulary a catalog winner may carry (contract
+#: §17.1). It lives here rather than in ``skill_catalog`` because the resolved
+#: kind is a *policy* fact — it decides the untracked-project failure and is the
+#: only catalog detail the redacted audit projection carries besides the name.
+SKILL_SOURCE_KINDS: frozenset[str] = frozenset(
+    {
+        "project",
+        "inherited",
+        "personal",
+        "plugin",
+        "custom",
+        "builtin",
+        "packaged",
+    }
+)
+
 
 def is_canonical_skill_name(value: object) -> bool:
     """Return whether a value is a canonical Skill policy identity."""
@@ -35,6 +51,42 @@ class SkillPolicyFallback(StrEnum):
 
     MINIMAL = "minimal"
     MIGRATION = "migration"
+
+
+class SkillPolicyStartupState(StrEnum):
+    """What a Run finds before it resolves an Effective Skill policy."""
+
+    #: No Config resolves anywhere; first-run setup establishes the policy.
+    UNCONFIGURED = "unconfigured"
+    #: Config exists but the selected scope predates ``enabled_skills``.
+    LEGACY = "legacy"
+    #: A policy is in effect from a scope or an environment replacement.
+    CONFIGURED = "configured"
+
+
+def classify_skill_policy_startup(
+    inputs: SkillPolicyInputs,
+    *,
+    config_present: bool,
+) -> SkillPolicyStartupState:
+    """Classify what a starting Run found, before any policy is resolved.
+
+    Deliberately separates *absent* from *unconfigured*. Both currently resolve
+    to the **Minimal Skill policy**, which is why the difference is invisible at
+    the resolver and has to be drawn here: an installation with no Config at all
+    has never been asked, while one whose Config predates ``enabled_skills`` has
+    an operator who answered every other question and was never shown this one.
+
+    Only a *base* policy counts as configured. A saved scope answers the
+    question durably, and ``GIT_LOOPY_ENABLED_SKILLS`` replaces the base policy
+    outright for this Run — but ``--enable-skill`` is a temporary overlay over
+    whatever base is in effect, so it leaves an unmigrated base unmigrated.
+    """
+    if inputs.project.present or inputs.global_.present or inputs.environment.present:
+        return SkillPolicyStartupState.CONFIGURED
+    if not config_present:
+        return SkillPolicyStartupState.UNCONFIGURED
+    return SkillPolicyStartupState.LEGACY
 
 
 class SkillPolicyResolutionError(ValueError):
@@ -86,6 +138,11 @@ class SkillCatalogWinner:
     project_path: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.source_kind not in SKILL_SOURCE_KINDS:
+            raise ValueError(
+                f"unrecognized Skill source_kind {self.source_kind!r} for "
+                f"{self.name!r}"
+            )
         path = Path(self.path) if self.path is not None else None
         project_path = (
             Path(self.project_path) if self.project_path is not None else None

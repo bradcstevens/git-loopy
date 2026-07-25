@@ -198,6 +198,141 @@ def run_plain_skill_picker(
             output_fn(f"  Cannot toggle: {exc}.")
 
 
+def run_textual_skill_picker(
+    model: SkillSelectionModel,
+    *,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> SkillSelectionResult | None:
+    """Run the optional ``[tui]`` picker; return ``None`` on cancel.
+
+    Signature-compatible with :func:`run_plain_skill_picker` so the two are
+    interchangeable behind :data:`PickerRunner`. ``input_fn`` and ``output_fn``
+    are accepted and unused: a fullscreen app owns the terminal itself, and
+    accepting them is what lets one collection seam call either implementation
+    without knowing which it got.
+
+    Textual is imported **here**, not at module import, so ``--help``, every
+    non-interactive command, and the base test suite never pay for — or require
+    — the optional extra.
+    """
+    from .interactive.skill_picker_app import SkillPickerApp
+
+    return SkillPickerApp(model).run()
+
+
+def select_skill_picker(
+    *,
+    isatty: bool,
+    textual_importable: bool,
+) -> PickerRunner:
+    """Pick the renderer for one policy edit: optional TUI, else plain terminal.
+
+    The plain-terminal picker is the base installation's guarantee, so it is the
+    fallback for every invocation that cannot render a fullscreen app — the
+    ``[tui]`` extra absent, or stdout not a terminal. Both implementations drive
+    the same :class:`SkillSelectionModel` and return the same
+    :class:`SkillSelectionResult`, so this decides presentation only.
+    """
+    if isatty and textual_importable:
+        return run_textual_skill_picker
+    return run_plain_skill_picker
+
+
+def _stdout_isatty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):  # pragma: no cover - closed/replaced stream
+        return False
+
+
+def _textual_importable() -> bool:
+    """Probe the ``[tui]`` extra without importing it.
+
+    Reuses the interactive path's pure probe (``importlib.util.find_spec``), so
+    checking costs no Textual import and no screen side effects.
+    """
+    from .interactive.detect import textual_available
+
+    return textual_available()
+
+
+def _resolve_picker_runner(picker_runner: PickerRunner | None) -> PickerRunner:
+    """Honour an injected picker; otherwise choose one for this invocation."""
+    if picker_runner is not None:
+        return picker_runner
+    return select_skill_picker(
+        isatty=_stdout_isatty(),
+        textual_importable=_textual_importable(),
+    )
+
+
+@dataclass(frozen=True)
+class SkillPolicySyncPlan:
+    """One reviewable Skill baseline delta, computed before anything is written.
+
+    The external agent client's enabled state has no authority over a saved
+    **Skill policy**, so a sync is the operator explicitly re-copying the
+    **Skill baseline** into one scope. Only names the client actually reports
+    are replaced: a winner the client does not represent — git-loopy's packaged
+    fallbacks, and any configured name the catalog has no winner for — keeps
+    whatever the current policy says about it.
+    """
+
+    current: tuple[str, ...]
+    proposed: tuple[str, ...]
+    configured: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "current", tuple(sorted(set(self.current))))
+        object.__setattr__(self, "proposed", tuple(sorted(set(self.proposed))))
+
+    @property
+    def additions(self) -> tuple[str, ...]:
+        if not self.configured:
+            return self.proposed
+        return tuple(name for name in self.proposed if name not in self.current)
+
+    @property
+    def removals(self) -> tuple[str, ...]:
+        if not self.configured:
+            return ()
+        return tuple(name for name in self.current if name not in self.proposed)
+
+    @property
+    def is_noop(self) -> bool:
+        return self.configured and self.current == self.proposed
+
+
+def plan_skill_policy_sync(
+    current: Iterable[str],
+    catalog: SkillCatalog,
+    *,
+    configured: bool = True,
+) -> SkillPolicySyncPlan:
+    """Project one Skill baseline over the current policy at a single scope.
+
+    ``configured`` says whether ``current`` is a *saved* policy at that scope.
+    An absent policy means inheritance or the unconfigured fallback rather than
+    a selection, so there is nothing for the baseline to already match and every
+    proposed name is an addition.
+    """
+    selected = set(current)
+    proposed = set(selected)
+    for name, winner in catalog.winners.items():
+        if winner.copilot_enabled is None:
+            continue
+        if winner.copilot_enabled:
+            proposed.add(name)
+        else:
+            proposed.discard(name)
+    return SkillPolicySyncPlan(
+        current=tuple(selected),
+        proposed=tuple(proposed),
+        configured=configured,
+    )
+
+
 def _packaged_skills_dir() -> Path:
     return Path(str(files("git_loopy") / "skills"))
 
@@ -235,12 +370,35 @@ def _configured_names(
     return tuple(global_ if global_ is not None else required_skills)
 
 
-def _scope_policy_names(
+@dataclass(frozen=True)
+class _ScopePolicySeed:
+    """The selection one scope starts from, and whether a policy backs it."""
+
+    names: tuple[str, ...]
+    configured: bool
+
+
+def _scope_policy_seed(
     *,
     scope: str,
     tables: settings.ConfigTables,
     catalog: SkillCatalog,
-) -> tuple[str, ...]:
+    legacy_denied: Iterable[str] = (),
+) -> _ScopePolicySeed:
+    """Seed one scope from the nearest saved policy, else the Skill baseline.
+
+    ``configured`` says the seed came from a saved **Skill policy** — the
+    scope's own, or the global one a project inherits until it establishes one.
+    An inherited policy is the selection a Run resolves today, so it is the
+    current state any delta must be reviewed against. Only the last branch is
+    genuinely unconfigured: there the seed *is* a fresh Skill baseline, so
+    nothing is being compared to a policy at all.
+
+    ``legacy_denied`` subtracts from that fresh baseline only. A deprecated deny
+    guard is a standing instruction the operator already gave, so a first
+    selection must not arrive with it pre-checked; a *saved* policy has already
+    accounted for it and is left exactly as written.
+    """
     project = settings.table_optional_str_list(
         tables.project, "enabled_skills", scope="project"
     )
@@ -248,14 +406,21 @@ def _scope_policy_names(
         tables.global_, "enabled_skills", scope="global"
     )
     if scope == "project" and project is not None:
-        return tuple(project)
+        return _ScopePolicySeed(tuple(project), configured=True)
     if global_ is not None:
-        return tuple(global_)
-    return tuple(
-        name
-        for name, winner in catalog.winners.items()
-        if winner.copilot_enabled is True
-        or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+        return _ScopePolicySeed(tuple(global_), configured=True)
+    denied = frozenset(legacy_denied)
+    return _ScopePolicySeed(
+        tuple(
+            name
+            for name, winner in catalog.winners.items()
+            if name not in denied
+            and (
+                winner.copilot_enabled is True
+                or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+            )
+        ),
+        configured=False,
     )
 
 
@@ -329,17 +494,268 @@ def _source_label(source_kind: str, plugin_name: str | None) -> str:
     return source_kind
 
 
-def run_skills_edit(
+class SkillScopeError(ValueError):
+    """Raised when the requested Skill policy scope cannot be resolved."""
+
+
+def _resolve_skill_scope(scope: str | None, repo_root: Path | None) -> str:
+    """Resolve the shared ``--global`` / ``--project`` selector (ADR-0006).
+
+    With no flag the default is **project** inside a git repository, else
+    **global** — the same rule ``init`` and ``config`` use. The global Skill
+    policy is machine-scoped, so it stays editable from outside a clone; the
+    project scope needs a repository, and requesting it without one is a clean
+    error rather than a Config written beside an arbitrary directory.
+    """
+    if scope is None:
+        scope = "project" if repo_root is not None else "global"
+    if scope not in {"project", "global"}:
+        raise SkillScopeError(f"invalid Skill policy scope: {scope}")
+    if scope == "project" and repo_root is None:
+        raise SkillScopeError(
+            "the project scope needs a git repository; run inside one or use "
+            "--global."
+        )
+    return scope
+
+
+def _repo_less_root(workspace: Path) -> Path:
+    """An empty stand-in root for commands run outside a git repository.
+
+    Mirrors ``skill_run_preflight._minimal_catalog``: a directory carrying no
+    project Config, no project prompt override, and no project Skill source, so
+    project resolution yields nothing while the global Config, the global prompt
+    override, and the packaged fallbacks resolve unchanged.
+    """
+    root = workspace / "repo-less-root"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+_WORKSPACE_DERIVED_SOURCES = frozenset({"project", "inherited"})
+
+
+def _without_workspace_derived_winners(catalog: SkillCatalog) -> SkillCatalog:
+    """Drop winners only a workspace ancestry could have produced.
+
+    Catalog discovery runs Copilot from an isolated temporary working
+    directory, and Copilot resolves its own ``project`` / ``inherited`` sources
+    by walking that directory's ancestors. When ``TMPDIR`` happens to sit inside
+    an unrelated checkout, that walk reports the unrelated repository's Skills.
+    With no repository of our own there is nothing such a winner could
+    legitimately be, so it is dropped rather than listed, seeded, or offered for
+    selection.
+    """
+    return SkillCatalog(
+        winners={
+            name: winner
+            for name, winner in catalog.winners.items()
+            if winner.source_kind not in _WORKSPACE_DERIVED_SOURCES
+        },
+        inventory_available=catalog.inventory_available,
+    )
+
+
+class SkillPolicyCancelled(Exception):
+    """Raised when the operator cancels the picker; the caller writes nothing."""
+
+
+#: Every failure that turns Skill-policy collection into an actionable, entirely
+#: non-mutating command failure rather than a traceback.
+SKILL_POLICY_FAILURES = (
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    PromptMetadataError,
+    settings.SettingsError,
+    SkillCatalogError,
+    SdkSkillSurfaceError,
+    SkillPolicyResolutionError,
+)
+
+
+@dataclass(frozen=True)
+class _PolicyContext:
+    """Everything one policy command needs after the workspace is torn down."""
+
+    catalog: SkillCatalog
+    required: tuple[str, ...]
+    tracked: frozenset[str]
+    seed: tuple[str, ...]
+    configured: bool = True
+
+
+def _collect_policy_context(
     *,
     scope: str,
-    repo_root: Path,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: ClientFactory | None,
+    discoverer: CatalogDiscoverer,
+    git: GitClient | None,
+    required_skills: Iterable[str] | None,
+    packaged_skills_dir: Path | None,
+    legacy_denied: Iterable[str] = (),
+) -> _PolicyContext:
+    """Discover the catalog and the current scope's policy, then let it go.
+
+    Every command that reads the **Skill catalog** to propose a policy — the
+    picker behind ``skills edit`` and ``init``, and the Skill baseline delta
+    behind ``skills sync`` — shares this one discovery seam, so all of them
+    apply the same repo-less root, the same ancestry-derived-winner rule, the
+    same project-tracking evidence, and the same scope seeding. The temporary
+    discovery workspace is gone before this returns, which is what lets a
+    caller write a Config afterwards without a teardown failure reporting
+    failure over a Config that did change.
+    """
+    packaged = packaged_skills_dir or _packaged_skills_dir()
+    with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
+        workspace = Path(temporary)
+        root = repo_root if repo_root is not None else _repo_less_root(workspace)
+        required = _required_skills(root, env, required_skills)
+        tables = settings.load_configs(root, env)
+        discovery_directory = workspace / "discovery"
+        discovery_directory.mkdir()
+        factory = client_factory or (
+            lambda: make_copilot_client(
+                working_directory=discovery_directory,
+                env=env,
+            )
+        )
+        catalog = asyncio.run(
+            _load_catalog(
+                client_factory=factory,
+                discoverer=discoverer,
+                repo_root=root,
+                packaged_skills_dir=packaged,
+                discovery_directory=discovery_directory,
+            )
+        )
+        if repo_root is None:
+            catalog = _without_workspace_derived_winners(catalog)
+        if git is None:
+            from .git import SubprocessGitClient
+
+            git = SubprocessGitClient(root)
+        seed = _scope_policy_seed(
+            scope=scope,
+            tables=tables,
+            catalog=catalog,
+            legacy_denied=legacy_denied,
+        )
+        return _PolicyContext(
+            catalog=catalog,
+            required=required,
+            tracked=collect_project_skill_tracking(catalog, git),
+            seed=seed.names,
+            configured=seed.configured,
+        )
+
+
+def _validate_policy(
+    enabled: Iterable[str],
+    *,
+    scope: str,
+    context: _PolicyContext,
+) -> None:
+    """Resolve a proposed policy so an invalid one never reaches a Config."""
+    selected_input = SkillPolicyInput(present=True, names=tuple(enabled))
+    inputs = SkillPolicyInputs(
+        project=selected_input if scope == "project" else SkillPolicyInput(),
+        global_=selected_input if scope == "global" else SkillPolicyInput(),
+    )
+    resolve_skill_policy(
+        inputs,
+        catalog=context.catalog,
+        required_skills=context.required,
+        tracked_project_skills=context.tracked,
+    )
+
+
+def _policy_config_path(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+) -> Path:
+    if scope == "project" and repo_root is not None:
+        return settings.project_config_path(repo_root)
+    return settings.global_config_path(env)
+
+
+def _write_policy(path: Path, enabled: Iterable[str], writer: ConfigWriter) -> None:
+    table = dict(settings.load_config_table(path))
+    table["enabled_skills"] = list(enabled)
+    writer(path, table)
+
+
+def collect_skill_policy(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    picker_runner: PickerRunner | None = None,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    packaged_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Discover, seed, pick, and validate one Skill policy without persisting it.
+
+    The single command-independent collection seam: ``skills edit`` and ``init``
+    both route through it, so both apply the same Skill baseline seeding, the
+    same Required-Skill and project-tracking validation, and the same picker.
+    Persisting the result belongs to the caller, which is what lets ``init``
+    fold the policy into its own single collect-then-commit Config write.
+
+    An omitted ``picker_runner`` is resolved by :func:`select_skill_picker`, so
+    the optional-TUI decision is made once here rather than in each command.
+
+    Raises :class:`SkillPolicyCancelled` when the operator cancels, and any
+    member of :data:`SKILL_POLICY_FAILURES` when the policy cannot be resolved.
+    The discovery workspace is gone before this returns, so a caller that writes
+    afterwards can never leave a changed Config behind a teardown failure.
+    """
+    runner = _resolve_picker_runner(picker_runner)
+    context = _collect_policy_context(
+        scope=scope,
+        repo_root=repo_root,
+        env=env,
+        client_factory=client_factory,
+        discoverer=discoverer,
+        git=git,
+        required_skills=required_skills,
+        packaged_skills_dir=packaged_skills_dir,
+        legacy_denied=legacy_denied,
+    )
+    model = _selection_model(
+        catalog=context.catalog,
+        enabled=context.seed,
+        required=context.required,
+        tracked_project_skills=context.tracked,
+    )
+    result = runner(model, input_fn=input_fn, output_fn=output_fn)
+    if result is None:
+        raise SkillPolicyCancelled
+    _validate_policy(result.enabled, scope=scope, context=context)
+    return result.enabled
+
+
+def run_skills_edit(
+    *,
+    scope: str | None,
+    repo_root: Path | None,
     env: Mapping[str, str] | None = None,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
     error_fn: Callable[[str], None] | None = None,
     client_factory: ClientFactory | None = None,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
-    picker_runner: PickerRunner = run_plain_skill_picker,
+    picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
     packaged_skills_dir: Path | None = None,
@@ -352,98 +768,281 @@ def run_skills_edit(
         if error_fn is None
         else error_fn
     )
-    if scope not in {"project", "global"}:
-        errors(f"git-loopy: invalid Skill policy scope: {scope}")
+    try:
+        selected_scope = _resolve_skill_scope(scope, repo_root)
+    except SkillScopeError as exc:
+        errors(f"git-loopy: {exc}")
         return 1
     try:
-        required = _required_skills(repo_root, environment, required_skills)
-        tables = settings.load_configs(repo_root, environment)
-        packaged = packaged_skills_dir or _packaged_skills_dir()
-        with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
-            discovery_directory = Path(temporary)
-            factory = client_factory or (
-                lambda: make_copilot_client(
-                    working_directory=discovery_directory,
-                    env=environment,
-                )
-            )
-            catalog = asyncio.run(
-                _load_catalog(
-                    client_factory=factory,
-                    discoverer=discoverer,
-                    repo_root=repo_root,
-                    packaged_skills_dir=packaged,
-                    discovery_directory=discovery_directory,
-                )
-            )
-        if git is None:
-            from .git import SubprocessGitClient
-
-            git = SubprocessGitClient(repo_root)
-        tracked = collect_project_skill_tracking(catalog, git)
-        seed = _scope_policy_names(scope=scope, tables=tables, catalog=catalog)
-        model = _selection_model(
-            catalog=catalog,
-            enabled=seed,
-            required=required,
-            tracked_project_skills=tracked,
-        )
-        result = picker_runner(
-            model,
+        enabled = collect_skill_policy(
+            scope=selected_scope,
+            repo_root=repo_root,
+            env=environment,
             input_fn=input_fn,
             output_fn=output_fn,
+            client_factory=client_factory,
+            discoverer=discoverer,
+            picker_runner=picker_runner,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
         )
-        if result is None:
-            errors("git-loopy: Skill policy edit cancelled; no changes written.")
-            return 1
-        selected_input = SkillPolicyInput(present=True, names=result.enabled)
-        inputs = SkillPolicyInputs(
-            project=(
-                selected_input if scope == "project" else SkillPolicyInput()
-            ),
-            global_=(
-                selected_input if scope == "global" else SkillPolicyInput()
-            ),
+        path = _policy_config_path(
+            scope=selected_scope, repo_root=repo_root, env=environment
         )
-        resolve_skill_policy(
-            inputs,
-            catalog=catalog,
-            required_skills=required,
-            tracked_project_skills=tracked,
-        )
-        path = (
-            settings.project_config_path(repo_root)
-            if scope == "project"
-            else settings.global_config_path(environment)
-        )
-        table = dict(settings.load_config_table(path))
-        table["enabled_skills"] = list(result.enabled)
-        writer(path, table)
-    except (
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        PromptMetadataError,
-        settings.SettingsError,
-        SkillCatalogError,
-        SdkSkillSurfaceError,
-        SkillPolicyResolutionError,
-    ) as exc:
+        # Persist only after the discovery workspace is gone, so a teardown
+        # failure can never leave a changed Config behind a failed exit.
+        _write_policy(path, enabled, writer)
+    except SkillPolicyCancelled:
+        errors("git-loopy: Skill policy edit cancelled; no changes written.")
+        return 1
+    except SKILL_POLICY_FAILURES as exc:
         errors(
             "git-loopy: unable to edit Skill policy: "
             f"{type(exc).__name__}: {exc}"
         )
         return 1
     output_fn(
-        f"Saved {len(result.enabled)} enabled Skill(s) to the {scope} Config "
-        f"({path})"
+        f"Saved {len(enabled)} enabled Skill(s) to the {selected_scope} "
+        f"Config ({path})"
+    )
+    return 0
+
+
+def migration_scope(
+    tables: settings.ConfigTables,
+    repo_root: Path | None,
+) -> str:
+    """The scope a legacy Config migrates: the nearest one that carries Config.
+
+    Migration answers the question for the scope a Run actually resolves. A
+    repository with its own Config is that scope, so writing the policy globally
+    there would leave the project still selecting nothing; with only a global
+    Config the global scope is the one in effect and the one to answer.
+    """
+    if repo_root is not None and tables.project:
+        return "project"
+    return "global"
+
+
+def run_skill_policy_migration(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str] | None = None,
+    legacy_denied: Iterable[str] = (),
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    error_fn: Callable[[str], None] | None = None,
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    picker_runner: PickerRunner | None = None,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    packaged_skills_dir: Path | None = None,
+    writer: ConfigWriter = settings.write_config_atomic,
+) -> int:
+    """Convert one Config that predates ``enabled_skills`` into a Skill policy.
+
+    The same collection seam ``skills edit`` uses, with two differences that are
+    the whole point of the one-time conversion: the fresh Skill baseline arrives
+    with every deprecated deny guard already unchecked, and the framing says a
+    conversion is happening rather than an edit.
+
+    Returns ``0`` only when a validated policy was persisted. Cancelling and
+    every resolution failure write nothing and return non-zero, so a Run that
+    calls this can treat a non-zero result as "do not start".
+    """
+    environment = os.environ if env is None else env
+    errors = (
+        (lambda message: print(message, file=sys.stderr))
+        if error_fn is None
+        else error_fn
+    )
+    try:
+        project_path = (
+            None if repo_root is None else settings.project_config_path(repo_root)
+        )
+        tables = settings.ConfigTables(
+            project=settings.load_config_table(project_path),
+            global_=settings.load_config_table(
+                settings.global_config_path(environment)
+            ),
+        )
+    except settings.SettingsError as exc:
+        errors(f"git-loopy: unable to read Config for Skill-policy migration: {exc}")
+        return 1
+    scope = migration_scope(tables, repo_root)
+    output_fn(
+        f"git-loopy: this {scope} Config predates the closed-world Skill "
+        "policy. Choose the Skills this installation may load; the selection is "
+        "saved once and never asked again."
+    )
+    try:
+        enabled = collect_skill_policy(
+            scope=scope,
+            repo_root=repo_root,
+            env=environment,
+            input_fn=input_fn,
+            output_fn=output_fn,
+            client_factory=client_factory,
+            discoverer=discoverer,
+            picker_runner=picker_runner,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
+            legacy_denied=legacy_denied,
+        )
+        path = _policy_config_path(
+            scope=scope, repo_root=repo_root, env=environment
+        )
+        # One write, and only after the discovery workspace is gone: a teardown
+        # failure must not report failure over a Config that did change.
+        _write_policy(path, enabled, writer)
+    except SkillPolicyCancelled:
+        errors(
+            "git-loopy: Skill-policy migration cancelled; no changes written "
+            "and no work started. Run `git-loopy skills edit` when ready."
+        )
+        return 1
+    except SKILL_POLICY_FAILURES as exc:
+        errors(
+            "git-loopy: unable to migrate Skill policy: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 1
+    output_fn(
+        f"Migrated the {scope} Config: {len(enabled)} enabled Skill(s) saved "
+        f"to {path}"
+    )
+    return 0
+
+
+def _winner_label(catalog: SkillCatalog, name: str) -> str:
+    winner = catalog.winners.get(name)
+    if winner is None:
+        return "missing from the Skill catalog"
+    return (
+        f"{_source_label(winner.source_kind, winner.plugin_name)}; "
+        f"Copilot {_copilot_state(winner.copilot_enabled)}"
+    )
+
+
+def _render_sync_plan(
+    plan: SkillPolicySyncPlan,
+    catalog: SkillCatalog,
+    *,
+    scope: str,
+    output_fn: Callable[[str], None],
+) -> None:
+    if plan.configured:
+        output_fn(
+            f"Skill baseline sync for the {scope} Skill policy: "
+            f"{len(plan.additions)} addition(s), {len(plan.removals)} removal(s)."
+        )
+    else:
+        output_fn(
+            f"No {scope} Skill policy is configured; syncing saves the current "
+            f"Skill baseline as one ({len(plan.proposed)} Skill(s))."
+        )
+    for name in plan.additions:
+        output_fn(f"  + {name} ({_winner_label(catalog, name)})")
+    for name in plan.removals:
+        output_fn(f"  - {name} ({_winner_label(catalog, name)})")
+
+
+def run_skills_sync(
+    *,
+    scope: str | None,
+    repo_root: Path | None,
+    env: Mapping[str, str] | None = None,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    error_fn: Callable[[str], None] | None = None,
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    packaged_skills_dir: Path | None = None,
+    writer: ConfigWriter = settings.write_config_atomic,
+) -> int:
+    """Re-copy the Skill baseline into one scope after an explicit confirmation.
+
+    Copilot's enabled state has no authority over a saved **Skill policy**, so
+    this is the one command that lets it change one — and only after the
+    operator has seen the exact additions and removals and said yes. The
+    proposed policy is validated before the prompt, so an invalid result is
+    never offered for confirmation, and Copilot's own settings are never
+    written back.
+    """
+    environment = os.environ if env is None else env
+    errors = (
+        (lambda message: print(message, file=sys.stderr))
+        if error_fn is None
+        else error_fn
+    )
+    try:
+        selected_scope = _resolve_skill_scope(scope, repo_root)
+    except SkillScopeError as exc:
+        errors(f"git-loopy: {exc}")
+        return 1
+    try:
+        context = _collect_policy_context(
+            scope=selected_scope,
+            repo_root=repo_root,
+            env=environment,
+            client_factory=client_factory,
+            discoverer=discoverer,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
+        )
+        plan = plan_skill_policy_sync(
+            context.seed, context.catalog, configured=context.configured
+        )
+        _validate_policy(plan.proposed, scope=selected_scope, context=context)
+    except SKILL_POLICY_FAILURES as exc:
+        errors(
+            "git-loopy: unable to sync Skill policy: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 1
+    _render_sync_plan(
+        plan, context.catalog, scope=selected_scope, output_fn=output_fn
+    )
+    if plan.is_noop:
+        output_fn(
+            f"The Skill policy in effect for the {selected_scope} scope already "
+            "matches the Skill baseline; no changes written."
+        )
+        return 0
+    answer = _read_picker_input(
+        input_fn,
+        f"Apply this Skill baseline to the {selected_scope} Config? [y/N]: ",
+    )
+    if answer is None or answer.casefold() not in {"y", "yes"}:
+        errors("git-loopy: Skill policy sync cancelled; no changes written.")
+        return 1
+    path = _policy_config_path(
+        scope=selected_scope, repo_root=repo_root, env=environment
+    )
+    try:
+        _write_policy(path, plan.proposed, writer)
+    except SKILL_POLICY_FAILURES as exc:
+        errors(
+            "git-loopy: unable to sync Skill policy: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 1
+    output_fn(
+        f"Saved {len(plan.proposed)} enabled Skill(s) to the {selected_scope} "
+        f"Config ({path})"
     )
     return 0
 
 
 def run_skills_list(
     *,
-    repo_root: Path,
+    repo_root: Path | None,
     env: Mapping[str, str] | None = None,
     output_fn: Callable[[str], None] = print,
     error_fn: Callable[[str], None] | None = None,
@@ -460,28 +1059,34 @@ def run_skills_list(
         if error_fn is None
         else error_fn
     )
-    if required_skills is None:
-        try:
-            required_skills = _required_skills(repo_root, environment, None)
-        except (OSError, PromptMetadataError) as exc:
-            errors(
-                "git-loopy: unable to resolve Required Skills: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            return 1
-    required = frozenset(required_skills)
-    if enabled_skills is None:
-        try:
-            enabled_skills = _configured_names(repo_root, environment, required)
-        except settings.SettingsError as exc:
-            errors(f"git-loopy: unable to resolve Skill policy: {exc}")
-            return 1
-    enabled = frozenset(enabled_skills)
     packaged = packaged_skills_dir or _packaged_skills_dir()
-
+    # The discovery workspace's own creation and teardown belong inside the
+    # inventory handler: an unusable temporary directory is an unavailable
+    # inventory, not a traceback.
     try:
         with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
-            discovery_directory = Path(temporary)
+            workspace = Path(temporary)
+            root = repo_root if repo_root is not None else _repo_less_root(workspace)
+            if required_skills is None:
+                try:
+                    required_skills = _required_skills(root, environment, None)
+                except (OSError, PromptMetadataError) as exc:
+                    errors(
+                        "git-loopy: unable to resolve Required Skills: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return 1
+            required = frozenset(required_skills)
+            if enabled_skills is None:
+                try:
+                    enabled_skills = _configured_names(root, environment, required)
+                except settings.SettingsError as exc:
+                    errors(f"git-loopy: unable to resolve Skill policy: {exc}")
+                    return 1
+            enabled = frozenset(enabled_skills)
+
+            discovery_directory = workspace / "discovery"
+            discovery_directory.mkdir()
             factory = client_factory or (
                 lambda: make_copilot_client(
                     working_directory=discovery_directory,
@@ -492,11 +1097,13 @@ def run_skills_list(
                 _load_catalog(
                     client_factory=factory,
                     discoverer=discoverer,
-                    repo_root=repo_root,
+                    repo_root=root,
                     packaged_skills_dir=packaged,
                     discovery_directory=discovery_directory,
                 )
             )
+            if repo_root is None:
+                catalog = _without_workspace_derived_winners(catalog)
     except (
         OSError,
         RuntimeError,

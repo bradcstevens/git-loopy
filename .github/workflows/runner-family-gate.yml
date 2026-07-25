@@ -2,11 +2,11 @@ name: Runner family gate
 
 # Anti-drift gate for the whole Runner family (ADR-0013, docs/wrapper-contract.md).
 # Every push, pull request, and calling release workflow must prove that the Python
-# reference Orchestrator and the shell + PowerShell ports still implement the same
-# Wrapper contract on the operating systems each member claims to support. All jobs
-# use fake external tools and scratch repositories, so the gate needs neither live
-# Copilot nor GitHub credentials. The shape of this file is pinned by
-# git-loopy/python/tests/test_runner_family_gate.py.
+# reference Orchestrator, the shell + PowerShell ports, and the Rust Dashboard core
+# still implement the same Wrapper contract on the operating systems each member
+# claims to support. All jobs use fake external tools and scratch repositories, so
+# the gate needs neither live Copilot nor GitHub credentials. The shape of this file
+# is pinned by git-loopy/python/tests/test_runner_family_gate.py.
 
 on:
   push:
@@ -63,7 +63,7 @@ jobs:
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           else
             sudo apt-get update
-            sudo apt-get install --yes jq
+            sudo apt-get install --yes jq xz-utils
           fi
 
       - name: Run shell smoke suite
@@ -77,14 +77,38 @@ jobs:
           "$BASH_BIN" --version
           "$BASH_BIN" -n \
             git-loopy/shell/git-loopy.sh \
+            git-loopy/shell/install.sh \
             git-loopy/shell/lib/continuation.sh \
             git-loopy/shell/lib/events.sh \
             git-loopy/shell/lib/orchestrator.sh \
+            git-loopy/shell/lib/release-version.sh \
+            git-loopy/shell/lib/tui-install.sh \
             git-loopy/shell/tests/*.sh
           "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-continuation-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-boundary.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-tui-install.sh
+
+  rust:
+    name: Rust Dashboard core / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt clippy
+
+      - name: Rust Conformance adapter and suite
+        run: |
+          cargo fmt --manifest-path git-loopy/tui/Cargo.toml --check
+          cargo clippy --manifest-path git-loopy/tui/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path git-loopy/tui/Cargo.toml
 
   powershell:
     name: PowerShell / ${{ matrix.os }}
@@ -113,3 +137,5 @@ jobs:
             git-loopy/powershell/tests/test-continuation-conformance.ps1
           pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-orchestrator-boundary.ps1
+          pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-tui-install.ps1

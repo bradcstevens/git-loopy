@@ -2,57 +2,14 @@ Set-StrictMode -Version Latest
 
 $EventsModule = Join-Path $PSScriptRoot "GitLoopy.Events.psm1"
 Import-Module $EventsModule -Force
-$Script:ReleaseVersionPath = [IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot "../../VERSION")
-)
-
-function Get-GitLoopyReleaseVersion {
-    [CmdletBinding()]
-    param(
-        [string]$Path = $Script:ReleaseVersionPath
-    )
-
-    try {
-        $Content = [Text.UTF8Encoding]::new($false, $true).GetString(
-            [IO.File]::ReadAllBytes($Path)
-        )
-    }
-    catch {
-        throw [IO.InvalidDataException]::new(
-            "cannot read Release version authority ${Path}: $($_.Exception.Message)",
-            $_.Exception
-        )
-    }
-
-    $Value = if ($Content.EndsWith("`r`n", [StringComparison]::Ordinal)) {
-        $Content.Substring(0, $Content.Length - 2)
-    }
-    elseif ($Content.EndsWith("`n", [StringComparison]::Ordinal)) {
-        $Content.Substring(0, $Content.Length - 1)
-    }
-    else {
-        $Content
-    }
-    $Identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-    $Pattern = (
-        "\A(?:0|[1-9][0-9]*)\." +
-        "(?:0|[1-9][0-9]*)\." +
-        "(?:0|[1-9][0-9]*)" +
-        "(?:-$Identifier(?:\.$Identifier)*)?" +
-        "(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z"
-    )
-    if (-not [regex]::IsMatch(
-        $Value,
-        $Pattern,
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant
-    )) {
-        throw [IO.InvalidDataException]::new(
-            "Release version authority $Path must contain exactly one " +
-                "Semantic Versioning value"
-        )
-    }
-    return $Value
-}
+$TuiModule = Join-Path $PSScriptRoot "GitLoopy.Tui.psm1"
+Import-Module $TuiModule -Force
+# One reader for this clone's Release version, shared with install.ps1: the
+# Orchestrator refuses a clone-local helper that disagrees with VERSION and the
+# installer stages that helper, so a second reader would be a second opinion
+# about what Release a clone is (issue #194).
+$ReleaseModule = Join-Path $PSScriptRoot "GitLoopy.Release.psm1"
+Import-Module $ReleaseModule -Force
 
 function New-GitLoopyParseException {
     param(
@@ -98,6 +55,36 @@ function Get-GitLoopyEnvironmentValue {
         return [string]$Environment[$Name]
     }
     return $null
+}
+
+# The config home (`<config-home>/git-loopy` is the global scope) resolved the
+# same way every scope-aware lookup resolves it: $XDG_CONFIG_HOME, else the home
+# directory's `.config`. Returns $null when no home is resolvable.
+function Get-GitLoopyConfigHome {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Environment
+    )
+
+    $Xdg = Get-GitLoopyEnvironmentValue $Environment "XDG_CONFIG_HOME"
+    if (-not [string]::IsNullOrWhiteSpace($Xdg)) {
+        return $Xdg
+    }
+
+    $HomePath = Get-GitLoopyEnvironmentValue $Environment "HOME"
+    if ([string]::IsNullOrWhiteSpace($HomePath)) {
+        $HomePath = Get-GitLoopyEnvironmentValue $Environment "USERPROFILE"
+    }
+    if ([string]::IsNullOrWhiteSpace($HomePath)) {
+        $HomePath = [Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::UserProfile
+        )
+    }
+    if ([string]::IsNullOrWhiteSpace($HomePath)) {
+        return $null
+    }
+    return (Join-Path $HomePath ".config")
 }
 
 function Add-GitLoopyUniqueValue {
@@ -168,8 +155,13 @@ function Resolve-GitLoopyConfig {
     $MaxIterationsText = "0"
     $PositionalSeen = $false
     $ShowHelp = $false
+    # Tri-state interactive request: "on", "off", or empty for "no flag given".
+    $InteractiveFlag = ""
     $CliTools = [Collections.Generic.List[string]]::new()
     $CliSkills = [Collections.Generic.List[string]]::new()
+    $SkillPolicyFlagsSeen = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+    )
 
     for ($Index = 0; $Index -lt $Arguments.Count; $Index++) {
         $Token = $Arguments[$Index]
@@ -186,6 +178,15 @@ function Resolve-GitLoopyConfig {
             continue
         }
 
+        if ($Token -ceq "--interactive") {
+            $InteractiveFlag = "on"
+            continue
+        }
+        if ($Token -ceq "--no-interactive") {
+            $InteractiveFlag = "off"
+            continue
+        }
+
         $ValueOptions = @(
             "--model",
             "--reasoning-effort",
@@ -193,6 +194,8 @@ function Resolve-GitLoopyConfig {
             "--max-nmt-strikes",
             "--deny-tool",
             "--deny-skill",
+            "--enable-skill",
+            "--disable-skill",
             "--send-timeout-seconds"
         )
         if ($Option -cin $ValueOptions) {
@@ -224,6 +227,17 @@ function Resolve-GitLoopyConfig {
                 "--max-nmt-strikes" { $MaxNmtStrikesText = $Value }
                 "--deny-tool" { $CliTools.Add($Value) }
                 "--deny-skill" { $CliSkills.Add($Value) }
+                # Recognised as a closed-world Skill-policy overlay, never as an
+                # unknown option and never as a legacy denial: the value is
+                # consumed and discarded so preflight can fail closed on the
+                # surface (contract §17.6) instead of the parser reporting a
+                # usage error or the overlay being silently applied.
+                "--enable-skill" {
+                    [void]$SkillPolicyFlagsSeen.Add($Option)
+                }
+                "--disable-skill" {
+                    [void]$SkillPolicyFlagsSeen.Add($Option)
+                }
                 "--send-timeout-seconds" { $SendTimeoutText = $Value }
             }
             continue
@@ -373,9 +387,184 @@ function Resolve-GitLoopyConfig {
         MaxNmtStrikes = $MaxNmtStrikes
         DenyTools = [string[]]$DenyTools.ToArray()
         DenySkills = [string[]]$DenySkills.ToArray()
+        SkillPolicyFlags = [string[]]@(
+            $SkillPolicyFlagsSeen | Sort-Object -CaseSensitive
+        )
         SendTimeoutSeconds = $SendTimeoutSeconds
+        InteractiveFlag = $InteractiveFlag
         ShowHelp = $ShowHelp
     }
+}
+
+# Decode a TOML *quoted* key's escapes into the characters `tomllib` would
+# resolve them to.
+#
+# `tomllib` reads `"enabled\u005fskills"` as `enabled_skills`, so a Config the
+# Python Orchestrator honours would slip through this port's detector unnoticed
+# if the raw spelling were compared. Unlike the shell port — which cannot use
+# `printf %b` on the Bash 4.0/4.1 it supports and therefore materialises only the
+# ASCII range — .NET can resolve any scalar, so this decodes the full range
+# rather than dropping characters it cannot build. An escape it cannot resolve
+# decodes to nothing, which can only ever *widen* the abort.
+function ConvertFrom-GitLoopyTomlKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Raw
+    )
+
+    $Builder = [Text.StringBuilder]::new()
+    $Index = 0
+    while ($Index -lt $Raw.Length) {
+        $Char = $Raw[$Index]
+        if ($Char -cne [char]0x5C -or $Index + 1 -ge $Raw.Length) {
+            [void]$Builder.Append($Char)
+            $Index++
+            continue
+        }
+
+        $Width = switch -CaseSensitive ([string]$Raw[$Index + 1]) {
+            "u" { 4 }
+            "U" { 8 }
+            default { 0 }
+        }
+        if ($Width -eq 0 -or $Index + 2 + $Width -gt $Raw.Length) {
+            # Every other escape stands for one literal character, and a
+            # truncated one has no scalar to resolve.
+            [void]$Builder.Append($Raw[$Index + 1])
+            $Index += 2
+            continue
+        }
+
+        $Hex = $Raw.Substring($Index + 2, $Width)
+        $Index += 2 + $Width
+        $Scalar = 0
+        if (
+            -not [int]::TryParse(
+                $Hex,
+                [Globalization.NumberStyles]::HexNumber,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$Scalar
+            )
+        ) {
+            continue
+        }
+        if (
+            $Scalar -lt 0 -or
+            $Scalar -gt 0x10FFFF -or
+            ($Scalar -ge 0xD800 -and $Scalar -le 0xDFFF)
+        ) {
+            continue
+        }
+        [void]$Builder.Append([char]::ConvertFromUtf32($Scalar))
+    }
+    return $Builder.ToString()
+}
+
+# Conservative detection of an `enabled_skills` key in one `config.toml`.
+#
+# The PowerShell port has no TOML parser, and this decision only ever *widens
+# the abort*: a false positive costs an operator one diagnostic, while a false
+# negative runs an Iteration on a wider capability set than they configured
+# (contract §17.6). So any assignment of the key counts, including one nested
+# under a table that the Python resolver would ignore. Anchoring the match to
+# the start of the trimmed line is what keeps a commented example — including
+# the comment-only banner `write_config` generates — from reading as a policy.
+#
+# A quoted key is decoded before comparison, so a Config the Python Orchestrator
+# honours cannot run wide here on spelling alone.
+function Test-GitLoopyConfigDeclaresEnabledSkills {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not [IO.File]::Exists($Path)) {
+        return $false
+    }
+    try {
+        $Lines = [IO.File]::ReadAllLines($Path)
+    }
+    catch [IO.IOException] {
+        return $false
+    }
+    catch [UnauthorizedAccessException] {
+        return $false
+    }
+
+    foreach ($Line in $Lines) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -cmatch '^enabled_skills\s*=') {
+            return $true
+        }
+        $Quoted = [regex]::Match(
+            $Trimmed,
+            '^(?:"(?<basic>[^"]*)"|''(?<literal>[^'']*)'')\s*='
+        )
+        if (-not $Quoted.Success) {
+            continue
+        }
+        # Decoding a literal (single-quoted) key too is harmless: TOML gives it
+        # no escapes, and the only possible effect is widening the abort.
+        $Raw = $Quoted.Groups["literal"].Value
+        if ($Quoted.Groups["basic"].Success) {
+            $Raw = $Quoted.Groups["basic"].Value
+        }
+        if ((ConvertFrom-GitLoopyTomlKey -Raw $Raw) -ceq "enabled_skills") {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Every closed-world Skill-policy surface this Run carries that the PowerShell
+# port cannot honour, in the canonical order of the family fixture's
+# `native_transition.policy_surfaces`. An empty result means nothing unsupported
+# was configured; legacy deny-only inputs are never a surface (contract §17.2).
+function Get-GitLoopySkillPolicySurfaces {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Environment,
+        [AllowNull()]
+        [string]$RepoRoot
+    )
+
+    $Surfaces = [Collections.Generic.List[string]]::new()
+
+    # Presence, not content: an explicit empty replacement is a real policy.
+    if ($Environment.Contains("GIT_LOOPY_ENABLED_SKILLS")) {
+        $Surfaces.Add("GIT_LOOPY_ENABLED_SKILLS")
+    }
+
+    # Canonical order, not command-line order, so two Runs that configure the
+    # same overlays always produce the same diagnostic.
+    foreach ($Flag in @("--enable-skill", "--disable-skill")) {
+        if ($Flag -cin @($Config.SkillPolicyFlags)) {
+            $Surfaces.Add($Flag)
+        }
+    }
+
+    $ConfigPaths = [Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+        $ConfigPaths.Add((Join-Path $RepoRoot "git-loopy/config.toml"))
+    }
+    $ConfigHome = Get-GitLoopyConfigHome -Environment $Environment
+    if (-not [string]::IsNullOrWhiteSpace($ConfigHome)) {
+        $ConfigPaths.Add((Join-Path $ConfigHome "git-loopy/config.toml"))
+    }
+    foreach ($Path in $ConfigPaths) {
+        if (Test-GitLoopyConfigDeclaresEnabledSkills -Path $Path) {
+            $Surfaces.Add("enabled_skills")
+            break
+        }
+    }
+
+    return [string[]]$Surfaces.ToArray()
 }
 
 function Test-GitLoopyAfkReady {
@@ -732,29 +921,7 @@ function Resolve-GitLoopyPrompt {
     $Candidates.Add((Join-Path $RepoRoot "git-loopy/prompt.md"))
     $Candidates.Add((Join-Path $RepoRoot "git-loopy/PROMPT.md"))
 
-    $Xdg = Get-GitLoopyEnvironmentValue $Environment "XDG_CONFIG_HOME"
-    if (-not [string]::IsNullOrWhiteSpace($Xdg)) {
-        $ConfigHome = $Xdg
-    }
-    else {
-        $HomePath = Get-GitLoopyEnvironmentValue $Environment "HOME"
-        if ([string]::IsNullOrWhiteSpace($HomePath)) {
-            $HomePath = Get-GitLoopyEnvironmentValue `
-                $Environment `
-                "USERPROFILE"
-        }
-        if ([string]::IsNullOrWhiteSpace($HomePath)) {
-            $HomePath = [Environment]::GetFolderPath(
-                [Environment+SpecialFolder]::UserProfile
-            )
-        }
-        if (-not [string]::IsNullOrWhiteSpace($HomePath)) {
-            $ConfigHome = Join-Path $HomePath ".config"
-        }
-        else {
-            $ConfigHome = $null
-        }
-    }
+    $ConfigHome = Get-GitLoopyConfigHome -Environment $Environment
     if ($null -ne $ConfigHome) {
         $Candidates.Add((Join-Path $ConfigHome "git-loopy/PROMPT.md"))
     }
@@ -783,6 +950,51 @@ function Test-GitLoopyCommand {
     )
 }
 
+# Fail closed on any closed-world Skill-policy surface this port cannot honour
+# (contract §17.6). Runs before the issue-tracker, dependency, and GitHub checks
+# — and therefore before source collection and before Copilot exists — so a
+# configured policy can never be silently widened into an Iteration.
+function Assert-GitLoopySkillPolicySupported {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Environment,
+        [AllowNull()]
+        [string]$RepoRoot
+    )
+
+    $Surfaces = @(
+        Get-GitLoopySkillPolicySurfaces `
+            -Config $Config `
+            -Environment $Environment `
+            -RepoRoot $RepoRoot
+    )
+    if ($Surfaces.Count -eq 0) {
+        return $true
+    }
+
+    [Console]::Error.WriteLine(
+        "git-loopy: the PowerShell Orchestrator does not yet support the " +
+        "closed-world Skill policy."
+    )
+    foreach ($Surface in $Surfaces) {
+        [Console]::Error.WriteLine(
+            "git-loopy: unsupported Skill-policy surface: $Surface"
+        )
+    }
+    [Console]::Error.WriteLine(
+        "git-loopy: run the Python Orchestrator, or wait for a PowerShell " +
+        "release with native config parity."
+    )
+    [Console]::Error.WriteLine(
+        "git-loopy: legacy --deny-skill / GIT_LOOPY_DENY_SKILLS invocations " +
+        "continue to run unchanged."
+    )
+    return $false
+}
+
 function Invoke-GitLoopyPreflight {
     [CmdletBinding()]
     param(
@@ -806,6 +1018,17 @@ function Invoke-GitLoopyPreflight {
         return $null
     }
     $RepoRoot = [IO.Path]::GetFullPath([string]$RepoOutput[-1])
+
+    if (
+        -not (
+            Assert-GitLoopySkillPolicySupported `
+                -Config $Config `
+                -Environment $Environment `
+                -RepoRoot $RepoRoot
+        )
+    ) {
+        return $null
+    }
 
     $TrackerPath = Join-Path $RepoRoot "docs/agents/issue-tracker.md"
     if (-not [IO.File]::Exists($TrackerPath)) {
@@ -2441,13 +2664,67 @@ function Invoke-GitLoopyDiscovery {
         [Parameter(Mandatory)]
         [psobject]$Config,
         [Parameter(Mandatory)]
-        [psobject]$Preflight
+        [psobject]$Preflight,
+        [Collections.IDictionary]$Environment = (Get-GitLoopyEnvironment)
     )
 
     $ReleaseVersion = Get-GitLoopyReleaseVersion
     $Context = New-GitLoopyEventContext -RepoRoot $Preflight.RepoRoot
     $EventTypes = Get-GitLoopyEventTypes
     Set-GitLoopyGitignoreEntry -RepoRoot $Preflight.RepoRoot
+    # Earn the live interface before the first Event exists, so the very first
+    # `wrapper.run.start` already goes to its final destination and the helper
+    # never has to be handed a partially replayed Run. Teardown is in the
+    # `finally` below because a Run that throws still owes the operator its
+    # terminal back.
+    #
+    # The sink is installed here rather than inside the TUI module so exactly one
+    # module owns the live destination. It stays installed after a mid-Run
+    # fallback and becomes a pass-through to stdout, which is what makes "a Run
+    # never respawns the helper" true by construction.
+    $Interactive = Start-GitLoopyTuiSession `
+        -RepoRoot $Preflight.RepoRoot `
+        -Flag $Config.InteractiveFlag `
+        -EnvironmentValue (
+            Get-GitLoopyEnvironmentValue $Environment "GIT_LOOPY_INTERACTIVE"
+        ) `
+        -ReleaseVersion $ReleaseVersion `
+        -SchemaVersion (Get-GitLoopyEventSchemaVersion)
+    if ($Interactive) {
+        Set-GitLoopyLiveSink -Sink {
+            param($Line)
+            Write-GitLoopyTuiLine -Line $Line
+        }
+    }
+    try {
+        return Invoke-GitLoopyDiscoveryLoop `
+            -Config $Config `
+            -Preflight $Preflight `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -ReleaseVersion $ReleaseVersion
+    }
+    finally {
+        Stop-GitLoopyTuiSession
+        Set-GitLoopyLiveSink -Sink $null
+    }
+}
+
+function Invoke-GitLoopyDiscoveryLoop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [psobject]$Preflight,
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [string]$ReleaseVersion
+    )
+
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_RUN_START"] `
@@ -2756,7 +3033,14 @@ Options:
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
+  --enable-skill SKILL          Closed-world Skill policy; not yet supported by
+                                the PowerShell Orchestrator (fails closed).
+  --disable-skill SKILL         Closed-world Skill policy; not yet supported by
+                                the PowerShell Orchestrator (fails closed).
   --send-timeout-seconds N
+  --interactive                 Drive the shared git-loopy-tui helper when a
+                                compatible one is installed.
+  --no-interactive              Keep raw JSONL on stdout (CI-safe).
   --version
   -h, --help
 "@
@@ -2799,7 +3083,8 @@ function Invoke-GitLoopyMain {
     }
     return Invoke-GitLoopyDiscovery `
         -Config $Config `
-        -Preflight $Preflight
+        -Preflight $Preflight `
+        -Environment $Environment
 }
 
 Export-ModuleMember -Function @(
@@ -2807,6 +3092,10 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyEnvironment",
     "Get-GitLoopyMonotonicSeconds",
     "Resolve-GitLoopyConfig",
+    "Get-GitLoopyConfigHome",
+    "Test-GitLoopyConfigDeclaresEnabledSkills",
+    "Get-GitLoopySkillPolicySurfaces",
+    "Assert-GitLoopySkillPolicySupported",
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",
