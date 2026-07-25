@@ -10,7 +10,14 @@
     "publication_job": "publish",
     "protected_environment": "release",
     "unprotected_environment": "validation",
-    "protected_ref_prefix": "refs/tags/v"
+    "protected_ref_prefix": "refs/tags/v",
+    "channel_credentials": [
+      {
+        "name": "HOMEBREW_TAP_TOKEN",
+        "job": "homebrew",
+        "purpose": "commit the generated formula to the Homebrew tap and open its pull request"
+      }
+    ]
   },
   "attestation": {
     "action": "actions/attest-build-provenance",

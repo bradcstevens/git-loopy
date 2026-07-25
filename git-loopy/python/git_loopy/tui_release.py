@@ -28,7 +28,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
 from .events import EVENT_SCHEMA_VERSION
-from .release_version import ReleaseVersionError, read_release_version
+from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 
 
 ARTIFACT_METADATA_PATH = Path("git-loopy/conformance/tui-artifacts.json")
@@ -343,13 +343,14 @@ def _digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def verify_checksum(archive: Path, checksum_manifest: Path) -> str:
-    """Prove ``archive`` is the artifact its published checksum names.
+def published_digest(checksum_manifest: Path, archive_name: str) -> str:
+    """The SHA-256 one published manifest declares for one archive.
 
-    Both halves are checked. A digest that matches proves nothing if it was
-    published for a different file, so the manifest's filename has to be this
-    artifact's too — otherwise a correct macOS arm64 checksum would happily
-    bless the x64 archive an installer downloaded by mistake.
+    Reading the manifest is separated from hashing the archive because the
+    package channels never hold the archive: a tap is generated from the
+    `.sha256` files a completed Release published, and downloading seven
+    multi-megabyte archives to copy four digests out of them would be a second
+    chance to write down a different number.
     """
     try:
         manifest = checksum_manifest.read_text(encoding="utf-8")
@@ -368,14 +369,24 @@ def verify_checksum(archive: Path, checksum_manifest: Path) -> str:
         raise TuiReleaseError(
             f"checksum manifest {checksum_manifest} declares no SHA-256 entry"
         )
-    if archive.name not in published:
+    if archive_name not in published:
         raise TuiReleaseError(
             f"checksum manifest {checksum_manifest} publishes "
-            f"{sorted(published)} rather than {archive.name}"
+            f"{sorted(published)} rather than {archive_name}"
         )
+    return published[archive_name]
 
+
+def verify_checksum(archive: Path, checksum_manifest: Path) -> str:
+    """Prove ``archive`` is the artifact its published checksum names.
+
+    Both halves are checked. A digest that matches proves nothing if it was
+    published for a different file, so the manifest's filename has to be this
+    artifact's too — otherwise a correct macOS arm64 checksum would happily
+    bless the x64 archive an installer downloaded by mistake.
+    """
+    expected = published_digest(checksum_manifest, archive.name)
     actual = _digest(archive)
-    expected = published[archive.name]
     if actual != expected:
         raise TuiReleaseError(
             f"release artifact {archive.name} failed its SHA-256 checksum: "
@@ -963,6 +974,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with args.github_output.open("a", encoding="utf-8") as handle:
                     handle.write(f"version={version}\n")
                     handle.write(f"tag=v{version}\n")
+                    handle.write(
+                        f"prerelease={'true' if is_prerelease(version) else 'false'}\n"
+                    )
             print(version)
         elif args.command == "verify-plan":
             for artifact in verify_release_plan(

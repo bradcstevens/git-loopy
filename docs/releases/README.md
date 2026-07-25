@@ -51,3 +51,42 @@ a credential cannot leak one however it is edited later. The exact credential
 names are declared in
 [`release-trust.json`](../../git-loopy/conformance/release-trust.json), and the
 release pipeline is refused if it reads any secret that fixture does not name.
+
+Not every credential signs. A **channel credential** writes on this project's
+behalf *outside* this repository — the Homebrew tap token pushes the generated
+formula and opens its pull request — so each is declared in the same fixture with
+the one job allowed to read it, and confined to the same protected environment.
+That keeps one registry rather than one per channel: a channel carrying its own
+credential list could add one nothing reviewed.
+
+## Package channels
+
+A tagged **stable** Release also updates the maintained package channels. They
+publish no bytes: each points at the archives the pipeline above already
+verified, attested, and attached, and at the `.sha256` published beside them.
+Nothing is rebuilt, re-signed, or re-hashed — recomputing a digest would be a
+second chance to write down a different number than the one operators verify
+against.
+
+| Channel | Platforms | Metadata |
+| --- | --- | --- |
+| Homebrew (`bradcstevens/homebrew-git-loopy`) | macOS arm64/x64, Linux arm64/x64 (glibc) | [`homebrew-tap.json`](../../git-loopy/conformance/homebrew-tap.json) |
+
+Channel metadata is generated and then **read back and refused** by a separate
+gate, because what reaches operators is whatever is committed to the channel —
+including text a human edited. A formula is refused unless the version it
+declares is this Release's, every URL resolves through the one shared download
+template from the trusted host, each platform fetches that platform's artifact,
+every digest is the published one, no covered platform is missing, and the
+formula still proves `--version` on the operator's own machine.
+
+Prereleases never reach a channel. The version string says which channel a
+Release is on and the prerelease flag says what an operator sees, and a channel
+resolving "the stable Release" depends entirely on the second — so the marking is
+read back off the completed Release and a disagreement refuses the update rather
+than resolving it in favour of either.
+
+Operator instructions for each channel — installation, upgrade, helper discovery,
+compatibility diagnostics, and how a channel-installed helper interacts with a
+clone-local one — live with the helper, in
+[its README](../../git-loopy/tui/README.md#homebrew).

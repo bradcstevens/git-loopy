@@ -60,7 +60,16 @@ delivered in later phases, sequenced value-first
   through a clearly marked prerelease. Those rules live in
   [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
   applied by `git_loopy.release_trust`.
-  The PowerShell port and package-manager distribution are still to come; until a
+  The first **package channel** now follows that publication: a stable Release
+  updates the Homebrew tap from the artifacts it just published — `brew tap
+  bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
+  re-hashing nothing. What the formula is allowed to say is pinned in
+  [`homebrew-tap.json`](../git-loopy/conformance/homebrew-tap.json) and enforced
+  by `git_loopy.homebrew`, which reads the committed formula back and refuses any
+  version, URL, host, digest, or coverage that is not this Release's. A
+  `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
+  one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
+  The PowerShell port and the `winget`/`scoop` channels are still to come; until a
   helper is present or selected, the native ports stream plain text and run in
   place from the clone. The shell port's `install.sh` now installs both halves of
   its distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,

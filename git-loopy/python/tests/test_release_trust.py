@@ -209,7 +209,11 @@ def test_a_signed_macos_binary_proves_its_authority_and_hardened_runtime() -> No
     policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
     tool = _FakeTool(
         {
-            "--verify": (0, "", "valid on disk\nsatisfies its Designated Requirement\n"),
+            "--verify": (
+                0,
+                "",
+                "valid on disk\nsatisfies its Designated Requirement\n",
+            ),
             "--display": (0, "", _CODESIGN_DISPLAY),
         }
     )
@@ -699,3 +703,27 @@ def test_observation_refuses_an_artifact_it_cannot_actually_look_at(
     assert exit_code == 1
     assert "git-loopy-tui-x86_64-pc-windows-msvc.zip" in capsys.readouterr().err
     assert not list(tmp_path.iterdir())
+
+
+def test_a_channel_credential_reaches_only_the_job_that_publishes_it() -> None:
+    """A token that can write to another repository is confined by name.
+
+    Signing credentials prove artifacts and stay in the signing job. A channel
+    credential *writes* — it pushes a formula or a manifest into a repository
+    this project publishes through — so a second job that could read it could
+    publish under this project's name. Both live behind the same protected
+    environment, and each is pinned to the one job that needs it.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    jobs = _workflow(policy)["jobs"]
+
+    assert policy.channel_credentials, "no distribution channel is published"
+    for credential in policy.channel_credentials:
+        assert credential.purpose.strip()
+        readers = {
+            name
+            for name, job in jobs.items()
+            if f"secrets.{credential.name}" in yaml.safe_dump(job)
+        }
+        assert readers == {credential.job}
+        assert jobs[credential.job]["environment"] == policy.protected_environment

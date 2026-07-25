@@ -24,6 +24,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
 | `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
+| `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -79,6 +80,18 @@ channel that resolves "the stable Release", actually sees. The unsigned Windows
 allowance belongs to the prerelease channel alone, so a case where the two
 disagree is a refusal in both directions rather than a preference for the
 version string.
+
+`homebrew-tap.json` is the third of that set, and the one furthest from the
+bytes. A package channel is the only distribution path where nobody reads what
+they installed: `brew install git-loopy-tui` resolves a URL and a digest that
+release automation wrote into a formula, and an operator cannot tell a formula
+naming the Release it claims from one naming a different build. So the formula is
+*generated* from the completed Release and then read back by a separate gate —
+version, per-platform artifact, trusted host, published digest, complete
+coverage, and the `brew test` version probe are each proven independently, and
+each drift is refused by its own name. The tap credential is not declared here:
+`release-trust.json` is the pipeline's one credential registry, and a channel
+that carried its own list could add one nothing reviewed.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered

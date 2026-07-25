@@ -34,6 +34,7 @@ jobs:
     outputs:
       version: ${{ steps.identity.outputs.version }}
       tag: ${{ steps.identity.outputs.tag }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -397,3 +398,101 @@ jobs:
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
         shell: bash
         run: gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
+
+  # The Homebrew channel. It publishes no bytes of its own: the tap points at
+  # the archives `publish` just verified, attested, and attached, and at the
+  # `.sha256` files that Release published beside them.
+  #
+  # Stable only, and proven twice. `needs.identity` says which channel this
+  # version is on, and the formula generator reads the marking back off the
+  # completed Release — because "the stable Release" is what an operator running
+  # `brew install` resolves, and that is the flag, not the version string.
+  homebrew:
+    name: Update the Homebrew tap
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # The completed Release is the source. Only the checksum manifests are
+      # downloaded: the tap needs the digests, and pulling the archives to
+      # recompute them would be a second chance to write down a different number
+      # than the one operators will verify against.
+      - name: Read the completed Release's checksums and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tap
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/homebrew-git-loopy
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Generate the formula this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.homebrew render
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --tap-root tap
+
+      # The generator and the gate are deliberately two commands over the same
+      # file. What reaches operators is whatever is committed to the tap, so the
+      # thing proven is the committed text — including one a human edited.
+      - name: Refuse a formula that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.homebrew verify
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --tap-root tap
+
+      - name: Open or update the tap's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: tap
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the tap already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.homebrew\`. Every URL and digest is verified against that Release." \
+            --head "$branch" \
+            --base main \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"

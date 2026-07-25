@@ -78,6 +78,22 @@ class SigningMechanism:
 
 
 @dataclass(frozen=True)
+class ChannelCredential:
+    """A credential the pipeline reads to publish a distribution channel.
+
+    Signing credentials prove an artifact; these push one somewhere else — a tap,
+    a manifest repository — and so can write on this project's behalf outside it.
+    They are declared here rather than beside their own channel because this
+    fixture is the registry the pipeline is refused for reading past: a channel
+    that carried its own credential list could add one nothing reviewed.
+    """
+
+    name: str
+    job: str
+    purpose: str
+
+
+@dataclass(frozen=True)
 class TrustPolicy:
     """The complete platform-trust policy for one distribution."""
 
@@ -95,6 +111,7 @@ class TrustPolicy:
     prerelease_channels: dict[str, bool]
     evidence_kinds: tuple[str, ...]
     mechanisms: tuple[SigningMechanism, ...]
+    channel_credentials: tuple[ChannelCredential, ...]
 
     def mechanism_for(self, platform: str) -> SigningMechanism | None:
         """The mechanism that signs ``platform``, or ``None`` if undeclared."""
@@ -119,10 +136,11 @@ class TrustPolicy:
 
     @property
     def credentials(self) -> tuple[str, ...]:
-        """Every credential name the policy allows a signing job to see."""
+        """Every credential name the release pipeline is allowed to read."""
         names: list[str] = []
         for mechanism in self.mechanisms:
             names.extend(mechanism.credentials)
+        names.extend(credential.name for credential in self.channel_credentials)
         return tuple(names)
 
 
@@ -135,7 +153,9 @@ def _read_policy_document(repository_root: Path) -> dict[str, Any]:
     try:
         document = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ReleaseTrustError(f"trust policy {path} is not valid JSON: {exc}") from exc
+        raise ReleaseTrustError(
+            f"trust policy {path} is not valid JSON: {exc}"
+        ) from exc
     if not isinstance(document, dict):
         raise ReleaseTrustError(f"trust policy {path} must be a JSON object")
     return document
@@ -174,6 +194,14 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
         schema_version=int(document["schema_version"]),
         workflow_path=workflow["path"],
         credential_free_jobs=tuple(workflow["credential_free_jobs"]),
+        channel_credentials=tuple(
+            ChannelCredential(
+                name=str(record["name"]),
+                job=str(record["job"]),
+                purpose=str(record["purpose"]),
+            )
+            for record in workflow["channel_credentials"]
+        ),
         signing_job=workflow["signing_job"],
         publication_job=workflow["publication_job"],
         protected_environment=workflow["protected_environment"],
@@ -225,9 +253,7 @@ def _artifact_for_triple(
     raise ReleaseTrustError(f"{triple} is not one of this Release's published targets")
 
 
-def receipt_path(
-    repository_root: Path, artifact_directory: Path, triple: str
-) -> Path:
+def receipt_path(repository_root: Path, artifact_directory: Path, triple: str) -> Path:
     """Where ``triple``'s trust receipt lives beside its archive."""
     policy = load_trust_policy(repository_root)
     artifact = _artifact_for_triple(repository_root, triple)
@@ -334,8 +360,7 @@ def _verify_one_artifact(
         problems.append(f"{artifact.archive_name}: the release set is missing it")
     elif not checksum.is_file():
         problems.append(
-            f"{artifact.archive_name}: no published checksum "
-            f"({artifact.checksum_name})"
+            f"{artifact.archive_name}: no published checksum ({artifact.checksum_name})"
         )
     else:
         try:
@@ -607,8 +632,7 @@ def observe_artifact(
     archive = artifact_directory / artifact.archive_name
     if not archive.is_file():
         raise ReleaseTrustError(
-            f"cannot observe {artifact.archive_name}: it is not in "
-            f"{artifact_directory}"
+            f"cannot observe {artifact.archive_name}: it is not in {artifact_directory}"
         )
     with tempfile.TemporaryDirectory() as scratch:
         binary = tui_release.extract_helper(archive, artifact, Path(scratch))

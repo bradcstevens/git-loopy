@@ -752,3 +752,37 @@ def test_a_plan_that_provisions_the_wrong_tool_is_refused() -> None:
     with pytest.raises(tui_release.TuiReleaseError) as raised:
         tui_release.verify_release_plan(REPOSITORY_ROOT, plan)
     assert "cargo-zigbuild" in str(raised.value)
+
+
+def test_the_identity_command_publishes_the_channel_it_resolved(
+    tmp_path: Path,
+) -> None:
+    """Which channel a Release is on is decided once, where its version is.
+
+    The package channels only publish stable Releases, so every consumer of the
+    identity job needs the same answer. Deriving it a second time from the
+    version string in a workflow `if:` is how two jobs end up disagreeing about
+    one Release.
+    """
+    github_output = tmp_path / "github-output"
+
+    assert (
+        tui_release.main(
+            [
+                "identity",
+                "--repository-root",
+                str(REPOSITORY_ROOT),
+                "--github-output",
+                str(github_output),
+            ]
+        )
+        == 0
+    )
+
+    published = dict(
+        line.split("=", 1)
+        for line in github_output.read_text(encoding="utf-8").splitlines()
+    )
+    version = published["version"]
+    assert published["tag"] == f"v{version}"
+    assert published["prerelease"] == ("true" if "-" in version else "false")
