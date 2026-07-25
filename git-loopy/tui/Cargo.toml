@@ -34,3 +34,59 @@ path = "src/main.rs"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+# The release toolchain, pinned (PRD #173, ADR-0016).
+#
+# `git-loopy-tui` is its own workspace root, so cargo-dist's configuration lives
+# here rather than in a parent manifest. The version is pinned exactly: the
+# release workflow refuses any other cargo-dist, so the artifact set cannot
+# change shape because a newer toolchain decided differently.
+#
+# `targets` is the Phase 2 matrix and must stay equal to
+# `git-loopy/conformance/tui-artifacts.json` — the manifest is what builds, the
+# fixture is what the installers and package channels resolve against, and
+# `git-loopy/python/tests/test_tui_release.py` fails if they disagree. Windows
+# arm64 is *deferred by name* in that fixture rather than silently absent here.
+#
+# No `installers` are generated: the shell and PowerShell installers this family
+# already ships do the fetching (#193, #194), and a second, differently-behaved
+# installer script would be a second contract to keep true.
+[workspace]
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = ["github"]
+installers = []
+checksum = "sha256"
+github-attestations = true
+# Generated CI is never committed: this repository drives pinned cargo-dist from
+# one reviewed workflow instead, so a plan change shows up as a failing job
+# rather than as a large generated diff nobody reads.
+allow-dirty = ["ci"]
+# A pull request proves the plan still resolves; it never builds a release.
+pr-run-mode = "plan"
+unix-archive = ".tar.xz"
+windows-archive = ".zip"
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-musl",
+]
+
+# The two arm64 Linux targets cannot execute on an x64 runner, so they are
+# cross-built through cargo-dist's container integration rather than
+# hand-maintained `cross` invocations, and their release job proves build and
+# metadata identity instead of pretending it ran a smoke test. Everything else
+# builds and runs on its own architecture — including x64 musl, which is
+# statically linked and runs on the glibc runner that produced it.
+[workspace.metadata.dist.github-custom-runners.aarch64-unknown-linux-gnu]
+runner = "ubuntu-22.04"
+container = { image = "ghcr.io/rust-cross/manylinux2014-cross:aarch64", host = "x86_64-unknown-linux-musl" }
+
+[workspace.metadata.dist.github-custom-runners.aarch64-unknown-linux-musl]
+runner = "ubuntu-22.04"
+container = { image = "messense/rust-musl-cross:aarch64-musl", host = "x86_64-unknown-linux-musl" }

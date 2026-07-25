@@ -1,0 +1,2 @@
+[v1]
+"cargo-dist 0.32.0 (registry+https://github.com/rust-lang/crates.io-index)" = ["dist"]

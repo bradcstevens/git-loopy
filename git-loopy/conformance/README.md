@@ -22,6 +22,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
+| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -29,6 +30,16 @@ version axis explicitly: fixture schema, Continuation contract, record format,
 Wrapper contract, and Event schema. Fixture content is data only: do not add
 host-language expressions, executable hooks, or implementation-specific
 expected-value generation.
+
+`tui-artifacts.json` is the one fixture whose consumers are not Orchestrators:
+release automation builds exactly the target set it declares, and the shell and
+PowerShell installers resolve their own artifact through its host aliases and
+selection cases. Everything about a published helper that more than one of them
+has to agree on — the toolchain pin, the target list, the archive and checksum
+names — is stated once there, so a renamed artifact cannot leave one consumer
+resolving a name that no longer exists. `git-loopy/tui/Cargo.toml` is what
+actually builds; `git-loopy/python/tests/test_tui_release.py` fails when the two
+disagree.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered

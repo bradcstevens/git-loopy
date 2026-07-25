@@ -214,6 +214,43 @@ cargo test --manifest-path git-loopy/tui/Cargo.toml
 CI runs this, `cargo fmt --check`, and `cargo clippy -- -D warnings` in the
 Runner family gate (`.github/workflows/runner-family-gate.yml`).
 
+## Release artifacts
+
+A tagged Release publishes seven prebuilt helpers, built by
+[`.github/workflows/tui-release.yml`](../../.github/workflows/tui-release.yml)
+from pinned cargo-dist `0.32.0`:
+
+| Target | Runner | Built |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | `macos-14` | natively |
+| `x86_64-apple-darwin` | `macos-13` | natively |
+| `x86_64-pc-windows-msvc` | `windows-2022` | natively |
+| `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | natively |
+| `x86_64-unknown-linux-musl` | `ubuntu-22.04` | natively (statically linked, so it runs on the glibc runner that produced it) |
+| `aarch64-unknown-linux-gnu` | `ubuntu-22.04` | cross, in a container |
+| `aarch64-unknown-linux-musl` | `ubuntu-22.04` | cross, in a container |
+
+Windows arm64, 32-bit ARM Linux, and FreeBSD are **deferred by name** in
+[`../conformance/tui-artifacts.json`](../conformance/tui-artifacts.json) rather
+than silently absent, so an operator on one of them reads why instead of the
+same "no artifact" sentence a typo would produce.
+
+The archives are named `git-loopy-tui-<target>.tar.xz` (`.zip` on Windows) with
+no version in the filename — a Release addresses its artifacts by tag, and a
+filename that repeated the version would give a mismatched download two ways to
+look right. Identity is proven three other ways instead: a published
+`.sha256` beside every archive, a GitHub artifact attestation, and the helper's
+own `--version`, which reports the single distribution Release version
+([ADR-0016](../../docs/adr/0016-single-distribution-release-version.md)).
+
+Before publication each artifact is verified through
+`python -m git_loopy.tui_release`. A natively built one is *run*: it must claim
+this Release, accept this Event schema, drain a minimal Run-start/Run-end trace,
+and exit cleanly. A cross-built one cannot execute on its release runner, so its
+job proves build and metadata identity and says so rather than pretending it ran.
+Publication is all-or-nothing — an incomplete set leaves one platform's installer
+resolving a name that 404s.
+
 ## Dependency floor
 
 `serde`, `serde_json`, and `ratatui` (with default features off, and `crossterm`

@@ -1,0 +1,233 @@
+name: Release the TUI helper
+
+# The seven Phase 2 artifacts for the shared `git-loopy-tui` helper (PRD #173).
+#
+# Source publication (`source-release.yml`) creates the GitHub Release for a tag;
+# this pipeline builds, verifies, attests, and attaches the compiled helper to
+# that same Release. They are separate workflows because they fail for different
+# reasons: a cross-compilation failure must not stop a source Release, and a
+# missing Release note must not strand seven built archives.
+#
+# Nothing here is generated. cargo-dist is pinned exactly and driven from this
+# one reviewed file, so a toolchain that would decide the artifact set
+# differently fails the pin instead of quietly re-planning the release. The
+# matrix, the archive names, and the deferred targets are pinned against
+# `git-loopy/conformance/tui-artifacts.json` by
+# `git-loopy/python/tests/test_tui_release_workflow.py`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Verify Release identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # One Release version, proven before anything is built: the root VERSION,
+      # the helper's own Cargo.toml — which is what `--version` and the
+      # `--schema-version` probe answer with — and, when tagging, the tag itself.
+      - name: Prove one Release version across the distribution
+        id: identity
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release identity
+          --repository-root .
+          ${{ startsWith(github.ref, 'refs/tags/v') && format('--tag-ref {0}', github.ref) || '' }}
+          --github-output "$GITHUB_OUTPUT"
+
+  family-conformance:
+    name: Prove Runner-family Conformance
+    needs: identity
+    uses: ./.github/workflows/runner-family-gate.yml
+
+  build:
+    name: build / ${{ matrix.target }}
+    needs: identity
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            build: native
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            build: native
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            build: native
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            build: cross
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            build: native
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04
+            build: cross
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+            build: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # Installed from source at an exact version rather than through a
+      # per-platform installer script, so one line covers every runner and the
+      # pin is the same string everywhere. The version check is a refusal, not a
+      # report: a different cargo-dist may plan a different artifact set.
+      - name: Install the pinned release toolchain
+        shell: bash
+        env:
+          CARGO_DIST_VERSION: "0.32.0"
+        run: |
+          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          dist --version
+          dist --version | grep -q "$CARGO_DIST_VERSION"
+
+      - name: Build the release artifact
+        shell: bash
+        working-directory: git-loopy/tui
+        env:
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
+
+      # cargo-dist writes one `.sha256` beside each archive because the helper
+      # manifest pins `checksum = "sha256"`. Listing them proves it did rather
+      # than assuming it: an artifact with no published checksum is an artifact
+      # no installer is allowed to trust.
+      - name: Publish the artifact checksum alongside it
+        shell: bash
+        working-directory: git-loopy/tui/target/distrib
+        run: ls -- *.sha256
+
+      # A native runner can ask the artifact itself: does it claim this Release,
+      # does it accept this Event schema, can it drain a whole Run and exit
+      # cleanly.
+      - name: Smoke-test the native artifact
+        id: smoke-test
+        if: matrix.build == 'native'
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-artifact
+          --repository-root .
+          --artifact-dir git-loopy/tui/target/distrib
+          --target "${{ matrix.target }}"
+          --smoke-test
+
+      # A cross-built artifact cannot execute here, so its job proves what it
+      # can — that the archive is named, checksummed, and shaped as declared —
+      # and says so rather than pretending it ran.
+      - name: Check the cross-built artifact's build and metadata
+        id: cross-metadata
+        if: matrix.build == 'cross'
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-artifact
+          --repository-root .
+          --artifact-dir git-loopy/tui/target/distrib
+          --target "${{ matrix.target }}"
+
+      - name: Hand the artifact to publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-loopy-tui-${{ matrix.target }}
+          path: |
+            git-loopy/tui/target/distrib/*.tar.xz
+            git-loopy/tui/target/distrib/*.zip
+            git-loopy/tui/target/distrib/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified helper artifacts
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - identity
+      - family-conformance
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Collect every built artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: git-loopy-tui-*
+          merge-multiple: true
+
+      # All or nothing. A Release that shipped six of seven archives leaves one
+      # platform's installer resolving a name that 404s, so the complete set is
+      # verified — names, checksums, and Release identity — before a single file
+      # is attached.
+      - name: Refuse an incomplete or altered release set
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-set
+          --repository-root .
+          --artifact-dir release-artifacts
+          --require-complete-set
+
+      - name: Attest the built artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-artifacts/*.tar.xz
+            release-artifacts/*.zip
+
+      # `source-release.yml` creates the Release for this tag from the same push,
+      # so the two can be in flight together. Waiting for it is bounded and
+      # explicit; failing to find it is a failure, not a silent skip.
+      - name: Attach the artifacts to the tagged Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          for attempt in $(seq 1 30); do
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "no GitHub Release exists for $RELEASE_TAG" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+          gh release upload "$RELEASE_TAG" release-artifacts/* --clobber

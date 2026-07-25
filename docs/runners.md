@@ -49,6 +49,10 @@ delivered in later phases, sequenced value-first
   then `PATH` discovery, the `--schema-version` compatibility gate, and a
   permanent fall back to plain JSONL on any helper failure — see
   [its README](../git-loopy/shell/README.md#the-live-interface-git-loopy-tui).
+  A tagged Release now also builds the helper itself: seven prebuilt, checksummed,
+  attested artifacts from pinned cargo-dist tooling, described once in
+  [`tui-artifacts.json`](../git-loopy/conformance/tui-artifacts.json) and listed
+  in [the helper's README](../git-loopy/tui/README.md#release-artifacts).
   The PowerShell port and package-manager distribution are still to come; until a
   helper is present or selected, the native ports stream plain text and run in
   place from the clone, and an optional `install.sh` / `install.ps1` only adds a
