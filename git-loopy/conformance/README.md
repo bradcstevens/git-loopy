@@ -95,6 +95,10 @@ reducer and projection from
 [`tui/tests/dashboard_conformance.rs`](../tui/tests/dashboard_conformance.rs), so
 the two renderers' semantics cannot diverge: `dashboard-insights.json` is the only
 place a Dashboard decision is stated, and neither member is the other's oracle. The
+Rust terminal rendering tests in
+[`tui/tests/dashboard_render.rs`](../tui/tests/dashboard_render.rs) read their
+expected cell values back out of the same fixture rather than restating them, so a
+drawn band cannot disagree with the projection it draws. The
 native discovery adapters call their production discriminator, Checkpoint-message,
 and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)

@@ -12,14 +12,22 @@
 //! rather than forking its behaviour (ADR-0013).
 
 mod event;
+mod render;
+mod session;
 mod state;
 mod timestamp;
 mod view;
 
 pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
+pub use render::draw_dashboard;
+pub use session::{drive_dashboard, DashboardSession, DashboardSurface};
 pub use state::{DashboardState, RunInputs};
 pub use timestamp::{Timestamp, Zone};
-pub use view::{project_run_view, RunView, TerminalCapabilities, ViewContext};
+pub use view::{
+    project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
+    DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView, PeakContext, Queue,
+    QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities, ViewContext,
+};
 
 /// The Event-schema major version this core decodes.
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;

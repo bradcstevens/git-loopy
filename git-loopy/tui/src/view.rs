@@ -84,158 +84,158 @@ pub struct RunView {
 /// The Dashboard bands: header, Queue, Activity, Summary.
 #[derive(Clone, Debug, Serialize)]
 pub struct Dashboard {
-    header: Header,
-    queue: Queue,
-    activity: Activity,
-    summary: Summary,
+    pub header: Header,
+    pub queue: Queue,
+    pub activity: Activity,
+    pub summary: Summary,
 }
 
 /// The drill-in bands: detail header, Iteration breakdown, Log.
 #[derive(Clone, Debug, Serialize)]
 pub struct DrillIn {
-    detail_header: DetailHeader,
-    iteration_breakdown: IterationBreakdown,
-    log: IssueLog,
+    pub detail_header: DetailHeader,
+    pub iteration_breakdown: IterationBreakdown,
+    pub log: IssueLog,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Header {
-    run_id: Option<String>,
-    model: Option<String>,
-    reasoning_effort: Option<String>,
-    started_at: Option<String>,
-    elapsed_seconds: f64,
-    status: String,
-    strikes: Strikes,
-    active_issue: Option<IssueRef>,
-    active_seconds: Option<f64>,
-    context_fill: ContextFill,
+pub struct Header {
+    pub run_id: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub started_at: Option<String>,
+    pub elapsed_seconds: f64,
+    pub status: String,
+    pub strikes: Strikes,
+    pub active_issue: Option<IssueRef>,
+    pub active_seconds: Option<f64>,
+    pub context_fill: ContextFill,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-struct Strikes {
-    current: i64,
-    limit: i64,
+pub struct Strikes {
+    pub current: i64,
+    pub limit: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextFill {
-    availability: &'static str,
-    current_tokens: Option<i64>,
-    token_limit: Option<i64>,
-    percentage: Option<f64>,
-    effective_target_tokens: Option<i64>,
-    effective_ceiling_tokens: Option<i64>,
+pub struct ContextFill {
+    pub availability: &'static str,
+    pub current_tokens: Option<i64>,
+    pub token_limit: Option<i64>,
+    pub percentage: Option<f64>,
+    pub effective_target_tokens: Option<i64>,
+    pub effective_ceiling_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Queue {
-    columns: Vec<&'static str>,
-    rows: Vec<QueueRow>,
+pub struct Queue {
+    pub columns: Vec<&'static str>,
+    pub rows: Vec<QueueRow>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct QueueRow {
-    issue: IssueRef,
-    status: String,
-    started_at: Option<String>,
-    active_seconds: f64,
-    closed_at: Option<String>,
-    iteration_count: usize,
-    tokens_in: Option<i64>,
-    tokens_out: Option<i64>,
-    cost_usd: Option<f64>,
+pub struct QueueRow {
+    pub issue: IssueRef,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub active_seconds: f64,
+    pub closed_at: Option<String>,
+    pub iteration_count: usize,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Activity {
-    issue: Option<IssueRef>,
-    lines: Vec<LogLineView>,
+pub struct Activity {
+    pub issue: Option<IssueRef>,
+    pub lines: Vec<LogLineView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct LogLineView {
-    at: Option<String>,
-    kind: String,
-    text: String,
+pub struct LogLineView {
+    pub at: Option<String>,
+    pub kind: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Summary {
-    rows: Vec<SummaryRow>,
+pub struct Summary {
+    pub rows: Vec<SummaryRow>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct SummaryRow {
-    kind: &'static str,
-    iteration: Option<i64>,
-    lane: Option<IssueRef>,
-    outcome: Option<String>,
-    duration_seconds: Option<f64>,
-    model: Option<String>,
-    tokens_in: Option<i64>,
-    tokens_out: Option<i64>,
-    observed_tokens: Option<i64>,
-    cost_usd: Option<f64>,
-    tool_count: Option<i64>,
-    skill_call_count: Option<i64>,
-    skills_consulted: Option<Vec<String>>,
-    commits: i64,
-    auto_closures: i64,
-    pr_advances: i64,
-    strikes: i64,
-    peak_context_window: Option<PeakContext>,
+pub struct SummaryRow {
+    pub kind: &'static str,
+    pub iteration: Option<i64>,
+    pub lane: Option<IssueRef>,
+    pub outcome: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub model: Option<String>,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    pub observed_tokens: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub tool_count: Option<i64>,
+    pub skill_call_count: Option<i64>,
+    pub skills_consulted: Option<Vec<String>>,
+    pub commits: i64,
+    pub auto_closures: i64,
+    pub pr_advances: i64,
+    pub strikes: i64,
+    pub peak_context_window: Option<PeakContext>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-struct PeakContext {
-    current_tokens: Option<i64>,
-    token_limit: Option<i64>,
-    effective_target_tokens: Option<i64>,
-    effective_ceiling_tokens: Option<i64>,
+pub struct PeakContext {
+    pub current_tokens: Option<i64>,
+    pub token_limit: Option<i64>,
+    pub effective_target_tokens: Option<i64>,
+    pub effective_ceiling_tokens: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct DetailHeader {
-    issue: IssueRef,
-    status: String,
-    started_at: Option<String>,
-    closed_at: Option<String>,
-    issue_elapsed_seconds: Option<f64>,
-    active_seconds: f64,
-    iteration_count: usize,
+pub struct DetailHeader {
+    pub issue: IssueRef,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub issue_elapsed_seconds: Option<f64>,
+    pub active_seconds: f64,
+    pub iteration_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct IterationBreakdown {
-    rows: Vec<ContributionRow>,
+pub struct IterationBreakdown {
+    pub rows: Vec<ContributionRow>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContributionRow {
-    kind: &'static str,
-    iteration: Option<i64>,
-    lane: Option<IssueRef>,
-    outcome: Option<String>,
-    duration_seconds: Option<f64>,
-    status: String,
-    active_seconds: f64,
-    consumption: ConsumptionView,
-    cost_usd: Option<f64>,
-    peak_context_window: Option<PeakContext>,
+pub struct ContributionRow {
+    pub kind: &'static str,
+    pub iteration: Option<i64>,
+    pub lane: Option<IssueRef>,
+    pub outcome: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub status: String,
+    pub active_seconds: f64,
+    pub consumption: ConsumptionView,
+    pub cost_usd: Option<f64>,
+    pub peak_context_window: Option<PeakContext>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ConsumptionView {
-    model: Option<String>,
-    tokens_in: Option<i64>,
-    tokens_out: Option<i64>,
+pub struct ConsumptionView {
+    pub model: Option<String>,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct IssueLog {
-    issue: IssueRef,
-    lines: Vec<LogLineView>,
+pub struct IssueLog {
+    pub issue: IssueRef,
+    pub lines: Vec<LogLineView>,
 }
 
 /// Project one complete Dashboard and drill-in for `drill_in`.

@@ -22,6 +22,15 @@ path = "src/main.rs"
 # `preserve_order` keeps a serialized band/column map in declaration order, so
 # the canonical Dashboard inventory is observable at the JSON boundary the way
 # the shared Conformance fixture states it.
+#
+# `ratatui` is the family's locked renderer toolkit (ADR-0013 / PRD #173) and
+# lives in the *library* so the embedded Rust Orchestrator renders through the
+# identical code path rather than a fork. Default features are trimmed to the
+# crossterm backend the helper actually drives: the calendar widget and the
+# `ratatui-macros` crate are unused, and every removed feature is one less
+# thing to cross-compile for the seven release artifacts. Terminal *ownership*
+# still stops at `src/main.rs` — `tests/library_purity.rs` enforces that.
 [dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
