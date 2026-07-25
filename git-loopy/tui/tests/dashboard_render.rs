@@ -8,13 +8,16 @@
 //! are all injected, so a snapshot stays reproducible forever.
 
 use git_loopy_tui::{
-    draw_dashboard, drive_dashboard, project_run_view, DashboardSession, DashboardState,
-    DashboardSurface, Event, IssueRef, RunInputs, RunView, TerminalCapabilities, Timestamp,
-    ViewContext, Zone,
+    draw_dashboard, draw_frame, drive_dashboard, project_run_view, DashboardFrame,
+    DashboardSession, DashboardState, DashboardSurface, Event, Input, IssueRef, RunInputs, RunView,
+    Screen, TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use serde_json::Value;
+
+mod common;
+use common::assert_snapshot;
 
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
@@ -83,10 +86,17 @@ fn render_lines(
     rows: u16,
     capabilities: TerminalCapabilities,
 ) -> Vec<String> {
+    let dashboard = DashboardFrame {
+        view: view.clone(),
+        screen: Screen::Dashboard,
+        selected: IssueRef::number(0),
+        capabilities,
+        diagnostics: Default::default(),
+    };
     let mut terminal =
         Terminal::new(TestBackend::new(columns, rows)).expect("a headless terminal is constructed");
     terminal
-        .draw(|frame| draw_dashboard(frame, view, &capabilities))
+        .draw(|frame| draw_dashboard(frame, &dashboard))
         .expect("the Dashboard draws");
     terminal
         .backend()
@@ -379,7 +389,6 @@ fn an_unmeasurable_context_window_still_shows_its_slot() {
 /// restoration are observable without a TTY, a child process, or a signal.
 struct RecordingSurface {
     terminal: Terminal<TestBackend>,
-    capabilities: TerminalCapabilities,
     frames: Vec<Vec<String>>,
     restorations: usize,
 }
@@ -389,7 +398,6 @@ impl RecordingSurface {
         Self {
             terminal: Terminal::new(TestBackend::new(columns, rows))
                 .expect("a headless terminal is constructed"),
-            capabilities: TerminalCapabilities::default(),
             frames: Vec::new(),
             restorations: 0,
         }
@@ -397,10 +405,9 @@ impl RecordingSurface {
 }
 
 impl DashboardSurface for RecordingSurface {
-    fn draw(&mut self, view: &RunView) -> std::io::Result<()> {
-        let capabilities = self.capabilities;
+    fn draw(&mut self, frame: &DashboardFrame) -> std::io::Result<()> {
         self.terminal
-            .draw(|frame| draw_dashboard(frame, view, &capabilities))
+            .draw(|target| draw_frame(target, frame))
             .expect("a headless backend cannot fail to draw");
         let width = self.terminal.backend().buffer().area.width as usize;
         self.frames.push(
@@ -459,7 +466,9 @@ fn end_of_input_draws_a_final_frame_and_hands_the_terminal_back() {
     drive_dashboard(
         &mut surface,
         &mut session,
-        fixture_trace("baseline-closed-iteration"),
+        fixture_trace("baseline-closed-iteration")
+            .into_iter()
+            .map(Input::Trace),
     )
     .expect("the Dashboard drives to EOF");
 
@@ -507,7 +516,12 @@ fn an_unreadable_line_never_stops_the_render() {
     trace.extend(fixture_trace("baseline-closed-iteration"));
     trace.push("{\"type\": 17}".to_string());
 
-    drive_dashboard(&mut surface, &mut session, trace).expect("the Dashboard drives to EOF");
+    drive_dashboard(
+        &mut surface,
+        &mut session,
+        trace.into_iter().map(Input::Trace),
+    )
+    .expect("the Dashboard drives to EOF");
 
     assert_eq!(surface.restorations, 1);
     assert_eq!(
@@ -523,28 +537,6 @@ fn frame_text(case_id: &str, capabilities: TerminalCapabilities) -> String {
     let mut text = render_lines(&fixture_view(case_id), 200, 36, capabilities).join("\n");
     text.push('\n');
     text
-}
-
-/// Compare one whole frame against its committed grid.
-///
-/// These pin *layout*: band order and geometry, column placement, and the
-/// frame the operator is left looking at. What the cells say is pinned
-/// independently, above, against the shared Conformance fixture — so a
-/// snapshot that drifts is a layout change, never a silent change of fact.
-///
-/// Re-bless with `GIT_LOOPY_TUI_BLESS=1 cargo test --test dashboard_render`
-/// and read the diff.
-fn assert_snapshot(name: &str, actual: String) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/snapshots")
-        .join(format!("{name}.txt"));
-    if std::env::var_os("GIT_LOOPY_TUI_BLESS").is_some() {
-        std::fs::write(&path, &actual).expect("the snapshot is writable");
-        return;
-    }
-    let expected = std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("no committed snapshot at {}", path.display()));
-    assert_eq!(actual, expected, "{name} drifted");
 }
 
 #[test]

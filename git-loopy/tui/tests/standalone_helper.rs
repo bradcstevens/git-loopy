@@ -162,3 +162,73 @@ fn the_projection_stays_the_default_so_a_pipeline_needs_no_terminal() {
         "without `--render` the helper stays the machine-readable projection"
     );
 }
+
+/// Run the helper in render mode over `trace`, bounded, reporting
+/// `(code, stdout, stderr)`.
+///
+/// A helper that hangs is the failure mode that matters here — an Orchestrator
+/// waiting on a child that will never exit has lost its Run — so the wait is
+/// bounded and a timeout is a test failure rather than a hung suite.
+fn render_over(trace: &str) -> (i32, String, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_git-loopy-tui"))
+        .args(["--render", "--utc-offset-minutes", "-360", "--issue", "42"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary target is built alongside this test");
+    {
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let _ = stdin.write_all(trace.as_bytes());
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().expect("the child is waitable").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("render mode did not exit within its bounded wait");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().expect("the helper terminates");
+    (
+        output.status.code().expect("the helper exits normally"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn render_mode_finishes_a_trace_that_is_mostly_unreadable() {
+    let mut trace = String::from("not json at all\n\n{\"type\": 17}\n{\"ts\": null}\n");
+    trace.push_str(&fixture_trace());
+    for line in 0..2_000 {
+        trace.push_str(&format!("garbage line {line}\n"));
+    }
+
+    let (code, stdout, stderr) = render_over(&trace);
+
+    assert_ne!(code, 2, "a malformed trace is not malformed usage");
+    assert!(
+        stdout.is_empty(),
+        "the Run's standard output belongs to the Orchestrator; a helper that \
+         cannot read its own input must not start writing there: {stdout}"
+    );
+    if code != 0 {
+        assert!(
+            stderr.contains("terminal"),
+            "the only reason render mode may fail here is a terminal it could \
+             not open: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn render_mode_ends_when_its_input_ends_rather_than_waiting_for_a_key() {
+    // Empty: the Orchestrator closed the pipe without ever writing an Event.
+    // The helper is a viewer, not the Run, so it must not outlive its trace
+    // waiting for an operator who may not be there.
+    let (code, stdout, _) = render_over("");
+
+    assert_ne!(code, 2);
+    assert!(stdout.is_empty());
+}

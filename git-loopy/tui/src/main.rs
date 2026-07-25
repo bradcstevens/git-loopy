@@ -13,14 +13,20 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use git_loopy_tui::{
-    draw_dashboard, drive_dashboard, project_run_view, DashboardSession, DashboardState,
-    DashboardSurface, Event, IssueRef, RunInputs, RunView, TerminalCapabilities, Timestamp,
-    ViewContext, Zone,
+    draw_frame, drive_dashboard, project_run_view, Admission, DashboardFrame, DashboardSession,
+    DashboardState, DashboardSurface, Event, Input, InputQueue, IssueRef, Key, RunInputs,
+    TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
+use ratatui::crossterm::event::{
+    self, Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers,
+};
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -205,12 +211,33 @@ fn project(options: &Options) {
     let _ = writeln!(stdout, "{rendered}");
 }
 
+/// The bounded buffer's depth, in pending inputs.
+///
+/// Deep enough that an ordinary burst of agent output never makes a reader
+/// wait, shallow enough that a helper which has stopped drawing cannot grow
+/// without limit. Structural input is never dropped to stay inside it: the
+/// reader waits instead, which pushes back on the Orchestrator's pipe.
+const INPUT_CAPACITY: usize = 512;
+
+/// How often the projection's clock advances when nothing else has.
+const TICK: Duration = Duration::from_millis(500);
+
+/// How long the terminal reader waits before checking whether to stop.
+const POLL: Duration = Duration::from_millis(100);
+
 /// Draw the live Dashboard on the controlling terminal until end of input.
 ///
 /// The Event trace arrives on standard input, so the terminal is opened
 /// *separately* for input and drawing: standard input is the Orchestrator's
 /// pipe and can never be the operator's keyboard.
+///
+/// Three producers and one consumer. A dedicated reader drains the trace, a
+/// second reads the keyboard, and the render thread takes whatever has
+/// accumulated and draws it. Nothing structural is dropped along the way — the
+/// bounded buffer makes a reader wait rather than forget — so a helper that
+/// draws more slowly than its Orchestrator writes falls behind without lying.
 fn render(options: &Options) -> Result<(), String> {
+    install_restoration_hook();
     let mut surface = CrosstermSurface::open(terminal_capabilities())?;
     let mut session = DashboardSession::new(
         options.inputs.clone(),
@@ -222,9 +249,181 @@ fn render(options: &Options) -> Result<(), String> {
         session.render_at(instant);
     }
 
-    let lines = io::stdin().lock().lines().map_while(Result::ok);
-    drive_dashboard(&mut surface, &mut session, lines)
-        .map_err(|error| format!("the terminal stopped accepting frames: {error}"))
+    let pending = Arc::new(Pending::new(INPUT_CAPACITY));
+    let stopping = Arc::new(AtomicBool::new(false));
+    read_the_trace(Arc::clone(&pending));
+    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+
+    let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
+        .map_err(|error| format!("the presentation input failed: {error}"));
+    stopping.store(true, Ordering::Relaxed);
+    outcome
+}
+
+/// The bounded buffer, plus the one condition both sides wait on.
+struct Pending {
+    queue: Mutex<InputQueue>,
+    changed: Condvar,
+}
+
+impl Pending {
+    fn new(capacity: usize) -> Self {
+        Self {
+            queue: Mutex::new(InputQueue::with_capacity(capacity)),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// Offer one input, waiting for room rather than dropping it.
+    fn offer(&self, input: Input) {
+        let mut queue = self.queue.lock().unwrap_or_else(|held| held.into_inner());
+        let mut pending = input;
+        while let Admission::Full(handed_back) = queue.push(pending) {
+            pending = handed_back;
+            queue = self
+                .changed
+                .wait(queue)
+                .unwrap_or_else(|held| held.into_inner());
+        }
+        self.changed.notify_all();
+    }
+
+    /// Every input the render thread should apply, forever.
+    ///
+    /// Blocks for at most one tick, then reports the clock has moved: elapsed
+    /// timers must keep running through a quiet stretch. The iterator never
+    /// ends — the loop stops on the end of the trace or the operator quitting,
+    /// which are inputs of their own.
+    fn drain(pending: &Arc<Pending>) -> impl Iterator<Item = Input> {
+        let pending = Arc::clone(pending);
+        std::iter::from_fn(move || {
+            let mut queue = pending
+                .queue
+                .lock()
+                .unwrap_or_else(|held| held.into_inner());
+            if queue.is_empty() {
+                let (waited, _) = pending
+                    .changed
+                    .wait_timeout(queue, TICK)
+                    .unwrap_or_else(|held| held.into_inner());
+                queue = waited;
+            }
+            let next = queue.pop().unwrap_or_else(|| Input::Tick(host_instant()));
+            drop(queue);
+            pending.changed.notify_all();
+            Some(next)
+        })
+    }
+}
+
+/// The dedicated trace reader.
+///
+/// It owns standard input for the whole Run and does nothing else, so a slow
+/// frame can never stall the pipe the Orchestrator is writing into.
+fn read_the_trace(pending: Arc<Pending>) {
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            match line {
+                Ok(line) => pending.offer(Input::Trace(line)),
+                // Not the end of the trace but the loss of it: the operator is
+                // looking at a Dashboard that has silently stopped updating,
+                // which is the one thing worse than no Dashboard at all.
+                Err(error) => {
+                    pending.offer(Input::Failed(format!("the Event trace broke: {error}")));
+                    return;
+                }
+            }
+        }
+        pending.offer(Input::EndOfTrace);
+    });
+}
+
+/// The dedicated keyboard reader.
+///
+/// Reads the *controlling terminal*, never standard input: standard input is
+/// the Orchestrator's pipe, and the two must never contend for a byte.
+fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        while !stopping.load(Ordering::Relaxed) {
+            match event::poll(POLL) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(_) => return,
+            }
+            match event::read() {
+                Ok(TerminalEvent::Key(key)) if key.kind != KeyEventKind::Release => {
+                    if let Some(intent) = intent(key.code, key.modifiers) {
+                        pending.offer(Input::Key(intent));
+                    }
+                }
+                Ok(TerminalEvent::Resize(..)) => pending.offer(Input::Resized),
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
+    });
+}
+
+/// The navigation intent one key press expresses.
+///
+/// Both the arrow keys and their `hjkl` equivalents, because an operator who
+/// lives in one is fluent in neither by accident. In raw mode `Ctrl-C` arrives
+/// here as a key rather than a signal, which is precisely what lets the helper
+/// hand the terminal back on its own one exit path.
+fn intent(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        return match code {
+            KeyCode::Char('c') | KeyCode::Char('d') => Some(Key::Quit),
+            _ => None,
+        };
+    }
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Key::Up),
+        KeyCode::Down | KeyCode::Char('j') => Some(Key::Down),
+        KeyCode::Home | KeyCode::Char('g') => Some(Key::First),
+        KeyCode::End | KeyCode::Char('G') => Some(Key::Last),
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => Some(Key::Open),
+        KeyCode::Esc | KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => Some(Key::Back),
+        KeyCode::Char('q') => Some(Key::Quit),
+        _ => None,
+    }
+}
+
+/// The host clock, as the instant the projection renders at.
+fn host_instant() -> Timestamp {
+    Timestamp::epoch().plus_seconds(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs_f64())
+            .unwrap_or_default(),
+    )
+}
+
+/// Give the terminal back on the one exit path a `Drop` guard cannot reach.
+///
+/// An unwinding panic runs `CrosstermSurface`'s guard, but a panic inside a
+/// reader thread, or one raised before the surface was built, does not. The
+/// operator would inherit a raw-mode terminal on the alternate screen either
+/// way, so restoration is installed once, ahead of everything.
+fn install_restoration_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_the_terminal();
+        previous(info);
+    }));
+}
+
+/// Undo every terminal change this helper makes, best effort, in order.
+fn restore_the_terminal() {
+    if let Ok(mut device) = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(CONTROLLING_TERMINAL)
+    {
+        let _ = device.execute(Show);
+        let _ = device.execute(LeaveAlternateScreen);
+    }
+    let _ = disable_raw_mode();
 }
 
 /// What this terminal can render, read once and then injected.
@@ -299,10 +498,8 @@ impl CrosstermSurface {
 }
 
 impl DashboardSurface for CrosstermSurface {
-    fn draw(&mut self, view: &RunView) -> io::Result<()> {
-        let capabilities = self.capabilities;
-        self.terminal
-            .draw(|frame| draw_dashboard(frame, view, &capabilities))?;
+    fn draw(&mut self, frame: &DashboardFrame) -> io::Result<()> {
+        self.terminal.draw(|target| draw_frame(target, frame))?;
         Ok(())
     }
 

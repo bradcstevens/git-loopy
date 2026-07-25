@@ -61,27 +61,77 @@ and fails if a new module reintroduces one.
 
 ## What the library draws
 
-`draw_dashboard(frame, &view)` presents that view with [ratatui] in the locked
-band order — **Header → Queue → Activity → Summary** — and consults the injected
-`TerminalCapabilities` for nothing but glyphs: a terminal that cannot render
-Unicode gets `-`, `|`, `#` and ASCII borders in place of `—`, `•`, `█` and box
-drawing, and states the identical facts.
+`draw_frame(frame, &dashboard)` presents a `DashboardFrame` — a view plus the
+screen the operator is on, the issue under their cursor, the terminal's
+capabilities, and any bounded diagnostics — with [ratatui]. Two screens, each in
+a locked band order:
 
-Terminal *ownership* is the caller's. `drive_dashboard` runs the whole loop
-against two injected seams — a `DashboardSurface` (anything that can be drawn on
-and handed back) and an iterator of trace lines — so the behaviour the operator
-depends on is drivable with no TTY at all:
+| Screen | Bands |
+| --- | --- |
+| Dashboard | **Header → Queue → Activity → Summary** |
+| Drill-in | **Detail header → Iteration breakdown → Log** |
+
+Capabilities move glyphs and nothing else: a terminal that cannot render Unicode
+gets `-`, `|`, `#` and ASCII borders in place of `—`, `•`, `█` and box drawing,
+and states the identical facts.
+
+### Navigation
+
+`Screen`, `Key` and `DashboardSession::handle_key` are the whole model; `main.rs`
+only decides which key press means which `Key`.
+
+| Intent | Keys |
+| --- | --- |
+| Move through the Queue | `↑`/`k`, `↓`/`j`, `Home`/`g`, `End`/`G` |
+| Open the selected issue | `Enter`, `→`, `l` |
+| Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
+| Quit | `q`, `Ctrl-C`, `Ctrl-D` |
+
+The cursor holds an **issue, not a row**. The Queue groups active before queued
+before history, so a row moves the moment an issue is activated, and a
+positional cursor would silently retarget under the operator's hands.
+
+### Narrow terminals
+
+Above the floor, reduction gives up whole facts in importance order rather than
+truncating one: Queue, Summary and Iteration-breakdown columns drop from the
+least decisive, and the Header sheds its run id before its model and its context
+gauge before its status. `strikes 0/` and `strikes 0/3` look alike at a glance
+and mean different things, so nothing is ever cut mid-word. Below **40×12** the
+whole layout is replaced by an unbordered ASCII state naming the size it has,
+the size it needs, and the `--render`-free way out.
+
+### Input the operator did not send
+
+`drive_dashboard` runs the whole loop against two injected seams — a
+`DashboardSurface` (anything that can be drawn on and handed back) and an
+iterator of `Input` — so the behaviour the operator depends on is drivable with
+no TTY at all:
 
 - a frame before the first Event, so an idle Run is still visible;
 - a frame per readable line, with an unreadable one skipped rather than fatal;
 - **a final frame at end of input**, so the last state stays on screen; and
 - the surface handed back exactly once, on every path including failure.
 
-`main.rs` supplies the real surface: it opens the *controlling terminal*
-(`/dev/tty`, or `CONOUT$` on Windows) rather than standard output, because the
-trace arrives on standard input and the two must not contend. `crossterm` —
-raw mode, the alternate screen, the cursor — appears only there, guarded by a
-`Drop` that restores the terminal even on a panic.
+`InputQueue` is the bounded channel between the readers and the loop. Structural
+input — trace lines, key presses, the end of the trace — is **never dropped**: a
+full buffer hands it straight back and the reader waits, which pushes back on
+the pipe instead of losing a Run's history. Only *render-only* deltas may
+coalesce to the newest value, and only three qualify: a context-window sample, a
+resize, and a clock tick. None of them changes what the Run did.
+
+Unusable telemetry leaves a bounded diagnostic — `input 12 unreadable` in the
+Header, with one truncated example kept on the session — rather than a stream
+scrolling the Run out of view. An *unknown* Event type is not a diagnostic: it
+decodes, reduces to nothing, and is simply skipped.
+
+`main.rs` supplies the real surface and the real readers: a dedicated thread
+owning standard input so a slow frame can never stall the Orchestrator's pipe, a
+second reading the *controlling terminal* (`/dev/tty`, or `CONOUT$` on Windows)
+so the keyboard and the trace never contend for a byte, and a half-second tick so
+elapsed timers keep moving through a quiet stretch. `crossterm` — raw mode, the
+alternate screen, the cursor — appears only there, guarded by a `Drop` **and** a
+panic hook, so raw mode never follows the operator out.
 
 [ratatui]: https://ratatui.rs
 
@@ -96,7 +146,8 @@ git-loopy-tui --schema-version
 
 Reads a JSONL Event trace and, **by default**, writes the projected semantic
 view as JSON. Rendering is opt-in through `--render`, which draws the live
-Dashboard on the controlling terminal instead and exits `0` at end of input.
+Dashboard on the controlling terminal instead and exits `0` at end of input or
+when the operator quits.
 The pipeline default is deliberate: a caller that only wants the view must not
 need a terminal, and the JSON path is the anti-drift control that proves the
 binary adds no behaviour of its own.
@@ -117,7 +168,11 @@ before committing a trace to it:
 
 An unreadable line is skipped rather than fatal — unusable telemetry never
 blocks a render — and malformed usage exits `2`, matching the family's locked
-CLI framing.
+CLI framing. Presentation input that fails *unrecoverably* (the trace pipe
+breaks, or no terminal can be opened) exits `1` after naming the reason on
+standard error, and writes nothing at all to standard output: the Run's stdout
+belongs to the Orchestrator, and a viewer's failure must never look like the
+Run's.
 
 ## Conformance
 
@@ -133,18 +188,23 @@ other's oracle, so the two cannot drift toward each other:
 | `tests/additive_compatibility.rs` | An unmodelled Event type and unknown fields still reduce to the same view |
 | `tests/library_purity.rs` | The library reaches for nothing the caller did not supply |
 | `tests/binary_seam.rs` | The binary is a thin shell over the library, through the real process boundary |
-| `tests/dashboard_render.rs` | What each band says, read back from the fixture; ASCII fallback; the end-of-input frame and single restoration; whole-frame layout snapshots |
-| `tests/standalone_helper.rs` | `--schema-version` answers without reading stdin; `--render` selects the terminal; the projection stays the default |
+| `tests/dashboard_render.rs` | What each Dashboard band says, read back from the fixture; ASCII fallback; the end-of-input frame and single restoration; whole-frame layout snapshots |
+| `tests/drill_in_render.rs` | What each drill-in band says, read back from the fixture; the locked band order; ASCII fallback; whole-frame layout snapshot |
+| `tests/navigation.rs` | Moving, opening, returning, and quitting; selection held by issue rather than row |
+| `tests/responsive_render.rs` | Column and Header reduction in importance order, never mid-word; the minimum-size state; narrow and below-floor snapshots |
+| `tests/bounded_input.rs` | Structural input is never dropped; only render-only deltas coalesce, to the newest value |
+| `tests/run_loop.rs` | Quitting, ticks, an unrecoverable read, bounded diagnostics, and restoration on every exit path |
+| `tests/log_guarantees.rs` | Logs are bounded per issue, retain pre-activation output with its own instants, and span Iterations |
+| `tests/standalone_helper.rs` | `--schema-version` answers without reading stdin; `--render` selects the terminal; a mostly-unreadable trace still finishes, silently on stdout; the projection stays the default |
 
 The rendering tests draw through ratatui's `TestBackend` and normalize the
 buffer to a text grid, so they are deterministic and need no terminal. Cell
 *contents* are asserted against values read back out of the fixture rather than
-recomputed, and the two whole-frame grids under `tests/snapshots/` pin layout
-only. Re-bless those two after an intended layout change and read the diff:
+recomputed, and the whole-frame grids under `tests/snapshots/` pin layout only.
+Re-bless them after an intended layout change and read the diff:
 
 ```bash
-GIT_LOOPY_TUI_BLESS=1 cargo test --manifest-path git-loopy/tui/Cargo.toml \
-  --test dashboard_render
+GIT_LOOPY_TUI_BLESS=1 cargo test --manifest-path git-loopy/tui/Cargo.toml
 ```
 
 ```bash

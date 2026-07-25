@@ -12,6 +12,8 @@
 //! rather than forking its behaviour (ADR-0013).
 
 mod event;
+mod input;
+mod navigation;
 mod render;
 mod session;
 mod state;
@@ -19,8 +21,12 @@ mod timestamp;
 mod view;
 
 pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
-pub use render::draw_dashboard;
-pub use session::{drive_dashboard, DashboardSession, DashboardSurface};
+pub use input::{Admission, Input, InputQueue};
+pub use navigation::{Flow, Key, Screen};
+pub use render::{draw_dashboard, draw_drill_in, draw_frame};
+pub use session::{
+    drive_dashboard, DashboardFrame, DashboardSession, DashboardSurface, Diagnostics,
+};
 pub use state::{DashboardState, RunInputs};
 pub use timestamp::{Timestamp, Zone};
 pub use view::{
