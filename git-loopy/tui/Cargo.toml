@@ -1,0 +1,27 @@
+[package]
+name = "git-loopy-tui"
+version = "0.2.0-dev.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Shared git-loopy TUI helper: the semantic Dashboard core plus the standalone renderer binary."
+license = "MIT"
+publish = false
+
+# ADR-0013 locks one Cargo package with two targets, not two behaviour forks:
+# `git_loopy_tui` is embedded in-process by the future Rust Orchestrator, and
+# `git-loopy-tui` is the standalone helper the shell and PowerShell
+# Orchestrators launch and feed. Both drive the same library.
+[lib]
+name = "git_loopy_tui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "git-loopy-tui"
+path = "src/main.rs"
+
+# `preserve_order` keeps a serialized band/column map in declaration order, so
+# the canonical Dashboard inventory is observable at the JSON boundary the way
+# the shared Conformance fixture states it.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }

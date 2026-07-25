@@ -70,3 +70,7 @@ docs/feature-requests/
 
 # Throwaway debugging scratch space (fake `gh` stubs, captured stdout/stderr).
 .scratch/
+
+# Rust build output. Scoped to the crate so an unrelated `target/` stays visible;
+# `Cargo.lock` is tracked because git-loopy-tui ships as a binary.
+/git-loopy/tui/target/

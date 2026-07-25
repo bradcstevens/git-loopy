@@ -14,7 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and future renderer #143 |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
@@ -89,7 +89,12 @@ catalog globs that do not identify a concrete `<name>` do not count.
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
 adapter drives Python's normalized Iteration-rollup seam and the production
-Dashboard semantic projection through every fixture snapshot. The
+Dashboard semantic projection through every fixture snapshot. The Rust Dashboard
+core drives the *same* `dashboard-insights.json` snapshots through its production
+reducer and projection from
+[`tui/tests/dashboard_conformance.rs`](../tui/tests/dashboard_conformance.rs), so
+the two renderers' semantics cannot diverge: `dashboard-insights.json` is the only
+place a Dashboard decision is stated, and neither member is the other's oracle. The
 native discovery adapters call their production discriminator, Checkpoint-message,
 and exit-code seams from
 [`shell/tests/test-orchestrator-conformance.sh`](../shell/tests/test-orchestrator-conformance.sh)
