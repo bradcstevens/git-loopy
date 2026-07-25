@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import TracebackType
 from typing import Any
 
-from git_loopy import settings
+import pytest
+
+from git_loopy import settings, skillscmd
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skillscmd import (
     SkillSelectionModel,
@@ -563,3 +567,448 @@ def test_skills_list_surfaces_invalid_required_metadata_before_client_start(
     assert len(errors) == 1
     assert errors[0].startswith("git-loopy: unable to resolve Required Skills: ")
     assert "listed more than once" in errors[0]
+
+
+def test_skills_edit_without_repository_resolves_the_global_scope(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    catalog = SkillCatalog(
+        winners={"alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)}
+    )
+    roots: list[Path] = []
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        repo_root = kwargs["repo_root"]
+        assert isinstance(repo_root, Path)
+        roots.append(repo_root)
+        return catalog
+
+    result = run_skills_edit(
+        scope=None,
+        repo_root=None,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert settings.load_config_table(settings.global_config_path(env))[
+        "enabled_skills"
+    ] == ["alpha"]
+    assert not (roots[0] / ".copilot").exists()
+
+
+def test_skills_edit_rejects_the_project_scope_without_a_repository() -> None:
+    def unexpected_client() -> object:
+        raise AssertionError("client must not start for an unresolvable scope")
+
+    writes: list[object] = []
+    errors: list[str] = []
+
+    result = run_skills_edit(
+        scope="project",
+        repo_root=None,
+        env={"HOME": "/nonexistent"},
+        error_fn=errors.append,
+        client_factory=unexpected_client,
+        picker_runner=lambda model, **kwargs: SkillSelectionResult(()),
+        writer=lambda path, table: writes.append((path, table)),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert errors == [
+        "git-loopy: the project scope needs a git repository; run inside one "
+        "or use --global."
+    ]
+
+
+def test_skills_list_without_repository_reports_the_global_policy(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.global_config_path(env), {"enabled_skills": ["alpha"]}
+    )
+    catalog = SkillCatalog(
+        winners={
+            "alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)
+        }
+    )
+    roots: list[Path] = []
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        repo_root = kwargs["repo_root"]
+        assert isinstance(repo_root, Path)
+        roots.append(repo_root)
+        return catalog
+
+    output: list[str] = []
+    errors: list[str] = []
+
+    result = run_skills_list(
+        repo_root=None,
+        env=env,
+        output_fn=output.append,
+        error_fn=errors.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert errors == []
+    assert output[1] == "enabled\tenabled\tno\tbuiltin\talpha\t"
+    assert not (roots[0] / ".copilot").exists()
+
+
+def test_skills_edit_global_takes_a_skill_baseline_over_a_project_policy(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"enabled_skills": ["project-only"]},
+    )
+    catalog = SkillCatalog(
+        winners={
+            "copilot-on": SkillCatalogWinner(
+                "copilot-on", "builtin", copilot_enabled=True
+            ),
+            "copilot-off": SkillCatalogWinner(
+                "copilot-off", "personal", copilot_enabled=False
+            ),
+            "project-only": SkillCatalogWinner(
+                "project-only", "builtin", copilot_enabled=False
+            ),
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert seen[0].enabled == ("copilot-on",)
+    assert settings.load_config_table(settings.global_config_path(env))[
+        "enabled_skills"
+    ] == ["copilot-on"]
+    assert settings.load_config_table(settings.project_config_path(tmp_path))[
+        "enabled_skills"
+    ] == ["project-only"]
+
+
+def test_skills_edit_leaves_new_catalog_names_unselected_at_the_edited_scope(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.global_config_path(env), {"enabled_skills": ["kept"]}
+    )
+    catalog = SkillCatalog(
+        winners={
+            "kept": SkillCatalogWinner("kept", "builtin", copilot_enabled=True),
+            "newly-discovered": SkillCatalogWinner(
+                "newly-discovered", "personal", copilot_enabled=True
+            ),
+            "newly-packaged": SkillCatalogWinner("newly-packaged", "packaged"),
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert seen[0].enabled == ("kept",)
+    assert [row.name for row in seen[0].rows] == [
+        "kept",
+        "newly-discovered",
+        "newly-packaged",
+    ]
+
+
+def test_skills_edit_preserves_an_explicitly_empty_policy_as_the_seed(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(settings.global_config_path(env), {"enabled_skills": []})
+    catalog = SkillCatalog(
+        winners={
+            "copilot-on": SkillCatalogWinner(
+                "copilot-on", "builtin", copilot_enabled=True
+            ),
+            "packaged": SkillCatalogWinner("packaged", "packaged"),
+        }
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert seen[0].enabled == ()
+    assert settings.load_config_table(settings.global_config_path(env))[
+        "enabled_skills"
+    ] == []
+
+
+class _LifecycleOnlyClient:
+    """A Copilot client that refuses every call but the async context manager.
+
+    ADR-0015 makes git-loopy's Skill policy import-only: management commands
+    read the catalog and never write Copilot's own enabled/disabled settings.
+    Any attribute reach beyond the lifecycle is a settings-mutation risk, so
+    this double turns one into a test failure instead of a live side effect.
+    """
+
+    def __init__(self) -> None:
+        self.lifecycle: list[str] = []
+
+    async def __aenter__(self) -> _LifecycleOnlyClient:
+        self.lifecycle.append("start")
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self.lifecycle.append("stop")
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(
+            f"Skill management must not call the Copilot client API: {name}"
+        )
+
+
+def test_skills_commands_never_reach_a_copilot_settings_mutation_api(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    catalog = SkillCatalog(
+        winners={"alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)}
+    )
+    clients: list[_LifecycleOnlyClient] = []
+
+    def factory() -> _LifecycleOnlyClient:
+        client = _LifecycleOnlyClient()
+        clients.append(client)
+        return client
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        assert isinstance(client, _LifecycleOnlyClient)
+        return catalog
+
+    listed = run_skills_list(
+        repo_root=tmp_path,
+        env=env,
+        output_fn=lambda _line: None,
+        client_factory=factory,
+        discoverer=discover,
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+    edited = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        output_fn=lambda _line: None,
+        client_factory=factory,
+        discoverer=discover,
+        picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert (listed, edited) == (0, 0)
+    assert [client.lifecycle for client in clients] == [
+        ["start", "stop"],
+        ["start", "stop"],
+    ]
+
+
+class _CleanupFailingTemporaryDirectory:
+    """A workspace whose teardown fails after the command has done its work."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._inner = TemporaryDirectory(**kwargs)
+
+    def __enter__(self) -> str:
+        return self._inner.__enter__()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._inner.__exit__(exc_type, exc, traceback)
+        raise OSError("workspace cleanup failed")
+
+
+def test_skills_edit_writes_nothing_when_the_workspace_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        skillscmd, "TemporaryDirectory", _CleanupFailingTemporaryDirectory
+    )
+    catalog = SkillCatalog(
+        winners={"alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)}
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    writes: list[object] = []
+    errors: list[str] = []
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        output_fn=lambda _line: None,
+        error_fn=errors.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append((path, table)),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert errors == [
+        "git-loopy: unable to edit Skill policy: OSError: workspace cleanup failed"
+    ]
+
+
+def test_skills_list_reports_an_unusable_workspace_as_a_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def unusable(**kwargs: Any) -> object:
+        raise OSError("no space for a discovery workspace")
+
+    monkeypatch.setattr(skillscmd, "TemporaryDirectory", unusable)
+
+    def unexpected_client() -> object:
+        raise AssertionError("client must not start without a workspace")
+
+    output: list[str] = []
+    errors: list[str] = []
+
+    result = run_skills_list(
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        output_fn=output.append,
+        error_fn=errors.append,
+        client_factory=unexpected_client,
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 1
+    assert output == []
+    assert errors == [
+        "git-loopy: unable to discover Skill inventory: "
+        "OSError: no space for a discovery workspace"
+    ]

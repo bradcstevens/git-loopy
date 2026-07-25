@@ -329,10 +329,48 @@ def _source_label(source_kind: str, plugin_name: str | None) -> str:
     return source_kind
 
 
+class SkillScopeError(ValueError):
+    """Raised when the requested Skill policy scope cannot be resolved."""
+
+
+def _resolve_skill_scope(scope: str | None, repo_root: Path | None) -> str:
+    """Resolve the shared ``--global`` / ``--project`` selector (ADR-0006).
+
+    With no flag the default is **project** inside a git repository, else
+    **global** — the same rule ``init`` and ``config`` use. The global Skill
+    policy is machine-scoped, so it stays editable from outside a clone; the
+    project scope needs a repository, and requesting it without one is a clean
+    error rather than a Config written beside an arbitrary directory.
+    """
+    if scope is None:
+        scope = "project" if repo_root is not None else "global"
+    if scope not in {"project", "global"}:
+        raise SkillScopeError(f"invalid Skill policy scope: {scope}")
+    if scope == "project" and repo_root is None:
+        raise SkillScopeError(
+            "the project scope needs a git repository; run inside one or use "
+            "--global."
+        )
+    return scope
+
+
+def _repo_less_root(workspace: Path) -> Path:
+    """An empty stand-in root for commands run outside a git repository.
+
+    Mirrors ``skill_run_preflight._minimal_catalog``: a directory carrying no
+    project Config, no project prompt override, and no project Skill source, so
+    project resolution yields nothing while the global Config, the global prompt
+    override, and the packaged fallbacks resolve unchanged.
+    """
+    root = workspace / "repo-less-root"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def run_skills_edit(
     *,
-    scope: str,
-    repo_root: Path,
+    scope: str | None,
+    repo_root: Path | None,
     env: Mapping[str, str] | None = None,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
@@ -352,15 +390,20 @@ def run_skills_edit(
         if error_fn is None
         else error_fn
     )
-    if scope not in {"project", "global"}:
-        errors(f"git-loopy: invalid Skill policy scope: {scope}")
+    try:
+        selected_scope = _resolve_skill_scope(scope, repo_root)
+    except SkillScopeError as exc:
+        errors(f"git-loopy: {exc}")
         return 1
     try:
-        required = _required_skills(repo_root, environment, required_skills)
-        tables = settings.load_configs(repo_root, environment)
         packaged = packaged_skills_dir or _packaged_skills_dir()
         with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
-            discovery_directory = Path(temporary)
+            workspace = Path(temporary)
+            root = repo_root if repo_root is not None else _repo_less_root(workspace)
+            required = _required_skills(root, environment, required_skills)
+            tables = settings.load_configs(root, environment)
+            discovery_directory = workspace / "discovery"
+            discovery_directory.mkdir()
             factory = client_factory or (
                 lambda: make_copilot_client(
                     working_directory=discovery_directory,
@@ -371,53 +414,63 @@ def run_skills_edit(
                 _load_catalog(
                     client_factory=factory,
                     discoverer=discoverer,
-                    repo_root=repo_root,
+                    repo_root=root,
                     packaged_skills_dir=packaged,
                     discovery_directory=discovery_directory,
                 )
             )
-        if git is None:
-            from .git import SubprocessGitClient
+            if git is None:
+                from .git import SubprocessGitClient
 
-            git = SubprocessGitClient(repo_root)
-        tracked = collect_project_skill_tracking(catalog, git)
-        seed = _scope_policy_names(scope=scope, tables=tables, catalog=catalog)
-        model = _selection_model(
-            catalog=catalog,
-            enabled=seed,
-            required=required,
-            tracked_project_skills=tracked,
-        )
-        result = picker_runner(
-            model,
-            input_fn=input_fn,
-            output_fn=output_fn,
-        )
-        if result is None:
-            errors("git-loopy: Skill policy edit cancelled; no changes written.")
-            return 1
-        selected_input = SkillPolicyInput(present=True, names=result.enabled)
-        inputs = SkillPolicyInputs(
-            project=(
-                selected_input if scope == "project" else SkillPolicyInput()
-            ),
-            global_=(
-                selected_input if scope == "global" else SkillPolicyInput()
-            ),
-        )
-        resolve_skill_policy(
-            inputs,
-            catalog=catalog,
-            required_skills=required,
-            tracked_project_skills=tracked,
-        )
-        path = (
-            settings.project_config_path(repo_root)
-            if scope == "project"
-            else settings.global_config_path(environment)
-        )
-        table = dict(settings.load_config_table(path))
-        table["enabled_skills"] = list(result.enabled)
+                git = SubprocessGitClient(root)
+            tracked = collect_project_skill_tracking(catalog, git)
+            seed = _scope_policy_names(
+                scope=selected_scope, tables=tables, catalog=catalog
+            )
+            model = _selection_model(
+                catalog=catalog,
+                enabled=seed,
+                required=required,
+                tracked_project_skills=tracked,
+            )
+            result = picker_runner(
+                model,
+                input_fn=input_fn,
+                output_fn=output_fn,
+            )
+            if result is None:
+                errors(
+                    "git-loopy: Skill policy edit cancelled; no changes written."
+                )
+                return 1
+            selected_input = SkillPolicyInput(present=True, names=result.enabled)
+            inputs = SkillPolicyInputs(
+                project=(
+                    selected_input
+                    if selected_scope == "project"
+                    else SkillPolicyInput()
+                ),
+                global_=(
+                    selected_input
+                    if selected_scope == "global"
+                    else SkillPolicyInput()
+                ),
+            )
+            resolve_skill_policy(
+                inputs,
+                catalog=catalog,
+                required_skills=required,
+                tracked_project_skills=tracked,
+            )
+            path = (
+                settings.project_config_path(root)
+                if selected_scope == "project"
+                else settings.global_config_path(environment)
+            )
+            table = dict(settings.load_config_table(path))
+            table["enabled_skills"] = list(result.enabled)
+        # Persist only after the discovery workspace is gone, so a teardown
+        # failure can never leave a changed Config behind a failed exit.
         writer(path, table)
     except (
         OSError,
@@ -435,15 +488,15 @@ def run_skills_edit(
         )
         return 1
     output_fn(
-        f"Saved {len(result.enabled)} enabled Skill(s) to the {scope} Config "
-        f"({path})"
+        f"Saved {len(result.enabled)} enabled Skill(s) to the {selected_scope} "
+        f"Config ({path})"
     )
     return 0
 
 
 def run_skills_list(
     *,
-    repo_root: Path,
+    repo_root: Path | None,
     env: Mapping[str, str] | None = None,
     output_fn: Callable[[str], None] = print,
     error_fn: Callable[[str], None] | None = None,
@@ -460,28 +513,34 @@ def run_skills_list(
         if error_fn is None
         else error_fn
     )
-    if required_skills is None:
-        try:
-            required_skills = _required_skills(repo_root, environment, None)
-        except (OSError, PromptMetadataError) as exc:
-            errors(
-                "git-loopy: unable to resolve Required Skills: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            return 1
-    required = frozenset(required_skills)
-    if enabled_skills is None:
-        try:
-            enabled_skills = _configured_names(repo_root, environment, required)
-        except settings.SettingsError as exc:
-            errors(f"git-loopy: unable to resolve Skill policy: {exc}")
-            return 1
-    enabled = frozenset(enabled_skills)
     packaged = packaged_skills_dir or _packaged_skills_dir()
-
+    # The discovery workspace's own creation and teardown belong inside the
+    # inventory handler: an unusable temporary directory is an unavailable
+    # inventory, not a traceback.
     try:
         with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
-            discovery_directory = Path(temporary)
+            workspace = Path(temporary)
+            root = repo_root if repo_root is not None else _repo_less_root(workspace)
+            if required_skills is None:
+                try:
+                    required_skills = _required_skills(root, environment, None)
+                except (OSError, PromptMetadataError) as exc:
+                    errors(
+                        "git-loopy: unable to resolve Required Skills: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return 1
+            required = frozenset(required_skills)
+            if enabled_skills is None:
+                try:
+                    enabled_skills = _configured_names(root, environment, required)
+                except settings.SettingsError as exc:
+                    errors(f"git-loopy: unable to resolve Skill policy: {exc}")
+                    return 1
+            enabled = frozenset(enabled_skills)
+
+            discovery_directory = workspace / "discovery"
+            discovery_directory.mkdir()
             factory = client_factory or (
                 lambda: make_copilot_client(
                     working_directory=discovery_directory,
@@ -492,7 +551,7 @@ def run_skills_list(
                 _load_catalog(
                     client_factory=factory,
                     discoverer=discoverer,
-                    repo_root=repo_root,
+                    repo_root=root,
                     packaged_skills_dir=packaged,
                     discovery_directory=discovery_directory,
                 )

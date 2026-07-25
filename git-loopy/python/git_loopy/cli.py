@@ -779,19 +779,25 @@ def _run_config(args: argparse.Namespace) -> int:
 
 
 def _run_skills(args: argparse.Namespace) -> int:
-    """Dispatch ``git-loopy skills`` without constructing the Run loop."""
+    """Dispatch ``git-loopy skills`` without constructing the Run loop.
+
+    Scope resolution belongs to the handler, which applies the shared
+    ``_add_scope_flags`` rule (ADR-0006): project inside a repository, else
+    global. The global Skill policy is machine-scoped, so — exactly like
+    ``config`` — running outside a repository is not an error here; only an
+    explicit ``--project`` without one is.
+    """
     from git_loopy import skillscmd
 
     try:
-        repo_root = resolve_repo_root()
-    except RuntimeError as exc:
-        print(f"git-loopy: {exc}", file=sys.stderr)
-        return 1
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
     if args.skills_command == "list":
         return skillscmd.run_skills_list(repo_root=repo_root, env=os.environ)
     if args.skills_command == "edit":
         return skillscmd.run_skills_edit(
-            scope=args.scope or "project",
+            scope=getattr(args, "scope", None),
             repo_root=repo_root,
             env=os.environ,
         )
