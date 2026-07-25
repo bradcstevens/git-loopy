@@ -4,57 +4,12 @@ $EventsModule = Join-Path $PSScriptRoot "GitLoopy.Events.psm1"
 Import-Module $EventsModule -Force
 $TuiModule = Join-Path $PSScriptRoot "GitLoopy.Tui.psm1"
 Import-Module $TuiModule -Force
-$Script:ReleaseVersionPath = [IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot "../../VERSION")
-)
-
-function Get-GitLoopyReleaseVersion {
-    [CmdletBinding()]
-    param(
-        [string]$Path = $Script:ReleaseVersionPath
-    )
-
-    try {
-        $Content = [Text.UTF8Encoding]::new($false, $true).GetString(
-            [IO.File]::ReadAllBytes($Path)
-        )
-    }
-    catch {
-        throw [IO.InvalidDataException]::new(
-            "cannot read Release version authority ${Path}: $($_.Exception.Message)",
-            $_.Exception
-        )
-    }
-
-    $Value = if ($Content.EndsWith("`r`n", [StringComparison]::Ordinal)) {
-        $Content.Substring(0, $Content.Length - 2)
-    }
-    elseif ($Content.EndsWith("`n", [StringComparison]::Ordinal)) {
-        $Content.Substring(0, $Content.Length - 1)
-    }
-    else {
-        $Content
-    }
-    $Identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-    $Pattern = (
-        "\A(?:0|[1-9][0-9]*)\." +
-        "(?:0|[1-9][0-9]*)\." +
-        "(?:0|[1-9][0-9]*)" +
-        "(?:-$Identifier(?:\.$Identifier)*)?" +
-        "(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z"
-    )
-    if (-not [regex]::IsMatch(
-        $Value,
-        $Pattern,
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant
-    )) {
-        throw [IO.InvalidDataException]::new(
-            "Release version authority $Path must contain exactly one " +
-                "Semantic Versioning value"
-        )
-    }
-    return $Value
-}
+# One reader for this clone's Release version, shared with install.ps1: the
+# Orchestrator refuses a clone-local helper that disagrees with VERSION and the
+# installer stages that helper, so a second reader would be a second opinion
+# about what Release a clone is (issue #194).
+$ReleaseModule = Join-Path $PSScriptRoot "GitLoopy.Release.psm1"
+Import-Module $ReleaseModule -Force
 
 function New-GitLoopyParseException {
     param(

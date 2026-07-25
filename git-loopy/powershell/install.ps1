@@ -2,35 +2,62 @@
 
 <#
 .SYNOPSIS
-    Optional installer for git-loopy's PowerShell Orchestrator (ADR-0013).
+    Installer for git-loopy's PowerShell distribution (ADR-0013, PRD #173).
 
 .DESCRIPTION
-    Puts a single `git-loopy` command on your PATH by writing a small launcher
-    shim that invokes this clone's git-loopy.ps1 by absolute path. It installs
-    NOTHING else — no Python, no TUI helper (git-loopy-tui arrives in phase 2),
-    and no package-manager distribution. Run-in-place from the clone stays the
-    baseline; this is a convenience so you can type `git-loopy` from any repo.
+    One command installs the two halves of this clone's distribution: a
+    `git-loopy` launcher on your PATH, and the `git-loopy-tui` helper this
+    clone's Release pins, staged into `.git-loopy/bin/` where the Orchestrator
+    looks for it first.
 
-    On Windows the shim is a `git-loopy.cmd` batch file; on Linux and macOS it is
-    a `git-loopy` script with a `pwsh` shebang. Either way the shim points back
-    into this clone so the shared git-loopy/PROMPT.md keeps resolving one
-    directory above the launcher — the installer never copies the Orchestrator
-    out of the tree.
+    The launcher is a small shim that invokes this clone's git-loopy.ps1 by
+    absolute path. On Windows the shim is a `git-loopy.cmd` batch file; on Linux
+    and macOS it is a `git-loopy` script with a `pwsh` shebang. Either way the
+    shim points back into this clone so the shared git-loopy/PROMPT.md keeps
+    resolving one directory above the launcher — the installer never copies the
+    Orchestrator out of the tree.
+
+    The helper is the only thing this script downloads, it is downloaded exactly
+    once here, and a Run never downloads anything at all. `-NoTui` skips it;
+    `-TuiArchive`/`-TuiChecksum` install it from files an air-gapped host already
+    has. Either way the artifact has to prove its published checksum, this
+    clone's exact Release version, and Event-schema compatibility before it
+    replaces anything — and a failure at any of those steps leaves a previously
+    installed helper exactly as it was, with the Orchestrator still runnable in
+    plain mode.
 
 .PARAMETER BinDir
     Directory to install the launcher into. Defaults to $HOME\bin on Windows and
     $XDG_BIN_HOME (else ~/.local/bin) on Linux and macOS.
 
+.PARAMETER NoTui
+    Install only the launcher. Runs stay in plain mode.
+
+.PARAMETER TuiArchive
+    Install the helper from a local release archive instead of downloading it.
+    Requires -TuiChecksum.
+
+.PARAMETER TuiChecksum
+    The archive's published `.sha256` manifest.
+
+.PARAMETER TuiBaseUrl
+    Fetch the helper from somewhere other than this Release's published download
+    location.
+
 .EXAMPLE
     pwsh -NoLogo -NoProfile -File ./install.ps1
 
 .EXAMPLE
-    pwsh -NoLogo -NoProfile -File ./install.ps1 -BinDir ~/.local/bin
+    pwsh -NoLogo -NoProfile -File ./install.ps1 -BinDir ~/.local/bin -NoTui
 #>
 
 [CmdletBinding()]
 param(
-    [string]$BinDir
+    [string]$BinDir,
+    [switch]$NoTui,
+    [string]$TuiArchive,
+    [string]$TuiChecksum,
+    [string]$TuiBaseUrl
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -51,6 +78,12 @@ if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
     exit 1
 }
 $Launcher = (Resolve-Path -LiteralPath $Launcher).Path
+$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
+$ArtifactMetadata = Join-Path $RepositoryRoot "git-loopy/conformance/tui-artifacts.json"
+
+Import-Module (Join-Path $PSScriptRoot "GitLoopy.Release.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "GitLoopy.Events.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "GitLoopy.TuiInstall.psm1") -Force
 
 if ([string]::IsNullOrWhiteSpace($BinDir)) {
     if ($IsWindows) {
@@ -91,6 +124,47 @@ else {
 
 [Console]::Out.WriteLine("Installed git-loopy launcher: $Shim")
 [Console]::Out.WriteLine("  -> $Launcher")
+
+# The helper is installed after the launcher because the launcher is the part
+# that has to work: a Run without a helper is a Run in plain mode, while a helper
+# without a launcher is nothing at all.
+if ($NoTui) {
+    [Console]::Out.WriteLine(
+        "Skipped git-loopy-tui (-NoTui). Runs stay in plain mode.")
+}
+else {
+    $ReleaseVersion = try {
+        Get-GitLoopyReleaseVersion
+    }
+    catch {
+        [Console]::Error.WriteLine(
+            "install.ps1: cannot determine which Release this clone pins")
+        exit 1
+    }
+
+    try {
+        $HelperPath = Install-GitLoopyTuiHelper `
+            -Metadata $ArtifactMetadata `
+            -RepositoryRoot $RepositoryRoot `
+            -ReleaseVersion $ReleaseVersion `
+            -SchemaVersion (Get-GitLoopyEventSchemaVersion) `
+            -BaseUrl $TuiBaseUrl `
+            -Archive $TuiArchive `
+            -Checksum $TuiChecksum
+        [Console]::Out.WriteLine(
+            "Installed git-loopy-tui ${ReleaseVersion}: $HelperPath")
+    }
+    catch {
+        [Console]::Error.WriteLine("install.ps1: $($_.Exception.Message)")
+        [Console]::Error.WriteLine(
+            "install.ps1: could not install the git-loopy-tui $ReleaseVersion helper.")
+        [Console]::Error.WriteLine(
+            "  Nothing was replaced; git-loopy still runs, in plain mode, without it.")
+        [Console]::Error.WriteLine(
+            "  Re-run with -NoTui to install the launcher alone.")
+        exit 1
+    }
+}
 
 $Separator = [IO.Path]::PathSeparator
 $Comparison = if ($IsWindows) {
