@@ -390,6 +390,58 @@ $Discovered = Find-GitLoopyTuiHelper -RepoRoot (Join-Path $ActivateDir "repo") -
 Assert-True ($null -ne $Discovered) "the Orchestrator discovers what the installer staged"
 Assert-Equal "clone-local" $Discovered.Source "the staged helper is the clone-local one"
 
+# --- Host architecture vocabulary -------------------------------------------
+#
+# The shared alias tables are keyed in `uname -m` vocabulary, because that is what
+# the Python consumer and the shell installer feed them. This is the family member
+# with no `uname`, so it asks .NET instead — and .NET answers in its own dialect
+# (`X64`, `Arm64`, `Arm`), which is not the same language. The translation is
+# therefore pinned here rather than left to the coincidence that two of those
+# names happen to lower-case into keys the table already holds.
+
+Assert-Equal "x86_64" (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture X64) `
+    "the 64-bit x86 runtime name is translated to uname's"
+Assert-Equal "aarch64" (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture Arm64) `
+    "the 64-bit ARM runtime name is translated to uname's"
+Assert-Equal "armv7l" (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture Arm) `
+    "the 32-bit ARM runtime name is translated to uname's"
+
+# An architecture nobody has published is passed through lowered rather than
+# dropped, so the refusal can still name the host it refused.
+Assert-Equal "riscv64" (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture RiscV64) `
+    "an unpublished architecture still names itself"
+
+# The control the three assertions above exist to serve: every architecture this
+# runtime can report has to survive translation into an answer the shared fixture
+# recognises. A deferred platform must be refused by its own recorded reason —
+# losing that vocabulary in translation would silently downgrade "we chose not to
+# ship this yet" into the same "nothing is published" sentence a typo produces.
+$DeferredArm = @($Metadata["deferred_targets"]) |
+    Where-Object { $_["arch"] -ceq "armv7" } | Select-Object -First 1
+Assert-True ($null -ne $DeferredArm) "the fixture still defers 32-bit ARM Linux"
+
+$ArmRefusal = Get-RefusalMessage {
+    Select-GitLoopyTuiTarget -Metadata $ArtifactMetadata -System "Linux" `
+        -Machine (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture Arm) -Libc "gnu"
+}
+Assert-Contains $ArmRefusal ([string]$DeferredArm["reason"]) `
+    "32-bit ARM Linux is deferred by name, not by absence"
+
+# And the architectures that are published resolve to the artifact the fixture
+# names for them, through the translation rather than around it.
+foreach ($Pair in @(
+        @("Linux", "X64", "gnu", "x86_64-unknown-linux-gnu"),
+        @("Linux", "Arm64", "musl", "aarch64-unknown-linux-musl"),
+        @("Darwin", "Arm64", "", "aarch64-apple-darwin"),
+        @("Windows", "X64", "", "x86_64-pc-windows-msvc")
+    )) {
+    Assert-Equal $Pair[3] (
+        Select-GitLoopyTuiTarget -Metadata $ArtifactMetadata -System $Pair[0] `
+            -Machine (ConvertFrom-GitLoopyRuntimeArchitecture -Architecture $Pair[1]) `
+            -Libc $Pair[2]
+    ) "$($Pair[0]) $($Pair[1]) resolves through the translated architecture"
+}
+
 # --- Host libc --------------------------------------------------------------
 #
 # Linux's alone, and the one selection input the runtime cannot answer. Parsed

@@ -601,6 +601,44 @@ function Get-GitLoopyTuiHostLibc {
     return ConvertFrom-GitLoopyLddReport -Report $Report
 }
 
+# Translate the runtime's architecture name into the `uname -m` vocabulary the
+# shared alias tables are keyed in.
+#
+# This is the family member with no `uname`, so it asks .NET — but .NET speaks its
+# own dialect. `X64` and `Arm64` happen to lower-case into keys the table already
+# holds, which makes the translation look unnecessary right up to the one that
+# does not: .NET calls 32-bit ARM `Arm`, while every `uname` on earth calls it
+# `armv7l`. Untranslated, that name misses the `armv7` entry in `deferred_targets`
+# and a Raspberry Pi is told nothing is published for it, rather than that 32-bit
+# ARM Linux was deliberately deferred.
+#
+# Translating here rather than teaching the shared table .NET's names keeps that
+# fixture one vocabulary instead of a union of every runtime's dialect. An
+# architecture with no `uname` spelling to translate to is passed through lowered,
+# so a refusal can still name the host it refused.
+$Script:TuiRuntimeArchitectureNames = @{
+    "x64" = "x86_64"
+    "x86" = "i686"
+    "arm64" = "aarch64"
+    "arm" = "armv7l"
+}
+
+function ConvertFrom-GitLoopyRuntimeArchitecture {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Architecture
+    )
+
+    $Key = if ($null -eq $Architecture) { "" } else { $Architecture.Trim().ToLowerInvariant() }
+    $Translated = $Script:TuiRuntimeArchitectureNames[$Key]
+    if ($null -eq $Translated) {
+        return $Key
+    }
+    return $Translated
+}
+
 # What this host calls itself, in the vocabulary the shared alias tables speak.
 # The runtime answers rather than `uname`, because Windows has no `uname` and this
 # is the family member that runs there.
@@ -615,7 +653,9 @@ function Get-GitLoopyTuiHostShape {
     return [pscustomobject]@{
         PSTypeName = "GitLoopy.TuiHostShape"
         System = $System
-        Machine = [string][Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+        Machine = ConvertFrom-GitLoopyRuntimeArchitecture -Architecture (
+            [string][Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+        )
         Libc = Get-GitLoopyTuiHostLibc
     }
 }
@@ -784,6 +824,7 @@ Export-ModuleMember -Function @(
     "New-GitLoopyTuiWorkspace",
     "Move-GitLoopyTuiHelper",
     "ConvertFrom-GitLoopyLddReport",
+    "ConvertFrom-GitLoopyRuntimeArchitecture",
     "Get-GitLoopyTuiHostLibc",
     "Get-GitLoopyTuiHostShape",
     "Get-GitLoopyTuiHostTarget",
