@@ -97,6 +97,85 @@ while IFS= read -r case_json; do
   jq -e --argjson actual "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
     '.expected == $actual' <<<"$case_json" >/dev/null ||
     fail "normalized rollup fixture: $case_id"
+
+  # An unavailable measurement must be unavailable *because* this port declares
+  # it so. The fixture above pins the nulls as literals, which cannot tell a
+  # deliberately unknown measurement apart from one that was simply forgotten --
+  # so derive the demand from the production capability manifest instead. A
+  # capability this port declares false MUST send every measurement it governs
+  # as null; contract 12's value semantics forbid reporting an unavailable
+  # counter as 0 or an unavailable collection as []. Flip a capability and this
+  # asks for the opposite.
+  jq -e \
+    --argjson capabilities "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
+    --argjson rollup "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
+    '
+      # Every normalized measurement each Insight capability governs. Keys are
+      # asserted below to equal the manifest keys exactly, so a new capability
+      # cannot arrive uncovered and a typo cannot quietly govern nothing.
+      def governed:
+        {
+          agent_output: [],
+          structured_agent_events: [$rollup.summary.tool_count],
+          token_usage: (
+            [
+              $rollup.summary.model,
+              $rollup.summary.tokens_in,
+              $rollup.summary.tokens_out,
+              $rollup.summary.observed_tokens
+            ]
+            + [$rollup.issues[]?.consumption.model]
+            + [$rollup.issues[]?.consumption.tokens_in]
+            + [$rollup.issues[]?.consumption.tokens_out]
+          ),
+          context_window: (
+            [$rollup.summary.peak_context_window]
+            + [$rollup.issues[]?.peak_context_window]
+          ),
+          skill_consultation: [
+            $rollup.summary.skill_call_count,
+            $rollup.summary.skills_consulted
+          ],
+          cost: (
+            [$rollup.summary.cost_usd]
+            + [$rollup.issues[]?.cost_usd]
+          )
+        };
+      (governed | keys) == ($capabilities | keys)
+      and (
+        [$capabilities | to_entries[] | select(.value == false) | .key]
+        | length > 0
+      )
+      and (
+        all(
+          $capabilities | to_entries[] | select(.value == false) | .key;
+          governed[.] | all(. == null)
+        )
+      )
+    ' >/dev/null <<<'null' ||
+    fail "unavailable telemetry must stay null for a declared-false capability: $case_id"
+
+  # The complement: a fact this port really can observe is never nulled away in
+  # the name of honesty. Without this, nulling the whole rollup would pass.
+  jq -e --argjson rollup "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
+    '
+      ($rollup.outcome | type) == "string"
+      and ($rollup.duration_seconds | type) == "number"
+      and all(
+        $rollup.summary
+        | .commits, .auto_closures, .pr_advances, .strikes;
+        type == "number"
+      )
+      and all(
+        $rollup.issues[]?;
+        (.issue | type) != "null"
+        and (.status | type) == "string"
+        and (.first_started_at | type) == "string"
+        and (.active_seconds | type) == "number"
+        and (.cumulative_active_seconds | type) == "number"
+      )
+    ' >/dev/null <<<'null' ||
+    fail "observable lifecycle and accounting facts must stay observed: $case_id"
 done < <(
   jq -c '.normalized_rollup_cases[] | select(.orchestrator == "shell")' "$fixture"
 )
