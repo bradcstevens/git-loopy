@@ -62,9 +62,12 @@ delivered in later phases, sequenced value-first
   applied by `git_loopy.release_trust`.
   The PowerShell port and package-manager distribution are still to come; until a
   helper is present or selected, the native ports stream plain text and run in
-  place from the clone, and an optional `install.sh` / `install.ps1` only adds a
-  `git-loopy` launcher to your `PATH` (no Python, no TUI helper, no package
-  manager).
+  place from the clone. The shell port's `install.sh` now installs both halves of
+  its distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
+  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — with
+  `--no-tui` for the launcher alone and `--tui-archive`/`--tui-checksum` for an
+  air-gapped host. `install.ps1` still adds only the launcher (no Python, no TUI
+  helper, no package manager). A Run itself never downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the

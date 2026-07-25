@@ -15,6 +15,8 @@ _git_loopy_orchestrator_dir="$(
 _GIT_LOOPY_RELEASE_VERSION_PATH="$_git_loopy_orchestrator_dir/../../../VERSION"
 
 # shellcheck disable=SC1091
+source "$_git_loopy_orchestrator_dir/release-version.sh"
+# shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/events.sh"
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/continuation.sh"
@@ -62,47 +64,6 @@ Options:
   --version
   -h, --help
 EOF
-}
-
-git_loopy_read_release_version() {
-  local path="${1:?Release metadata path is required}"
-  if [[ ! -f "$path" || ! -r "$path" ]]; then
-    printf 'git-loopy: cannot read Release metadata %s\n' "$path" >&2
-    return 1
-  fi
-
-  local release_version=""
-  local extra_line=""
-  local first_status=0
-  local second_status=0
-  exec 3<"$path" || {
-    printf 'git-loopy: cannot read Release metadata %s\n' "$path" >&2
-    return 1
-  }
-  IFS= read -r release_version <&3 || first_status=$?
-  IFS= read -r extra_line <&3 || second_status=$?
-  exec 3<&-
-
-  if ((first_status > 1 || second_status == 0)) || [[ -n "$extra_line" ]]; then
-    printf 'git-loopy: Release metadata %s must contain exactly one Semantic Versioning value\n' \
-      "$path" >&2
-    return 1
-  fi
-  [[ "$release_version" != *$'\r' ]] || release_version="${release_version%$'\r'}"
-
-  local numeric_identifier='(0|[1-9][0-9]*)'
-  local prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
-  local semver_pattern
-  semver_pattern="^${numeric_identifier}\\.${numeric_identifier}\\.${numeric_identifier}"
-  semver_pattern+="(-${prerelease_identifier}(\\.${prerelease_identifier})*)?"
-  semver_pattern+='(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-  if [[ ! "$release_version" =~ $semver_pattern ]]; then
-    printf 'git-loopy: Release metadata %s must contain exactly one Semantic Versioning value\n' \
-      "$path" >&2
-    return 1
-  fi
-
-  printf '%s\n' "$release_version"
 }
 
 git_loopy_print_release_version() {

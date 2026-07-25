@@ -63,7 +63,7 @@ jobs:
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           else
             sudo apt-get update
-            sudo apt-get install --yes jq
+            sudo apt-get install --yes jq xz-utils
           fi
 
       - name: Run shell smoke suite
@@ -77,14 +77,18 @@ jobs:
           "$BASH_BIN" --version
           "$BASH_BIN" -n \
             git-loopy/shell/git-loopy.sh \
+            git-loopy/shell/install.sh \
             git-loopy/shell/lib/continuation.sh \
             git-loopy/shell/lib/events.sh \
             git-loopy/shell/lib/orchestrator.sh \
+            git-loopy/shell/lib/release-version.sh \
+            git-loopy/shell/lib/tui-install.sh \
             git-loopy/shell/tests/*.sh
           "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-continuation-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-boundary.sh
+          "$BASH_BIN" git-loopy/shell/tests/test-tui-install.sh
 
   rust:
     name: Rust Dashboard core / ${{ matrix.os }}

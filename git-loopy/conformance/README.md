@@ -22,7 +22,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
-| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
+| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
 | `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
@@ -41,6 +41,16 @@ names — is stated once there, so a renamed artifact cannot leave one consumer
 resolving a name that no longer exists. `git-loopy/tui/Cargo.toml` is what
 actually builds; `git-loopy/python/tests/test_tui_release.py` fails when the two
 disagree.
+
+`release_download_url_template` is there for the same reason the names are: the
+installers, the Homebrew tap, and the winget/Scoop manifests all download the
+same bytes, and a channel that resolves its own URL is a channel that can
+install a different Release. It is pinned against the helper manifest's
+`repository`, so a fork or a rename cannot leave every channel downloading from
+the old repository's Releases. The shell adapter is
+[`shell/tests/test-tui-install.sh`](../shell/tests/test-tui-install.sh), which
+drives the same `selection_cases` and installs a fake published Release over
+`file://` — a real transfer, with no network.
 
 Three of the seven targets cannot link on a bare runner, so each target also
 declares the container it builds inside and the packages that container needs.
@@ -221,6 +231,7 @@ uv run --project git-loopy/python --all-extras \
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
 bash git-loopy/shell/tests/test-continuation-conformance.sh
+bash git-loopy/shell/tests/test-tui-install.sh
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-orchestrator-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-continuation-conformance.ps1
