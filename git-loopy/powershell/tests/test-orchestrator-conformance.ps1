@@ -372,6 +372,189 @@ finally {
     }
 }
 
+# --- Closed-world Skill policy (Wrapper contract §17.6) ------------------------
+# This port has no native `enabled_skills` support yet, so every policy surface
+# the family contract names must be *detected*, not ignored. The fixture's
+# `native_transition` block is the input — the surface names and their canonical
+# order are read from it rather than restated here, so a fifth surface added to
+# the contract fails this port instead of silently widening a Run's capability
+# set.
+$SkillPolicyFixture = Get-Content `
+    -LiteralPath (Join-Path $ConformanceDir "skill-policy.json") `
+    -Raw |
+    ConvertFrom-Json -AsHashtable
+
+Assert-True (
+    @($SkillPolicyFixture["native_transition"]["fail_closed"]) -ccontains "powershell"
+) "skill-policy fixture: powershell is a fail-closed port"
+Assert-True (
+    -not (
+        @($SkillPolicyFixture["native_transition"]["implemented"]) -ccontains "powershell"
+    )
+) "skill-policy fixture: powershell does not implement the policy natively"
+
+$PolicySurfaces = [string]::Join(
+    ",",
+    @($SkillPolicyFixture["native_transition"]["policy_surfaces"])
+)
+
+$PolicyTemp = Join-Path ([IO.Path]::GetTempPath()) (
+    "git-loopy-skill-policy-$([guid]::NewGuid())"
+)
+$PolicyRepo = Join-Path $PolicyTemp "repo"
+$PolicyGlobal = Join-Path $PolicyTemp "global"
+$PolicyProjectConfig = Join-Path $PolicyRepo "git-loopy/config.toml"
+$PolicyGlobalConfig = Join-Path $PolicyGlobal "git-loopy/config.toml"
+[IO.Directory]::CreateDirectory((Join-Path $PolicyRepo "git-loopy")) | Out-Null
+[IO.Directory]::CreateDirectory((Join-Path $PolicyGlobal "git-loopy")) | Out-Null
+
+function Get-PolicySurfaceLine {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]]$Arguments,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Environment
+    )
+
+    $Config = Resolve-GitLoopyConfig `
+        -Arguments $Arguments `
+        -Environment $Environment
+    return [string]::Join(
+        ",",
+        @(
+            Get-GitLoopySkillPolicySurfaces `
+                -Config $Config `
+                -Environment $Environment `
+                -RepoRoot $PolicyRepo
+        )
+    )
+}
+
+try {
+    # Every surface at once: the detector must name all four, in fixture order.
+    [IO.File]::WriteAllText($PolicyProjectConfig, "enabled_skills = [`"tdd`"]`n")
+    Assert-Equal $PolicySurfaces (
+        Get-PolicySurfaceLine `
+            -Arguments @("--enable-skill", "tdd", "--disable-skill", "prototype") `
+            -Environment ([ordered]@{
+                XDG_CONFIG_HOME = $PolicyGlobal
+                GIT_LOOPY_ENABLED_SKILLS = "tdd"
+            })
+    ) "skill-policy: every unsupported surface is detected in fixture order"
+    [IO.File]::Delete($PolicyProjectConfig)
+
+    # An explicit empty replacement is a real policy, so presence — not content —
+    # is what the detector reads.
+    Assert-Equal "GIT_LOOPY_ENABLED_SKILLS" (
+        Get-PolicySurfaceLine `
+            -Arguments @() `
+            -Environment ([ordered]@{
+                XDG_CONFIG_HOME = $PolicyGlobal
+                GIT_LOOPY_ENABLED_SKILLS = ""
+            })
+    ) "skill-policy: an explicit empty environment replacement is a surface"
+
+    # The global scope is a standard Config location too.
+    [IO.File]::WriteAllText($PolicyGlobalConfig, "enabled_skills = []`n")
+    Assert-Equal "enabled_skills" (
+        Get-PolicySurfaceLine `
+            -Arguments @() `
+            -Environment ([ordered]@{ XDG_CONFIG_HOME = $PolicyGlobal })
+    ) "skill-policy: a global Config key is detected"
+    [IO.File]::Delete($PolicyGlobalConfig)
+
+    # A Config that predates the key stays runnable: the generated banner is
+    # comment-only, and a commented example is not a configured policy.
+    [IO.File]::WriteAllText(
+        $PolicyProjectConfig,
+        "# enabled_skills = [`"tdd`"]`nmodel = `"claude-opus-4.8`"`n"
+    )
+    Assert-Equal "" (
+        Get-PolicySurfaceLine `
+            -Arguments @() `
+            -Environment ([ordered]@{ XDG_CONFIG_HOME = $PolicyGlobal })
+    ) "skill-policy: a commented key is not a configured policy"
+
+    # A TOML quoted key may spell the same name with escapes, and `tomllib`
+    # resolves `"enabled\u005fskills"` to `enabled_skills`. Detection must too, or
+    # a Config the Python Orchestrator honours would run wide here.
+    foreach ($Spelling in @(
+        '"enabled\u005fskills"',
+        '"enabled\U0000005Fskills"',
+        '"\u0065nabled\u005fskills"'
+    )) {
+        [IO.File]::WriteAllText($PolicyProjectConfig, "$Spelling = [`"tdd`"]`n")
+        Assert-Equal "enabled_skills" (
+            Get-PolicySurfaceLine `
+                -Arguments @() `
+                -Environment ([ordered]@{ XDG_CONFIG_HOME = $PolicyGlobal })
+        ) "skill-policy: an escaped TOML quoted key is detected ($Spelling)"
+    }
+
+    # Decoding must not smear one key into another: a deprecated legacy guard
+    # spelled with the same escape is still not a closed-world surface.
+    [IO.File]::WriteAllText(
+        $PolicyProjectConfig,
+        "`"deny\u005fskills`" = [`"tdd`"]`n"
+    )
+    Assert-Equal "" (
+        Get-PolicySurfaceLine `
+            -Arguments @() `
+            -Environment ([ordered]@{ XDG_CONFIG_HOME = $PolicyGlobal })
+    ) "skill-policy: an escaped unrelated key is not a policy"
+    [IO.File]::Delete($PolicyProjectConfig)
+
+    # Legacy deny-only invocations are explicitly *not* a closed-world surface
+    # (contract §17.2 keeps them as deprecated final guards), so they must
+    # resolve and run unchanged.
+    $LegacyEnvironment = [ordered]@{
+        XDG_CONFIG_HOME = $PolicyGlobal
+        GIT_LOOPY_DENY_SKILLS = "legacy-skill"
+    }
+    $LegacyArguments = @("--deny-skill", "flag-skill", "--deny-tool", "flag-tool")
+    Assert-Equal "" (
+        Get-PolicySurfaceLine `
+            -Arguments $LegacyArguments `
+            -Environment $LegacyEnvironment
+    ) "skill-policy: legacy deny-only inputs are not an unsupported surface"
+    Assert-Equal "flag-skill legacy-skill" (
+        [string]::Join(
+            " ",
+            @(
+                (
+                    Resolve-GitLoopyConfig `
+                        -Arguments $LegacyArguments `
+                        -Environment $LegacyEnvironment
+                ).DenySkills
+            )
+        )
+    ) "skill-policy: legacy Skill denials still resolve unchanged"
+
+    # Recognition is not application: the port records the surface and applies
+    # nothing, so a Run that aborts never carried an overlay into the denylists.
+    $OverlayEnvironment = [ordered]@{ XDG_CONFIG_HOME = $PolicyGlobal }
+    Assert-Equal "--disable-skill" (
+        Get-PolicySurfaceLine `
+            -Arguments @("--disable-skill=prototype") `
+            -Environment $OverlayEnvironment
+    ) "skill-policy: the =VALUE overlay form is recognised"
+    Assert-Equal 0 (
+        @(
+            (
+                Resolve-GitLoopyConfig `
+                    -Arguments @("--disable-skill=prototype") `
+                    -Environment $OverlayEnvironment
+            ).DenySkills
+        ).Count
+    ) "skill-policy: a recognised overlay is never applied as a legacy denial"
+}
+finally {
+    if ([IO.Directory]::Exists($PolicyTemp)) {
+        [IO.Directory]::Delete($PolicyTemp, $true)
+    }
+}
+
 # --- Send-timeout watchdog (Wrapper contract §4 real-exit-status + §6) ---------
 # `Invoke-GitLoopyBoundedTurn` bounds one agent turn by the resolved send timeout
 # using pwsh built-ins only (an inner pwsh under a child Process, no jq/timeout(1)

@@ -427,6 +427,72 @@ function Resolve-GitLoopyConfig {
     }
 }
 
+# Decode a TOML *quoted* key's escapes into the characters `tomllib` would
+# resolve them to.
+#
+# `tomllib` reads `"enabled\u005fskills"` as `enabled_skills`, so a Config the
+# Python Orchestrator honours would slip through this port's detector unnoticed
+# if the raw spelling were compared. Unlike the shell port — which cannot use
+# `printf %b` on the Bash 4.0/4.1 it supports and therefore materialises only the
+# ASCII range — .NET can resolve any scalar, so this decodes the full range
+# rather than dropping characters it cannot build. An escape it cannot resolve
+# decodes to nothing, which can only ever *widen* the abort.
+function ConvertFrom-GitLoopyTomlKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Raw
+    )
+
+    $Builder = [Text.StringBuilder]::new()
+    $Index = 0
+    while ($Index -lt $Raw.Length) {
+        $Char = $Raw[$Index]
+        if ($Char -cne [char]0x5C -or $Index + 1 -ge $Raw.Length) {
+            [void]$Builder.Append($Char)
+            $Index++
+            continue
+        }
+
+        $Width = switch -CaseSensitive ([string]$Raw[$Index + 1]) {
+            "u" { 4 }
+            "U" { 8 }
+            default { 0 }
+        }
+        if ($Width -eq 0 -or $Index + 2 + $Width -gt $Raw.Length) {
+            # Every other escape stands for one literal character, and a
+            # truncated one has no scalar to resolve.
+            [void]$Builder.Append($Raw[$Index + 1])
+            $Index += 2
+            continue
+        }
+
+        $Hex = $Raw.Substring($Index + 2, $Width)
+        $Index += 2 + $Width
+        $Scalar = 0
+        if (
+            -not [int]::TryParse(
+                $Hex,
+                [Globalization.NumberStyles]::HexNumber,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$Scalar
+            )
+        ) {
+            continue
+        }
+        if (
+            $Scalar -lt 0 -or
+            $Scalar -gt 0x10FFFF -or
+            ($Scalar -ge 0xD800 -and $Scalar -le 0xDFFF)
+        ) {
+            continue
+        }
+        [void]$Builder.Append([char]::ConvertFromUtf32($Scalar))
+    }
+    return $Builder.ToString()
+}
+
 # Conservative detection of an `enabled_skills` key in one `config.toml`.
 #
 # The PowerShell port has no TOML parser, and this decision only ever *widens
@@ -436,6 +502,9 @@ function Resolve-GitLoopyConfig {
 # under a table that the Python resolver would ignore. Anchoring the match to
 # the start of the trimmed line is what keeps a commented example — including
 # the comment-only banner `write_config` generates — from reading as a policy.
+#
+# A quoted key is decoded before comparison, so a Config the Python Orchestrator
+# honours cannot run wide here on spelling alone.
 function Test-GitLoopyConfigDeclaresEnabledSkills {
     [CmdletBinding()]
     param(
@@ -457,10 +526,24 @@ function Test-GitLoopyConfigDeclaresEnabledSkills {
     }
 
     foreach ($Line in $Lines) {
-        if (
-            $Line.Trim() -cmatch
-            '^(enabled_skills|"enabled_skills"|''enabled_skills'')\s*='
-        ) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -cmatch '^enabled_skills\s*=') {
+            return $true
+        }
+        $Quoted = [regex]::Match(
+            $Trimmed,
+            '^(?:"(?<basic>[^"]*)"|''(?<literal>[^'']*)'')\s*='
+        )
+        if (-not $Quoted.Success) {
+            continue
+        }
+        # Decoding a literal (single-quoted) key too is harmless: TOML gives it
+        # no escapes, and the only possible effect is widening the abort.
+        $Raw = $Quoted.Groups["literal"].Value
+        if ($Quoted.Groups["basic"].Success) {
+            $Raw = $Quoted.Groups["basic"].Value
+        }
+        if ((ConvertFrom-GitLoopyTomlKey -Raw $Raw) -ceq "enabled_skills") {
             return $true
         }
     }
@@ -2927,6 +3010,10 @@ Options:
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
+  --enable-skill SKILL          Closed-world Skill policy; not yet supported by
+                                the PowerShell Orchestrator (fails closed).
+  --disable-skill SKILL         Closed-world Skill policy; not yet supported by
+                                the PowerShell Orchestrator (fails closed).
   --send-timeout-seconds N
   --version
   -h, --help

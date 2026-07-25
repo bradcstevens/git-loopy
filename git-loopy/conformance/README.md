@@ -107,6 +107,12 @@ through it. Its boundary suite drives every surface through the real entrypoint
 and proves the Run exits `1` before Pool collection and before the fake Copilot
 process exists.
 
+The PowerShell adapter reads the same block the same way: its conformance suite
+drives `Get-GitLoopySkillPolicySurfaces` and its boundary suite drives every
+surface through the real entrypoint. Both ports also assert their own name is in
+`fail_closed` and absent from `implemented`, so the day either gains native
+support the stale expectation fails loudly instead of passing by omission.
+
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The
 adapter drives Python's normalized Iteration-rollup seam and the production

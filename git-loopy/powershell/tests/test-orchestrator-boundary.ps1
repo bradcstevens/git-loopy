@@ -2683,6 +2683,27 @@ Start-Sleep -Seconds $Sleep
         Assert-True (-not $Reached) "fail-closed run reached Pool collection for $Label"
     }
 
+    # "Copilot was never invoked" is only an assertion if the fake records being
+    # invoked, so prove the recorder works before relying on its absence.
+    $ProbeBin = Join-Path $TempDir "fail-closed-probe-bin"
+    Write-FailClosedTools -BinDir $ProbeBin
+    $ProbeLog = Join-Path $TempDir "fail-closed-probe.log"
+    $OldCopilotLog = $env:FAKE_COPILOT_LOG
+    try {
+        $env:FAKE_COPILOT_LOG = $ProbeLog
+        # `Write-FakeCommand -DirectPowerShell` lands the fake as `copilot.ps1`
+        # on Windows and as an executable `copilot` elsewhere.
+        $ProbeName = if ($IsWindows) { "copilot.ps1" } else { "copilot" }
+        $ProbeCopilot = Join-Path $ProbeBin $ProbeName
+        & $ProbeCopilot "--probe"
+        Assert-True (
+            [IO.File]::Exists($ProbeLog)
+        ) "the fail-closed Copilot fake records that it ran"
+    }
+    finally {
+        $env:FAKE_COPILOT_LOG = $OldCopilotLog
+    }
+
     foreach (
         $Surface in @($SkillPolicyFixture["native_transition"]["policy_surfaces"])
     ) {
@@ -2711,9 +2732,13 @@ Start-Sleep -Seconds $Sleep
                     -Arguments @("$Surface=tdd")
             }
             "enabled_skills" {
+                # Spelled with a TOML escape `tomllib` resolves to the same key,
+                # so the abort is proven to survive the decode all the way
+                # through the real entrypoint. The global-scope case below
+                # carries the plain spelling.
                 [IO.File]::WriteAllText(
                     (Join-Path $Repo "git-loopy/config.toml"),
-                    "enabled_skills = [`"tdd`"]`n"
+                    "`"enabled\u005fskills`" = [`"tdd`"]`n"
                 )
                 $Result = Invoke-FailClosedEntrypoint `
                     -Repo $Repo -FakeBin $FakeBin -Label $Label
