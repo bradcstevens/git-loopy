@@ -125,6 +125,10 @@ foreach (
         # same production seam the Run loop uses — so per-issue cumulative Active
         # time, retroactive fallback binding, and first-activation identity are
         # pinned across Iterations rather than only inside one rollup call.
+        # Each case is one Run, so it starts from the Run loop's own reset seam:
+        # otherwise a later case inherits an earlier case's per-issue history and
+        # the fixture would pin whatever order the cases happen to appear in.
+        Reset-GitLoopyIterationLifecycleState
         $Actual = [object[]]@(
             foreach ($IterationFacts in $InputFacts["iterations"]) {
                 foreach ($FixtureEvent in $IterationFacts["events"]) {

@@ -247,7 +247,10 @@ Orchestrator rollout tickets own enabling those producers.
   Python serial bindings use `working_marker`, `closure`, `commit`, or `single_member_pool`;
   Parallel Lane pickup uses `lane_pickup`. A later marker or fallback never replaces the first
   binding. Output and Consumption observed before the event remain pending and are attributed
-  when the event arrives.
+  when the event arrives. A record whose `activated_at` is absent or is not a resolvable instant
+  is not a valid activation: it MUST NOT bind, because binding it would republish a
+  non-RFC3339 `first_started_at` on every later Iteration end. The Iteration reports no issue
+  contribution and the Run continues.
 - `agent.output`: `text` and `kind`, where the only schema-1 kind is `unclassified`. Once produced,
   native CLI text MUST NOT be relabeled as SDK reasoning, assistant, tool-call, or tool-result
   data.
