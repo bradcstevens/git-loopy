@@ -313,7 +313,13 @@ function Set-GitLoopyTuiExecutable {
         return
     }
     catch [Management.Automation.MethodException] {
-        & chmod +x $Path
+        $PSNativeCommandUseErrorActionPreference = $false
+        try {
+            & chmod +x $Path
+        }
+        catch {
+            throw (New-GitLoopyTuiInstallError -Message "cannot make $Path executable")
+        }
         if ($LASTEXITCODE -ne 0) {
             throw (New-GitLoopyTuiInstallError -Message "cannot make $Path executable")
         }
@@ -363,6 +369,14 @@ function Expand-GitLoopyTuiArchive {
         # `-xf` rather than `-xJf`: GNU tar and libarchive both detect xz from the
         # stream, and letting them do it keeps one code path for any compression a
         # later Release picks.
+        if ($null -eq (Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)) {
+            throw (New-GitLoopyTuiInstallError -Message (
+                    "tar is required to unpack $ArchiveName"
+                ))
+        }
+        # The exit code is the answer here and is checked, so the native-command
+        # preference is pinned rather than inherited from the calling script.
+        $PSNativeCommandUseErrorActionPreference = $false
         & tar -xf $Archive -C $Destination 2>$null
         if ($LASTEXITCODE -ne 0) {
             throw (New-GitLoopyTuiInstallError -Message "cannot unpack $ArchiveName")

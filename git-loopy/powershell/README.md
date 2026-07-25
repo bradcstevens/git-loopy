@@ -88,17 +88,21 @@ it from the repo root:
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/git-loopy.ps1
 ```
 
-### Optional: put `git-loopy` on your PATH
+### Optional: `install.ps1` — the launcher and the live interface
 
-`install.ps1` writes a small launcher shim (it installs **nothing else** — no
-Python, no TUI helper, no package manager) that runs this clone's
-`git-loopy.ps1`. On Windows it writes a `git-loopy.cmd`; on Linux and macOS a
-`git-loopy` script with a `pwsh` shebang:
+`install.ps1` installs the two halves of this clone's distribution: a small
+launcher shim on your `PATH` that runs this clone's `git-loopy.ps1`, and the
+`git-loopy-tui` helper this clone's Release pins, staged into `.git-loopy/bin/`
+where the Orchestrator looks for it first. On Windows the shim is a
+`git-loopy.cmd`; on Linux and macOS it is a `git-loopy` script with a `pwsh`
+shebang.
 
 ```powershell
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1     # default bin dir
 # or choose the directory:
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1 -BinDir ~/bin
+# launcher only — Runs stay in plain mode:
+pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1 -NoTui
 ```
 
 Then, from inside any git repository:
@@ -110,7 +114,50 @@ git-loopy
 The default install directory is `~\bin` on Windows and `$XDG_BIN_HOME` (else
 `~/.local/bin`) on Linux and macOS; the installer prints a `PATH` hint if it
 isn't already on `PATH`. To uninstall, delete the shim (`git-loopy.cmd` or
-`git-loopy`). Move the clone? Re-run `install.ps1`.
+`git-loopy`) and the staged helper (`.git-loopy/bin`). Move the clone? Re-run
+`install.ps1`.
+
+**The helper is the only thing `install.ps1` downloads, and a Run never downloads
+anything at all.** An air-gapped host installs from files it already has, and the
+published checksum manifest is required either way:
+
+```powershell
+pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1 `
+  -TuiArchive  ~/artifacts/git-loopy-tui-x86_64-pc-windows-msvc.zip `
+  -TuiChecksum ~/artifacts/git-loopy-tui-x86_64-pc-windows-msvc.zip.sha256
+```
+
+**What the helper has to prove before it replaces anything**, in order:
+
+1. it is the artifact your OS and architecture publish, chosen from the shared
+   [`tui-artifacts.json`](../conformance/tui-artifacts.json) — a platform this
+   Release defers (Windows arm64, 32-bit ARM Linux) says so by name;
+2. its **published SHA-256 checksum** matches, over both the digest and the
+   filename the manifest names;
+3. `git-loopy-tui --version` reports this clone's **exact** Release version
+   (Wrapper contract
+   [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must));
+4. `git-loopy-tui --schema-version` reports an Event-schema range containing the
+   version this port emits.
+
+Only then is it renamed into place, from a staging directory beside the
+destination — so activation is a single atomic rename and never a partially
+written file in the slot a Run searches. On Windows the staged file is
+`git-loopy-tui.exe`, because that is the name the Release publishes and the name
+discovery looks for there.
+
+**A failed installation costs you nothing.** Selection, download, checksum,
+extraction, and probe failures all leave a previously installed helper exactly as
+it was and leave nothing behind. The command exits non-zero, because you asked
+for a helper and did not get one, and says that `git-loopy` still runs in plain
+mode without it.
+
+### Upgrading
+
+Pull the clone and re-run `install.ps1`. The Release version the helper must
+report comes from the clone's `VERSION`, so a clone that moved to a new Release
+refuses the old helper until you re-run the installer — which is also what the
+Orchestrator's own startup diagnostic tells you.
 
 ---
 
@@ -247,7 +294,7 @@ auto-detect**, matching the Python member and the shell port:
 
 | Rank | Source | Path |
 | --- | --- | --- |
-| 1 | clone-local | `<repo>/.git-loopy/bin/git-loopy-tui` ([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md#decision)) |
+| 1 | clone-local | `<repo>/.git-loopy/bin/git-loopy-tui` ([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md#decision)) — what [`install.ps1`](#optional-installps1--the-launcher-and-the-live-interface) stages |
 | 2 | `PATH` | the first `git-loopy-tui` on your `PATH` |
 
 On Windows the `.exe`, `.com`, `.cmd`, and `.bat` extensions are tried in that

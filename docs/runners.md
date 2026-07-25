@@ -69,14 +69,14 @@ delivered in later phases, sequenced value-first
   version, URL, host, digest, or coverage that is not this Release's. A
   `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
   one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
-  The PowerShell port and the `winget`/`scoop` channels are still to come; until a
+  The `winget`/`scoop` channels are still to come; until a
   helper is present or selected, the native ports stream plain text and run in
-  place from the clone. The shell port's `install.sh` now installs both halves of
-  its distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
-  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — with
-  `--no-tui` for the launcher alone and `--tui-archive`/`--tui-checksum` for an
-  air-gapped host. `install.ps1` still adds only the launcher (no Python, no TUI
-  helper, no package manager). A Run itself never downloads or updates software.
+  place from the clone. Both native installers now install both halves of their
+  distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
+  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — the shell
+  port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
+  `install.ps1` with `-NoTui` / `-TuiArchive` / `-TuiChecksum` on Windows, Linux,
+  and macOS. A Run itself never downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the
