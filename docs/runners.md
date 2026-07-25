@@ -44,10 +44,16 @@ delivered in later phases, sequenced value-first
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
   binary renders the Event schema for the shell and PowerShell ports (the Python
   member already has its Textual Dashboard), plus prebuilt binaries and
-  **package-manager distribution** (Homebrew, `winget`/`scoop`). Until it lands,
-  the native ports stream plain text and run in place from the clone — an
-  optional `install.sh` / `install.ps1` only adds a `git-loopy` launcher to your
-  `PATH` (no Python, no TUI helper, no package manager).
+  **package-manager distribution** (Homebrew, `winget`/`scoop`). The shell
+  Orchestrator now **supervises** that helper — selection precedence, clone-local
+  then `PATH` discovery, the `--schema-version` compatibility gate, and a
+  permanent fall back to plain JSONL on any helper failure — see
+  [its README](../git-loopy/shell/README.md#the-live-interface-git-loopy-tui).
+  The PowerShell port and package-manager distribution are still to come; until a
+  helper is present or selected, the native ports stream plain text and run in
+  place from the clone, and an optional `install.sh` / `install.ps1` only adds a
+  `git-loopy` launcher to your `PATH` (no Python, no TUI helper, no package
+  manager).
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the

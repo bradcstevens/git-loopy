@@ -159,6 +159,8 @@ set **union** of their CLI and env values, not an override.
 | `GIT_LOOPY_DENY_TOOLS` | `--deny-tool TOOL` (repeatable) | empty | Tools to deny the agent (union). |
 | `GIT_LOOPY_DENY_SKILLS` | `--deny-skill SKILL` (repeatable) | empty | Skills to deny the agent (union). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS` | `--send-timeout-seconds N` | `7200` | Per-Iteration agent turn timeout. |
+| `GIT_LOOPY_INTERACTIVE` | `--interactive` / `--no-interactive` | auto (on only when stdout is a TTY) | Render the Run through the shared `git-loopy-tui` helper. |
+| `GIT_LOOPY_TUI_GRACE_SECONDS` | — | `5` | How long Run-end waits for the helper to exit on its own before signalling it. |
 
 This is the phase-1 core of the shared
 [environment surface](../../docs/wrapper-contract.md#11-environment-variable-surface-must-honour-the-phase-1-core);
@@ -203,9 +205,63 @@ same lines to a replay log:
 Secrets are scrubbed before a line is written. The Orchestrator keeps
 `.git-loopy/` in your repo's `.gitignore` so these artifacts never land in a
 commit or Checkpoint. The event vocabulary is pinned in Wrapper contract
-[§12](../../docs/wrapper-contract.md#12-event-schema-phase-1-must). (Live
-rendering of this stream — the shared `git-loopy-tui` — is phase 2; phase 1 is
-plain text.)
+[§12](../../docs/wrapper-contract.md#12-event-schema-phase-1-must).
+
+The replay log is written **first and unconditionally**, before the line is
+handed to whatever is rendering it. It is the authoritative record of a Run: it
+is complete whether the Run was plain-text or live, and whether the live helper
+survived the Run or not.
+
+---
+
+## The live interface (`git-loopy-tui`)
+
+The shared `git-loopy-tui` helper renders the same Event stream as a live
+terminal interface. This port **supervises** it; it does not implement it. Plain
+JSONL on stdout is the baseline and is always what you fall back to.
+
+**Whether to go interactive** resolves as **CLI flag > `GIT_LOOPY_INTERACTIVE` >
+auto-detect**, matching the Python member:
+
+- `--interactive` / `--no-interactive` decide it outright.
+- `GIT_LOOPY_INTERACTIVE` decides it when no flag was passed. `1`/`true`/`yes`/`on`
+  are on; any other non-blank value is off. A blank value is not a decision.
+- Otherwise it is on only when stdout is a terminal — so pipes, redirects, CI,
+  and `--parallel` Lanes stay plain text without being told to.
+
+**Which helper runs** is resolved in one order, and the first hit wins:
+
+| Rank | Source | Path |
+| --- | --- | --- |
+| 1 | clone-local | `<repo>/.git-loopy/bin/git-loopy-tui` ([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md#decision)) |
+| 2 | `PATH` | the first `git-loopy-tui` on your `PATH` |
+
+A clone-local helper is part of *this clone's* packaged distribution, so Wrapper
+contract [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must)
+requires exact Release-version equality: on drift it is **refused** and the Run
+continues in plain text. A helper found on `PATH` is a separate installation, so
+Release drift only earns a **warning** and it still runs. Release equality is
+never the compatibility authority in either case — that is the probe.
+
+**The probe is the gate.** Before anything takes over the terminal, the helper is
+run as `git-loopy-tui --schema-version` and must report an Event-schema range
+that contains the version this port emits. A helper that fails the probe is never
+started, so an incompatible one cannot leave your terminal in a half-drawn state.
+
+**Delivery is one flushed JSON object per line on the helper's stdin** — the same
+lines, in the same order, as the replay log.
+
+**A live interface never fails a Run.** Anything that goes wrong with the helper —
+not found, probe failure, refused Release, failing to start, dying mid-Run,
+stopping reading — produces exactly **one** diagnostic on stderr, permanently
+reverts the Run to plain JSONL on stdout, and leaves the exit code alone. The
+helper is never respawned inside a Run: a second start would mean a second
+terminal takeover and a stream with a hole in it.
+
+**Run-end closes the helper's stdin** as the cue to draw its final frame and
+restore the terminal, waits `GIT_LOOPY_TUI_GRACE_SECONDS` (default `5`) for it to
+exit on its own, then signals and reaps it. The Run's exit code is decided before
+teardown and is never changed by it.
 
 ---
 

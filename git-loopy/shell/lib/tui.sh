@@ -170,12 +170,9 @@ git_loopy_tui_start() {
     return 1
   fi
 
-  # A write to a child that has already exited must return EPIPE so the fallback
-  # can run; the default SIGPIPE disposition would kill the Orchestrator instead.
-  trap '' PIPE
-
   _GIT_LOOPY_TUI_PID="$pid"
   _GIT_LOOPY_TUI_FIFO_DIR="$fifo_dir"
+  # shellcheck disable=SC2034  # read by the boundary suite and by diagnostics
   GIT_LOOPY_TUI_HELPER_PATH="$helper"
   GIT_LOOPY_TUI_ACTIVE=1
   GIT_LOOPY_LIVE_SINK="git_loopy_tui_live_sink"
@@ -209,8 +206,20 @@ git_loopy_tui_live_sink() {
     return 0
   fi
 
-  if ! eval "printf '%s\n' \"\$line\" >&$_GIT_LOOPY_TUI_FD" 2>/dev/null; then
-    git_loopy_tui_fallback "the $GIT_LOOPY_TUI_COMMAND_NAME helper stopped reading the Event stream"
+  # SIGPIPE is ignored *only* across the write itself. Ignoring it for the whole
+  # Run would be inherited through `exec` by the agent process and every tool it
+  # starts, quietly changing how they behave on a closed pipe; a Run's live
+  # interface has no business reaching that far.
+  local delivered=0
+  trap '' PIPE
+  if eval "printf '%s\n' \"\$line\" >&$_GIT_LOOPY_TUI_FD" 2>/dev/null; then
+    delivered=1
+  fi
+  trap - PIPE
+
+  if ((delivered == 0)); then
+    git_loopy_tui_fallback \
+      "the $GIT_LOOPY_TUI_COMMAND_NAME helper stopped reading the Event stream"
     git_loopy_live_sink_stdout "$line"
     return 0
   fi
@@ -234,6 +243,7 @@ git_loopy_tui_finish() {
 
   if [[ -n "$_GIT_LOOPY_TUI_PID" ]]; then
     GIT_LOOPY_TUI_ACTIVE=0
+    # shellcheck disable=SC2034  # consumed by git_loopy_emit_event in events.sh
     GIT_LOOPY_LIVE_SINK="git_loopy_live_sink_stdout"
     _git_loopy_tui_close_fd
 
@@ -260,7 +270,6 @@ git_loopy_tui_finish() {
     rm -rf "$_GIT_LOOPY_TUI_FIFO_DIR"
     _GIT_LOOPY_TUI_FIFO_DIR=""
   fi
-  trap - PIPE
   return 0
 }
 
@@ -318,6 +327,7 @@ git_loopy_tui_begin() {
     return 0
   fi
 
+  # shellcheck disable=SC2034  # read by the boundary suite and by diagnostics
   GIT_LOOPY_TUI_HELPER_SOURCE="$helper_source"
   if ! git_loopy_tui_start "$helper"; then
     _git_loopy_tui_warn \
