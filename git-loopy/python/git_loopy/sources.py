@@ -61,10 +61,29 @@ __all__ = [
     "Completion",
     "IssueSource",
     "GitHubIssueSource",
+    "MembershipSnapshot",
+    "Pickup",
+    "PoolCandidate",
     "PrdsIssueSource",
+    "RollingIssueSource",
+    "LABEL_PARALLEL_SAFE",
+    "LABEL_READY_FOR_AGENT",
+    "PICKUP_STALE",
+    "PICKUP_UNAVAILABLE",
+    "PICKUP_VALIDATED",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
+
+# The two human triage assertions Rolling dispatch reads. Both are labels and
+# neither is ever inferred (ADR-0008, CONTEXT.md "Parallel-safe").
+LABEL_READY_FOR_AGENT: str = "ready-for-agent"
+LABEL_PARALLEL_SAFE: str = "parallel-safe"
+
+# Pickup outcomes (#219 §2.10-2.11).
+PICKUP_VALIDATED: str = "validated"
+PICKUP_STALE: str = "stale"
+PICKUP_UNAVAILABLE: str = "unavailable"
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
 # Body must contain BOTH ``^## What to build`` and ``^## Acceptance
@@ -187,6 +206,97 @@ class Completion:
     sha: str
     shas: tuple[str, ...] = ()
     kind: str = "issue"
+
+
+@dataclass(frozen=True)
+class PoolCandidate:
+    """One shallow **Pool** membership record, cheap enough to refresh often.
+
+    **Rolling dispatch** (#219 §2) reconciles its candidate cache from
+    membership alone and pays the authoritative per-issue read only at Lane
+    pickup. A candidate is therefore *not* an :class:`AfkReadyItem` — it has no
+    rendered block and no comments, and nothing may be dispatched from it
+    without a :meth:`RollingIssueSource.pickup` first.
+
+    Attributes:
+        ref: Source-native identifier, matching :attr:`AfkReadyItem.ref`.
+        title: Display title, for diagnostics and the **Dashboard** **Queue**.
+        labels: The item's labels — the carrier of the human **Parallel-safe**
+            assertion. Eligibility is read from here, never inferred.
+    """
+
+    ref: int | str
+    title: str
+    labels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MembershipSnapshot:
+    """One shallow membership read plus whether it is authoritative.
+
+    Attributes:
+        candidates: The AFK-shaped candidates read, in source order.
+        complete: ``True`` only when the read paginated to completion and did
+            not fail. An incomplete snapshot is still usable for *reconciling*
+            survivors, but per #219 §2.13 it may never establish that the
+            **Pool** is empty — so the flag travels with the data rather than
+            being reconstructed by a caller comparing lengths.
+    """
+
+    candidates: tuple[PoolCandidate, ...]
+    complete: bool
+
+
+@dataclass(frozen=True)
+class Pickup:
+    """The result of the targeted read taken immediately before Lane reservation.
+
+    #219 §2.10-2.11 distinguish three outcomes, and the distinction is
+    load-bearing: a *stale* candidate is dropped from the cache outright, while
+    an *unavailable* one is quarantined and retried later — collapsing them
+    would either lose recoverable work or spin forever on a closed issue.
+
+    Attributes:
+        outcome: ``"validated"``, ``"stale"``, or ``"unavailable"``.
+        item: The enriched, dispatchable :class:`AfkReadyItem` — populated only
+            when ``outcome == "validated"``.
+    """
+
+    outcome: str
+    item: AfkReadyItem | None = None
+
+    @property
+    def validated(self) -> bool:
+        """``True`` iff this pickup may be dispatched into a **Lane**."""
+        return self.outcome == PICKUP_VALIDATED
+
+
+@runtime_checkable
+class RollingIssueSource(Protocol):
+    """The two extra operations **Rolling dispatch** needs from a source.
+
+    Deliberately separate from :class:`IssueSource`: the local-markdown backend
+    has no **Parallel-safe** assertion to read and never participates in
+    **Rolling dispatch**, so requiring these of every source would force a
+    meaningless implementation. A scheduler asks
+    ``isinstance(source, RollingIssueSource)`` before offering Parallel mode.
+
+    The split between the two methods is the whole point of #219 §2: membership
+    is cheap and refreshed continuously, authority is expensive and paid once
+    per Lane reservation.
+    """
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        """Read current candidate membership without per-issue enrichment.
+
+        Never raises for a source failure — a failure is reported as an
+        incomplete snapshot so the caller retains its last complete one.
+        """
+        ...
+
+    def pickup(self, ref: int | str) -> Pickup:
+        """Re-read one candidate authoritatively immediately before reservation."""
+        ...
 
 
 @runtime_checkable
@@ -376,6 +486,84 @@ class GitHubIssueSource:
         if self._include_prs:
             items.extend(self._collect_afk_ready_prs())
         return items
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        """Read AFK-shaped ``ready-for-agent`` membership with no enrichment.
+
+        One paginated list call. Nothing is viewed per-issue, so a **Rolling
+        dispatch** refresh costs a single round-trip however large the **Pool**
+        is; the authoritative read is deferred to :meth:`pickup`.
+
+        A list failure returns an *incomplete empty* snapshot rather than
+        raising or returning a clean empty one — #219 §2.12-2.13 require the
+        caller to retain its last complete snapshot and forbid a failed refresh
+        from establishing emptiness.
+        """
+        try:
+            page = self._gh.issue_list_membership(LABEL_READY_FOR_AGENT)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh issue list (membership refresh) failed: %s; "
+                "retaining last complete snapshot",
+                exc,
+            )
+            return MembershipSnapshot(candidates=(), complete=False)
+
+        candidates = tuple(
+            PoolCandidate(
+                ref=issue.number,
+                title=issue.title,
+                labels=tuple(issue.labels),
+            )
+            for issue in page.issues
+            if is_afk_ready(issue.body or "")
+        )
+        return MembershipSnapshot(candidates=candidates, complete=page.complete)
+
+    def pickup(self, ref: int | str) -> Pickup:
+        """Re-read ``ref`` authoritatively and render it for dispatch.
+
+        Applies #219 §2.10 verbatim: the issue must still be open, still carry
+        ``ready-for-agent`` *and* ``parallel-safe``, and still satisfy the
+        AFK-ready body discriminator. The same read supplies the comments and
+        rendered prompt block, so a **Lane** never dispatches from membership
+        that a cheap refresh happened to observe some seconds ago.
+
+        Returns:
+            A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
+            ``"stale"`` (no longer qualifies — drop it from the cache), or
+            ``"unavailable"`` (the read itself failed — quarantine and retry).
+        """
+        if not isinstance(ref, int):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            full = self._gh.issue_view(ref)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh issue view #%s during pickup failed: %s; quarantining candidate",
+                ref,
+                exc,
+            )
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        labels = tuple(full.labels)
+        if (
+            full.state.upper() != "OPEN"
+            or LABEL_READY_FOR_AGENT not in labels
+            or LABEL_PARALLEL_SAFE not in labels
+            or not is_afk_ready(full.body or "")
+        ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        return Pickup(
+            outcome=PICKUP_VALIDATED,
+            item=AfkReadyItem(
+                ref=full.number,
+                title=full.title,
+                rendered_block=_format_github_issue_block(full),
+                labels=labels,
+            ),
+        )
 
     def _collect_afk_ready_prs(self) -> list[AfkReadyItem]:
         """Fetch the AFK-ready PR pool (``ready-for-agent`` + agent brief).

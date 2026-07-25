@@ -80,6 +80,7 @@ __all__ = [
     "Repo",
     "Comment",
     "Issue",
+    "IssueListPage",
     "PullRequest",
     "GitHubClient",
     "SubprocessGitHubClient",
@@ -97,6 +98,14 @@ __all__ = [
 
 _GH_BIN: Final[str] = "gh"
 _STDERR_TAIL_LIMIT: Final[int] = 400
+
+# Shallow-membership pagination bounds (#219 §2.8). The first read asks for
+# ``_MEMBERSHIP_PAGE_LIMIT``; each ambiguous full page doubles the ask until a
+# short page proves completeness or ``_MEMBERSHIP_MAX_LIMIT`` is reached, at
+# which point the snapshot is reported incomplete rather than silently
+# truncated.
+_MEMBERSHIP_PAGE_LIMIT: Final[int] = 100
+_MEMBERSHIP_MAX_LIMIT: Final[int] = 1600
 
 
 class GhError(RuntimeError):
@@ -191,6 +200,31 @@ class Issue:
     state: str
     url: str
     comments: tuple[Comment, ...] = field(default=())
+
+
+@dataclass(frozen=True)
+class IssueListPage:
+    """One shallow issue-list read plus whether it paginated to completion.
+
+    **Rolling dispatch** (#219 §2) refreshes candidate **Pool** membership
+    without paying the per-issue ``issue_view`` round-trip, and must never
+    let a truncated read establish final emptiness. A plain ``list[Issue]``
+    cannot say "there may be more" — so the shallow reader returns this pair
+    and the caller decides what an incomplete snapshot may be used for.
+
+    Attributes:
+        issues: The issues read, in the order ``gh`` returned them (source
+            order). ``comments`` is empty on every one, exactly as
+            :meth:`GitHubClient.issue_list` leaves it.
+        complete: ``True`` only when the read is provably exhaustive — the
+            adapter saw a page shorter than the limit it asked for. ``False``
+            means the read hit its ceiling and more issues may exist; the
+            issues it did return are still usable, but emptiness may not be
+            concluded from them.
+    """
+
+    issues: tuple[Issue, ...]
+    complete: bool
 
 
 @dataclass(frozen=True)
@@ -490,6 +524,19 @@ class GitHubClient(Protocol):
 
     def issue_list(self, label: str, state: str = "open") -> list[Issue]:
         """List issues filtered by ``label`` / ``state`` (``comments`` left empty)."""
+        ...
+
+    def issue_list_membership(
+        self, label: str, state: str = "open"
+    ) -> IssueListPage:
+        """Read shallow issue membership, paginating to completion.
+
+        The **Rolling dispatch** candidate refresh (#219 §2) needs the same
+        cheap list :meth:`issue_list` performs, but must be able to tell a
+        genuinely exhausted read from a truncated one — an incomplete read may
+        not establish that the **Pool** is empty. Returns an
+        :class:`IssueListPage` carrying both.
+        """
         ...
 
     def issue_view(self, number: int) -> Issue:
@@ -1214,6 +1261,64 @@ class SubprocessGitHubClient:
                 f"expected JSON array from gh issue list, got {type(parsed).__name__}",
             )
         return [_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed]
+
+    def issue_list_membership(
+        self, label: str, state: str = "open"
+    ) -> IssueListPage:
+        """Read shallow issue membership, paginating to completion.
+
+        ``gh issue list`` pages internally up to whatever ``--limit`` asks for,
+        so completeness is provable by the returned length: a page *shorter*
+        than the requested limit means the server had nothing more to give.
+        A page exactly at the limit is ambiguous, so the reader asks again with
+        a doubled limit until either the page comes back short (complete) or
+        the ceiling is reached (incomplete — the caller must not conclude the
+        **Pool** is empty from it, per #219 §2.13).
+
+        The field set is deliberately identical to :meth:`issue_list`: identity,
+        source order, title, state, labels, and the body the AFK-ready shape
+        discriminator reads. No comments, no per-issue round-trip.
+
+        Args:
+            label: A single label name.
+            state: ``"open"``, ``"closed"``, or ``"all"``.
+
+        Returns:
+            An :class:`IssueListPage` whose ``complete`` flag says whether the
+            read is provably exhaustive.
+
+        Raises:
+            GhError: On any subprocess or parse failure.
+        """
+        limit = _MEMBERSHIP_PAGE_LIMIT
+        while True:
+            cmd = [
+                "issue",
+                "list",
+                "--state",
+                state,
+                "--label",
+                label,
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,body,labels,state,url",
+            ]
+            raw = _run(cmd)
+            parsed = _parse_json(raw, [_GH_BIN, *cmd])
+            if not isinstance(parsed, list):
+                raise GhError(
+                    [_GH_BIN, *cmd],
+                    0,
+                    "expected JSON array from gh issue list, got "
+                    f"{type(parsed).__name__}",
+                )
+            issues = tuple(_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed)
+            if len(issues) < limit:
+                return IssueListPage(issues=issues, complete=True)
+            if limit >= _MEMBERSHIP_MAX_LIMIT:
+                return IssueListPage(issues=issues, complete=False)
+            limit *= 2
 
     def issue_view(self, number: int) -> Issue:
         """Fetch one issue including its comments.
