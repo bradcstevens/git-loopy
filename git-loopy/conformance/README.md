@@ -47,12 +47,13 @@ byte-order-mark rejection — through their public native `publish` command.
 Shell and PowerShell also drive the shared immutable-revision trust,
 observation, DAG, race, fork, quarantine, re-attestation, and `repair-index`
 scenarios through native commands and their deterministic scripted GitHub
-transports. Shell additionally drives the live prospective Reconciliation
+transports. Shell and PowerShell also drive the live prospective Reconciliation
 fixtures for typed stable reads, every v1 condition, Ready/Blocked derivation,
 smallest-scope uncertainty, equivalent-claim provenance, incompatible Action
-semantics, and Prerequisite cycles; its production-boundary probe traverses
-complete issue and comment pagination without treating the discovery label as
-authority.
+semantics, and Prerequisite cycles; each port's production-boundary probe
+traverses complete issue and comment pagination without treating the discovery
+label as authority, and must reproduce the same shared Reconciliation result
+once the extra pages carry only unindexed carriers and ordinary discussion.
 
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root
