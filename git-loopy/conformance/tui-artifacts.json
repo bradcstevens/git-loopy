@@ -51,7 +51,7 @@
       "os": "macos",
       "arch": "x64",
       "libc": null,
-      "runner": "macos-13",
+      "runner": "macos-15-intel",
       "build": "native"
     },
     {

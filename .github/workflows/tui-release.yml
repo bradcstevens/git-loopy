@@ -74,7 +74,7 @@ jobs:
             runner: macos-14
             build: native
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-15-intel
             build: native
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
