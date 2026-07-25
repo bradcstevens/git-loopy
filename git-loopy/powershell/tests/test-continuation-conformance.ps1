@@ -661,6 +661,128 @@ function Assert-GitLoopyRejection {
     ) "$Id reached GitHub before rejection"
 }
 
+# The shared live-frontier fixtures fit on one issue page and one comment page,
+# so only a production-boundary probe can prove that complete all-state
+# discovery traverses every page. Extra pages that carry nothing but unindexed
+# carriers and ordinary discussion must reproduce the fixture's Reconciliation
+# result exactly; stopping early would report an optimistic empty frontier.
+function Test-ReconciliationPagination {
+    $Scenario = @(
+        $Fixture["scenarios"] |
+            Where-Object {
+                $_["id"] -ceq "missing-index-label-does-not-hide-revision"
+            }
+    )
+    Assert-True ($Scenario.Count -eq 1) (
+        "paginated Reconciliation reuses one shared live-frontier fixture"
+    )
+    $Scenario = $Scenario[0]
+    $Steps = @($Scenario["github_script"])
+    $IssueStep = $Steps[0]
+    $CommentStep = $Steps[1]
+
+    $FirstIssuePage = [Collections.Generic.List[object]]::new()
+    foreach ($Number in 1000..1099) {
+        $FirstIssuePage.Add([ordered]@{
+            number = $Number
+            state = "open"
+            html_url = "https://github.com/octo/example/issues/$Number"
+            labels = @()
+            comments = 0
+        })
+    }
+    $CarrierIssue = Copy-GitLoopyDeepValue @($IssueStep["stdout_json"])[0]
+    $CarrierIssue["comments"] = 101
+
+    $FirstCommentPage = [Collections.Generic.List[object]]::new()
+    foreach ($CommentId in 8000..8099) {
+        $FirstCommentPage.Add([ordered]@{
+            id = $CommentId
+            html_url = (
+                "https://github.com/octo/example/issues/237" +
+                "#issuecomment-$CommentId"
+            )
+            body = "Ordinary issue discussion."
+            user = [ordered]@{ login = "maintainer"; type = "User" }
+            created_at = "2026-07-22T19:00:00Z"
+            updated_at = "2026-07-22T19:00:00Z"
+        })
+    }
+
+    $GithubScript = [Collections.Generic.List[object]]::new()
+    $GithubScript.Add([ordered]@{
+        command = $IssueStep["command"]
+        exit_code = $IssueStep["exit_code"]
+        stdout_json = $FirstIssuePage.ToArray()
+    })
+    $GithubScript.Add([ordered]@{
+        command = "api repos/octo/example/issues?state=all&per_page=100&page=2"
+        exit_code = $IssueStep["exit_code"]
+        stdout_json = @($CarrierIssue)
+    })
+    $GithubScript.Add([ordered]@{
+        command = $CommentStep["command"]
+        exit_code = $CommentStep["exit_code"]
+        stdout_json = $FirstCommentPage.ToArray()
+    })
+    $GithubScript.Add([ordered]@{
+        command = (
+            "api repos/octo/example/issues/237/comments?per_page=100&page=2"
+        )
+        exit_code = $CommentStep["exit_code"]
+        stdout_json = @($CommentStep["stdout_json"])
+    })
+    foreach ($Step in $Steps[2..($Steps.Count - 1)]) {
+        $GithubScript.Add($Step)
+    }
+
+    $Transport = [ordered]@{
+        GithubLog = Join-Path $TempRoot "reconciliation-pagination-github.log"
+        ScriptPath = Join-Path $TempRoot "reconciliation-pagination-script.json"
+        StatePath = Join-Path $TempRoot "reconciliation-pagination-state"
+    }
+    [IO.File]::WriteAllText(
+        $Transport["ScriptPath"],
+        (
+            ConvertTo-Json `
+                -InputObject $GithubScript.ToArray() `
+                -Compress `
+                -Depth 50
+        ),
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        $Transport["GithubLog"],
+        "",
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::Delete($Transport["StatePath"])
+
+    $Case = [ordered]@{
+        id = "reconciliation-pagination"
+        arguments = $Scenario["arguments"]
+        request = $Scenario["request"]
+    }
+    $Result = Invoke-Scenario -Scenario $Case -Transport $Transport
+    Assert-ScenarioResult `
+        -Id "reconciliation-pagination" `
+        -Result $Result `
+        -Expected $Scenario["expected"]
+
+    $ExpectedCalls = @($GithubScript | ForEach-Object { [string]$_["command"] })
+    Assert-True (
+        ($Result.GithubCalls | ConvertTo-Json -Compress) -ceq
+            ($ExpectedCalls | ConvertTo-Json -Compress)
+    ) (
+        "paginated Reconciliation consumed every issue and comment page; " +
+        "expected: $($ExpectedCalls | ConvertTo-Json -Compress); " +
+        "actual: $($Result.GithubCalls | ConvertTo-Json -Compress)"
+    )
+    Assert-True (
+        $Result.ConsumedSteps -eq $GithubScript.Count
+    ) "paginated Reconciliation consumed every scripted GitHub call"
+}
+
 function Test-CompletionSemanticRejections {
     foreach ($Case in $Fixture["completion_records"]["semantic_rejections"]) {
         $Request = Get-GitLoopyMaterializedRequest -Case $Case
@@ -1092,6 +1214,7 @@ try {
             $ReleaseFixture["expected_release_version"]
     ) "PowerShell Continuation capabilities match the shared Release version"
     Test-GitHubFailureBoundaries
+    Test-ReconciliationPagination
     Test-CompletionSemanticRejections
     Test-CanonicalJsonRejections
     Test-CanonicalJsonAcceptances
