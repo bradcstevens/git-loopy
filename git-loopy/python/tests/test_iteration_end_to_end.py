@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,20 +53,24 @@ from copilot import CopilotClient
 from copilot.generated.session_events import (
     AssistantMessageData,
     AssistantUsageData,
+    PermissionRequestCustomTool,
     SessionEvent,
     SessionEventType,
     SessionUsageInfoData,
     ToolExecutionStartData,
 )
 
+from git_loopy import cli
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
+from git_loopy import settings
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.pricing import Pricing
+from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.ui import RunSummary
@@ -211,11 +216,15 @@ def _make_issue(
     )
 
 
+def _log_lines(tmp_path: Path) -> list[str]:
+    """Return the raw JSONL lines the run logged, in order."""
+    logs_dir = tmp_path / ".git-loopy" / "logs"
+    return next(logs_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+
+
 def _logged_types(tmp_path: Path) -> list[str]:
     """Return the ordered ``type`` of every JSONL event the run logged."""
-    logs_dir = tmp_path / ".git-loopy" / "logs"
-    lines = next(logs_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
-    return [json.loads(raw)["type"] for raw in lines]
+    return [json.loads(raw)["type"] for raw in _log_lines(tmp_path)]
 
 
 @pytest.fixture(autouse=True)
@@ -1833,3 +1842,236 @@ def test_loop_emit_fans_scrubbed_envelope_to_sink_via_emitter(tmp_path) -> None:
         .splitlines()
     ]
     assert log_lines[-1] == received
+
+
+# ---------------------------------------------------------------------------
+# Persisted closed-world Skill policy, end to end (issue #227)
+# ---------------------------------------------------------------------------
+
+
+class _SkillExposureRecordingClient(FakeCopilotClient):
+    """A client that observes the Run-scoped Skill exposure while it is live.
+
+    The exposure is materialized into a Run-scoped temporary workspace that is
+    torn down before :func:`git_loopy.loop.run` returns, so a test that only
+    inspects ``create_calls`` afterwards can prove nothing about what the SDK
+    was actually handed. This records the live directory and the permission
+    handler at session creation instead.
+    """
+
+    def __init__(self, scripted_events: list[SessionEvent]) -> None:
+        super().__init__(scripted_events)
+        self.exposure_dirs: list[Path] = []
+        self.exposed_names: list[list[str]] = []
+        self.permission_handlers: list[Any] = []
+
+    async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+        directory = Path(kwargs["skill_directories"][0])
+        self.exposure_dirs.append(directory)
+        self.exposed_names.append(sorted(path.name for path in directory.iterdir()))
+        self.permission_handlers.append(kwargs["on_permission_request"])
+        return await super().create_session(**kwargs)
+
+
+def _write_project_skill(skills_root: Path, name: str) -> Path:
+    """Write one project Skill document and return its directory."""
+    skill = skills_root / name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {name} description\n---\n# {name}\n",
+        encoding="utf-8",
+    )
+    return skill
+
+
+def _persisted_policy_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """Lay out a repo whose Config enables one of two tracked project Skills."""
+    skills_root = tmp_path / ".copilot" / "skills"
+    enabled = _write_project_skill(skills_root, "team-review")
+    withheld = _write_project_skill(skills_root, "team-deploy")
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text(
+        "---\nrequired-skills:\n  - tdd\n---\nYou are ralph.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "git-loopy" / "config.toml").write_text(
+        'model = "claude-opus-4.7-xhigh"\n'
+        'issue_source = "github"\n'
+        'enabled_skills = ["team-review", "tdd"]\n',
+        encoding="utf-8",
+    )
+    return enabled, withheld
+
+
+def _wire_persisted_policy_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    tracked: tuple[Path, ...],
+) -> _SkillExposureRecordingClient:
+    """Wire the git / gh / SDK seams for a Run driven from a persisted Config."""
+    fake_git = FakeGitClient(
+        tmp_path,
+        commits=[
+            git_module.Commit(
+                sha="0000000000000000000000000000000000000001",
+                subject="prior commit",
+                body="",
+                date="2026-05-16",
+            )
+        ],
+        tracked_paths=tracked,
+    )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42)],
+        ),
+    )
+    fake_client = _SkillExposureRecordingClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    return fake_client
+
+
+def _run_from_persisted_config(tmp_path: Path) -> tuple[int, RunConfig]:
+    """Resolve the Config exactly as ``cli.main`` does, then drive one Run."""
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg-empty")}
+    tables = settings.load_configs(tmp_path, env)
+    resolved = cli.resolve_config(
+        cli.build_parser().parse_args(["1"]),
+        env,
+        project=tables.project,
+        global_=tables.global_,
+    )
+    return asyncio.run(loop_module.run(resolved.run)), resolved.run
+
+
+def _skill_permission(skill: str) -> PermissionRequestCustomTool:
+    return PermissionRequestCustomTool(
+        tool_description="invoke a Skill",
+        tool_name=SKILL_TOOL_NAME,
+        args={"skill": skill},
+        tool_call_id="call-skill",
+    )
+
+
+def test_persisted_skill_policy_reaches_exposure_and_permission_enforcement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ``enabled_skills`` key on disk is the Run's whole capability boundary.
+
+    Issue #227's AC8: the *persisted* policy — not a hand-built
+    :class:`SkillPolicyInputs` — must flow through the real Config resolver into
+    Skill preflight, from there into the SDK session's Skill exposure and its
+    permission enforcement, and stay auditable in the replay log without
+    disturbing the preflight order. ``team-deploy`` is a tracked project winner
+    the catalog *offers* and the Config withholds, so this fails if any hop
+    widens the boundary back to the open world.
+    """
+    enabled, withheld = _persisted_policy_repo(tmp_path)
+    fake_client = _wire_persisted_policy_run(
+        tmp_path, monkeypatch, tracked=(enabled, withheld)
+    )
+
+    exit_code, config = _run_from_persisted_config(tmp_path)
+
+    assert exit_code == 0
+    # The policy under test came out of the resolver, not out of the test.
+    assert config.skill_policy.project.present is True
+    assert config.skill_policy.project.names == ("tdd", "team-review")
+
+    # One session, exposed exactly the enabled winners.
+    assert len(fake_client.create_calls) == 1
+    assert len(fake_client.create_calls[0]["skill_directories"]) == 1
+    assert fake_client.exposed_names == [["tdd", "team-review"]]
+    assert "team-deploy" in fake_client.create_calls[0]["disabled_skills"]
+
+    # The same frozen policy denies the withheld winner at the permission seam.
+    handler = fake_client.permission_handlers[0]
+    assert handler(_skill_permission("team-deploy"), {}).kind == "reject"
+    assert handler(_skill_permission("team-review"), {}).kind != "reject"
+
+    # Auditable, path-free, and still ahead of wrapper.run.start.
+    logged = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    resolved_event = next(
+        event for event in logged if event["type"] == "wrapper.skill_policy.resolved"
+    )
+    assert resolved_event["enabled"] == ["tdd", "team-review"]
+    assert resolved_event["base_scope"] == "project"
+    assert resolved_event["fallback"] is None
+    assert str(tmp_path) not in json.dumps(resolved_event)
+    types_seen = [event["type"] for event in logged]
+    assert types_seen.index("wrapper.skill_policy.resolved") < types_seen.index(
+        "wrapper.run.start"
+    )
+
+
+def test_frozen_skill_policy_survives_a_catalog_change_mid_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A catalog input that changes after preflight cannot move the boundary.
+
+    Issue #227's AC6 requires the identical immutable policy to reach every
+    session "even if catalog inputs change later". Here the agent deletes an
+    enabled project Skill from the working tree mid-session: the Run must keep
+    serving the exposure it froze at preflight rather than re-reading the tree.
+    """
+    enabled, withheld = _persisted_policy_repo(tmp_path)
+    fake_client = _wire_persisted_policy_run(
+        tmp_path, monkeypatch, tracked=(enabled, withheld)
+    )
+    observed_after_change: list[tuple[list[str], str]] = []
+
+    def delete_the_enabled_skill_then_observe() -> None:
+        shutil.rmtree(enabled)
+        exposure = fake_client.exposure_dirs[0]
+        observed_after_change.append(
+            (
+                sorted(path.name for path in exposure.iterdir()),
+                # Read *through* the exposure: a name that survives while its
+                # content does not would be a reference to the live tree, not
+                # the frozen copy the session was promised.
+                (exposure / "team-review" / "SKILL.md").read_text(encoding="utf-8"),
+            )
+        )
+
+    fake_client.on_send = delete_the_enabled_skill_then_observe
+
+    exit_code, _config = _run_from_persisted_config(tmp_path)
+
+    assert exit_code == 0
+    assert not enabled.exists(), "the test must actually mutate the catalog input"
+    assert observed_after_change == [
+        (
+            ["tdd", "team-review"],
+            "---\nname: team-review\ndescription: team-review description\n---\n"
+            "# team-review\n",
+        )
+    ]
+
+
+def test_persisted_policy_enabling_an_untracked_project_skill_fails_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracking evidence is preflight's business, not the session's.
+
+    Issue #227's AC3 fails a configured policy closed on invalid *tracking
+    evidence* — an enabled project winner that no teammate would receive from a
+    clone — before any Iteration or Lane starts. This is the branch that
+    depends on the git seam reaching preflight, so it regresses silently if
+    that wiring is ever dropped.
+    """
+    enabled, withheld = _persisted_policy_repo(tmp_path)
+    # `team-review` is enabled by the persisted Config but tracked by nobody.
+    fake_client = _wire_persisted_policy_run(tmp_path, monkeypatch, tracked=(withheld,))
+
+    exit_code, _config = _run_from_persisted_config(tmp_path)
+
+    assert exit_code == 1
+    assert enabled.exists()
+    assert fake_client.create_calls == [], "no session may start behind a failed policy"
+    assert fake_client.start_call_count == 1
+    assert fake_client.stop_call_count == 1
