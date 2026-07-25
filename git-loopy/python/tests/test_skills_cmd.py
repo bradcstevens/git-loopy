@@ -1442,3 +1442,96 @@ def test_skills_sync_never_silently_drops_a_name_with_no_catalog_winner(
         "vanished",
     ]
     assert any("vanished" in message for message in errors)
+
+
+def test_skills_sync_establishes_a_policy_when_the_scope_has_none(
+    tmp_path: Path,
+) -> None:
+    """An unconfigured scope has no policy to match, so every name is an addition.
+
+    Reporting "already matches the Skill baseline" would be true of the seed and
+    false of the Config: absence means inheritance or the unconfigured fallback,
+    not a saved policy. Sync therefore offers to save the baseline as one.
+    """
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    catalog = SkillCatalog(
+        winners={
+            "kept": SkillCatalogWinner("kept", "personal", copilot_enabled=True),
+            "off": SkillCatalogWinner("off", "personal", copilot_enabled=False),
+            "fallback-on": SkillCatalogWinner("fallback-on", "packaged"),
+        }
+    )
+    output: list[str] = []
+    prompts: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda prompt: prompts.append(prompt) or "y",
+        output_fn=output.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=settings.write_config,
+    )
+
+    assert result == 0
+    assert len(prompts) == 1
+    rendered = "\n".join(output)
+    assert "+ fallback-on" in rendered
+    assert "+ kept" in rendered
+    assert "off" not in rendered.replace("fallback-on", "")
+    assert settings.load_config_table(config_path)["enabled_skills"] == [
+        "fallback-on",
+        "kept",
+    ]
+
+
+def test_skills_sync_shows_removals_against_an_inherited_global_policy(
+    tmp_path: Path,
+) -> None:
+    """A project scope with no policy of its own still has a current selection.
+
+    The inherited global policy is what a Run resolves today, so the delta an
+    overriding project policy must be reviewed against is that selection — not
+    an empty one, which would hide every inherited Skill Copilot now reports
+    disabled behind a preview showing only additions.
+    """
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.global_config_path(env),
+        {"enabled_skills": ["kept", "removed"]},
+    )
+    output: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return _sync_catalog()
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda _prompt: "y",
+        output_fn=output.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=settings.write_config,
+    )
+
+    assert result == 0
+    rendered = "\n".join(output)
+    assert "- removed" in rendered
+    assert "+ added" in rendered
+    assert settings.load_config_table(settings.project_config_path(tmp_path))[
+        "enabled_skills"
+    ] == ["added", "kept"]

@@ -95,7 +95,11 @@ git-loopy skills sync --global
 ```
 
 Sync prints the exact additions and removals before writing anything and saves
-only after you confirm. It replaces only the Skills Copilot actually reports:
+only after you confirm. When the scope has no policy of its own — it inherits a
+lower-scope one, or falls back to the unconfigured default — there is nothing
+for the baseline to already match, so sync says so and offers to save the whole
+baseline as that scope's first policy. It replaces only the Skills Copilot
+actually reports:
 git-loopy's packaged fallbacks — and any configured name Copilot does not know —
 keep their current state rather than being synced away. The proposed policy is
 validated first, so a sync that would disable a Required Skill, enable an

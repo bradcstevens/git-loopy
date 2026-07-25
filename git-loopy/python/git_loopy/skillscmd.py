@@ -212,6 +212,7 @@ class SkillPolicySyncPlan:
 
     current: tuple[str, ...]
     proposed: tuple[str, ...]
+    configured: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "current", tuple(sorted(set(self.current))))
@@ -219,22 +220,34 @@ class SkillPolicySyncPlan:
 
     @property
     def additions(self) -> tuple[str, ...]:
+        if not self.configured:
+            return self.proposed
         return tuple(name for name in self.proposed if name not in self.current)
 
     @property
     def removals(self) -> tuple[str, ...]:
+        if not self.configured:
+            return ()
         return tuple(name for name in self.current if name not in self.proposed)
 
     @property
     def is_noop(self) -> bool:
-        return self.current == self.proposed
+        return self.configured and self.current == self.proposed
 
 
 def plan_skill_policy_sync(
     current: Iterable[str],
     catalog: SkillCatalog,
+    *,
+    configured: bool = True,
 ) -> SkillPolicySyncPlan:
-    """Project one Skill baseline over the current policy at a single scope."""
+    """Project one Skill baseline over the current policy at a single scope.
+
+    ``configured`` says whether ``current`` is a *saved* policy at that scope.
+    An absent policy means inheritance or the unconfigured fallback rather than
+    a selection, so there is nothing for the baseline to already match and every
+    proposed name is an addition.
+    """
     selected = set(current)
     proposed = set(selected)
     for name, winner in catalog.winners.items():
@@ -244,7 +257,11 @@ def plan_skill_policy_sync(
             proposed.add(name)
         else:
             proposed.discard(name)
-    return SkillPolicySyncPlan(current=tuple(selected), proposed=tuple(proposed))
+    return SkillPolicySyncPlan(
+        current=tuple(selected),
+        proposed=tuple(proposed),
+        configured=configured,
+    )
 
 
 def _packaged_skills_dir() -> Path:
@@ -284,12 +301,29 @@ def _configured_names(
     return tuple(global_ if global_ is not None else required_skills)
 
 
-def _scope_policy_names(
+@dataclass(frozen=True)
+class _ScopePolicySeed:
+    """The selection one scope starts from, and whether a policy backs it."""
+
+    names: tuple[str, ...]
+    configured: bool
+
+
+def _scope_policy_seed(
     *,
     scope: str,
     tables: settings.ConfigTables,
     catalog: SkillCatalog,
-) -> tuple[str, ...]:
+) -> _ScopePolicySeed:
+    """Seed one scope from the nearest saved policy, else the Skill baseline.
+
+    ``configured`` says the seed came from a saved **Skill policy** — the
+    scope's own, or the global one a project inherits until it establishes one.
+    An inherited policy is the selection a Run resolves today, so it is the
+    current state any delta must be reviewed against. Only the last branch is
+    genuinely unconfigured: there the seed *is* a fresh Skill baseline, so
+    nothing is being compared to a policy at all.
+    """
     project = settings.table_optional_str_list(
         tables.project, "enabled_skills", scope="project"
     )
@@ -297,14 +331,17 @@ def _scope_policy_names(
         tables.global_, "enabled_skills", scope="global"
     )
     if scope == "project" and project is not None:
-        return tuple(project)
+        return _ScopePolicySeed(tuple(project), configured=True)
     if global_ is not None:
-        return tuple(global_)
-    return tuple(
-        name
-        for name, winner in catalog.winners.items()
-        if winner.copilot_enabled is True
-        or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+        return _ScopePolicySeed(tuple(global_), configured=True)
+    return _ScopePolicySeed(
+        tuple(
+            name
+            for name, winner in catalog.winners.items()
+            if winner.copilot_enabled is True
+            or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+        ),
+        configured=False,
     )
 
 
@@ -466,6 +503,7 @@ class _PolicyContext:
     required: tuple[str, ...]
     tracked: frozenset[str]
     seed: tuple[str, ...]
+    configured: bool = True
 
 
 def _collect_policy_context(
@@ -519,11 +557,13 @@ def _collect_policy_context(
             from .git import SubprocessGitClient
 
             git = SubprocessGitClient(root)
+        seed = _scope_policy_seed(scope=scope, tables=tables, catalog=catalog)
         return _PolicyContext(
             catalog=catalog,
             required=required,
             tracked=collect_project_skill_tracking(catalog, git),
-            seed=_scope_policy_names(scope=scope, tables=tables, catalog=catalog),
+            seed=seed.names,
+            configured=seed.configured,
         )
 
 
@@ -695,10 +735,16 @@ def _render_sync_plan(
     scope: str,
     output_fn: Callable[[str], None],
 ) -> None:
-    output_fn(
-        f"Skill baseline sync for the {scope} Skill policy: "
-        f"{len(plan.additions)} addition(s), {len(plan.removals)} removal(s)."
-    )
+    if plan.configured:
+        output_fn(
+            f"Skill baseline sync for the {scope} Skill policy: "
+            f"{len(plan.additions)} addition(s), {len(plan.removals)} removal(s)."
+        )
+    else:
+        output_fn(
+            f"No {scope} Skill policy is configured; syncing saves the current "
+            f"Skill baseline as one ({len(plan.proposed)} Skill(s))."
+        )
     for name in plan.additions:
         output_fn(f"  + {name} ({_winner_label(catalog, name)})")
     for name in plan.removals:
@@ -751,7 +797,9 @@ def run_skills_sync(
             required_skills=required_skills,
             packaged_skills_dir=packaged_skills_dir,
         )
-        plan = plan_skill_policy_sync(context.seed, context.catalog)
+        plan = plan_skill_policy_sync(
+            context.seed, context.catalog, configured=context.configured
+        )
         _validate_policy(plan.proposed, scope=selected_scope, context=context)
     except SKILL_POLICY_FAILURES as exc:
         errors(
@@ -764,8 +812,8 @@ def run_skills_sync(
     )
     if plan.is_noop:
         output_fn(
-            f"The {selected_scope} Skill policy already matches the Skill "
-            "baseline; no changes written."
+            f"The Skill policy in effect for the {selected_scope} scope already "
+            "matches the Skill baseline; no changes written."
         )
         return 0
     answer = _read_picker_input(
