@@ -8,7 +8,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
 $OrchestratorModule = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
+$TuiModule = Join-Path $PortDir "GitLoopy.Tui.psm1"
 Import-Module $OrchestratorModule -Force
+Import-Module $TuiModule -Force
 $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
@@ -213,6 +215,76 @@ switch -CaseSensitive ($Command) {
     }
 }
 '@
+}
+
+# A fake `git-loopy-tui` that records what it was asked to do. `FAKE_TUI_STARTED`
+# says which discovered helper ran; `FAKE_TUI_STDIN` is what the child actually
+# received, and must equal the replay log byte for byte because the contract's
+# "serialize once" rule makes the live destination and the replay log the same
+# bytes.
+#
+# Returns the path the Orchestrator's discovery is expected to report, which on
+# Windows is the `.cmd` launcher rather than the extensionless name.
+function New-FakeTuiHelper {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Directory,
+        [string]$Label = "helper"
+    )
+
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $Body = @"
+`$Label = "$Label"
+"@ + @'
+
+$ErrorActionPreference = "Stop"
+if ($args.Count -ge 1 -and $args[0] -ceq "--schema-version") {
+    if ($env:FAKE_TUI_PROBE) {
+        [Console]::Out.WriteLine($env:FAKE_TUI_PROBE)
+    }
+    else {
+        $Version = if ($env:FAKE_TUI_VERSION) { $env:FAKE_TUI_VERSION }
+            else { "0.0.0" }
+        $Minimum = if ($env:FAKE_TUI_MIN_SCHEMA) { $env:FAKE_TUI_MIN_SCHEMA }
+            else { "1" }
+        $Maximum = if ($env:FAKE_TUI_MAX_SCHEMA) { $env:FAKE_TUI_MAX_SCHEMA }
+            else { "1" }
+        [Console]::Out.WriteLine(
+            '{"name": "git-loopy-tui", "version": "' + $Version + '", ' +
+            '"min_event_schema_version": ' + $Minimum + ', ' +
+            '"max_event_schema_version": ' + $Maximum + ', ' +
+            '"wrapper_contract_version": "1.0"}'
+        )
+    }
+    exit $(if ($env:FAKE_TUI_PROBE_STATUS) {
+        [int]$env:FAKE_TUI_PROBE_STATUS
+    }
+    else { 0 })
+}
+[IO.File]::AppendAllText($env:FAKE_TUI_STARTED, $Label + [Environment]::NewLine)
+$Delivered = 0
+while ($null -ne ($Line = [Console]::In.ReadLine())) {
+    $Delivered++
+    [IO.File]::AppendAllText($env:FAKE_TUI_STDIN, $Line + "`n")
+    if (
+        $env:FAKE_TUI_EXIT_AFTER -and
+        $Delivered -ge [int]$env:FAKE_TUI_EXIT_AFTER
+    ) {
+        exit $(if ($env:FAKE_TUI_EXIT_CODE) { [int]$env:FAKE_TUI_EXIT_CODE }
+            else { 0 })
+    }
+}
+if ($env:FAKE_TUI_LINGER_SECONDS) {
+    Start-Sleep -Seconds ([double]$env:FAKE_TUI_LINGER_SECONDS)
+}
+exit 0
+'@
+
+    Write-FakeCommand -BinDir $Directory -Name "git-loopy-tui" -Body $Body
+    if ($IsWindows) {
+        return Join-Path $Directory "git-loopy-tui.cmd"
+    }
+    return Join-Path $Directory "git-loopy-tui"
 }
 
 function New-TestRepo {
@@ -2791,6 +2863,251 @@ Start-Sleep -Seconds $Sleep
             "issue list", [StringComparison]::Ordinal
         )
     ) "a legacy deny-only Run still reached Pool collection"
+
+    # The shared TUI helper (PRD #173). The resolution seam is exercised
+    # in-process because it is a pure decision with no observable side effect at
+    # the process boundary: a Run that declines the live interface and a Run that
+    # never had a helper look identical from outside.
+    foreach ($Case in @(
+        @{
+            Id = "an explicit flag beats a contradicting environment setting"
+            Flag = "off"
+            Environment = "1"
+            IsTty = $true
+            Intent = "off"
+            Source = "explicit"
+        },
+        @{
+            Id = "an explicit on-flag beats a non-terminal stdout"
+            Flag = "on"
+            Environment = ""
+            IsTty = $false
+            Intent = "on"
+            Source = "explicit"
+        },
+        @{
+            Id = "a truthy environment setting requests the live interface"
+            Flag = ""
+            Environment = " Yes "
+            IsTty = $false
+            Intent = "on"
+            Source = "explicit"
+        },
+        @{
+            Id = "an unrecognised environment value is a refusal, not a request"
+            Flag = ""
+            Environment = "maybe"
+            IsTty = $true
+            Intent = "off"
+            Source = "explicit"
+        },
+        @{
+            Id = "a blank environment setting falls through to detection"
+            Flag = ""
+            Environment = "   "
+            IsTty = $true
+            Intent = "on"
+            Source = "auto"
+        },
+        @{
+            Id = "a redirected stdout auto-detects plain output"
+            Flag = ""
+            Environment = ""
+            IsTty = $false
+            Intent = "off"
+            Source = "auto"
+        }
+    )) {
+        $Resolved = Resolve-GitLoopyTuiIntent `
+            -Flag $Case["Flag"] `
+            -EnvironmentValue $Case["Environment"] `
+            -IsTty $Case["IsTty"]
+        Assert-Equal $Case["Intent"] $Resolved.Intent (
+            "TUI intent: $($Case["Id"])"
+        )
+        Assert-Equal $Case["Source"] $Resolved.Source (
+            "TUI intent source: $($Case["Id"])"
+        )
+    }
+
+    # Discovery precedence. The clone-local helper is version-pinned by the
+    # repository, so it wins over whatever a package manager happens to have
+    # installed globally; both still have to pass the probe.
+    $DiscoveryRoot = Join-Path $TempDir "tui-discovery"
+    $DiscoveryPinnedDir = Join-Path $DiscoveryRoot ".git-loopy/bin"
+    $DiscoveryPathDir = Join-Path $TempDir "tui-discovery-path"
+    [IO.Directory]::CreateDirectory($DiscoveryPinnedDir) | Out-Null
+    [IO.Directory]::CreateDirectory($DiscoveryPathDir) | Out-Null
+    $PinnedHelper = New-FakeTuiHelper -Directory $DiscoveryPinnedDir
+    $PathHelper = New-FakeTuiHelper -Directory $DiscoveryPathDir
+
+    Assert-Equal $null (
+        Find-GitLoopyTuiHelper `
+            -RepoRoot (Join-Path $TempDir "tui-discovery-absent") `
+            -SearchPath ""
+    ) "no helper anywhere discovers nothing"
+
+    $PathOnly = Find-GitLoopyTuiHelper `
+        -RepoRoot (Join-Path $TempDir "tui-discovery-absent") `
+        -SearchPath $DiscoveryPathDir
+    Assert-Equal "path" $PathOnly.Source "a PATH helper is discovered"
+    Assert-Equal $PathHelper $PathOnly.Path "the discovered PATH helper's path"
+
+    $Pinned = Find-GitLoopyTuiHelper `
+        -RepoRoot $DiscoveryRoot `
+        -SearchPath $DiscoveryPathDir
+    Assert-Equal "clone-local" $Pinned.Source (
+        "the repository-pinned helper outranks one on PATH"
+    )
+    Assert-Equal $PinnedHelper $Pinned.Path "the pinned helper's path"
+
+    # The pre-fullscreen gate. `--schema-version` is the only helper invocation
+    # that is safe before a decision: it reads no stdin and touches no terminal,
+    # so a helper that turns out to be incompatible never gets to blank the
+    # screen first. The answer is a *range* because a later helper may decode
+    # more than one Event-schema version at once, so the test is containment,
+    # not equality.
+    $ProbeNames = @(
+        "FAKE_TUI_PROBE",
+        "FAKE_TUI_PROBE_STATUS",
+        "FAKE_TUI_VERSION",
+        "FAKE_TUI_MIN_SCHEMA",
+        "FAKE_TUI_MAX_SCHEMA"
+    )
+    foreach ($Case in @(
+        @{
+            Id = "a helper whose range contains this schema is compatible"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "1"
+                FAKE_TUI_MAX_SCHEMA = "4"
+                FAKE_TUI_VERSION = "9.9.9"
+            }
+            Expected = "9.9.9"
+        },
+        @{
+            Id = "a helper that decodes only later schemas is rejected"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "2"
+                FAKE_TUI_MAX_SCHEMA = "3"
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a helper that decodes only earlier schemas is rejected"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "0"
+                FAKE_TUI_MAX_SCHEMA = "0"
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a probe that is not an object is rejected"
+            Environment = @{ FAKE_TUI_PROBE = "[]" }
+            Expected = $null
+        },
+        @{
+            Id = "a probe that is not JSON at all is rejected"
+            Environment = @{ FAKE_TUI_PROBE = "not json" }
+            Expected = $null
+        },
+        @{
+            Id = "a probe whose bounds are not numbers is rejected"
+            Environment = @{
+                FAKE_TUI_PROBE = (
+                    '{"min_event_schema_version": "1", ' +
+                    '"max_event_schema_version": "1"}'
+                )
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a helper that fails its own probe is rejected"
+            Environment = @{ FAKE_TUI_PROBE_STATUS = "3" }
+            Expected = $null
+        },
+        @{
+            Id = "a compatible helper that reports no Release version is usable"
+            Environment = @{
+                FAKE_TUI_PROBE = (
+                    '{"min_event_schema_version": 1, ' +
+                    '"max_event_schema_version": 1}'
+                )
+            }
+            Expected = ""
+        }
+    )) {
+        foreach ($Name in $ProbeNames) {
+            [Environment]::SetEnvironmentVariable($Name, $null)
+        }
+        foreach ($Entry in $Case["Environment"].GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($Entry.Key, $Entry.Value)
+        }
+        Assert-Equal $Case["Expected"] (
+            Test-GitLoopyTuiSchemaSupport -Helper $PinnedHelper
+        ) "TUI probe: $($Case["Id"])"
+    }
+    foreach ($Name in $ProbeNames) {
+        [Environment]::SetEnvironmentVariable($Name, $null)
+    }
+
+    # Contract §16: Release equality is product identity, never a compatibility
+    # authority. A helper staged as part of *this* distribution must match
+    # exactly and fails closed on drift; an externally discovered one may still
+    # run on the strength of the schema probe, but the operator is told the
+    # Releases differ.
+    foreach ($Case in @(
+        @{
+            Id = "a pinned helper from this Release is trusted silently"
+            Source = "clone-local"
+            HelperVersion = "1.2.3"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        },
+        @{
+            Id = "a pinned helper from another Release fails closed"
+            Source = "clone-local"
+            HelperVersion = "1.2.2"
+            ReleaseVersion = "1.2.3"
+            Trusted = $false
+            Warns = $false
+        },
+        @{
+            Id = "a PATH helper from another Release runs, but says so"
+            Source = "path"
+            HelperVersion = "1.2.2"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $true
+        },
+        @{
+            Id = "a PATH helper from this Release is trusted silently"
+            Source = "path"
+            HelperVersion = "1.2.3"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        },
+        @{
+            Id = "a helper that reports no Release version is not drift"
+            Source = "clone-local"
+            HelperVersion = ""
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        }
+    )) {
+        $Identity = Test-GitLoopyTuiReleaseIdentity `
+            -Source $Case["Source"] `
+            -HelperVersion $Case["HelperVersion"] `
+            -ReleaseVersion $Case["ReleaseVersion"]
+        Assert-Equal $Case["Trusted"] $Identity.Trusted (
+            "TUI Release identity: $($Case["Id"])"
+        )
+        Assert-Equal $Case["Warns"] ($null -ne $Identity.Warning) (
+            "TUI Release identity warning: $($Case["Id"])"
+        )
+    }
 }
 finally {
     foreach ($Name in @(
