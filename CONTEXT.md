@@ -419,8 +419,13 @@ new Iteration, including a context-cutover continuation pinned to the same
 _Avoid_: round, pass, tick; session as a separate accounting unit.
 
 **Pool**:
-The set of `ready-for-agent` issues collected at the start of an iteration and
-offered to the agent together in a single prompt; the agent picks one.
+The candidate `ready-for-agent` work discovered from the source. A serial **Iteration**
+collects its own full authoritative Pool at the start of the Iteration and offers it to
+the agent together in a single prompt; the agent picks one. **Rolling dispatch** instead
+keeps a continuously refreshed cache of *shallow* Pool membership and re-reads one
+candidate authoritatively immediately before reserving its **Lane** — membership alone is
+never authority to start a **Lane contribution**. An incomplete or failed read leaves the
+Pool's emptiness unknown rather than empty.
 _Avoid_: batch, backlog.
 
 **Strike**:
