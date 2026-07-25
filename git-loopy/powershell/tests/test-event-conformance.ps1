@@ -113,6 +113,165 @@ function Add-RollupEnvelope {
     return $Event
 }
 
+$script:NumericTypes = @(
+    [int], [long], [double], [decimal], [single], [short], [byte]
+)
+
+function Test-IsNumber {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value -or $Value -is [bool]) {
+        return $false
+    }
+    return $Value.GetType() -in $script:NumericTypes
+}
+
+function Get-GovernedMeasurement {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Rollup
+    )
+
+    # Every normalized measurement each Insight capability governs. The keys are
+    # asserted below to equal the production manifest's keys exactly, so a new
+    # capability cannot arrive uncovered and a typo cannot quietly govern
+    # nothing. `agent_output` governs the `agent.output` Event rather than a
+    # rollup field, so its list is deliberately empty — stating that explicitly
+    # is what makes the key equality meaningful.
+    #
+    # Built through an explicit list rather than array literals so a null is
+    # recorded as a governed measurement instead of vanishing: a dropped null
+    # would leave the "all must be null" check below vacuously satisfied.
+    $Summary = $Rollup["summary"]
+    $Governed = [ordered]@{}
+    foreach (
+        $Name in @(
+            "agent_output",
+            "structured_agent_events",
+            "token_usage",
+            "context_window",
+            "skill_consultation",
+            "cost"
+        )
+    ) {
+        $Governed[$Name] = [Collections.Generic.List[object]]::new()
+    }
+
+    $Governed["structured_agent_events"].Add($Summary["tool_count"])
+    foreach ($Name in @("model", "tokens_in", "tokens_out", "observed_tokens")) {
+        $Governed["token_usage"].Add($Summary[$Name])
+    }
+    $Governed["context_window"].Add($Summary["peak_context_window"])
+    foreach ($Name in @("skill_call_count", "skills_consulted")) {
+        $Governed["skill_consultation"].Add($Summary[$Name])
+    }
+    $Governed["cost"].Add($Summary["cost_usd"])
+
+    foreach ($Issue in @($Rollup["issues"])) {
+        foreach ($Name in @("model", "tokens_in", "tokens_out")) {
+            $Governed["token_usage"].Add($Issue["consumption"][$Name])
+        }
+        $Governed["context_window"].Add($Issue["peak_context_window"])
+        $Governed["cost"].Add($Issue["cost_usd"])
+    }
+    return $Governed
+}
+
+function Assert-CapabilityDerivedTelemetry {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Rollup,
+        [Parameter(Mandatory)]
+        [string]$CaseId
+    )
+
+    # An unavailable measurement must be unavailable *because* this port
+    # declares it so. The fixture comparison pins the nulls as literals, which
+    # cannot tell a deliberately unknown measurement apart from one that was
+    # simply forgotten — a coordinated edit that fabricates a value in
+    # production and updates the fixture's `expected` to match passes it. So
+    # derive the demand from the production Insight capability manifest
+    # instead. A capability this port declares false MUST send every
+    # measurement it governs as null; contract 12's value semantics forbid
+    # reporting an unavailable counter as 0 or an unavailable collection as an
+    # empty list. Flip a capability and this asks for the opposite.
+    $Capabilities = Get-GitLoopyInsightCapabilities
+    $Governed = Get-GovernedMeasurement -Rollup $Rollup
+
+    [string[]]$CapabilityKeys = @(
+        $Capabilities.Keys | ForEach-Object { [string]$_ }
+    )
+    [string[]]$GovernedKeys = @($Governed.Keys | ForEach-Object { [string]$_ })
+    [Array]::Sort($CapabilityKeys, [StringComparer]::Ordinal)
+    [Array]::Sort($GovernedKeys, [StringComparer]::Ordinal)
+    Assert-Equal (
+        [string]::Join(",", $CapabilityKeys)
+    ) (
+        [string]::Join(",", $GovernedKeys)
+    ) "every Insight capability governs a declared measurement set: $CaseId"
+
+    $DeclaredFalse = @(
+        $Capabilities.Keys | Where-Object { -not $Capabilities[$_] }
+    )
+    Assert-True (
+        $DeclaredFalse.Count -gt 0
+    ) "this port must declare at least one unavailable capability: $CaseId"
+
+    foreach ($Name in $DeclaredFalse) {
+        foreach ($Value in $Governed[$Name]) {
+            Assert-True (
+                $null -eq $Value
+            ) (
+                "unavailable telemetry must stay null for declared-false " +
+                "capability '$Name': $CaseId"
+            )
+        }
+    }
+}
+
+function Assert-ObservedFact {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Rollup,
+        [Parameter(Mandatory)]
+        [string]$CaseId
+    )
+
+    # The complement: a fact this port really can observe is never nulled away
+    # in the name of honesty. Without this, nulling the whole rollup would
+    # satisfy the capability-derived guard above.
+    Assert-True (
+        $Rollup["outcome"] -is [string] -and $Rollup["outcome"].Length -gt 0
+    ) "observed Iteration outcome must stay observed: $CaseId"
+    Assert-True (
+        Test-IsNumber $Rollup["duration_seconds"]
+    ) "observed Iteration duration must stay observed: $CaseId"
+    foreach ($Name in @("commits", "auto_closures", "pr_advances", "strikes")) {
+        Assert-True (
+            Test-IsNumber $Rollup["summary"][$Name]
+        ) "observed accounting fact $Name must stay observed: $CaseId"
+    }
+    foreach ($Issue in @($Rollup["issues"])) {
+        Assert-True (
+            $null -ne $Issue["issue"]
+        ) "an Active issue's identity must stay observed: $CaseId"
+        Assert-True (
+            $Issue["status"] -is [string] -and $Issue["status"].Length -gt 0
+        ) "an Active issue's status must stay observed: $CaseId"
+        Assert-True (
+            $Issue["first_started_at"] -is [string]
+        ) "an Active issue's first activation must stay observed: $CaseId"
+        foreach ($Name in @("active_seconds", "cumulative_active_seconds")) {
+            Assert-True (
+                Test-IsNumber $Issue[$Name]
+            ) "an Active issue's $Name must stay observed: $CaseId"
+        }
+    }
+}
+
 foreach (
     $Case in @(
         $Fixture["normalized_rollup_cases"] |
@@ -178,6 +337,12 @@ foreach (
         ) (
             [string]::Join("", $ActualLines)
         ) "normalized rollup fixture: $($Case["id"])"
+        foreach ($Rollup in $Actual) {
+            Assert-CapabilityDerivedTelemetry `
+                -Rollup $Rollup `
+                -CaseId $Case["id"]
+            Assert-ObservedFact -Rollup $Rollup -CaseId $Case["id"]
+        }
         continue
     }
     $RollupArguments = @{
@@ -218,6 +383,8 @@ foreach (
     ) (
         ConvertTo-GitLoopyJsonLine -Event (Add-RollupEnvelope -Rollup $Actual)
     ) "normalized rollup fixture: $($Case["id"])"
+    Assert-CapabilityDerivedTelemetry -Rollup $Actual -CaseId $Case["id"]
+    Assert-ObservedFact -Rollup $Actual -CaseId $Case["id"]
 }
 
 $GeneratedRunId = New-GitLoopyRunId
