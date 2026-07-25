@@ -2075,3 +2075,59 @@ def test_persisted_policy_enabling_an_untracked_project_skill_fails_preflight(
     assert fake_client.create_calls == [], "no session may start behind a failed policy"
     assert fake_client.start_call_count == 1
     assert fake_client.stop_call_count == 1
+
+
+def test_persisted_skill_policy_bounds_the_replay_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC8, replay half: the frozen boundary and the consultation share one log.
+
+    Exposure and the permission handler are in-process facts that vanish with
+    the Run. Replay output is what an operator — or the Dashboard — actually
+    reads afterwards, so the persisted policy has only really "flowed through"
+    if the durable artifacts let a reader check the consultation against the
+    boundary that permitted it, with no access to the Run.
+    """
+    enabled, withheld = _persisted_policy_repo(tmp_path)
+    fake_client = _wire_persisted_policy_run(
+        tmp_path, monkeypatch, tracked=(enabled, withheld)
+    )
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.TOOL_EXECUTION_START,
+            ToolExecutionStartData(
+                tool_call_id="call-skill",
+                tool_name=SKILL_TOOL_NAME,
+                arguments={"skill": "team-review"},
+            ),
+        ),
+    ]
+
+    exit_code, _ = _run_from_persisted_config(tmp_path)
+    assert exit_code == 0
+
+    payload = json.loads(
+        next((tmp_path / ".git-loopy" / "runs").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    row = payload["iterations"][0]
+    assert row["skill_count"] == 1
+    assert row["skills_consulted"] == ["team-review"]
+    assert payload["skill_adoption"]["skills"] == ["team-review"]
+
+    resolved = [
+        json.loads(line)
+        for line in _log_lines(tmp_path)
+        if json.loads(line)["type"] == "wrapper.skill_policy.resolved"
+    ]
+    assert len(resolved) == 1
+    boundary = resolved[0]["enabled"]
+    assert boundary == ["tdd", "team-review"]
+
+    # The two artifacts are checkable against each other with nothing else in
+    # hand: every Skill the Run consulted is inside the policy the same Run
+    # recorded, and the withheld project Skill appears in neither.
+    assert set(payload["skill_adoption"]["skills"]) <= set(boundary)
+    assert "team-deploy" not in boundary
+    assert "team-deploy" not in payload["skill_adoption"]["skills"]
