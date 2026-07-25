@@ -101,7 +101,10 @@ def published_checksums(directory: Path) -> Path:
 
 
 def published_receipt(
-    directory: Path, defect: str = "signed", release_version: str = "1.2.3"
+    directory: Path,
+    defect: str = "signed",
+    release_version: str = "1.2.3",
+    publisher: str = PUBLISHER,
 ) -> Path:
     """The Windows artifact's trust receipt, as the release runner wrote it.
 
@@ -114,8 +117,8 @@ def published_receipt(
         return directory
 
     evidence: dict[str, Any] = {
-        "signature": PUBLISHER,
-        "publisher_identity": PUBLISHER,
+        "signature": publisher,
+        "publisher_identity": publisher,
         "checksum": WINDOWS_DIGEST,
     }
     if defect == "no-publisher-identity":
@@ -800,3 +803,141 @@ def test_an_unchanged_channel_stops_before_it_opens_a_pull_request(
     assert completed.returncode == 0, completed.stderr
     assert "already publishes v1.2.3" in completed.stdout
     assert "gh" not in completed.stderr
+
+
+# The certificate-subject vocabulary.
+#
+# `publisher_identity` is not a name someone chose for this project; it is
+# whatever `Get-AuthenticodeSignature` reported for `SignerCertificate.Subject`
+# on the artifact the release runner had just signed. That is .NET's
+# `X509Certificate2.Subject`, which renders a distinguished name in one specific
+# grammar — and winget's `Publisher` is the one thing a Windows operator is
+# shown *instead of* a digest, so reading that grammar wrong is not cosmetic.
+#
+# The grammar below was observed by round-tripping each subject through
+# `X500DistinguishedName` under PowerShell 7 rather than read off a spec.
+
+DOTNET_SUBJECT_RENDERINGS = [
+    pytest.param(
+        "CN=Brad Stevens, O=Brad Stevens, L=Redmond, S=Washington, C=US",
+        "Brad Stevens",
+        id="a-value-needing-no-quoting-is-bare",
+    ),
+    pytest.param(
+        'CN="Contoso, Inc.", O=Contoso Corp, L=Redmond, S=WA, C=US',
+        "Contoso, Inc.",
+        id="a-value-holding-a-comma-is-quoted-whole",
+    ),
+    pytest.param(
+        'CN="Say ""Hi""", O=Contoso Corp',
+        'Say "Hi"',
+        id="a-quote-inside-a-quoted-value-is-doubled",
+    ),
+    pytest.param(
+        'CN="Contoso ", O=Contoso Corp',
+        "Contoso",
+        id="a-value-quoted-only-to-keep-its-spaces",
+    ),
+    pytest.param(
+        "O=Contoso Corp, C=US",
+        "O=Contoso Corp, C=US",
+        id="a-subject-with-no-common-name-passes-through-whole",
+    ),
+]
+
+
+@pytest.mark.parametrize(("subject", "expected"), DOTNET_SUBJECT_RENDERINGS)
+def test_the_publisher_shown_is_the_whole_common_name_the_certificate_carries(
+    subject: str, expected: str
+) -> None:
+    """A publisher is read out of the subject, not truncated at its first comma.
+
+    `CN=Contoso, Inc.` is an ordinary organisation-validated code-signing
+    identity, and .NET writes it as `CN="Contoso, Inc."`. A reader that split the
+    subject on every comma would publish that helper under `"Contoso` — a name
+    with a stray quote in it that matches no company and that an operator
+    checking a Windows security prompt would have to guess about.
+    """
+    assert windows_channels.publisher_display_name(subject) == expected
+
+
+def test_a_comma_bearing_publisher_survives_generation_and_its_own_gate(
+    tmp_path: Path,
+) -> None:
+    """The control: the channel, not the reader, is what has to hold.
+
+    Byte-equality between `render` and `verify` cannot catch this on its own —
+    both sides read the same receipt through the same function, so a truncating
+    reader agrees with itself perfectly. What the drift gate would then be
+    proving is that the committed manifest credits the publisher this code
+    *invented*, which is precisely the assurance winget's `Publisher` field is
+    there to give and not give.
+
+    So the name is asserted against the certificate subject the receipt carries,
+    and the rendered text is then put back through `verify_manifests` to prove
+    the gate still accepts what generation produced.
+    """
+    subject = 'CN="Contoso, Inc.", O=Contoso Corp, L=Redmond, S=WA, C=US'
+    checksums = published_checksums(tmp_path / "checksums")
+    receipts = published_receipt(tmp_path / "receipts", publisher=subject)
+
+    manifests = windows_channels.render_manifests(
+        REPOSITORY_ROOT,
+        "winget",
+        release_version="1.2.3",
+        release_marked_prerelease=False,
+        checksum_dir=checksums,
+        receipt_dir=receipts,
+    )
+
+    locale = next(
+        document
+        for document in (yaml.safe_load(text) for text in manifests.values())
+        if document["ManifestType"] == "defaultLocale"
+    )
+    assert locale["Publisher"] == "Contoso, Inc."
+
+    assert (
+        windows_channels.verify_manifests(
+            REPOSITORY_ROOT,
+            "winget",
+            manifests,
+            release_version="1.2.3",
+            release_marked_prerelease=False,
+            checksum_dir=checksums,
+            receipt_dir=receipts,
+        ).archive_name
+        == WINDOWS_ARCHIVE
+    )
+
+
+@pytest.mark.parametrize(
+    "installers",
+    [
+        pytest.param("Installers: 1", id="a-scalar-where-a-sequence-belongs"),
+        pytest.param("Installers:\n  Architecture: x64", id="a-mapping"),
+        pytest.param('Installers: "x64"', id="a-string"),
+    ],
+)
+def test_a_winget_manifest_whose_installers_is_not_a_sequence_is_refused_by_name(
+    installers: str,
+) -> None:
+    """Every refusal this gate makes has to survive being handed nonsense.
+
+    `Installers` is a YAML sequence, and a committed manifest is a file a human
+    can edit. A reader that iterated it without looking raises `TypeError` three
+    frames down, which escapes the one error type `main` turns into an exit code
+    -- so the release job would fail with a traceback and exit 1 for a reason
+    that reads like a bug in this tool rather than drift in the manifest.
+    """
+    manifest = (
+        "PackageIdentifier: bradcstevens.git-loopy-tui\n"
+        'PackageVersion: "1.2.3"\n'
+        f"{installers}\n"
+        'ManifestType: "installer"\n'
+    )
+
+    with pytest.raises(windows_channels.WindowsChannelError) as raised:
+        windows_channels.read_winget_claims({"installer.yaml": manifest})
+
+    assert "Installers" in str(raised.value)

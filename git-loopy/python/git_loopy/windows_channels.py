@@ -317,6 +317,53 @@ def signing_identity(
     return identity
 
 
+def _distinguished_name_components(subject: str) -> list[tuple[str, str]]:
+    """One certificate subject, split the way the runtime that wrote it splits it.
+
+    `publisher_identity` is `Get-AuthenticodeSignature`'s
+    `SignerCertificate.Subject`, which is .NET's `X509Certificate2.Subject`, and
+    that renders a distinguished name in one observable grammar: a value is bare
+    unless it needs quoting, in which case it is wrapped in `"` and any `"`
+    inside it is doubled. So a comma only separates components when it is
+    outside quotes — `CN="Contoso, Inc."` is one component, not two.
+
+    Splitting on every comma instead is the difference between publishing a
+    helper under `Contoso, Inc.` and publishing it under `"Contoso`.
+    """
+    components: list[tuple[str, str]] = []
+    name: list[str] = []
+    value: list[str] = []
+    seen_separator = False
+    quoted = False
+    index = 0
+    while index < len(subject):
+        character = subject[index]
+        if quoted:
+            if character == '"':
+                if subject[index + 1 : index + 2] == '"':
+                    value.append('"')
+                    index += 2
+                    continue
+                quoted = False
+            else:
+                value.append(character)
+        elif character == '"' and seen_separator and not "".join(value).strip():
+            quoted = True
+            value = []
+        elif character == "=" and not seen_separator:
+            seen_separator = True
+        elif character == ",":
+            components.append(("".join(name).strip(), "".join(value).strip()))
+            name, value, seen_separator = [], [], False
+        elif seen_separator:
+            value.append(character)
+        else:
+            name.append(character)
+        index += 1
+    components.append(("".join(name).strip(), "".join(value).strip()))
+    return [(name, value) for name, value in components if name]
+
+
 def publisher_display_name(certificate_subject: str) -> str:
     """The publisher an operator is shown, out of the certificate subject.
 
@@ -325,10 +372,9 @@ def publisher_display_name(certificate_subject: str) -> str:
     passes through whole rather than emptied: an unusual certificate should be
     published under an ugly name it can be checked against, not under none.
     """
-    for component in certificate_subject.split(","):
-        name, separator, value = component.strip().partition("=")
-        if separator and name.strip().upper() == "CN" and value.strip():
-            return value.strip()
+    for name, value in _distinguished_name_components(certificate_subject):
+        if name.upper() == "CN" and value:
+            return value
     return certificate_subject.strip()
 
 
