@@ -232,11 +232,43 @@ def test_skills_edit_dispatches_selected_scope(
     assert seen == [("global", tmp_path)]
 
 
+def test_subcommand_parser_parses_skills_sync_scope() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["skills", "sync", "--project"]
+    )
+    assert args.command == "skills"
+    assert args.skills_command == "sync"
+    assert args.scope == "project"
+
+
+def test_skills_sync_dispatches_selected_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from git_loopy import skillscmd
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    seen: list[tuple[str, Path]] = []
+
+    def fake_sync(**kwargs: Any) -> int:
+        seen.append((kwargs["scope"], kwargs["repo_root"]))
+        return 0
+
+    monkeypatch.setattr(skillscmd, "run_skills_sync", fake_sync)
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["skills", "sync", "--global"]
+    )
+
+    assert cli_module._run_skills(args) == 0
+    assert seen == [("global", tmp_path)]
+
+
 def test_root_help_advertises_skill_policy_inspection_and_editing() -> None:
     help_text = cli_module.build_parser().format_help()
 
     assert "skills list" in help_text
     assert "skills edit" in help_text
+    assert "skills sync" in help_text
 
 
 def test_main_config_bad_op_errors_no_loop(

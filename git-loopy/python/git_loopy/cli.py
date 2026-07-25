@@ -222,6 +222,8 @@ def build_parser() -> argparse.ArgumentParser:
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
             "policy.\n"
+            "  skills sync                    Re-copy Copilot's Skill baseline "
+            "after confirmation.\n"
             "                                 See `git-loopy skills -h`.\n"
             "  continuation                   Native Continuation contract commands.\n"
             "                                 See `git-loopy continuation -h`.\n"
@@ -531,7 +533,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     skills_sub = skills.add_subparsers(
         dest="skills_command",
         required=True,
-        metavar="{list,edit}",
+        metavar="{list,edit,sync}",
     )
     skills_sub.add_parser(
         "list",
@@ -551,6 +553,17 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_scope_flags(skills_edit)
+    skills_sync = skills_sub.add_parser(
+        "sync",
+        help="Re-copy Copilot's Skill baseline into a saved Skill policy.",
+        description=(
+            "Show the exact additions and removals one explicit Copilot import "
+            "would make to a project or global Skill policy, then save it after "
+            "confirmation. Skills Copilot does not report keep their current "
+            "state, and Copilot's own settings are never changed."
+        ),
+    )
+    _add_scope_flags(skills_sync)
 
     continuation = sub.add_parser(
         "continuation",
@@ -800,6 +813,12 @@ def _run_skills(args: argparse.Namespace) -> int:
         return skillscmd.run_skills_list(repo_root=repo_root, env=os.environ)
     if args.skills_command == "edit":
         return skillscmd.run_skills_edit(
+            scope=getattr(args, "scope", None),
+            repo_root=repo_root,
+            env=os.environ,
+        )
+    if args.skills_command == "sync":
+        return skillscmd.run_skills_sync(
             scope=getattr(args, "scope", None),
             repo_root=repo_root,
             env=os.environ,

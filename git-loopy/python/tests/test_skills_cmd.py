@@ -1394,3 +1394,51 @@ def test_skills_sync_refuses_an_unavailable_skill_inventory(tmp_path: Path) -> N
     assert writes == []
     assert settings.load_config_table(config_path)["enabled_skills"] == ["kept"]
     assert any("SkillInventoryUnavailable" in message for message in errors)
+
+
+def test_skills_sync_never_silently_drops_a_name_with_no_catalog_winner(
+    tmp_path: Path,
+) -> None:
+    """A stale configured name is not a Copilot removal; it is an invalid policy.
+
+    Sync replaces only what the Skill catalog represents, so a name with no
+    winner keeps its current state and then fails resolution — the same
+    fail-closed answer a Run gives — rather than being quietly synced away.
+    """
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(config_path, {"enabled_skills": ["kept", "vanished"]})
+    catalog = SkillCatalog(
+        winners={
+            "kept": SkillCatalogWinner("kept", "personal", copilot_enabled=True),
+            "added": SkillCatalogWinner("added", "builtin", copilot_enabled=True),
+        }
+    )
+    writes: list[Path] = []
+    errors: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda _prompt: "yes",
+        output_fn=lambda _message: None,
+        error_fn=errors.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert settings.load_config_table(config_path)["enabled_skills"] == [
+        "kept",
+        "vanished",
+    ]
+    assert any("vanished" in message for message in errors)

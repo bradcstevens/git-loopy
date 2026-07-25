@@ -84,6 +84,25 @@ enabled project Skill that is not git-tracked blocks the save. `git-loopy init
 without contacting the machine's Copilot inventory, which keeps a first CI setup
 reproducible. Change a saved policy later with `git-loopy skills edit`.
 
+Copilot's own enabled state has no authority over a saved Skill policy — once
+established, the policy changes only through an explicit git-loopy action. When
+you *do* want to re-import it, `git-loopy skills sync` is that explicit action:
+
+```bash
+# Show what importing Copilot's current Skill baseline would change, then confirm.
+git-loopy skills sync            # project scope inside a repository, else global
+git-loopy skills sync --global
+```
+
+Sync prints the exact additions and removals before writing anything and saves
+only after you confirm. It replaces only the Skills Copilot actually reports:
+git-loopy's packaged fallbacks — and any configured name Copilot does not know —
+keep their current state rather than being synced away. The proposed policy is
+validated first, so a sync that would disable a Required Skill, enable an
+untracked project Skill, or leave an unresolvable name enabled fails without
+touching the Config. Cancelling writes nothing, and no path ever writes back to
+Copilot's own settings.
+
 ### 1.3 Alternative: copy the source catalog manually
 
 Use a manual copy when Python or `uv` is not available yet, or when you want
