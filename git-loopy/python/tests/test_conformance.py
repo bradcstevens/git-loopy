@@ -235,7 +235,14 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         == events_module.PYTHON_INSIGHT_CAPABILITIES
     )
 
-    assert _EVENT_SCHEMA["payload_contracts"] == {
+    insight_contracts = {
+        name: contract
+        for name, contract in _EVENT_SCHEMA["payload_contracts"].items()
+        if name not in _EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]
+        and name
+        not in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    }
+    assert insight_contracts == {
         "wrapper.run.start": {
             "required": [
                 "release_version",
@@ -325,6 +332,45 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         "duration_source": "monotonic clock",
         "duration_unit": "seconds",
     }
+
+
+def test_event_fixture_pins_rolling_contribution_contract() -> None:
+    """Rolling dispatch's identity rules are pinned as *relationships* the
+    fixture cannot self-check: the shared constructor, the fixture, and the
+    written contract must name the same triple, the same lifecycle set, and
+    the same terminal dispositions."""
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    assert tuple(identity["keys"]) == events_module.CONTRIBUTION_IDENTITY_KEYS
+    assert identity["iter"] is None
+    assert set(identity["lifecycle_types"]) == (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
+
+    literals = set(_EVENT_SCHEMA["event_types"].values())
+    grouped = (
+        identity["lifecycle_types"]
+        + identity["stamped_types"]
+        + identity["scheduler_scoped_types"]
+        + identity["forbidden_types"]
+    )
+    assert len(grouped) == len(set(grouped)), "an event type is in two scopes"
+    assert set(grouped) <= literals
+
+    # Every contribution-scoped lifecycle type requires the whole triple, and
+    # no scheduler-scoped rolling event pretends to carry one.
+    contracts = _EVENT_SCHEMA["payload_contracts"]
+    for type_name in identity["lifecycle_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert required[: len(identity["keys"])] == identity["keys"], type_name
+    for type_name in identity["scheduler_scoped_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert "contribution_id" not in required, type_name
+        assert "lane_id" not in required, type_name
+
+    end = contracts["wrapper.contribution.end"]
+    assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
+    assert end["strike_reaction_values"] == ["reset", "+1"]
+    assert "strike_reaction" in end["summary_required"]
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:

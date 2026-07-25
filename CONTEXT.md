@@ -920,7 +920,9 @@ _Avoid_: independent, parallelizable (as the label name).
   agent-authored commit is a plain commit and counts as progress; a runner-authored
   one is a **Checkpoint** and does not.
 - `wave` vs `iteration` — resolved historically as parallel and serial round units, then
-  superseded for Parallel mode: **Rolling dispatch** has no barrier round. An
+  superseded for Parallel mode by
+  [ADR-0020](docs/adr/0020-rolling-dispatch-with-bounded-green-integration.md):
+  **Rolling dispatch** has no barrier round. An
   **Iteration** remains the serial session/accounting unit; **Lanes** are reusable and
   **Integration** is a separate serialized stage. **Wave** remains only as the
   historical ADR-0008 model.

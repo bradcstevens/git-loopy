@@ -207,10 +207,12 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 observations only and never carry authoritative fragments, secrets, or runnable Instructions.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§17). Producing these additive events
-is capability-dependent.
+Run-scoped record of the frozen **Effective Skill policy** (§17). Rolling-dispatch additions
+within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
+Producing these additive events is capability-dependent.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
-segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`), and two that are
+segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`, `work_finished`,
+`branch_observed`, `recovery_started`, `refill_turn`), and two that are
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
 SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
 `assistant.reasoning`, `tool.call`, `tool.result`, `tool.permission_requested`,
@@ -280,6 +282,52 @@ counters or collections MUST NOT be reported as `0` or `[]`.
 Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.
+
+### Rolling-dispatch contribution lifecycle
+
+**Rolling dispatch** (Parallel mode) has no barrier round, so a Parallel record belongs to a
+**Lane contribution** rather than to an **Iteration**
+([ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)). These additive type
+literals are reserved within compatibility schema 1. Contribution lifecycle:
+`wrapper.contribution.start`,
+`wrapper.contribution.work_finished`, `wrapper.integration.parked`,
+`wrapper.integration.admitted`, `wrapper.integration.started`,
+`wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
+`wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
+`wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
+`wrapper.pipeline.quiescent`, and `wrapper.rolling.refill_turn`.
+
+- **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
+  and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
+  contribution *started* in and never changes, because a Lane is refillable the moment its
+  contribution is admitted to **Integration** — a record identifying only its Lane becomes
+  unattributable as soon as the next contribution starts there. Consumers MUST NOT rely on a
+  mutable Lane→issue lookup.
+- **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
+  `usage.tokens`, `usage.context_window`, `agent.output`, `wrapper.commit.recorded`,
+  `wrapper.checkpoint.recorded`, `wrapper.auto_close` — carry the same triple when they belong to
+  a contribution. The same literals remain valid, unstamped, for serial Iterations.
+- **Scope separation.** A Lane contribution MUST NOT emit `wrapper.iteration.start` or
+  `wrapper.iteration.end`; a serial Iteration keeps both and its positive `iter`.
+- **`wrapper.contribution.end` is the finalized Parallel row and the Strike transition.** Its
+  `reason` MUST at least distinguish `published`, `unchanged_branch`, `checkpoint_failed`, and
+  `serial_fallback`; only `published` is Parallel progress. A publication whose runner-driven
+  closure has not yet verified is *not* a contribution end. Lane-work and recovery Consumption and
+  commits appear exactly once, in the originating contribution, and runner **Checkpoint** commits
+  stay out of the commit total.
+- **Unknown stays unknown.** `wrapper.concurrency.changed` reports the immutable configured Lane
+  cap and the current effective limit, and reports a signal the Run cannot observe as `null` —
+  never an estimate and never `0`. It is emitted for an authoritative transition, not per
+  observation.
+- **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
+  They remain readable and MUST NOT be reinterpreted as contributions.
+
+The `contribution_identity` and `payload_contracts` sections of
+[`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, and the
+serialization cases pin the wire form. As with the other reserved Insight shapes above, producing
+these records is capability-dependent and the rolling-dispatch Orchestrator tickets own enabling
+the producers; the Event-schema fixture revision advances with the first Orchestrator that emits
+them, since that revision is what a distribution's capability manifest advertises.
 
 ### Renderer-neutral Dashboard seam
 

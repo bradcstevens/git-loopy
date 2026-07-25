@@ -13,7 +13,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
-| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows, and the fixed-frontier Automation vocabulary, safety case, eligibility, stop, and Dispatch-evidence scenarios |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
@@ -306,6 +306,24 @@ history leaks forward and the fixture silently pins case order instead of
 behavior. Because the adapter feeds decoded fixture values straight to the seam,
 these cases also pin that nested lifecycle timestamps are republished as RFC3339
 UTC regardless of how a producer represented the instant.
+
+`event-schema.json`'s `contribution_identity` section is the rolling-dispatch half
+of that file, and it exists because a **Lane** is reusable the moment its
+contribution is admitted to **Integration**. It partitions every literal into four
+disjoint scopes — the nine contribution lifecycle types that MUST carry
+`contribution_id`/`issue`/`lane_id` with a null `iter`, the existing per-Lane types
+that get stamped with the same triple, the five scheduler-scoped rolling types that
+describe the Run rather than one contribution, and the two serial Iteration types a
+contribution MUST NOT emit. A fixture cannot check its own partition, so the Python
+adapter asserts the disjointness, the coverage against `event_types`, and that the
+lifecycle contracts and terminal `reason` values equal the constants the production
+constructor enforces. The four rolling serialization cases are what every family
+executes: they pin a finalized contribution row, a stamped Lane commit, an unknown
+(`null`) versus observed-none (`0`) concurrency signal, and a refreshed **Pool**
+whose membership keeps source order while the payload keys around it sort. No
+Orchestrator emits these yet — the rolling-dispatch scheduler tickets own the
+producers — so the fixture revision advertised by each distribution's capability
+manifest deliberately has not moved.
 
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root

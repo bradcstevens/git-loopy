@@ -102,7 +102,158 @@
       "fallback_values": ["minimal", "migration", null],
       "sorted_projections": ["enabled", "legacy_denied", "required", "source_kinds"],
       "redacted": "Skill identity is the canonical name: no absolute path, home directory, exposure directory, or Skill content may appear."
+    },
+    "wrapper.pool.refreshed": {
+      "required_when_present": ["issues"],
+      "emitted": "Only for a complete successful shallow snapshot. An incomplete pagination, an unresolved candidate, or a failed refresh emits nothing and cannot establish emptiness.",
+      "order": "Source order, as read. The membership list is not re-sorted."
+    },
+    "wrapper.contribution.start": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.contribution.work_finished": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.integration.parked": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.integration.admitted": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.integration.started": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.integration.branch_observed": {
+      "required_when_present": [
+        "contribution_id",
+        "issue",
+        "lane_id",
+        "base_publications_since_cut"
+      ],
+      "nullable": ["base_publications_since_cut"]
+    },
+    "wrapper.integration.recovery_started": {
+      "required_when_present": [
+        "contribution_id",
+        "issue",
+        "lane_id",
+        "attempt",
+        "max_attempts"
+      ]
+    },
+    "wrapper.integration.published": {
+      "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.contribution.end": {
+      "required_when_present": [
+        "contribution_id",
+        "issue",
+        "lane_id",
+        "published",
+        "reason",
+        "summary"
+      ],
+      "reason_values": [
+        "published",
+        "unchanged_branch",
+        "checkpoint_failed",
+        "serial_fallback"
+      ],
+      "summary_required": [
+        "model",
+        "effort",
+        "tokens_in",
+        "tokens_out",
+        "observed_tokens",
+        "cost_usd",
+        "commits",
+        "closures",
+        "closure_outcome",
+        "recovery_attempts",
+        "agent_seconds",
+        "lifecycle_seconds",
+        "peak_context_window",
+        "strike_reaction"
+      ],
+      "strike_reaction_values": ["reset", "+1"],
+      "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
+      "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total."
+    },
+    "wrapper.concurrency.changed": {
+      "required_when_present": [
+        "configured_lane_limit",
+        "effective_lane_limit",
+        "pressure",
+        "rate_limit_state",
+        "credit_state",
+        "host_state"
+      ],
+      "nullable": ["pressure", "rate_limit_state", "credit_state", "host_state"],
+      "pressure_values": [
+        "integration_backlog",
+        "rate_limit",
+        "credit",
+        "host",
+        null
+      ],
+      "emitted": "Only for an authoritative effective-limit transition, never per observation. The configured Lane cap is immutable for the Run.",
+      "unavailable": "A signal the Run cannot observe is null, never an estimated or zero value."
+    },
+    "wrapper.serial.requested": {
+      "required_when_present": ["issue", "reason"],
+      "nullable": ["issue"],
+      "reason_values": ["validated_serial_candidate", "integration_fallback"]
+    },
+    "wrapper.pipeline.quiescent": {
+      "required_when_present": ["phase", "reason"],
+      "phase_values": [
+        "draining_for_serial",
+        "serial_ownership",
+        "rolling_refill_turn",
+        "iteration_cap_drain",
+        "abort_drain"
+      ]
+    },
+    "wrapper.rolling.refill_turn": {
+      "required_when_present": ["reservations", "effective_lane_limit"]
     }
+  },
+  "contribution_identity": {
+    "keys": ["contribution_id", "issue", "lane_id"],
+    "iter": null,
+    "lifecycle_types": [
+      "wrapper.contribution.start",
+      "wrapper.contribution.work_finished",
+      "wrapper.contribution.end",
+      "wrapper.integration.parked",
+      "wrapper.integration.admitted",
+      "wrapper.integration.started",
+      "wrapper.integration.branch_observed",
+      "wrapper.integration.recovery_started",
+      "wrapper.integration.published"
+    ],
+    "stamped_types": [
+      "agent.output",
+      "assistant.message",
+      "assistant.reasoning",
+      "tool.call",
+      "tool.result",
+      "usage.context_window",
+      "usage.tokens",
+      "wrapper.auto_close",
+      "wrapper.checkpoint.recorded",
+      "wrapper.commit.recorded"
+    ],
+    "scheduler_scoped_types": [
+      "wrapper.pool.refreshed",
+      "wrapper.concurrency.changed",
+      "wrapper.serial.requested",
+      "wrapper.pipeline.quiescent",
+      "wrapper.rolling.refill_turn"
+    ],
+    "forbidden_types": ["wrapper.iteration.start", "wrapper.iteration.end"],
+    "lane_id": "The reusable Lane the contribution started in. It never changes, even after that Lane is refilled, so replay never needs a mutable Lane-to-issue lookup.",
+    "legacy": "Historical Wave traces carry lane_issue and no contribution identity. They remain readable and MUST NOT be reinterpreted as contributions."
   },
   "value_semantics": {
     "unknown": null,
@@ -134,6 +285,20 @@
     "WRAPPER_CONTINUATION_DISPATCH_STARTED": "wrapper.continuation_dispatch.started",
     "WRAPPER_CONTINUATION_DISPATCH_ENDED": "wrapper.continuation_dispatch.ended",
     "WRAPPER_CONTINUATION_STOPPED": "wrapper.continuation.stopped",
+    "WRAPPER_POOL_REFRESHED": "wrapper.pool.refreshed",
+    "WRAPPER_CONTRIBUTION_START": "wrapper.contribution.start",
+    "WRAPPER_CONTRIBUTION_WORK_FINISHED": "wrapper.contribution.work_finished",
+    "WRAPPER_INTEGRATION_PARKED": "wrapper.integration.parked",
+    "WRAPPER_INTEGRATION_ADMITTED": "wrapper.integration.admitted",
+    "WRAPPER_INTEGRATION_STARTED": "wrapper.integration.started",
+    "WRAPPER_INTEGRATION_BRANCH_OBSERVED": "wrapper.integration.branch_observed",
+    "WRAPPER_INTEGRATION_RECOVERY_STARTED": "wrapper.integration.recovery_started",
+    "WRAPPER_INTEGRATION_PUBLISHED": "wrapper.integration.published",
+    "WRAPPER_CONTRIBUTION_END": "wrapper.contribution.end",
+    "WRAPPER_CONCURRENCY_CHANGED": "wrapper.concurrency.changed",
+    "WRAPPER_SERIAL_REQUESTED": "wrapper.serial.requested",
+    "WRAPPER_PIPELINE_QUIESCENT": "wrapper.pipeline.quiescent",
+    "WRAPPER_ROLLING_REFILL_TURN": "wrapper.rolling.refill_turn",
     "SESSION_CREATED": "session.created",
     "SESSION_IDLE": "session.idle",
     "SESSION_DELETED": "session.deleted",
@@ -1030,6 +1195,97 @@
         "base_scope": "project"
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:00.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.skill_policy.resolved\", \"base_scope\": \"project\", \"enabled\": [\"house-style\", \"tdd\"], \"fallback\": null, \"legacy_denied\": [\"prototype\"], \"migration_warning\": false, \"required\": [\"tdd\"], \"source_kinds\": {\"house-style\": \"project\", \"tdd\": \"packaged\"}}\n"
+    },
+    {
+      "id": "contribution-end-finalized-row",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "contribution_id": "c-3",
+        "issue": 42,
+        "lane_id": "L1",
+        "published": true,
+        "reason": "published",
+        "summary": {
+          "model": null,
+          "effort": null,
+          "tokens_in": null,
+          "tokens_out": null,
+          "observed_tokens": null,
+          "cost_usd": null,
+          "commits": 2,
+          "closures": 1,
+          "closure_outcome": "verified",
+          "recovery_attempts": 0,
+          "agent_seconds": 41.5,
+          "lifecycle_seconds": 96.25,
+          "peak_context_window": null,
+          "strike_reaction": "reset"
+        }
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-3\", \"issue\": 42, \"lane_id\": \"L1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": null, \"effort\": null, \"tokens_in\": null, \"tokens_out\": null, \"observed_tokens\": null, \"cost_usd\": null, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"verified\", \"recovery_attempts\": 0, \"agent_seconds\": 41.5, \"lifecycle_seconds\": 96.25, \"peak_context_window\": null, \"strike_reaction\": \"reset\"}}\n"
+    },
+    {
+      "id": "contribution-stamped-lane-commit",
+      "event": {
+        "ts": "2026-05-16T00:00:06.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": null,
+        "type": "wrapper.commit.recorded",
+        "sha": "0123456789abcdef0123456789abcdef01234567",
+        "lane_id": "L1",
+        "issue": 42,
+        "contribution_id": "c-3"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:06.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.commit.recorded\", \"contribution_id\": \"c-3\", \"issue\": 42, \"lane_id\": \"L1\", \"sha\": \"0123456789abcdef0123456789abcdef01234567\"}\n"
+    },
+    {
+      "id": "concurrency-changed-unknown-and-observed-none",
+      "event": {
+        "ts": "2026-05-16T00:00:07.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": null,
+        "type": "wrapper.concurrency.changed",
+        "configured_lane_limit": 4,
+        "effective_lane_limit": 2,
+        "pressure": "integration_backlog",
+        "rate_limit_state": 0,
+        "credit_state": null,
+        "host_state": null
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:07.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 4, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": null, \"pressure\": \"integration_backlog\", \"rate_limit_state\": 0}\n"
+    },
+    {
+      "id": "pool-refreshed-keeps-source-order",
+      "event": {
+        "ts": "2026-05-16T00:00:08.000Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": null,
+        "type": "wrapper.pool.refreshed",
+        "issues": [
+          {
+            "number": 80,
+            "title": "Refill a Lane",
+            "state": "open",
+            "labels": [
+              "ready-for-agent",
+              "parallel-safe"
+            ]
+          },
+          {
+            "number": 42,
+            "title": "Drain the frontier",
+            "state": "open",
+            "labels": [
+              "ready-for-agent",
+              "parallel-safe"
+            ]
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:08.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [{\"number\": 80, \"title\": \"Refill a Lane\", \"state\": \"open\", \"labels\": [\"ready-for-agent\", \"parallel-safe\"]}, {\"number\": 42, \"title\": \"Drain the frontier\", \"state\": \"open\", \"labels\": [\"ready-for-agent\", \"parallel-safe\"]}]}\n"
     }
   ]
 }
