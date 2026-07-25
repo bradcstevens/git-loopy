@@ -15,8 +15,10 @@ against the Release again.
 
 `git-loopy/conformance/windows-channels.json` is the policy. It names the one
 target Windows package managers run, records the other six as excluded *by name
-and reason* rather than by absence, names the probe winget cannot run, and pins
-the drift a committed manifest is refused for.
+and reason* rather than by absence, names the probe winget cannot run, names the
+repository each channel's pull request is opened against and the directories
+each channel exclusively owns, and pins the drift a committed manifest is
+refused for.
 """
 
 from __future__ import annotations
@@ -91,6 +93,7 @@ class Channel:
     id: str
     channel_job: str
     repository: str
+    pull_request_base_repository: str
     package_identifier: str
     package_name: str
     publisher_url: str
@@ -98,6 +101,7 @@ class Channel:
     default_locale: str | None
     installer_architecture: str
     files: tuple[str, ...]
+    exclusive_directories: tuple[str, ...]
 
     def committed_files(self, release_version: str) -> tuple[str, ...]:
         """Where this channel's metadata is committed for one Release.
@@ -109,6 +113,21 @@ class Channel:
         different file.
         """
         return tuple(path.format(version=release_version) for path in self.files)
+
+    def owned_directories(self, release_version: str) -> tuple[str, ...]:
+        """The directories whose whole contents are this channel's, for one Release.
+
+        Not every channel has one. winget resolves a package from *every*
+        manifest in its version directory, and that directory holds nothing
+        else, so anything in it is metadata an operator can install through.
+        Scoop's bucket directory holds every other package in it, so this
+        channel owns one file there and no directory — declared empty rather
+        than assumed, because a channel that claimed its neighbours' directory
+        would refuse packages it has nothing to do with.
+        """
+        return tuple(
+            path.format(version=release_version) for path in self.exclusive_directories
+        )
 
 
 @dataclass(frozen=True)
@@ -190,6 +209,9 @@ def load_channel_policy(repository_root: Path) -> ChannelPolicy:
                 id=str(record["id"]),
                 channel_job=str(record["channel_job"]),
                 repository=str(record["repository"]),
+                pull_request_base_repository=str(
+                    record["pull_request_base_repository"]
+                ),
                 package_identifier=str(record["package_identifier"]),
                 package_name=str(record["package_name"]),
                 publisher_url=str(record["publisher_url"]),
@@ -197,6 +219,9 @@ def load_channel_policy(repository_root: Path) -> ChannelPolicy:
                 default_locale=_optional_text(record["default_locale"]),
                 installer_architecture=str(record["installer_architecture"]),
                 files=tuple(str(path) for path in record["files"]),
+                exclusive_directories=tuple(
+                    str(path) for path in record["exclusive_directories"]
+                ),
             )
             for record in document["channels"]
         ),
@@ -680,6 +705,24 @@ def _yaml_document(path: str, text: str) -> dict[str, Any]:
     return document
 
 
+def _sequence(value: Any, path: str, field: str) -> list[Any]:
+    """One YAML field that has to be a sequence, refused by name when it is not.
+
+    A committed manifest is a file a human can edit, so every shape it could
+    take has to reach a refusal rather than a traceback: `TypeError` escapes the
+    one error type `main` turns into an exit code, and the job would then fail
+    for a reason that reads like a bug here rather than drift there.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise WindowsChannelError(
+            f"{path} declares {field} as {type(value).__name__}, but winget "
+            "reads it as a sequence"
+        )
+    return value
+
+
 def _one(values: list[Any], path: str, field: str) -> Any:
     """The single entry of a list winget's schema allows to hold several.
 
@@ -710,7 +753,11 @@ def read_winget_claims(files: dict[str, str]) -> ChannelClaims:
         identifiers.add(str(document.get("PackageIdentifier")))
         versions.add(str(document.get("PackageVersion")))
         if document.get("ManifestType") == "installer":
-            installer = _one(list(document.get("Installers") or []), path, "Installers")
+            installer = _one(
+                _sequence(document.get("Installers"), path, "Installers"),
+                path,
+                "Installers",
+            )
         elif document.get("ManifestType") == "defaultLocale":
             found = document.get("Publisher")
             publisher = None if found is None else str(found)
@@ -993,6 +1040,36 @@ def committed_files(
     }
 
 
+def unread_channel_files(
+    repository_root: Path,
+    channel_root: Path,
+    channel_id: str,
+    release_version: str,
+) -> list[str]:
+    """What this channel would publish that the gate did not open.
+
+    The gate proves the files the policy names; the release job commits whatever
+    is in the checkout, because a winget version directory is new on every
+    Release and only `git add -A` catches it. Those are the same set only if
+    nothing else is there — and a package manager resolves a package from the
+    directory, not from this project's list.
+    """
+    channel = load_channel_policy(repository_root).channel(channel_id)
+    expected = set(channel.committed_files(release_version))
+    unread: set[str] = set()
+    for directory in channel.owned_directories(release_version):
+        root = channel_root / directory
+        if not root.is_dir():
+            continue
+        for found in root.rglob("*"):
+            if not found.is_file():
+                continue
+            relative = found.relative_to(channel_root).as_posix()
+            if relative not in expected:
+                unread.add(relative)
+    return sorted(unread)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the winget/Scoop channel generator and its drift gate."""
     args = _build_parser().parse_args(argv)
@@ -1018,6 +1095,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 written.write_text(text, encoding="utf-8")
                 print(written)
         else:
+            unread = unread_channel_files(
+                args.repository_root,
+                args.channel_root,
+                args.channel,
+                args.release_version,
+            )
+            if unread:
+                raise WindowsChannelError(
+                    f"the {args.channel} channel would publish "
+                    f"{', '.join(unread)}, which this gate never read; a package "
+                    "manager resolves every file in that directory"
+                )
             published: dict[str, str] = {}
             for path, location in locations.items():
                 try:

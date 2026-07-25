@@ -45,6 +45,7 @@
       "id": "winget",
       "channel_job": "winget",
       "repository": "bradcstevens/winget-pkgs",
+      "pull_request_base_repository": "microsoft/winget-pkgs",
       "package_identifier": "bradcstevens.git-loopy-tui",
       "package_name": "git-loopy-tui",
       "publisher_url": "https://github.com/bradcstevens",
@@ -55,12 +56,16 @@
         "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.yaml",
         "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.installer.yaml",
         "manifests/b/bradcstevens/git-loopy-tui/{version}/bradcstevens.git-loopy-tui.locale.en-US.yaml"
+      ],
+      "exclusive_directories": [
+        "manifests/b/bradcstevens/git-loopy-tui/{version}"
       ]
     },
     {
       "id": "scoop",
       "channel_job": "scoop",
       "repository": "bradcstevens/scoop-git-loopy",
+      "pull_request_base_repository": "bradcstevens/scoop-git-loopy",
       "package_identifier": "git-loopy-tui",
       "package_name": "git-loopy-tui",
       "publisher_url": "https://github.com/bradcstevens",
@@ -69,7 +74,8 @@
       "installer_architecture": "64bit",
       "files": [
         "bucket/git-loopy-tui.json"
-      ]
+      ],
+      "exclusive_directories": []
     }
   ],
   "unavailable_claims": [

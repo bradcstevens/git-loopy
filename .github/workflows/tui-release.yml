@@ -586,11 +586,21 @@ jobs:
           GH_TOKEN: ${{ secrets.WINGET_MANIFESTS_TOKEN }}
           RELEASE_VERSION: ${{ needs.identity.outputs.version }}
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          CHANNEL_REPOSITORY: bradcstevens/winget-pkgs
+          PR_BASE_REPOSITORY: microsoft/winget-pkgs
         working-directory: channel
         shell: bash
         run: |
           branch="git-loopy-tui-$RELEASE_TAG"
-          base=$(git rev-parse --abbrev-ref HEAD)
+          # winget's default source is the community repository, and a project
+          # publishes into it by pushing to its own fork and opening a pull
+          # request across repositories. So the base is stated rather than left
+          # to `gh`'s reading of this checkout's remotes, and the head names the
+          # fork's owner -- an unqualified branch is one the base repository
+          # looks for in itself and never finds.
+          head="${CHANNEL_REPOSITORY%%/*}:$branch"
+          base=$(gh repo view "$PR_BASE_REPOSITORY" \
+            --json defaultBranchRef --jq .defaultBranchRef.name)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
@@ -616,11 +626,13 @@ jobs:
             git push origin "HEAD:refs/heads/$branch"
           fi
           gh pr create \
+            --repo "$PR_BASE_REPOSITORY" \
             --title "git-loopy-tui $RELEASE_VERSION" \
             --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The installer URL, digest, and publisher are verified against that Release." \
-            --head "$branch" \
+            --head "$head" \
             --base "$base" \
-          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+          || gh pr edit "$head" --repo "$PR_BASE_REPOSITORY" \
+            --title "git-loopy-tui $RELEASE_VERSION"
 
   scoop:
     name: Update the Scoop bucket
@@ -690,11 +702,19 @@ jobs:
           GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
           RELEASE_VERSION: ${{ needs.identity.outputs.version }}
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          CHANNEL_REPOSITORY: bradcstevens/scoop-git-loopy
+          PR_BASE_REPOSITORY: bradcstevens/scoop-git-loopy
         working-directory: channel
         shell: bash
         run: |
           branch="git-loopy-tui-$RELEASE_TAG"
-          base=$(git rev-parse --abbrev-ref HEAD)
+          # A bucket is a repository operators add by name, so this pull request
+          # is its own -- but it is still stated rather than inferred, and read
+          # from the base repository rather than from the checked-out branch, so
+          # the two channels differ only in which repository they name.
+          head="${CHANNEL_REPOSITORY%%/*}:$branch"
+          base=$(gh repo view "$PR_BASE_REPOSITORY" \
+            --json defaultBranchRef --jq .defaultBranchRef.name)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
@@ -720,8 +740,10 @@ jobs:
             git push origin "HEAD:refs/heads/$branch"
           fi
           gh pr create \
+            --repo "$PR_BASE_REPOSITORY" \
             --title "git-loopy-tui $RELEASE_VERSION" \
             --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The download URL and hash are verified against that Release." \
-            --head "$branch" \
+            --head "$head" \
             --base "$base" \
-          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+          || gh pr edit "$head" --repo "$PR_BASE_REPOSITORY" \
+            --title "git-loopy-tui $RELEASE_VERSION"

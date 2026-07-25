@@ -699,6 +699,55 @@ def test_every_windows_channel_declares_its_credential_in_the_one_registry() -> 
         assert declared[channel.channel_job].purpose.strip()
 
 
+def pull_request_step(channel: str) -> dict[str, Any]:
+    """The step that commits a channel's metadata and opens its Release PR."""
+    return next(
+        step
+        for step in channel_job(channel)["steps"]
+        if "gh pr create" in str(step.get("run", ""))
+    )
+
+
+def step_environment(step: dict[str, Any], **supplied: str) -> dict[str, str]:
+    """The step's own declared environment, with the workflow's expressions supplied.
+
+    Read from the step rather than restated, so a job that grows a variable the
+    script depends on cannot pass here while failing on a runner. A `${{ }}`
+    expression is the one thing a test has to stand in for; everything else is
+    a literal the workflow already decided.
+    """
+    declared = {
+        name: str(value)
+        for name, value in step.get("env", {}).items()
+        if not str(value).startswith("${{")
+    }
+    return {**os.environ, **declared, **supplied}
+
+
+def stub_gh(directory: Path, default_branch: str = "main") -> Path:
+    """A `gh` the step's bash can reach without a token or a live repository.
+
+    The step asks the *base* repository for its default branch rather than
+    reading the checkout's current branch, because a cross-repository pull
+    request's base lives in a repository this checkout is not. That call has to
+    be answered for the rest of the script to run at all, and every invocation
+    is recorded so a test can prove which ones happened.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    executable = directory / "gh"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$GH_CALLS"\n'
+        'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then\n'
+        f"  echo {default_branch}\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
 @pytest.mark.parametrize("channel", ["winget", "scoop"])
 def test_a_channel_push_updates_its_own_branch_on_a_rerun(
     channel: str, tmp_path: Path
@@ -710,12 +759,10 @@ def test_a_channel_push_updates_its_own_branch_on_a_rerun(
     "stale info" rather than updating. This runs the step's own bash against a
     real bare remote, twice, which is the only way to find that out.
     """
-    script = next(
-        step
-        for step in channel_job(channel)["steps"]
-        if "gh pr create" in str(step.get("run", ""))
-    )["run"]
+    step = pull_request_step(channel)
+    script = str(step["run"])
     script = script[: script.index("gh pr create")]
+    stub_gh(tmp_path / "bin")
 
     remote = tmp_path / "channel.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True)
@@ -742,7 +789,13 @@ def test_a_channel_push_updates_its_own_branch_on_a_rerun(
         return subprocess.run(
             ["bash", "-eo", "pipefail", "-c", script],
             cwd=checkout,
-            env={**os.environ, "RELEASE_TAG": "v1.2.3", "RELEASE_VERSION": "1.2.3"},
+            env=step_environment(
+                step,
+                RELEASE_TAG="v1.2.3",
+                RELEASE_VERSION="1.2.3",
+                GH_CALLS=str(tmp_path / f"gh-{marker}.log"),
+                PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            ),
             capture_output=True,
             text=True,
         )
@@ -772,11 +825,10 @@ def test_an_unchanged_channel_stops_before_it_opens_a_pull_request(
     channel: str, tmp_path: Path
 ) -> None:
     """Re-running a Release that is already published is not an update."""
-    script = next(
-        step
-        for step in channel_job(channel)["steps"]
-        if "gh pr create" in str(step.get("run", ""))
-    )["run"]
+    step = pull_request_step(channel)
+    script = str(step["run"])
+    stub_gh(tmp_path / "bin")
+    calls = tmp_path / "gh.log"
 
     remote = tmp_path / "channel.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True)
@@ -795,14 +847,20 @@ def test_an_unchanged_channel_stops_before_it_opens_a_pull_request(
     completed = subprocess.run(
         ["bash", "-eo", "pipefail", "-c", script],
         cwd=checkout,
-        env={**os.environ, "RELEASE_TAG": "v1.2.3", "RELEASE_VERSION": "1.2.3"},
+        env=step_environment(
+            step,
+            RELEASE_TAG="v1.2.3",
+            RELEASE_VERSION="1.2.3",
+            GH_CALLS=str(calls),
+            PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        ),
         capture_output=True,
         text=True,
     )
 
     assert completed.returncode == 0, completed.stderr
     assert "already publishes v1.2.3" in completed.stdout
-    assert "gh" not in completed.stderr
+    assert "pr create" not in calls.read_text(encoding="utf-8")
 
 
 # The certificate-subject vocabulary.
@@ -941,3 +999,152 @@ def test_a_winget_manifest_whose_installers_is_not_a_sequence_is_refused_by_name
         windows_channels.read_winget_claims({"installer.yaml": manifest})
 
     assert "Installers" in str(raised.value)
+
+
+def test_a_manifest_this_gate_never_read_cannot_ride_along(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC4: what reaches operators is the whole committed directory, not a list.
+
+    The gate reads the files the policy names, and the job commits whatever is
+    in the checkout — `git add -A`, because a winget version directory is new on
+    every Release. Those are not the same set. winget resolves a package from
+    every manifest in its version directory, so a second locale manifest left
+    there by an earlier run, or added by anyone with write access to the fork,
+    is metadata an operator can install through and this gate never opened.
+
+    Refused by name, and only where a directory is this channel's own: Scoop's
+    bucket holds every other package in it, so it declares no exclusive
+    directory rather than claiming one and refusing its neighbours.
+    """
+    root = tmp_path / "channel"
+    assert windows_channels.main(channel_argv("render", "winget", tmp_path, root)) == 0
+    capsys.readouterr()
+
+    committed = windows_channels.load_channel_policy(REPOSITORY_ROOT).channel("winget")
+    smuggled = root / Path(committed.committed_files("1.2.3")[0]).with_name(
+        "bradcstevens.git-loopy-tui.locale.fr-FR.yaml"
+    )
+    smuggled.write_text(
+        "PackageIdentifier: bradcstevens.git-loopy-tui\n"
+        'PackageVersion: "1.2.3"\n'
+        'PackageLocale: "fr-FR"\n'
+        "Publisher: \"Quelqu'un D'Autre\"\n"
+        'ManifestType: "locale"\n'
+        'ManifestVersion: "1.6.0"\n',
+        encoding="utf-8",
+    )
+
+    assert windows_channels.main(channel_argv("verify", "winget", tmp_path, root)) == 1
+    refusal = capsys.readouterr().err
+    assert "locale.fr-FR.yaml" in refusal
+    assert "this gate never read" in refusal
+
+
+@pytest.mark.parametrize("channel", ["winget", "scoop"])
+def test_a_channel_opens_its_pull_request_where_operators_install_from(
+    channel: str,
+) -> None:
+    """AC3: the manifests have to land in the repository the package resolves from.
+
+    winget's default source is `microsoft/winget-pkgs`, and the way a project
+    publishes into it is to push a branch to its own fork and open a pull
+    request *across* repositories. The checked-out repository is therefore not
+    the repository the pull request belongs to, and `--head` has to name the
+    fork's owner or the base repository looks for that branch in itself.
+
+    Both are stated in the policy rather than left to `gh`'s resolution of the
+    checkout's remotes: a job whose base repository is inferred is a job that
+    can silently open a pull request against a fork nobody installs from.
+    """
+    declared = windows_channels.load_channel_policy(REPOSITORY_ROOT).channel(channel)
+    opening = next(
+        step
+        for step in channel_job(channel)["steps"]
+        if "gh pr create" in str(step.get("run", ""))
+    )
+    environment = opening["env"]
+    run = str(opening["run"])
+
+    assert environment["PR_BASE_REPOSITORY"] == declared.pull_request_base_repository
+    assert environment["CHANNEL_REPOSITORY"] == declared.repository
+    assert '--repo "$PR_BASE_REPOSITORY"' in run
+    # The head owner is derived from the checked-out repository rather than
+    # written down twice: a fork whose owner disagreed with its own checkout is
+    # a branch the base repository cannot find.
+    assert 'head="${CHANNEL_REPOSITORY%%/*}:$branch"' in run
+    assert '--head "$head"' in run
+    assert "gh pr edit" in run and run.count('--repo "$PR_BASE_REPOSITORY"') == 2
+
+
+def test_the_winget_channel_publishes_through_a_fork_of_the_community_repository() -> (
+    None
+):
+    """The one channel whose metadata leaves this project's own namespace.
+
+    Scoop's bucket is a repository operators add by name, so its pull request is
+    its own. winget's is not: the package identifier and the committed path are
+    both `microsoft/winget-pkgs` conventions, and a manifest that never reaches
+    that repository is one `winget install bradcstevens.git-loopy-tui` -- the
+    command this project's own README publishes -- cannot resolve.
+    """
+    policy = windows_channels.load_channel_policy(REPOSITORY_ROOT)
+    winget = policy.channel("winget")
+    scoop = policy.channel("scoop")
+
+    assert winget.pull_request_base_repository == "microsoft/winget-pkgs"
+    assert winget.repository != winget.pull_request_base_repository
+    assert winget.committed_files("1.2.3")[0].startswith("manifests/b/bradcstevens/")
+    assert scoop.pull_request_base_repository == scoop.repository
+
+
+@pytest.mark.parametrize("channel", ["winget", "scoop"])
+def test_the_pull_request_a_channel_actually_opens_names_the_right_repository(
+    channel: str, tmp_path: Path
+) -> None:
+    """The control for the cross-repository fix: what `gh` was asked to do.
+
+    Matching the step's text proves the flags are written down. Running it
+    proves they survive the shell — `${CHANNEL_REPOSITORY%%/*}` is a parameter
+    expansion, and a head reference that expanded to the wrong thing would look
+    correct in the YAML and open a pull request in a repository nobody installs
+    from.
+    """
+    step = pull_request_step(channel)
+    declared = windows_channels.load_channel_policy(REPOSITORY_ROOT).channel(channel)
+    stub_gh(tmp_path / "bin", default_branch="master")
+    calls = tmp_path / "gh.log"
+
+    remote = tmp_path / "channel.git"
+    subprocess.run(["git", "init", "--bare", "-b", "master", str(remote)], check=True)
+    checkout = tmp_path / "channel"
+    subprocess.run(["git", "clone", str(remote), str(checkout)], check=True)
+    (checkout / "manifest.txt").write_text("published\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", str(step["run"])],
+        cwd=checkout,
+        env=step_environment(
+            step,
+            RELEASE_TAG="v1.2.3",
+            RELEASE_VERSION="1.2.3",
+            GH_CALLS=str(calls),
+            PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        ),
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    opened = next(
+        line
+        for line in calls.read_text(encoding="utf-8").splitlines()
+        if line.startswith("pr create")
+    )
+    owner = declared.repository.split("/")[0]
+    assert f"--repo {declared.pull_request_base_repository}" in opened
+    assert f"--head {owner}:git-loopy-tui-v1.2.3" in opened
+    # The base is the base repository's own default branch, not this checkout's:
+    # a fork of the community repository is checked out on whatever branch it
+    # tracks, and that is a different repository's answer to the question.
+    assert "--base master" in opened

@@ -377,7 +377,15 @@ every one of these holds:
   `https://github.com/bradcstevens/git-loopy/releases/download/` and nowhere
   else, and names *this Release's Windows artifact* rather than another one;
 - the digest is the one the Release published for those exact bytes;
-- the whole committed text is byte-for-byte the text this Release generates.
+- the whole committed text is byte-for-byte the text this Release generates;
+- nothing else is in the package's own directory. winget resolves a package from
+  every manifest in its version directory, so a file the gate did not read is
+  refused by name rather than installed through.
+
+The winget manifests are pushed to this project's fork of the community
+repository and opened as a pull request into `microsoft/winget-pkgs`, which is
+the repository `winget install` resolves from. The Scoop manifest's pull request
+is opened against the bucket you added by name.
 
 Two further checks are asymmetric, because the two formats are:
 

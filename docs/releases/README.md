@@ -72,8 +72,17 @@ against.
 | Channel | Platforms | Metadata |
 | --- | --- | --- |
 | Homebrew (`bradcstevens/homebrew-git-loopy`) | macOS arm64/x64, Linux arm64/x64 (glibc) | [`homebrew-tap.json`](../../git-loopy/conformance/homebrew-tap.json) |
-| winget (`bradcstevens/winget-pkgs`) | Windows x64 | [`windows-channels.json`](../../git-loopy/conformance/windows-channels.json) |
+| winget (`bradcstevens/winget-pkgs` → `microsoft/winget-pkgs`) | Windows x64 | [`windows-channels.json`](../../git-loopy/conformance/windows-channels.json) |
 | Scoop (`bradcstevens/scoop-git-loopy`) | Windows x64 | [`windows-channels.json`](../../git-loopy/conformance/windows-channels.json) |
+
+winget is the one channel whose metadata leaves this project's namespace. Its
+default source is the community repository, so the manifests are pushed to this
+project's **fork** and the pull request is opened **across repositories** into
+`microsoft/winget-pkgs`. Both repositories are named in the fixture rather than
+inferred from the checkout's remotes: a pull request whose base was guessed is
+one that can quietly land in a fork nobody installs from. Homebrew and Scoop are
+repositories an operator adds by name, so each opens its pull request against
+itself.
 
 Channel metadata is generated and then **read back and refused** by a separate
 gate, because what reaches operators is whatever is committed to the channel —

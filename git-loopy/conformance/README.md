@@ -113,6 +113,17 @@ each committed file must be byte-for-byte the text this Release generates — so
 reading the claims is what earns each drift its own refusal rather than what
 makes the gate sound.
 
+Canonical equality proves the files the policy names, and those are the files
+that reach operators only if nothing else does. A package manager resolves a
+package from its *directory*, so each channel also declares the directories it
+exclusively owns: winget's version directory holds that package's manifests and
+nothing else, and anything found there the gate did not read is refused by name.
+Scoop declares none, because its bucket directory holds every other package in
+it — a channel that claimed its neighbours' directory would refuse packages it
+has nothing to do with. Each channel also names the repository its pull request
+is opened against, which for winget is the community repository its checkout is
+a fork of rather than the checkout itself.
+
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered
 scripted-GitHub transport. An adapter runs only records naming its distribution,
