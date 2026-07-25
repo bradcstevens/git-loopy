@@ -107,6 +107,41 @@ untracked project Skill, or leave an unresolvable name enabled fails without
 touching the Config. Cancelling writes nothing, and no path ever writes back to
 Copilot's own settings.
 
+#### Upgrading a Config written before Skill policies existed
+
+A Config that predates the closed-world Skill policy carries no
+`enabled_skills` key. git-loopy will not guess one for it: an absent key is not
+"expose everything", it resolves to the **Minimal Skill policy** — the Required
+Skills and nothing else — so an unmigrated Config keeps running, just with a
+narrower surface than its author expected.
+
+The first interactive `git-loopy` run on such a Config offers a one-time
+migration through the same picker as `skills edit`, seeded from your current
+Copilot Skill baseline with any Skill Copilot reports **disabled** left
+unchecked. It is offered once, before any work starts, and writes the scope a
+Run actually resolves — project when the repository carries Config, otherwise
+global:
+
+```text
+git-loopy: this project Config predates the closed-world Skill policy. Choose
+the Skills this installation may load; the selection is saved once and never
+asked again.
+```
+
+- Confirming saves the selection and the Run continues on the policy you just
+  established; later Runs see a configured Config and are never asked again.
+- Cancelling writes nothing **and starts nothing** — the Run exits non-zero so
+  no Iteration silently proceeds on a policy you declined to choose.
+- Without a TTY, or with `--no-interactive`, nothing is prompted or persisted:
+  the Run proceeds on the Minimal Skill policy and prints a warning naming
+  `git-loopy skills edit` as the fix. Automation therefore never blocks.
+- A Config with `enabled_skills = []` is a real policy — a deliberately empty
+  one — not a legacy Config, and is never offered for migration.
+- `GIT_LOOPY_ENABLED_SKILLS` replaces the policy for that Run outright, so it
+  also suppresses the offer. `--enable-skill` is a temporary overlay on top of
+  the base policy and does not, so the underlying Config is still offered for
+  migration.
+
 ### 1.3 Alternative: copy the source catalog manually
 
 Use a manual copy when Python or `uv` is not available yet, or when you want

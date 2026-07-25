@@ -37,6 +37,42 @@ class SkillPolicyFallback(StrEnum):
     MIGRATION = "migration"
 
 
+class SkillPolicyStartupState(StrEnum):
+    """What a Run finds before it resolves an Effective Skill policy."""
+
+    #: No Config resolves anywhere; first-run setup establishes the policy.
+    UNCONFIGURED = "unconfigured"
+    #: Config exists but the selected scope predates ``enabled_skills``.
+    LEGACY = "legacy"
+    #: A policy is in effect from a scope or an environment replacement.
+    CONFIGURED = "configured"
+
+
+def classify_skill_policy_startup(
+    inputs: SkillPolicyInputs,
+    *,
+    config_present: bool,
+) -> SkillPolicyStartupState:
+    """Classify what a starting Run found, before any policy is resolved.
+
+    Deliberately separates *absent* from *unconfigured*. Both currently resolve
+    to the **Minimal Skill policy**, which is why the difference is invisible at
+    the resolver and has to be drawn here: an installation with no Config at all
+    has never been asked, while one whose Config predates ``enabled_skills`` has
+    an operator who answered every other question and was never shown this one.
+
+    Only a *base* policy counts as configured. A saved scope answers the
+    question durably, and ``GIT_LOOPY_ENABLED_SKILLS`` replaces the base policy
+    outright for this Run — but ``--enable-skill`` is a temporary overlay over
+    whatever base is in effect, so it leaves an unmigrated base unmigrated.
+    """
+    if inputs.project.present or inputs.global_.present or inputs.environment.present:
+        return SkillPolicyStartupState.CONFIGURED
+    if not config_present:
+        return SkillPolicyStartupState.UNCONFIGURED
+    return SkillPolicyStartupState.LEGACY
+
+
 class SkillPolicyResolutionError(ValueError):
     """Base class for actionable Effective Skill policy failures."""
 

@@ -314,6 +314,7 @@ def _scope_policy_seed(
     scope: str,
     tables: settings.ConfigTables,
     catalog: SkillCatalog,
+    legacy_denied: Iterable[str] = (),
 ) -> _ScopePolicySeed:
     """Seed one scope from the nearest saved policy, else the Skill baseline.
 
@@ -323,6 +324,11 @@ def _scope_policy_seed(
     current state any delta must be reviewed against. Only the last branch is
     genuinely unconfigured: there the seed *is* a fresh Skill baseline, so
     nothing is being compared to a policy at all.
+
+    ``legacy_denied`` subtracts from that fresh baseline only. A deprecated deny
+    guard is a standing instruction the operator already gave, so a first
+    selection must not arrive with it pre-checked; a *saved* policy has already
+    accounted for it and is left exactly as written.
     """
     project = settings.table_optional_str_list(
         tables.project, "enabled_skills", scope="project"
@@ -334,12 +340,16 @@ def _scope_policy_seed(
         return _ScopePolicySeed(tuple(project), configured=True)
     if global_ is not None:
         return _ScopePolicySeed(tuple(global_), configured=True)
+    denied = frozenset(legacy_denied)
     return _ScopePolicySeed(
         tuple(
             name
             for name, winner in catalog.winners.items()
-            if winner.copilot_enabled is True
-            or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+            if name not in denied
+            and (
+                winner.copilot_enabled is True
+                or (winner.source_kind == "packaged" and winner.copilot_enabled is None)
+            )
         ),
         configured=False,
     )
@@ -516,6 +526,7 @@ def _collect_policy_context(
     git: GitClient | None,
     required_skills: Iterable[str] | None,
     packaged_skills_dir: Path | None,
+    legacy_denied: Iterable[str] = (),
 ) -> _PolicyContext:
     """Discover the catalog and the current scope's policy, then let it go.
 
@@ -557,7 +568,12 @@ def _collect_policy_context(
             from .git import SubprocessGitClient
 
             git = SubprocessGitClient(root)
-        seed = _scope_policy_seed(scope=scope, tables=tables, catalog=catalog)
+        seed = _scope_policy_seed(
+            scope=scope,
+            tables=tables,
+            catalog=catalog,
+            legacy_denied=legacy_denied,
+        )
         return _PolicyContext(
             catalog=catalog,
             required=required,
@@ -617,6 +633,7 @@ def collect_skill_policy(
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
     packaged_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """Discover, seed, pick, and validate one Skill policy without persisting it.
 
@@ -640,6 +657,7 @@ def collect_skill_policy(
         git=git,
         required_skills=required_skills,
         packaged_skills_dir=packaged_skills_dir,
+        legacy_denied=legacy_denied,
     )
     model = _selection_model(
         catalog=context.catalog,
@@ -714,6 +732,114 @@ def run_skills_edit(
     output_fn(
         f"Saved {len(enabled)} enabled Skill(s) to the {selected_scope} "
         f"Config ({path})"
+    )
+    return 0
+
+
+def migration_scope(
+    tables: settings.ConfigTables,
+    repo_root: Path | None,
+) -> str:
+    """The scope a legacy Config migrates: the nearest one that carries Config.
+
+    Migration answers the question for the scope a Run actually resolves. A
+    repository with its own Config is that scope, so writing the policy globally
+    there would leave the project still selecting nothing; with only a global
+    Config the global scope is the one in effect and the one to answer.
+    """
+    if repo_root is not None and tables.project:
+        return "project"
+    return "global"
+
+
+def run_skill_policy_migration(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str] | None = None,
+    legacy_denied: Iterable[str] = (),
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    error_fn: Callable[[str], None] | None = None,
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    picker_runner: PickerRunner = run_plain_skill_picker,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    packaged_skills_dir: Path | None = None,
+    writer: ConfigWriter = settings.write_config_atomic,
+) -> int:
+    """Convert one Config that predates ``enabled_skills`` into a Skill policy.
+
+    The same collection seam ``skills edit`` uses, with two differences that are
+    the whole point of the one-time conversion: the fresh Skill baseline arrives
+    with every deprecated deny guard already unchecked, and the framing says a
+    conversion is happening rather than an edit.
+
+    Returns ``0`` only when a validated policy was persisted. Cancelling and
+    every resolution failure write nothing and return non-zero, so a Run that
+    calls this can treat a non-zero result as "do not start".
+    """
+    environment = os.environ if env is None else env
+    errors = (
+        (lambda message: print(message, file=sys.stderr))
+        if error_fn is None
+        else error_fn
+    )
+    try:
+        project_path = (
+            None if repo_root is None else settings.project_config_path(repo_root)
+        )
+        tables = settings.ConfigTables(
+            project=settings.load_config_table(project_path),
+            global_=settings.load_config_table(
+                settings.global_config_path(environment)
+            ),
+        )
+    except settings.SettingsError as exc:
+        errors(f"git-loopy: unable to read Config for Skill-policy migration: {exc}")
+        return 1
+    scope = migration_scope(tables, repo_root)
+    output_fn(
+        f"git-loopy: this {scope} Config predates the closed-world Skill "
+        "policy. Choose the Skills this installation may load; the selection is "
+        "saved once and never asked again."
+    )
+    try:
+        enabled = collect_skill_policy(
+            scope=scope,
+            repo_root=repo_root,
+            env=environment,
+            input_fn=input_fn,
+            output_fn=output_fn,
+            client_factory=client_factory,
+            discoverer=discoverer,
+            picker_runner=picker_runner,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
+            legacy_denied=legacy_denied,
+        )
+        path = _policy_config_path(
+            scope=scope, repo_root=repo_root, env=environment
+        )
+        # One write, and only after the discovery workspace is gone: a teardown
+        # failure must not report failure over a Config that did change.
+        _write_policy(path, enabled, writer)
+    except SkillPolicyCancelled:
+        errors(
+            "git-loopy: Skill-policy migration cancelled; no changes written "
+            "and no work started. Run `git-loopy skills edit` when ready."
+        )
+        return 1
+    except SKILL_POLICY_FAILURES as exc:
+        errors(
+            "git-loopy: unable to migrate Skill policy: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 1
+    output_fn(
+        f"Migrated the {scope} Config: {len(enabled)} enabled Skill(s) saved "
+        f"to {path}"
     )
     return 0
 
