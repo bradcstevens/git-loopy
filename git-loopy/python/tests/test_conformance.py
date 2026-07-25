@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
@@ -12,26 +13,26 @@ import pytest
 from rich.console import Console
 
 from git_loopy import events as events_module
+from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
     RunConfig,
+    SkillPolicyInput,
+    SkillPolicyInputs,
     gate_reasoning_effort,
     resolve_iteration_model,
 )
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.view_model import project_run_view
-from git_loopy.config import (
-    SkillPolicyInput,
-    SkillPolicyInputs,
-)
 from git_loopy.pricing import Pricing
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.skill_exposure import SkillExposure
 from git_loopy.skill_policy import (
     MissingEnabledSkills,
     MissingRequiredSkills,
+    SKILL_SOURCE_KINDS,
     SkillCatalog,
     SkillCatalogWinner,
     SkillInventoryUnavailable,
@@ -1075,3 +1076,184 @@ def test_run_skill_policy_and_iteration_consultation_stay_separate_facts() -> No
     assert payload["enabled"] == ["code-review", "prototype", "tdd"]
     assert sorted(snap.skills_consulted) == ["tdd"]
     assert snap.skill_count == 1
+
+
+def test_skill_policy_fixture_declares_no_vocabulary_of_its_own() -> None:
+    """§17.1 says the vocabularies are *exact*, so the fixture cannot invent one.
+
+    ``source_kind`` is the one catalog fact the redacted audit projection
+    carries besides the name, and the native ports copy this fixture to learn
+    it. A fixture free to declare a kind — or a startup state, or a fallback
+    reason — Python never resolves would teach a port to expect a value the
+    reference Orchestrator cannot produce. The parametrized cases prove the
+    values the fixture *uses*; this proves the values it *declares*.
+    """
+    assert set(_SKILL_POLICY["source_kinds"]) == set(SKILL_SOURCE_KINDS)
+    assert set(_SKILL_POLICY["startup_states"]) == {
+        state.value for state in SkillPolicyStartupState
+    }
+    assert set(_SKILL_POLICY["fallback_reasons"]) == {
+        reason.value for reason in SkillPolicyFallback
+    }
+
+
+def _resolved_skill_policy_inputs(
+    argv: list[str] | None = None,
+    *,
+    env: dict[str, str] | None = None,
+    project: dict[str, Any] | None = None,
+) -> SkillPolicyInputs:
+    """Drive the production Config resolver the way ``main`` does."""
+    return cli_module.resolve_config(
+        cli_module.build_parser().parse_args(argv or []),
+        env or {},
+        project=project or {},
+        global_={},
+        warn=lambda _message: None,
+    ).run.skill_policy
+
+
+@pytest.mark.parametrize("surface", _SKILL_POLICY["native_transition"]["policy_surfaces"])
+def test_every_declared_policy_surface_is_one_python_actually_honours(
+    surface: str,
+) -> None:
+    """The fail-closed list is only safe if these are the real surface names.
+
+    #233/#234 make the shell and PowerShell Orchestrators abort when they detect
+    any of these, so a stale name here would be a port failing closed on a
+    surface that no longer exists while ignoring the one that replaced it. Each
+    is therefore supplied to the production Config resolver and must arrive.
+    """
+    supplied = {
+        "GIT_LOOPY_ENABLED_SKILLS": lambda: _resolved_skill_policy_inputs(
+            env={surface: "tdd"}
+        ),
+        "--enable-skill": lambda: _resolved_skill_policy_inputs([surface, "tdd"]),
+        "--disable-skill": lambda: _resolved_skill_policy_inputs([surface, "tdd"]),
+        "enabled_skills": lambda: _resolved_skill_policy_inputs(
+            project={surface: ["tdd"]}
+        ),
+    }[surface]()
+
+    observed = {
+        "GIT_LOOPY_ENABLED_SKILLS": supplied.environment.present,
+        "--enable-skill": "tdd" in supplied.enable_skills,
+        "--disable-skill": "tdd" in supplied.disable_skills,
+        "enabled_skills": supplied.project.present,
+    }
+    assert observed[surface], f"{surface} did not reach the resolved Skill policy"
+    # A surface that also lit up every *other* input would make the fail-closed
+    # detection meaningless, so the detection must be surface-specific.
+    assert [name for name, seen in observed.items() if seen] == [surface]
+
+
+def test_native_transition_partitions_the_declared_runner_family() -> None:
+    """Every family member is either resolving a policy or failing closed.
+
+    The Python-first transition (§17.6) is only safe while the set of ports that
+    *ignore* a configured policy is empty. Deriving both lists from the same
+    roster the Event-schema fixture declares means a fourth Orchestrator cannot
+    join the family and silently be neither — which is exactly the state that
+    would run an agent with a wider capability set than the operator configured.
+    """
+    transition = _SKILL_POLICY["native_transition"]
+    family = set(_EVENT_SCHEMA["insight_capabilities"]["orchestrators"])
+    implemented = set(transition["implemented"])
+    fail_closed = set(transition["fail_closed"])
+
+    assert implemented | fail_closed == family
+    assert implemented & fail_closed == set()
+    assert "python" in implemented, "the reference Orchestrator resolves the policy"
+
+
+def test_a_run_supplying_no_policy_surface_records_none_of_them() -> None:
+    """The fail-closed ports need a negative case, or aborting is unfalsifiable.
+
+    A port that aborted on *every* Run would satisfy "abort when you detect a
+    policy surface" while making the Orchestrator unusable, so the contract's
+    detection has to be able to say no.
+    """
+    inputs = _resolved_skill_policy_inputs()
+
+    assert not inputs.project.present
+    assert not inputs.global_.present
+    assert not inputs.environment.present
+    assert not inputs.enable_skills
+    assert not inputs.disable_skills
+
+
+_CONTRACT_VERSION_LINE = re.compile(
+    r"^\*\*Contract version:\*\*\s+(?P<version>\d+\.\d+)", re.MULTILINE
+)
+
+
+def _written_contract_version() -> str:
+    """The Wrapper contract version the written contract declares."""
+    for parent in Path(__file__).resolve().parents:
+        contract = parent / "docs" / "wrapper-contract.md"
+        if contract.is_file():
+            match = _CONTRACT_VERSION_LINE.search(contract.read_text(encoding="utf-8"))
+            assert match is not None, "the contract declares no Contract version"
+            return match["version"]
+    pytest.skip("written contract not found (installed-wheel run)")
+
+
+def _declared_fixture_contract_versions() -> dict[str, str]:
+    """Every fixture's declared Wrapper contract version, by file name."""
+    declared: dict[str, str] = {}
+    for path in sorted(CONFORMANCE_DIR.glob("*.json")):
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+        version = fixture.get("wrapper_contract_version") or fixture.get(
+            "contract_version"
+        )
+        if version is not None:
+            declared[path.name] = version
+    return declared
+
+
+def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> None:
+    """AC3's together-bump is mechanical, not a reviewer's memory.
+
+    A fixture declares the contract version its decision last changed at, so an
+    old fixture legitimately sits below the current one. What is never
+    legitimate is a fixture *ahead* of the written contract: that is a decision
+    pinned against a contract nobody can read, and the ports built from it would
+    be conforming to a version that does not exist.
+    """
+    written = _written_contract_version()
+    ceiling = tuple(int(part) for part in written.split("."))
+
+    ahead = {
+        name: version
+        for name, version in _declared_fixture_contract_versions().items()
+        if tuple(int(part) for part in version.split(".")) > ceiling
+    }
+    assert ahead == {}, f"fixtures ahead of written contract {written}: {ahead}"
+
+
+def test_bumping_the_contract_requires_bumping_an_affected_fixture() -> None:
+    """The other half: a version the written contract reached alone changed nothing.
+
+    Contract 1.4 exists because closed-world Skill policy became a family
+    requirement. If no fixture pins it, the bump is prose — every Orchestrator
+    stays green while implementing 1.3, which is the drift ADR-0013's fixture
+    backbone exists to prevent.
+    """
+    written = _written_contract_version()
+    declared = _declared_fixture_contract_versions()
+
+    assert written in declared.values(), (
+        f"no Conformance fixture pins contract {written}; "
+        f"declared versions are {sorted(set(declared.values()))}"
+    )
+
+
+def test_the_python_capability_manifest_declares_the_written_contract() -> None:
+    """A runtime capability answer is the contract a caller is actually offered.
+
+    Continuation's manifest is what a Skill negotiates against, so a stale
+    constant here would advertise a contract the Orchestrator no longer
+    implements — the one drift a fixture comparison cannot catch, because both
+    sides of that comparison are data.
+    """
+    assert continuation_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()

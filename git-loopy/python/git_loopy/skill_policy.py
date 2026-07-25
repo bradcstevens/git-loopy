@@ -16,6 +16,22 @@ if TYPE_CHECKING:
 
 _SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
+#: The exact ``source_kind`` vocabulary a catalog winner may carry (contract
+#: §17.1). It lives here rather than in ``skill_catalog`` because the resolved
+#: kind is a *policy* fact — it decides the untracked-project failure and is the
+#: only catalog detail the redacted audit projection carries besides the name.
+SKILL_SOURCE_KINDS: frozenset[str] = frozenset(
+    {
+        "project",
+        "inherited",
+        "personal",
+        "plugin",
+        "custom",
+        "builtin",
+        "packaged",
+    }
+)
+
 
 def is_canonical_skill_name(value: object) -> bool:
     """Return whether a value is a canonical Skill policy identity."""
@@ -122,6 +138,11 @@ class SkillCatalogWinner:
     project_path: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.source_kind not in SKILL_SOURCE_KINDS:
+            raise ValueError(
+                f"unrecognized Skill source_kind {self.source_kind!r} for "
+                f"{self.name!r}"
+            )
         path = Path(self.path) if self.path is not None else None
         project_path = (
             Path(self.project_path) if self.project_path is not None else None

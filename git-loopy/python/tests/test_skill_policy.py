@@ -306,3 +306,16 @@ def test_effective_policy_copies_and_freezes_every_collection() -> None:
     assert tuple(catalog.winners) == ("alpha", "beta")
     with pytest.raises(TypeError):
         result.source_kinds["later"] = "custom"  # type: ignore[index]
+
+
+def test_a_winner_cannot_carry_a_source_kind_outside_the_vocabulary() -> None:
+    """An unrecognized kind is refused where the winner is built, not later.
+
+    ``source_kind`` decides the untracked-project failure and is projected into
+    the Run's redacted audit Event. A winner carrying a kind nothing in the
+    family recognizes would silently skip that failure — an enabled project
+    Skill mislabelled ``proejct`` would never be checked for tracking — and
+    would put an unpinned value into a replay log every port reads.
+    """
+    with pytest.raises(ValueError, match="proejct"):
+        SkillCatalogWinner(name="tdd", source_kind="proejct")
