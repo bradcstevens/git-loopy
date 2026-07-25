@@ -135,6 +135,7 @@
     {
       "id": "a-complete-signed-stable-set-publishes",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": null,
       "allowed": true,
@@ -143,6 +144,7 @@
     {
       "id": "a-stable-release-refuses-an-unnotarized-macos-artifact",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "macos",
@@ -155,6 +157,7 @@
     {
       "id": "a-stable-release-refuses-a-macos-artifact-built-without-the-hardened-runtime",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "macos",
@@ -167,6 +170,7 @@
     {
       "id": "a-stable-release-refuses-a-windows-artifact-with-no-verifiable-publisher",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "windows",
@@ -179,6 +183,7 @@
     {
       "id": "a-stable-release-refuses-an-unsigned-windows-artifact",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "windows",
@@ -191,6 +196,7 @@
     {
       "id": "a-clearly-marked-prerelease-may-ship-an-unsigned-windows-artifact",
       "version": "1.2.3-rc.1",
+      "release_marked_prerelease": true,
       "attestation": false,
       "defect": {
         "platform": "windows",
@@ -203,6 +209,7 @@
     {
       "id": "a-stable-release-refuses-a-missing-attestation",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": false,
       "defect": null,
       "allowed": false,
@@ -211,6 +218,7 @@
     {
       "id": "a-stable-release-refuses-an-artifact-with-no-trust-receipt",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "linux",
@@ -223,6 +231,7 @@
     {
       "id": "a-stable-release-refuses-an-artifact-with-no-published-checksum",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "linux",
@@ -235,6 +244,7 @@
     {
       "id": "a-stable-release-refuses-a-receipt-issued-for-another-release",
       "version": "1.2.3",
+      "release_marked_prerelease": false,
       "attestation": true,
       "defect": {
         "platform": "macos",
@@ -243,6 +253,28 @@
       },
       "allowed": false,
       "error": "Release version"
+    },
+    {
+      "id": "a-prerelease-may-not-attach-to-a-release-marked-stable",
+      "version": "1.2.3-rc.1",
+      "release_marked_prerelease": false,
+      "attestation": false,
+      "defect": {
+        "platform": "windows",
+        "kind": "unsigned",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "is not marked as a prerelease"
+    },
+    {
+      "id": "a-stable-release-may-not-attach-to-a-release-marked-prerelease",
+      "version": "1.2.3",
+      "release_marked_prerelease": true,
+      "attestation": true,
+      "defect": null,
+      "allowed": false,
+      "error": "is marked as a prerelease"
     }
   ]
 }

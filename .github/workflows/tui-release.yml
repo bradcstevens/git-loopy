@@ -345,12 +345,41 @@ jobs:
             release-artifacts/*.tar.xz
             release-artifacts/*.zip
 
+      # `source-release.yml` creates the Release for this tag from the same push,
+      # so the two can be in flight together. Waiting for it is bounded and
+      # explicit; failing to find it is a failure, not a silent skip.
+      #
+      # Its prerelease marking is read here rather than assumed, because the
+      # marking is the whole of "clearly marked": the unsigned Windows
+      # allowance belongs to the prerelease channel alone, the workflow that
+      # applies the marking is deliberately a separate one, and the flag stays
+      # editable afterwards.
+      - name: Wait for the tagged Release and read how it is marked
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          for attempt in $(seq 1 30); do
+            if marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease); then
+              echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "no GitHub Release exists for $RELEASE_TAG" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+
       # The last thing that can stop an untrusted Release. Every artifact's
       # signature, hardened runtime, notary verdict, publisher, and checksum is
-      # proven against the channel this version publishes on — so an unsigned
-      # Windows archive reaches operators only through a tag that says
-      # prerelease, and a stable Release that lost any one of them is refused
-      # rather than uploaded and withdrawn.
+      # proven against the channel this version publishes on, and that channel
+      # is proven against the marking the Release itself carries — so an
+      # unsigned Windows archive reaches operators only through a Release that
+      # says prerelease, and a stable Release that lost any one of them is
+      # refused rather than uploaded and withdrawn.
       - name: Refuse a Release that cannot prove its platform trust
         shell: bash
         run: >-
@@ -359,25 +388,12 @@ jobs:
           --repository-root .
           --artifact-dir release-artifacts
           --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
           --attestation "${{ steps.attest.outputs.bundle-path }}"
 
-      # `source-release.yml` creates the Release for this tag from the same push,
-      # so the two can be in flight together. Waiting for it is bounded and
-      # explicit; failing to find it is a failure, not a silent skip.
       - name: Attach the artifacts to the tagged Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
         shell: bash
-        run: |
-          for attempt in $(seq 1 30); do
-            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo "no GitHub Release exists for $RELEASE_TAG" >&2
-              exit 1
-            fi
-            sleep 20
-          done
-          gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
+        run: gh release upload "$RELEASE_TAG" release-artifacts/* --clobber

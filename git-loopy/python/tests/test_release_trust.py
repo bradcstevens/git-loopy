@@ -136,7 +136,16 @@ def _stage_release_set(
 def test_publication_carries_the_trust_its_channel_requires(
     case: dict[str, Any], tmp_path: Path
 ) -> None:
-    """AC5: stable publication fails closed on any missing piece of trust."""
+    """AC3/AC5: stable publication fails closed on any missing piece of trust.
+
+    The Release's own prerelease marking is one of those pieces. The unsigned
+    Windows allowance belongs to the prerelease channel alone, and the marking
+    is the only thing that tells an operator — or #196's winget and Scoop
+    channels, which resolve "the stable Release" — which channel they are
+    installing from. It is written by a deliberately separate workflow and
+    stays editable afterwards, so the gate reads it back rather than assuming
+    the version string settled it.
+    """
     artifacts = _stage_release_set(
         tmp_path / "release-artifacts", version=case["version"], defect=case["defect"]
     )
@@ -149,6 +158,7 @@ def test_publication_carries_the_trust_its_channel_requires(
             REPOSITORY_ROOT,
             artifacts,
             version=case["version"],
+            release_marked_prerelease=case["release_marked_prerelease"],
             attestation=attestation if case["attestation"] else None,
         )
         assert len(receipts) == len(
@@ -161,6 +171,7 @@ def test_publication_carries_the_trust_its_channel_requires(
             REPOSITORY_ROOT,
             artifacts,
             version=case["version"],
+            release_marked_prerelease=case["release_marked_prerelease"],
             attestation=attestation if case["attestation"] else None,
         )
     assert case["error"] in str(raised.value)
@@ -327,6 +338,8 @@ def test_the_command_refuses_a_release_that_cannot_prove_its_trust(
             str(artifacts),
             "--release-version",
             "1.2.3",
+            "--release-marked-prerelease",
+            "false",
             "--attestation",
             str(attestation),
         ]
@@ -355,12 +368,48 @@ def test_the_command_publishes_a_release_that_proves_its_trust(
                 str(artifacts),
                 "--release-version",
                 "1.2.3",
+                "--release-marked-prerelease",
+                "false",
                 "--attestation",
                 str(attestation),
             ]
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("marking", ["", "no", "0", "unknown", "prerelease"])
+def test_the_command_will_not_guess_the_release_marking(
+    marking: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC3/AC5: an unreadable marking is a refusal, not a default.
+
+    `gh release view` answers `true` or `false`. Anything else means the
+    Release was never read — a deleted step, a renamed output, a failed API
+    call — and the safe reading of "we do not know which channel this is" is
+    not "stable".
+    """
+    artifacts = _stage_release_set(
+        tmp_path / "release-artifacts", version="1.2.3", defect=None
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        release_trust.main(
+            [
+                "verify",
+                "--repository-root",
+                str(REPOSITORY_ROOT),
+                "--artifact-dir",
+                str(artifacts),
+                "--release-version",
+                "1.2.3",
+                "--release-marked-prerelease",
+                marking,
+            ]
+        )
+
+    assert raised.value.code == 2
+    assert "--release-marked-prerelease" in capsys.readouterr().err
 
 
 def test_the_helper_manifest_enables_the_signing_the_policy_declares() -> None:
@@ -558,6 +607,49 @@ def test_publication_proves_platform_trust_before_it_uploads_anything() -> None:
     assert len(runs) == 1, names
     assert attests and uploads
     assert attests[0] < runs[0] < uploads[0], names
+
+
+def test_publication_reads_the_release_marking_before_it_trusts_the_channel() -> None:
+    """AC3: the marking is observed off the Release, ahead of the gate.
+
+    The version string decides which evidence is *required*; the marking is
+    what an operator, and every package channel that resolves "the stable
+    Release", actually sees. `source-release.yml` writes it — deliberately a
+    separate workflow, so that a cross-compilation failure cannot stop a source
+    Release — and it stays editable afterwards. Reading it back is what turns
+    "clearly marked" from an assumption held in another file into an input this
+    gate refuses to publish without.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    publish = _workflow(policy)["jobs"][policy.publication_job]
+
+    names = [step.get("name", step.get("uses", "")) for step in publish["steps"]]
+    observed = [
+        index
+        for index, step in enumerate(publish["steps"])
+        if "isPrerelease" in str(step.get("run", ""))
+    ]
+    verifies = [
+        index
+        for index, step in enumerate(publish["steps"])
+        if "git_loopy.release_trust verify" in str(step.get("run", ""))
+    ]
+    uploads = [
+        index
+        for index, step in enumerate(publish["steps"])
+        if "gh release upload" in str(step.get("run", ""))
+    ]
+
+    assert len(observed) == 1, names
+    assert observed[0] < verifies[0] < uploads[0], names
+
+    reader = publish["steps"][observed[0]]
+    gate = str(publish["steps"][verifies[0]]["run"])
+    assert "--release-marked-prerelease" in gate
+    assert f"steps.{reader['id']}.outputs" in gate, (
+        "the gate must be handed the marking this job actually read, not a "
+        "second opinion about the same Release"
+    )
 
 
 def test_every_native_runner_records_what_it_can_prove_about_its_artifact() -> None:

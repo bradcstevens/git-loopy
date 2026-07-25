@@ -388,6 +388,7 @@ def verify_release_trust(
     artifact_directory: Path,
     *,
     version: str,
+    release_marked_prerelease: bool,
     attestation: Path | None = None,
 ) -> tuple[TrustReceipt, ...]:
     """Prove the complete Release carries the trust its channel requires.
@@ -395,6 +396,12 @@ def verify_release_trust(
     Every declared target is checked and every problem is reported together:
     publication is all-or-nothing, so learning about one unsigned artifact per
     re-run would turn a single refusal into a sequence of them.
+
+    ``release_marked_prerelease`` is the marking read back off the GitHub
+    Release the artifacts are about to attach to. It is a required argument
+    rather than an optional cross-check because the whole of the unsigned
+    allowance rests on it: a caller that could omit it could publish an
+    unsigned artifact to a Release that says nothing about being one.
     """
     policy = load_trust_policy(repository_root)
     channel = policy.channel_for(version)
@@ -402,6 +409,20 @@ def verify_release_trust(
 
     receipts: list[TrustReceipt] = []
     problems: list[str] = []
+
+    # The channel decides which evidence is optional; the marking is what tells
+    # an operator — and every package channel that resolves "the stable
+    # Release" — which channel they are installing from. A version that says
+    # prerelease and a Release that does not are two answers to one question,
+    # and the lenient half of the gate was applied to the wrong one.
+    expected_marking = policy.prerelease_channels[channel]
+    if release_marked_prerelease is not expected_marking:
+        was = "is" if release_marked_prerelease else "is not"
+        problems.append(
+            f"version {version} publishes on the {channel} channel, but the "
+            f"GitHub Release it attaches to {was} marked as a prerelease"
+        )
+
     for artifact in tui_release.published_artifacts(metadata):
         receipt, artifact_problems = _verify_one_artifact(
             repository_root,
@@ -632,6 +653,22 @@ def hardened_runtime_environment(policy: TrustPolicy) -> dict[str, str]:
     }
 
 
+def _boolean_argument(value: str) -> bool:
+    """Read one of `gh release view --json isPrerelease`'s two answers.
+
+    Rejected rather than coerced. `bool("false")` is `True`, and a marking
+    argument that read an unexpected word as "stable" would relax the gate in
+    exactly the direction it exists to prevent.
+    """
+    normalized = value.strip().lower()
+    if normalized in {"true", "false"}:
+        return normalized == "true"
+    raise argparse.ArgumentTypeError(
+        f"expected 'true' or 'false', not {value!r}; this is the Release's own "
+        "prerelease marking, and it may not be guessed"
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Prove a git-loopy Release carries the trust its channel requires.",
@@ -672,6 +709,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="refuse a Release that cannot prove its channel's trust",
     )
     verify.add_argument(
+        "--release-marked-prerelease",
+        required=True,
+        type=_boolean_argument,
+        metavar="{true,false}",
+        help="whether the GitHub Release being attached to is marked prerelease",
+    )
+    verify.add_argument(
         "--attestation",
         type=Path,
         help="the published build-provenance attestation bundle",
@@ -710,6 +754,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.repository_root,
                 args.artifact_dir,
                 version=version,
+                release_marked_prerelease=args.release_marked_prerelease,
                 attestation=args.attestation,
             ):
                 print(receipt.archive_name)

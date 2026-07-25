@@ -23,7 +23,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
-| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions |
+| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -61,6 +61,14 @@ trusting a step that did not fail. Evidence a platform cannot carry is recorded
 by name and reason, the same way targets are deferred by name: an absent
 requirement and an impossible one look identical from the outside, and only one
 of them is a decision.
+
+Each of its `publication_cases` also states the prerelease flag the GitHub
+Release carries, alongside the version being published. The version decides
+which evidence is *required*; the marking is what an operator, and every package
+channel that resolves "the stable Release", actually sees. The unsigned Windows
+allowance belongs to the prerelease channel alone, so a case where the two
+disagree is a refusal in both directions rather than a preference for the
+version string.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered

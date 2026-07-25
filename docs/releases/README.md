@@ -25,6 +25,16 @@ A stable Release additionally requires a build-provenance attestation. Any
 missing artifact, signature, notary verdict, publisher, checksum, or attestation
 refuses the whole publication rather than shipping a partial set.
 
+The version string decides which of those a Release *needs*; the prerelease flag
+on the GitHub Release is what tells an operator — and every package channel that
+resolves "the stable Release" — which channel they are installing from. Those
+are two answers to one question, and the unsigned Windows allowance rests
+entirely on the second, so publication reads the marking back off the Release it
+is about to attach to and refuses to upload when the two disagree. `--prerelease`
+is applied by `source-release.yml`, deliberately a separate workflow, and the
+flag stays editable afterwards; the helper pipeline therefore proves it rather
+than inheriting it.
+
 Signing runs inside `dist build`, which is the only place it can: cargo-dist
 writes each `.sha256` afterwards, so a published checksum is a checksum of the
 signed artifact. A ticket cannot be stapled into a bare Mach-O — stapling needs
