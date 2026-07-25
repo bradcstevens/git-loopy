@@ -160,6 +160,12 @@ _LANE_EVENTS = frozenset(
     }
 )
 
+#: Binding sources that name work an Orchestrator recognized *after* the fact.
+#: The Iteration was already running when the evidence appeared, so the issue's
+#: Active stint opens at the Iteration start rather than at the marker, and the
+#: pre-marker output is attributed to the issue that produced it.
+RETROACTIVE_BINDING_SOURCES = frozenset({"closure", "commit", "single_member_pool"})
+
 #: Status shown before the first ``wrapper.run.start`` is observed.
 _STATUS_STARTING = "starting"
 #: Status while the loop is driving iterations.
@@ -487,7 +493,7 @@ class LiveRunState:
                 source = event.get("binding_source")
                 since = (
                     self._iter_started_monotonic
-                    if source in {"closure", "commit", "single_member_pool"}
+                    if source in RETROACTIVE_BINDING_SOURCES
                     and self._iter_started_monotonic is not None
                     else now
                 )

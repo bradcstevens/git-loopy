@@ -20,7 +20,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
-from git_loopy.interactive.state import LiveRunState
+from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy.pricing import Pricing
 from git_loopy.rollup import IterationRollupAccumulator
@@ -137,6 +137,15 @@ def test_exit_code_fixture(case: dict[str, Any]) -> None:
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
 _DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
+
+
+def _dashboard_case(case_id: str) -> dict[str, Any]:
+    """One Dashboard fixture case by identity, never by positional index."""
+    return next(
+        case for case in _DASHBOARD_INSIGHTS["cases"] if case["id"] == case_id
+    )
+
+
 _PYTHON_ROLLUP_CASES = [
     case
     for case in _EVENT_SCHEMA["normalized_rollup_cases"]
@@ -149,6 +158,29 @@ class _FixtureClock:
 
     def __call__(self) -> float:
         return self.value
+
+
+class _FixtureWallClock:
+    """The Orchestrator's wall clock, sampled independently of its monotonic one.
+
+    Keeping the two clocks separate is what lets a fixture case pin the contract's
+    rule that a mid-Run wall-clock adjustment never changes a monotonic duration.
+    """
+
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+def _fixture_monotonic(
+    observed: Any, at: datetime, run_started: datetime
+) -> float:
+    """One monotonic reading: declared by the case, else derived from ``ts``."""
+    if isinstance(observed, (int, float)) and not isinstance(observed, bool):
+        return float(observed)
+    return (at - run_started).total_seconds()
 
 
 def test_event_fixture_covers_python_normalized_rollup() -> None:
@@ -284,7 +316,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.1"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.2"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -361,7 +393,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "toolkit_widgets",
     ]
 
-    case = _DASHBOARD_INSIGHTS["cases"][0]
+    case = _dashboard_case("baseline-closed-iteration")
     assert case["id"] == "baseline-closed-iteration"
     assert case["inputs"]["local_utc_offset_minutes"] == -360
     assert case["inputs"]["drill_in_issue"] == 42
@@ -420,6 +452,238 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert breakdown[0]["duration_seconds"] == 4.0
 
 
+def _resolve_field(row: dict[str, Any], path: str) -> Any:
+    value: Any = row
+    for part in path.split("."):
+        value = value[part]
+    return value
+
+
+def test_every_dashboard_projection_matches_the_declared_field_inventory() -> None:
+    """Every projected band carries exactly the fields the contract declares.
+
+    A renderer in any language reads this fixture to learn what a Dashboard
+    *is*. Pinning band order and column labels alone leaves the projection free
+    to gain, lose, or reorder a field that no column names, so a second
+    implementation could disagree about the payload while agreeing about the
+    headings. The inventory is asserted from the fixture's own
+    ``projection_fields`` against every snapshot of every case, and each
+    rendered column is required to resolve onto that inventory -- so a new
+    column cannot be added without a field to carry it, and a field cannot be
+    renamed without the column following.
+    """
+    contract = _DASHBOARD_INSIGHTS["semantic_contract"]
+    fields = contract["projection_fields"]
+
+    checked_queue_rows = 0
+    checked_breakdown_rows = 0
+    checked_summary_rows = 0
+    checked_log_lines = 0
+    for case in _DASHBOARD_INSIGHTS["cases"]:
+        for snapshot in case["snapshots"]:
+            where = f"{case['id']} @ {snapshot['after_event_count']}"
+            expected = snapshot["expected"]
+            assert list(expected["dashboard"]) == contract["dashboard_band_order"], where
+            assert list(expected["drill_in"]) == contract["drill_in_band_order"], where
+
+            header = expected["dashboard"]["header"]
+            assert list(header) == fields["header"], where
+            assert list(header["context_fill"]) == fields["context_fill"], where
+            assert list(expected["dashboard"]["activity"]) == fields["activity"], where
+            assert list(expected["drill_in"]["detail_header"]) == (
+                fields["detail_header"]
+            ), where
+
+            for row in expected["dashboard"]["queue"]["rows"]:
+                assert list(row) == fields["queue_row"], where
+                checked_queue_rows += 1
+            for row in expected["dashboard"]["summary"]["rows"]:
+                assert list(row) == fields["summary_row"], where
+                checked_summary_rows += 1
+            for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
+                assert list(row) == fields["iteration_breakdown_row"], where
+                assert list(row["consumption"]) == fields["consumption"], where
+                checked_breakdown_rows += 1
+            for line in (
+                expected["dashboard"]["activity"]["lines"]
+                + expected["drill_in"]["log"]["lines"]
+            ):
+                assert list(line) == fields["log_line"], where
+                checked_log_lines += 1
+
+    # An empty inventory sweep would pass vacuously.
+    assert checked_queue_rows > 0
+    assert checked_breakdown_rows > 0
+    assert checked_summary_rows > 0
+    assert checked_log_lines > 0
+
+    sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
+        "expected"
+    ]["dashboard"]["queue"]["rows"][0]
+    sample_breakdown = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
+        "expected"
+    ]["drill_in"]["iteration_breakdown"]["rows"][0]
+    for column in contract["queue_columns"]:
+        for path in column["fields"]:
+            _resolve_field(sample_queue, path)
+    for column in contract["iteration_breakdown_columns"]:
+        for path in column["fields"]:
+            _resolve_field(sample_breakdown, path)
+    # Every declared queue field is rendered by exactly one column; the
+    # breakdown additionally carries `consumption.model`, which names the model
+    # behind the token counts rather than occupying a column of its own.
+    assert sorted(
+        path for column in contract["queue_columns"] for path in column["fields"]
+    ) == sorted(fields["queue_row"])
+    breakdown_paths = {
+        path
+        for column in contract["iteration_breakdown_columns"]
+        for path in column["fields"]
+    }
+    assert breakdown_paths | {"consumption", "consumption.model"} == set(
+        fields["iteration_breakdown_row"]
+    ) | {f"consumption.{name}" for name in fields["consumption"]}
+
+
+def test_dashboard_fixture_covers_every_family_semantic_dimension() -> None:
+    """The case set spans the dimensions a second renderer could get wrong.
+
+    Family-wide parity is only enforceable if the shared cases actually reach
+    the ambiguous corners: pre-marker attribution, a conflicting later binding,
+    every fallback ``binding_source``, Parallel Lane contributions, non-closure
+    terminal outcomes, both unknown-vs-observed-none encodings, a wall clock
+    that moves independently of the monotonic clock, and both signs of display
+    offset. Without this gate a case can be deleted or watered down and the
+    remaining suite still passes.
+    """
+    cases = _DASHBOARD_INSIGHTS["cases"]
+    events = [event for case in cases for event in case["events"]]
+
+    offsets = {case["inputs"]["local_utc_offset_minutes"] for case in cases}
+    assert any(offset < 0 for offset in offsets)
+    assert any(offset > 0 for offset in offsets)
+    # A half-hour zone proves localization is a real conversion.
+    assert any(offset % 60 for offset in offsets)
+
+    binding_sources = {
+        event["binding_source"]
+        for event in events
+        if event["type"] == "wrapper.issue.activated"
+    }
+    vocabulary = _DASHBOARD_INSIGHTS["semantic_contract"]["binding_sources"]
+    legal = {source for group in vocabulary.values() for source in group}
+    assert binding_sources <= legal, binding_sources - legal
+    # A marker binding, a retroactive fallback binding that retains pre-marker
+    # time, and a Parallel Lane pickup are three different lifecycle meanings.
+    for group in vocabulary.values():
+        for source in group:
+            assert source in binding_sources, source
+    # The reducer's own retroactive set is the contract's, not a private copy.
+    assert set(vocabulary["retroactive"]) == set(RETROACTIVE_BINDING_SOURCES)
+
+    outcomes = {
+        event["outcome"] for event in events if event["type"] == "wrapper.iteration.end"
+    }
+    # Closure is not the only way an Iteration ends.
+    assert {"closed", "advanced", "no-progress", "gone"} <= outcomes, outcomes
+    projected_statuses = {
+        row["status"]
+        for case in cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+    }
+    assert {"active", "queued", "closed", "advanced", "no-progress", "gone"} <= (
+        projected_statuses
+    ), projected_statuses
+
+    # A later marker that disagrees with the bound issue must be pinned
+    # somewhere, or "first authoritative binding wins" is untested.
+    assert any(
+        sum(
+            1
+            for event in case["events"]
+            if event["type"] == "wrapper.issue.activated"
+            and event.get("iter") == 1
+        )
+        > 1
+        for case in cases
+    )
+
+    # Parallel Lane contributions, which carry a lane rather than an Iteration.
+    breakdown_kinds = {
+        row["kind"]
+        for case in cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["drill_in"]["iteration_breakdown"]["rows"]
+    }
+    assert breakdown_kinds == {"iteration", "lane"}, breakdown_kinds
+
+    # Unknown (`null`) and observed-none (`[]`) are distinct encodings, and a
+    # token count without a limit is not the same as no token observation.
+    skills = [
+        issue_summary["skills_consulted"]
+        for event in events
+        if event["type"] == "wrapper.iteration.end"
+        for issue_summary in [event["summary"]]
+    ]
+    assert None in skills
+    assert [] in skills
+    assert any(
+        event["token_limit"] is None
+        for event in events
+        if event["type"] == "usage.context_window"
+    )
+
+    # A wall-clock adjustment must not move a monotonic duration.
+    assert any(
+        "observed_monotonic" in event for case in cases for event in case["events"]
+    )
+    assert any(
+        _dashboard_wall_clock_steps_backwards(case) for case in cases
+    ), "no case exercises a wall clock that moves backwards mid-Iteration"
+
+
+def _dashboard_wall_clock_steps_backwards(case: dict[str, Any]) -> bool:
+    stamps = [event["ts"] for event in case["events"]]
+    return any(later < earlier for earlier, later in zip(stamps, stamps[1:]))
+
+
+def test_native_dashboard_cases_are_producer_verified() -> None:
+    """A native trace in this fixture is producible by both native ports.
+
+    The Python reducer is only one side of parity. A hand-written native
+    ``wrapper.iteration.end`` payload can encode a rollup no shell or PowerShell
+    Orchestrator would ever emit, and every family adapter would still agree.
+    Each case whose Run start declares the native capability manifest therefore
+    carries the producer input behind every Iteration end, and the shell and
+    PowerShell Event-schema suites rebuild those payloads through their real
+    rollup seams.
+    """
+    native_manifest = _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["shell"]
+    native_cases = [
+        case
+        for case in _DASHBOARD_INSIGHTS["cases"]
+        if case["events"][0].get("insight_capabilities") == native_manifest
+    ]
+    assert native_cases, "no Dashboard case exercises a native Orchestrator"
+
+    for case in native_cases:
+        ends = [
+            index
+            for index, event in enumerate(case["events"])
+            if event["type"] == "wrapper.iteration.end"
+        ]
+        declared = case.get("producer_rollups", [])
+        assert [entry["event_index"] for entry in declared] == ends, case["id"]
+        for entry in declared:
+            assert sorted(entry["distributions"]) == ["powershell", "shell"], case["id"]
+            # Shell rollup arithmetic is integral, so a native fixture value it
+            # could not produce would make the case unprovable there.
+            assert float(
+                case["events"][entry["event_index"]]["duration_seconds"]
+            ).is_integer(), case["id"]
+
+
 def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None:
     for case in _DASHBOARD_INSIGHTS["cases"]:
         offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
@@ -427,13 +691,12 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
             case["events"][0]["ts"].replace("Z", "+00:00")
         )
         clock = _FixtureClock()
+        wall = _FixtureWallClock(run_started.astimezone(offset))
         state = LiveRunState(
             model=case["inputs"]["model"],
             reasoning_effort=case["inputs"]["reasoning_effort"],
             monotonic=clock,
-            wall_clock=lambda: (
-                run_started + timedelta(seconds=clock.value)
-            ).astimezone(offset),
+            wall_clock=wall,
         )
         summary = RunSummary(pricing=Pricing(models={}))
         renderer = Renderer(
@@ -445,14 +708,24 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
         for snapshot in case["snapshots"]:
             for event in case["events"][applied : snapshot["after_event_count"]]:
                 at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
-                clock.value = (at - run_started).total_seconds()
+                # The Orchestrator's two clocks are independent axes of the seam:
+                # the envelope ``ts`` is its wall clock, ``observed_monotonic``
+                # its monotonic clock. A case that omits the latter advances both
+                # together, which is every trace with no wall-clock adjustment.
+                wall.value = at.astimezone(offset)
+                clock.value = _fixture_monotonic(
+                    event.get("observed_monotonic"), at, run_started
+                )
                 state.render(event)
                 renderer.render(event)
             applied = snapshot["after_event_count"]
             render_at = datetime.fromisoformat(
                 snapshot["render_at_utc"].replace("Z", "+00:00")
             )
-            clock.value = (render_at - run_started).total_seconds()
+            wall.value = render_at.astimezone(offset)
+            clock.value = _fixture_monotonic(
+                snapshot.get("render_at_monotonic"), render_at, run_started
+            )
 
             actual = project_run_view(
                 state,
@@ -684,9 +957,8 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
     unknown while the counters it *can* observe stay exact, and while the
     SDK-backed baseline case keeps its observed-empty ``[]`` Skills list.
     """
-    baseline, native = _DASHBOARD_INSIGHTS["cases"]
-    assert baseline["id"] == "baseline-closed-iteration"
-    assert native["id"] == "native-orchestrator-unavailable-capabilities"
+    baseline = _dashboard_case("baseline-closed-iteration")
+    native = _dashboard_case("native-orchestrator-unavailable-capabilities")
 
     capabilities = native["events"][0]["insight_capabilities"]
     # Exactly the family contract's native-Orchestrator manifest.
@@ -757,8 +1029,8 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
         (1, 1, 0),
     ]
     assert [(row["outcome"], row["duration_seconds"]) for row in breakdown] == [
-        ("advanced", 29.5),
-        ("closed", 19.5),
+        ("advanced", 29),
+        ("closed", 19),
     ]
     assert all(
         row["consumption"] == {"model": None, "tokens_in": None, "tokens_out": None}

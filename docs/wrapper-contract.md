@@ -311,6 +311,50 @@ Glyphs, colors, widths, responsive truncation, keybindings, and toolkit widget s
 contractual. Future renderer issue #143 MUST consume this seam rather than redefine its inventory
 or semantic meaning.
 
+#### Per-Orchestrator obligations at this seam
+
+The fixture's `semantic_contract` is the single declaration of what a Dashboard *is*. Its
+`projection_fields` inventory names every field of every band, its `queue_columns` and
+`iteration_breakdown_columns` carry a `fields` mapping from each rendered column onto that
+inventory, and `binding_sources` groups the activation vocabulary into `marker`, `retroactive`, and
+`lane`. A renderer or Orchestrator MUST NOT keep a second copy of any of these lists.
+
+Every Orchestrator MUST:
+
+- Emit `wrapper.issue.activated` with a `binding_source` drawn from the declared vocabulary. A
+  `retroactive` source (`closure`, `commit`, `single_member_pool`) means the Iteration was already
+  running when the evidence appeared, so the issue's Active stint opens at the *Iteration* start and
+  the pre-marker output belongs to that issue. A `lane_pickup` binding never becomes the single
+  serial Active issue.
+- Treat the first authoritative binding in an Iteration as final. A later `wrapper.issue.activated`
+  naming a different issue is ignored, not a rebinding.
+- Declare each Insight capability once at Run start and stay consistent with it: a capability
+  declared unavailable MUST arrive as `null` in every normalized measurement it feeds, and a
+  capability declared available MUST NOT use `null` to mean an observed zero or an observed empty
+  collection.
+- Derive `duration_seconds` and every `*_active_seconds` field from the monotonic clock, so a
+  wall-clock adjustment moves the rendered timestamps without moving any duration.
+- Report `first_started_at`, `closed_at`, and `activated_at` as RFC3339 UTC with a trailing `Z`;
+  localization to the display zone is the renderer's job, not the producer's.
+
+The native ports carry one additional obligation. A Dashboard case whose Run start declares the
+native capability manifest MUST carry a `producer_rollups` entry for *every* `wrapper.iteration.end`
+in the case, naming both native distributions and the producer facts behind that Event. The shell
+and PowerShell Event-schema suites rebuild those payloads through their real Iteration-rollup seams
+and compare them against the Event the Python reducer consumes, so a native trace in this fixture is
+one both native rollup seams actually produce rather than a hand-written approximation. Shell rollup
+arithmetic is integral, so a native case MUST NOT pin a fractional `duration_seconds`.
+
+The probe's depth is the rollup seam, not the whole Run loop: it proves the payload is *producible*,
+not that today's native Run loop reaches every input it accepts. The shell and PowerShell Run loops
+currently pass a constant zero for PR advances and only an empty or `aborted` terminal outcome, so a
+native `pr_advances` or `gone` Iteration is seam-reachable but not yet loop-reachable there.
+
+The boundary with #143 is deliberate and narrow: this seam fixes inventory, ordering, scope,
+nullability, placeholder meaning, and localization. It fixes nothing about renderer lifecycle,
+process model, threading, redraw scheduling, input handling, or widget toolkit — no Rust or TUI
+lifecycle belongs here.
+
 ## 13. Conformance (phase 1, MUST)
 
 Each Orchestrator MUST pass the language-neutral fixtures in the

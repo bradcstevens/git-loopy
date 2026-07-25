@@ -14,7 +14,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and future renderer #143 |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.2): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and future renderer #143 |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
@@ -66,6 +66,24 @@ behavior. Because the adapter feeds decoded fixture values straight to the seam,
 these cases also pin that nested lifecycle timestamps are republished as RFC3339
 UTC regardless of how a producer represented the instant.
 
+`dashboard-insights.json` is consumed by three ports at two different depths.
+Python drives the whole case: it replays the normalized Event prefix through the
+production reducer and projection and compares the toolkit-neutral view models.
+The shell and PowerShell Event-schema adapters drive the *producer* half. Each
+case whose Run start declares the native capability manifest carries a
+`producer_rollups` list with one entry per `wrapper.iteration.end`, and each
+entry's `input` is fed to that port's real Iteration-rollup seam; the rebuilt
+payload must equal the Event byte for byte in content. Without it a native
+Dashboard trace is only an assertion *about* shell and PowerShell rather than a
+trace either of their rollup seams produces — a hand-written rollup can encode
+timing or nullability no native producer would ever produce, and every adapter
+would still agree with it. Two consequences bind fixture authors: a native case
+must declare a producer rollup for every Iteration end it contains, and it must
+not pin a fractional `duration_seconds`, because shell rollup arithmetic is
+integral. The probe's depth is the rollup seam, so it proves a payload is
+producible rather than that today's native Run loop reaches every input the seam
+accepts.
+
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root
 `VERSION` authority for family adapters; `expected_python_distribution_version`
@@ -100,7 +118,8 @@ Their Event-schema adapters call the production serialization and replay seams f
 and
 [`powershell/tests/test-event-conformance.ps1`](../powershell/tests/test-event-conformance.ps1).
 Each family adapter drives its native normalized Iteration-rollup seam from its
-orchestrator-scoped shared cases.
+orchestrator-scoped shared cases and from the `dashboard-insights.json`
+producer rollups.
 The native Continuation adapters invoke each real public entrypoint from
 [`python/tests/test_continuation_scenarios.py`](../python/tests/test_continuation_scenarios.py),
 [`shell/tests/test-continuation-conformance.sh`](../shell/tests/test-continuation-conformance.sh),
