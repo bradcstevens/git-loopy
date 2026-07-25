@@ -212,6 +212,56 @@ Assert-Equal 3 $Defaults.MaxNmtStrikes "default Strike threshold"
 Assert-Equal 7200.0 $Defaults.SendTimeoutSeconds "default send timeout"
 Assert-Equal 0 $Defaults.DenyTools.Count "default tool denylist"
 Assert-Equal 0 $Defaults.DenySkills.Count "default skill denylist"
+Assert-Equal "" $Defaults.InteractiveFlag "no interactive flag by default"
+
+# The live interface is a tri-state at the flag layer: "on", "off", and "no flag
+# given". Collapsing the third into a boolean would lose the only thing that
+# lets `GIT_LOOPY_INTERACTIVE` and TTY detection still have a say.
+foreach ($Case in @(
+    @{
+        Id = "--interactive requests the live interface"
+        Arguments = @("--interactive")
+        Expected = "on"
+    },
+    @{
+        Id = "--no-interactive refuses it"
+        Arguments = @("--no-interactive")
+        Expected = "off"
+    },
+    @{
+        Id = "the last interactive flag wins"
+        Arguments = @("--interactive", "--no-interactive")
+        Expected = "off"
+    },
+    @{
+        Id = "the last interactive flag wins in the other order"
+        Arguments = @("--no-interactive", "--interactive")
+        Expected = "on"
+    }
+)) {
+    $InteractiveConfig = Resolve-GitLoopyConfig `
+        -Arguments $Case["Arguments"] `
+        -Environment $EmptyEnvironment
+    Assert-Equal $Case["Expected"] $InteractiveConfig.InteractiveFlag (
+        "interactive flag: $($Case["Id"])"
+    )
+}
+
+# The flags take no value, so a bare cap after one is still the cap and not a
+# swallowed argument.
+$InteractiveWithCap = Resolve-GitLoopyConfig `
+    -Arguments @("--interactive", "4") `
+    -Environment $EmptyEnvironment
+Assert-Equal 4 $InteractiveWithCap.MaxIterations (
+    "--interactive consumes no value"
+)
+
+$Usage = Get-GitLoopyUsage
+foreach ($Flag in @("--interactive", "--no-interactive")) {
+    Assert-True (
+        $Usage.Contains($Flag, [StringComparison]::Ordinal)
+    ) "usage documents $Flag"
+}
 
 $Environment = [ordered]@{
     GIT_LOOPY_MODEL = "env-model"

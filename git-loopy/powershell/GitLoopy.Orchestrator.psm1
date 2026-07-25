@@ -2,6 +2,8 @@ Set-StrictMode -Version Latest
 
 $EventsModule = Join-Path $PSScriptRoot "GitLoopy.Events.psm1"
 Import-Module $EventsModule -Force
+$TuiModule = Join-Path $PSScriptRoot "GitLoopy.Tui.psm1"
+Import-Module $TuiModule -Force
 $Script:ReleaseVersionPath = [IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot "../../VERSION")
 )
@@ -198,6 +200,8 @@ function Resolve-GitLoopyConfig {
     $MaxIterationsText = "0"
     $PositionalSeen = $false
     $ShowHelp = $false
+    # Tri-state interactive request: "on", "off", or empty for "no flag given".
+    $InteractiveFlag = ""
     $CliTools = [Collections.Generic.List[string]]::new()
     $CliSkills = [Collections.Generic.List[string]]::new()
     $SkillPolicyFlagsSeen = [Collections.Generic.HashSet[string]]::new(
@@ -216,6 +220,15 @@ function Resolve-GitLoopyConfig {
 
         if ($Option -cin @("-h", "--help")) {
             $ShowHelp = $true
+            continue
+        }
+
+        if ($Token -ceq "--interactive") {
+            $InteractiveFlag = "on"
+            continue
+        }
+        if ($Token -ceq "--no-interactive") {
+            $InteractiveFlag = "off"
             continue
         }
 
@@ -423,6 +436,7 @@ function Resolve-GitLoopyConfig {
             $SkillPolicyFlagsSeen | Sort-Object -CaseSensitive
         )
         SendTimeoutSeconds = $SendTimeoutSeconds
+        InteractiveFlag = $InteractiveFlag
         ShowHelp = $ShowHelp
     }
 }
@@ -2695,13 +2709,67 @@ function Invoke-GitLoopyDiscovery {
         [Parameter(Mandatory)]
         [psobject]$Config,
         [Parameter(Mandatory)]
-        [psobject]$Preflight
+        [psobject]$Preflight,
+        [Collections.IDictionary]$Environment = (Get-GitLoopyEnvironment)
     )
 
     $ReleaseVersion = Get-GitLoopyReleaseVersion
     $Context = New-GitLoopyEventContext -RepoRoot $Preflight.RepoRoot
     $EventTypes = Get-GitLoopyEventTypes
     Set-GitLoopyGitignoreEntry -RepoRoot $Preflight.RepoRoot
+    # Earn the live interface before the first Event exists, so the very first
+    # `wrapper.run.start` already goes to its final destination and the helper
+    # never has to be handed a partially replayed Run. Teardown is in the
+    # `finally` below because a Run that throws still owes the operator its
+    # terminal back.
+    #
+    # The sink is installed here rather than inside the TUI module so exactly one
+    # module owns the live destination. It stays installed after a mid-Run
+    # fallback and becomes a pass-through to stdout, which is what makes "a Run
+    # never respawns the helper" true by construction.
+    $Interactive = Start-GitLoopyTuiSession `
+        -RepoRoot $Preflight.RepoRoot `
+        -Flag $Config.InteractiveFlag `
+        -EnvironmentValue (
+            Get-GitLoopyEnvironmentValue $Environment "GIT_LOOPY_INTERACTIVE"
+        ) `
+        -ReleaseVersion $ReleaseVersion `
+        -SchemaVersion (Get-GitLoopyEventSchemaVersion)
+    if ($Interactive) {
+        Set-GitLoopyLiveSink -Sink {
+            param($Line)
+            Write-GitLoopyTuiLine -Line $Line
+        }
+    }
+    try {
+        return Invoke-GitLoopyDiscoveryLoop `
+            -Config $Config `
+            -Preflight $Preflight `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -ReleaseVersion $ReleaseVersion
+    }
+    finally {
+        Stop-GitLoopyTuiSession
+        Set-GitLoopyLiveSink -Sink $null
+    }
+}
+
+function Invoke-GitLoopyDiscoveryLoop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Config,
+        [Parameter(Mandatory)]
+        [psobject]$Preflight,
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [string]$ReleaseVersion
+    )
+
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_RUN_START"] `
@@ -3015,6 +3083,9 @@ Options:
   --disable-skill SKILL         Closed-world Skill policy; not yet supported by
                                 the PowerShell Orchestrator (fails closed).
   --send-timeout-seconds N
+  --interactive                 Drive the shared git-loopy-tui helper when a
+                                compatible one is installed.
+  --no-interactive              Keep raw JSONL on stdout (CI-safe).
   --version
   -h, --help
 "@
@@ -3057,7 +3128,8 @@ function Invoke-GitLoopyMain {
     }
     return Invoke-GitLoopyDiscovery `
         -Config $Config `
-        -Preflight $Preflight
+        -Preflight $Preflight `
+        -Environment $Environment
 }
 
 Export-ModuleMember -Function @(

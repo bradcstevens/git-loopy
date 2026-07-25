@@ -503,6 +503,59 @@ try {
         $RejectedMalformedRunId = $true
     }
     Assert-True $RejectedMalformedRunId "malformed explicit run id was accepted"
+
+    # The live-sink seam (PRD #173). The replay log is written unconditionally
+    # and first, so it stays the authoritative record no matter what the live
+    # destination does; this indirection only decides who *else* sees the same
+    # bytes. `GitLoopy.Tui.psm1` points it at the TUI helper's stdin for an
+    # interactive Run and points it back at stdout — permanently — the moment
+    # that child stops reading.
+    $SinkContext = New-GitLoopyEventContext `
+        -RepoRoot (Join-Path $TempDir "sink") `
+        -RunId "01HXR0000000000000000000AB" `
+        -StartedAt $FixedStartedAt
+    $Delivered = [Collections.Generic.List[string]]::new()
+    $SinkOriginalOut = [Console]::Out
+    $SinkBuffer = [IO.StringWriter]::new(
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+    try {
+        [Console]::SetOut($SinkBuffer)
+        Set-GitLoopyLiveSink -Sink { param($Line) $Delivered.Add($Line) }
+        Write-GitLoopyEvent `
+            -Context $SinkContext `
+            -Type "wrapper.run.start" `
+            -Timestamp ([DateTimeOffset]::Parse("2026-05-16T00:00:03.000Z"))
+        Set-GitLoopyLiveSink -Sink $null
+        Write-GitLoopyEvent `
+            -Context $SinkContext `
+            -Type "wrapper.run.end" `
+            -Payload ([ordered]@{ reason = "complete" }) `
+            -Timestamp ([DateTimeOffset]::Parse("2026-05-16T00:00:04.000Z"))
+    }
+    finally {
+        Set-GitLoopyLiveSink -Sink $null
+        [Console]::SetOut($SinkOriginalOut)
+    }
+
+    $SinkReplay = [IO.File]::ReadAllText($SinkContext.ReplayPath)
+    Assert-Equal 1 $Delivered.Count "an installed sink receives exactly the live copy"
+    Assert-True (
+        $SinkReplay.StartsWith($Delivered[0], [StringComparison]::Ordinal)
+    ) "the sink and the replay log carry the same bytes"
+    Assert-True (
+        -not $SinkBuffer.ToString().Contains(
+            '"wrapper.run.start"', [StringComparison]::Ordinal
+        )
+    ) "an installed sink is the live destination, not a second one"
+    Assert-True (
+        $SinkBuffer.ToString().Contains(
+            '"wrapper.run.end"', [StringComparison]::Ordinal
+        )
+    ) "clearing the sink restores stdout as the live destination"
+    Assert-Equal (
+        $SinkReplay
+    ) ($Delivered[0] + $SinkBuffer.ToString()) "replay parity across a sink change"
 }
 finally {
     if ([IO.Directory]::Exists($TempDir)) {
