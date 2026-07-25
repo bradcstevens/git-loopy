@@ -104,6 +104,11 @@ jobs:
       - plan
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    # A tagged Release enters the protected environment that holds the signing
+    # credentials; every pull request enters one that holds none. The boundary
+    # is the platform's, not a step's `if:` — a job that never sees a secret
+    # cannot leak one, however it is edited later.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'validation' }}
     permissions:
       contents: read
     strategy:
@@ -170,12 +175,22 @@ jobs:
         working-directory: git-loopy/tui
         env:
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          # cargo-dist signs inside this step, which is the only place signing
+          # can happen: it writes each `.sha256` afterwards, so a published
+          # checksum is a checksum of the *signed* artifact. Both signers
+          # degrade to a warning when their credentials are absent — which is
+          # what keeps a pull request buildable, and exactly why the trust gate
+          # asks the artifact instead of trusting this step's exit code.
+          CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+          CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          CODESIGN_OPTIONS: runtime
+          SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+          SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+          SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+          SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
         run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
 
-      # cargo-dist writes one `.sha256` beside each archive because the helper
-      # manifest pins `checksum = "sha256"`. Listing them proves it did rather
-      # than assuming it: an artifact with no published checksum is an artifact
-      # no installer is allowed to trust.
       - name: Publish the artifact checksum alongside it
         shell: bash
         working-directory: git-loopy/tui/target/distrib
@@ -210,6 +225,63 @@ jobs:
           --artifact-dir git-loopy/tui/target/distrib
           --target "${{ matrix.target }}"
 
+      # Apple's verdict, and only Apple's. cargo-dist signs but does not
+      # notarize, so the signed helper is submitted here and the notary's own
+      # answer is carried into the trust receipt. A ticket cannot be stapled
+      # into a bare Mach-O — stapling needs a bundle, .dmg, or .pkg — so
+      # Gatekeeper resolves this one online, and `release-trust.json` records
+      # that by name rather than leaving it to look like an oversight.
+      - name: Notarize the signed macOS artifact
+        id: notarize
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+          ARCHIVE: git-loopy/tui/target/distrib/git-loopy-tui-${{ matrix.target }}.tar.xz
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          staged="$RUNNER_TEMP/notarize"
+          umask 077
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$key"
+          mkdir -p "$staged"
+          tar -xJf "$ARCHIVE" -C "$staged"
+          ditto -c -k --keepParent "$staged" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --key "$key" \
+            --wait --output-format json > "$RUNNER_TEMP/notary.json"
+          rm -f "$key"
+          python3 -c 'import json,os,sys; print("status=" + json.load(open(os.environ["RUNNER_TEMP"] + "/notary.json"))["status"])' >> "$GITHUB_OUTPUT"
+
+      # Written where the evidence exists: a macOS runner is the only machine
+      # that can ask `codesign` what it just signed, and a Windows runner the
+      # only one that can read an Authenticode publisher. A cross-built target
+      # observes nothing and says so, rather than recording an absence that
+      # looks like a pass.
+      - name: Record what this runner can prove about its own artifact
+        shell: bash
+        env:
+          NOTARIZATION_STATUS: ${{ steps.notarize.outputs.status }}
+          OBSERVE: ${{ matrix.build == 'native' && '--observe' || '' }}
+        run: |
+          flags=()
+          if [ -n "$OBSERVE" ]; then
+            flags+=("$OBSERVE")
+          fi
+          if [ -n "$NOTARIZATION_STATUS" ]; then
+            flags+=(--notarization-status "$NOTARIZATION_STATUS")
+          fi
+          uv run --project git-loopy/python --all-extras \
+            python -m git_loopy.release_trust record \
+            --repository-root . \
+            --artifact-dir git-loopy/tui/target/distrib \
+            --target "${{ matrix.target }}" \
+            --release-version "${{ needs.identity.outputs.version }}" \
+            "${flags[@]}"
+
       - name: Hand the artifact to publication
         uses: actions/upload-artifact@v4
         with:
@@ -218,6 +290,7 @@ jobs:
             git-loopy/tui/target/distrib/*.tar.xz
             git-loopy/tui/target/distrib/*.zip
             git-loopy/tui/target/distrib/*.sha256
+            git-loopy/tui/target/distrib/*.trust.json
           if-no-files-found: error
           retention-days: 7
 
@@ -230,6 +303,7 @@ jobs:
       - family-conformance
       - build
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
@@ -261,11 +335,28 @@ jobs:
           --require-complete-set
 
       - name: Attest the built artifacts
+        id: attest
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             release-artifacts/*.tar.xz
             release-artifacts/*.zip
+
+      # The last thing that can stop an untrusted Release. Every artifact's
+      # signature, hardened runtime, notary verdict, publisher, and checksum is
+      # proven against the channel this version publishes on — so an unsigned
+      # Windows archive reaches operators only through a tag that says
+      # prerelease, and a stable Release that lost any one of them is refused
+      # rather than uploaded and withdrawn.
+      - name: Refuse a Release that cannot prove its platform trust
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.release_trust verify
+          --repository-root .
+          --artifact-dir release-artifacts
+          --release-version "${{ needs.identity.outputs.version }}"
+          --attestation "${{ steps.attest.outputs.bundle-path }}"
 
       # `source-release.yml` creates the Release for this tag from the same push,
       # so the two can be in flight together. Waiting for it is bounded and

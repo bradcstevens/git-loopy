@@ -23,6 +23,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
+| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -48,6 +49,18 @@ release pipeline proves it: `dist plan --output-format=json` is checked against
 this fixture before a byte is compiled, and a plan that would build on another
 runner, in another container, or under another toolchain fails the release
 instead of the linker.
+
+`release-trust.json` is the other half of that story: `tui-artifacts.json` says
+*what* is published, and `release-trust.json` says what publishing it has to
+prove. Signing happens inside `dist build`, because cargo-dist writes each
+`.sha256` afterwards and a published checksum must be a checksum of the *signed*
+artifact. Both of its signers degrade to a warning when their credentials are
+absent — which is what keeps a pull request buildable, and exactly why the gate
+proves a signature by unpacking the artifact and asking it, rather than by
+trusting a step that did not fail. Evidence a platform cannot carry is recorded
+by name and reason, the same way targets are deferred by name: an absent
+requirement and an impossible one look identical from the outside, and only one
+of them is a decision.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered

@@ -53,6 +53,13 @@ delivered in later phases, sequenced value-first
   attested artifacts from pinned cargo-dist tooling, described once in
   [`tui-artifacts.json`](../git-loopy/conformance/tui-artifacts.json) and listed
   in [the helper's README](../git-loopy/tui/README.md#release-artifacts).
+  A **stable** Release additionally has to prove its platform trust — Developer ID
+  signing with the hardened runtime and an accepted Apple notary verdict on macOS,
+  a hardware-backed signing service with a readable publisher on Windows — before
+  a single archive is attached; an unsigned Windows archive reaches operators only
+  through a clearly marked prerelease. Those rules live in
+  [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
+  applied by `git_loopy.release_trust`.
   The PowerShell port and package-manager distribution are still to come; until a
   helper is present or selected, the native ports stream plain text and run in
   place from the clone, and an optional `install.sh` / `install.ps1` only adds a

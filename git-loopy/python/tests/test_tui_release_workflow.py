@@ -104,22 +104,35 @@ def test_publication_waits_for_conformance_and_the_complete_artifact_set() -> No
 
 
 def test_a_pull_request_builds_without_release_credentials() -> None:
-    """AC7: a normal pull request proves the pipeline without protected access."""
+    """AC7: a normal pull request proves the pipeline without protected access.
+
+    #192 gave the build job signing credentials, so "no secrets anywhere before
+    `publish:`" stopped being the right test — it would now fail for a pipeline
+    that is *more* trustworthy than the one it was written for. What still has
+    to hold is the boundary itself: identity and plan read nothing, and the one
+    job that does read credentials reaches them through an environment a pull
+    request never enters. `test_release_trust.py` pins that expression against
+    the trust policy; here it is enough that the credential-free half is still
+    credential-free.
+    """
     workflow = _load_workflow()
     trigger = workflow.get("on", workflow.get(True))
 
     assert trigger["push"] == {"tags": ["v*"]}
     assert "pull_request" in trigger
 
-    for name in ("identity", "build"):
+    for name in ("identity", "plan"):
         job = workflow["jobs"][name]
         assert "environment" not in job
+        assert "secrets." not in yaml.safe_dump(job)
         assert job.get("permissions", {}).get("contents") == "read"
 
+    build = workflow["jobs"]["build"]
+    assert build.get("permissions", {}).get("contents") == "read"
+    assert build["environment"].startswith("${{ startsWith(github.ref, ")
+
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
-    credential_free, _, protected = text.partition("  publish:")
-    assert "secrets." not in credential_free
-    assert "environment:" not in credential_free
+    _, _, protected = text.partition("  publish:")
     assert "GH_TOKEN: ${{ github.token }}" in protected
 
 
@@ -162,9 +175,9 @@ def test_the_build_is_tagged_with_the_release_identity_it_just_proved() -> None:
         step for step in build["steps"] if step.get("name") == "Build the release artifact"
     ]
     assert len(compile_step) == 1
-    assert compile_step[0]["env"] == {
-        "RELEASE_TAG": "${{ needs.identity.outputs.tag }}"
-    }
+    assert compile_step[0]["env"]["RELEASE_TAG"] == (
+        "${{ needs.identity.outputs.tag }}"
+    )
     assert '--tag "$RELEASE_TAG"' in compile_step[0]["run"]
 
 
