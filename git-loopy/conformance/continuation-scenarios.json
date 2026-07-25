@@ -15,6 +15,7 @@
       "stable-external-state"
     ],
     "retry_kinds": ["at-most-once", "idempotent", "resumable"],
+    "instruction_modes": ["command", "manual", "skill"],
     "ineligibility_reasons": [
       "already-dispatched",
       "grant-missing",
@@ -2318,7 +2319,8 @@
               "immutable_producer_revisions": true,
               "prospective_projection": false,
               "terminal_rendering": false,
-              "concurrent_dispatch": false
+              "concurrent_dispatch": false,
+              "fixed_frontier_authorization": false
             },
             "continuation_modes": {
               "default": "off",
@@ -2368,7 +2370,8 @@
               "immutable_producer_revisions": true,
               "prospective_projection": false,
               "terminal_rendering": false,
-              "concurrent_dispatch": false
+              "concurrent_dispatch": false,
+              "fixed_frontier_authorization": false
             },
             "continuation_modes": {
               "default": "off",
@@ -2532,6 +2535,9 @@
                     "kind": "access",
                     "name": "tracker-write"
                   }
+                ],
+                "instruction_modes": [
+                  "skill"
                 ]
               }
             },
@@ -2597,7 +2603,7 @@
                 {
                   "id": 9001,
                   "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
-                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"safety_case\":{\"assumptions\":[{\"kind\":\"durable-inputs-fixed\",\"statement\":\"The approved map is already published.\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"effects\":[{\"kind\":\"tracker-write\",\"scope\":\"issue:octo/example#239\"}],\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"requirements\":[{\"kind\":\"skill\",\"name\":\"to-spec\"},{\"kind\":\"access\",\"name\":\"tracker-write\"}],\"retry\":{\"kind\":\"idempotent\"},\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"},\"triggers\":[],\"version\":\"1\"},\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.2\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"adcc37452227eadb9338d23b0a8dade455edc980da197dfd618091fffb8e89cb\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"safety_case\":{\"assumptions\":[{\"kind\":\"durable-inputs-fixed\",\"statement\":\"The approved map is already published.\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"effects\":[{\"kind\":\"tracker-write\",\"scope\":\"issue:octo/example#239\"}],\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"requirements\":[{\"kind\":\"skill\",\"name\":\"to-spec\"},{\"kind\":\"access\",\"name\":\"tracker-write\"}],\"retry\":{\"kind\":\"idempotent\"},\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"},\"triggers\":[],\"version\":\"1\"},\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.2\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"adcc37452227eadb9338d23b0a8dade455edc980da197dfd618091fffb8e89cb\",\"semantic_fingerprints\":{\"action\":\"97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
                   "user": {
                     "login": "planner",
                     "type": "User"
@@ -2634,7 +2640,7 @@
             "actions": [
               {
                 "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+                "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
                 "workstream_anchor": {
                   "kind": "issue",
                   "number": 237,
@@ -2759,27 +2765,27 @@
                 "actions": [
                   {
                     "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                    "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7"
+                    "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791"
                   }
                 ]
               },
               "validators": [
                 {
                   "comment_id": 9001,
-                  "sha256": "3e6549db6c7e2bee2ec886dfc15ea2dbb2bf77a92c938cfb31db94104d3eda72"
+                  "sha256": "b12adc95f338c7d39ad1213aaa597e67537909de6e83fa50c9c5ec7f77c52997"
                 }
               ],
               "eligibility": [
                 {
                   "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                  "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+                  "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
                   "automation_selectable": true
                 }
               ],
               "report_only": [],
               "authorization": {
                 "action_identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+                "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
                 "performer": "runner",
                 "workstream_anchor": {
                   "kind": "issue",
@@ -2861,6 +2867,9 @@
                     "kind": "access",
                     "name": "tracker-write"
                   }
+                ],
+                "instruction_modes": [
+                  "skill"
                 ]
               }
             },
@@ -3114,7 +3123,7 @@
           ],
           "dispatch": {
             "action_identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-            "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+            "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
             "performer": "runner",
             "carrier": {
               "kind": "issue",
@@ -3135,6 +3144,14 @@
         }
       },
       "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "runner",
+            "type": "User"
+          }
+        },
         {
           "command": "api --method POST repos/octo/example/issues/237/comments --input -",
           "exit_code": 0,
@@ -3158,10 +3175,10 @@
           "operation": "record-dispatch-result",
           "receipt": {
             "status": "committed",
-            "dispatch_evidence_id": "b1a6fbe8ad6831965675285723040b592c74218e76bf1a9cc7aa6e29b2145199",
+            "dispatch_evidence_id": "5dcaf83a8c3ee0a72a5ad48aca965e6a85714227b3105d444a21234b874c42b9",
             "class": "safety-case-violation",
             "action_identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-            "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+            "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
             "carrier": {
               "kind": "issue",
               "repository": "octo/example",
@@ -3175,6 +3192,7 @@
         },
         "stderr_contains": null,
         "github_calls": [
+          "api user",
           "api --method POST repos/octo/example/issues/237/comments --input -"
         ]
       }
@@ -3209,6 +3227,9 @@
                     "kind": "access",
                     "name": "tracker-write"
                   }
+                ],
+                "instruction_modes": [
+                  "skill"
                 ]
               }
             },
@@ -3274,7 +3295,7 @@
                 {
                   "id": 9001,
                   "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
-                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"safety_case\":{\"assumptions\":[{\"kind\":\"durable-inputs-fixed\",\"statement\":\"The approved map is already published.\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"effects\":[{\"kind\":\"tracker-write\",\"scope\":\"issue:octo/example#239\"}],\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"requirements\":[{\"kind\":\"skill\",\"name\":\"to-spec\"},{\"kind\":\"access\",\"name\":\"tracker-write\"}],\"retry\":{\"kind\":\"idempotent\"},\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"},\"triggers\":[],\"version\":\"1\"},\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.2\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"adcc37452227eadb9338d23b0a8dade455edc980da197dfd618091fffb8e89cb\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+                  "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"safety_case\":{\"assumptions\":[{\"kind\":\"durable-inputs-fixed\",\"statement\":\"The approved map is already published.\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"effects\":[{\"kind\":\"tracker-write\",\"scope\":\"issue:octo/example#239\"}],\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"requirements\":[{\"kind\":\"skill\",\"name\":\"to-spec\"},{\"kind\":\"access\",\"name\":\"tracker-write\"}],\"retry\":{\"kind\":\"idempotent\"},\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"},\"triggers\":[],\"version\":\"1\"},\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.2\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"adcc37452227eadb9338d23b0a8dade455edc980da197dfd618091fffb8e89cb\",\"semantic_fingerprints\":{\"action\":\"97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
                   "user": {
                     "login": "planner",
                     "type": "User"
@@ -3285,9 +3306,9 @@
                 {
                   "id": 9100,
                   "url": "https://github.com/octo/example/issues/237#issuecomment-9100",
-                  "body": "<!-- git-loopy-continuation-dispatch:1 -->\n```json\n{\"action_identity\":\"b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4\",\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"class\":\"safety-case-violation\",\"evidence\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"performer\":\"runner\",\"reason\":\"credential-required\",\"semantic_fingerprint\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\",\"summary\":\"The Instruction required a credential no grant covers.\"}\n```",
+                  "body": "<!-- git-loopy-continuation-dispatch:1 -->\n```json\n{\"action_identity\":\"b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4\",\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"class\":\"safety-case-violation\",\"evidence\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"performer\":\"runner\",\"reason\":\"credential-required\",\"semantic_fingerprint\":\"97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791\",\"summary\":\"The Instruction required a credential no grant covers.\"}\n```",
                   "author": {
-                    "login": "planner",
+                    "login": "runner",
                     "is_bot": false
                   },
                   "createdAt": "2026-07-25T21:00:00Z",
@@ -3322,7 +3343,7 @@
             "actions": [
               {
                 "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+                "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
                 "workstream_anchor": {
                   "kind": "issue",
                   "number": 237,
@@ -3432,7 +3453,8 @@
                 "class": "safety-case-violation",
                 "identities": [
                   "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4"
-                ]
+                ],
+                "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791"
               }
             ],
             "automation": {
@@ -3456,20 +3478,20 @@
                 "actions": [
                   {
                     "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                    "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7"
+                    "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791"
                   }
                 ]
               },
               "validators": [
                 {
                   "comment_id": 9001,
-                  "sha256": "3e6549db6c7e2bee2ec886dfc15ea2dbb2bf77a92c938cfb31db94104d3eda72"
+                  "sha256": "b12adc95f338c7d39ad1213aaa597e67537909de6e83fa50c9c5ec7f77c52997"
                 }
               ],
               "eligibility": [
                 {
                   "identity": "b04f388463dcfd1ca21e12bc0661f13eabd045b5b1321d1e17543e050cce56b4",
-                  "semantic_fingerprint": "34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7",
+                  "semantic_fingerprint": "97b0bc81d370ddd0c3dad95e0f44fa71a2883087d25ab9d6be011780d0553791",
                   "automation_selectable": false,
                   "reasons": [
                     "quarantined"

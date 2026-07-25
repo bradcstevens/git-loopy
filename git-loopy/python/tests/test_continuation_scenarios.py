@@ -535,6 +535,24 @@ class _RecordingGitHub:
         self.comments.append(comment)
         return comment
 
+    def append_comment(
+        self, number: int, body: str, *, author: str = "planner"
+    ) -> ContinuationComment:
+        """Seed one arbitrary carrier comment without going through publish."""
+        comment = ContinuationComment(
+            id=self.next_comment_id,
+            url=(
+                f"https://github.com/octo/example/issues/{number}"
+                f"#issuecomment-{self.next_comment_id}"
+            ),
+            body=body,
+            author=author,
+            author_type="User",
+        )
+        self.next_comment_id += 1
+        self.comments.append(comment)
+        return comment
+
     def _carrier(self) -> ContinuationCarrier:
         comments = tuple(self.comments)
         if not comments and self.body:
@@ -4433,6 +4451,7 @@ def _automation_request(**overrides: Any) -> dict[str, Any]:
                     {"kind": "skill", "name": "to-spec"},
                     {"kind": "access", "name": "tracker-write"},
                 ],
+                "instruction_modes": ["skill"],
             },
         },
         "scope": {
@@ -4904,6 +4923,8 @@ def test_python_record_dispatch_result_quarantines_a_safety_case_violation(
     github = _RecordingGitHub()
     _publish_afk_action(github, monkeypatch, capsys)
     before = _automation_result(github, monkeypatch, capsys)
+    github.actor_login = "runner"
+    github.comment_author = "runner"
     identity = before["authorization"]["action_identity"]
     fingerprint = before["authorization"]["semantic_fingerprint"]
 
@@ -4931,3 +4952,334 @@ def test_python_record_dispatch_result_quarantines_a_safety_case_violation(
     assert "authorization" not in after
     assert after["stop"]["reason"] == "safety-case-violation"
     assert after["stop"]["disposition"] == "attention-required"
+
+
+# ---------------------------------------------------------------------------
+# Review findings (issue #254)
+# ---------------------------------------------------------------------------
+
+
+def test_python_semantic_fingerprint_covers_the_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The case owns effects and retry, so the freeze must see it move.
+
+    Before contract 1.2 those fields lived on the Action and the fingerprint
+    hashed them there. A case that widened its effects while the Action stayed
+    byte-identical would otherwise keep its frozen fingerprint and stay
+    dispatchable for the rest of the Run.
+    """
+    baseline = _afk_publish_request()
+    widened = copy.deepcopy(baseline)
+    case = widened["completion"]["actions"][0]["safety_case"]
+    case["effects"] = [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"},
+        {"kind": "repository-write", "scope": "branch:main"},
+    ]
+    case["retry"] = {"kind": "at-most-once"}
+
+    first = _publish_result(baseline, _RecordingGitHub(), monkeypatch, capsys)[1]
+    second = _publish_result(widened, _RecordingGitHub(), monkeypatch, capsys)[1]
+
+    assert (
+        first["receipt"]["semantic_fingerprints"]["action"]
+        != second["receipt"]["semantic_fingerprints"]["action"]
+    )
+
+
+def test_python_automation_refuses_to_authorize_beside_a_guidance_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frontier frozen from an untrustworthy projection authorizes nothing.
+
+    The conflicted Action never reaches ``actions`` at all, so the selectable
+    one looks perfectly healthy. What is unsound is the *coverage*: the Run
+    froze a description of the project that the project disagrees with.
+    """
+    github = _RecordingGitHub()
+    _publish_two_afk_actions(github, monkeypatch, capsys)
+    conflicting = _afk_publish_request()
+    conflicting["trusted_producers"] = ["planner", "second-planner"]
+    conflicting["completion"]["producer"] = {
+        "login": "second-planner",
+        "role": "planning",
+    }
+    other = conflicting["completion"]["actions"][0]
+    other["key"] = "second"
+    other["summary"] = "Publish the second specification"
+    other["target"] = _issue(240)
+    other["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    other["instruction"] = {"mode": "skill", "value": "/to-spec 237 --different"}
+    other["safety_case"] = _afk_safety_case(other)
+    github.comment_author = "second-planner"
+    assert _publish_result(conflicting, github, monkeypatch, capsys)[0] == 0
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile",
+        _automation_request() | {"trusted_producers": ["planner", "second-planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert any(
+        diagnostic["code"] == "action_conflict"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    automation = result["result"]["automation"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "guidance-fault"
+    assert automation["stop"]["disposition"] == "attention-required"
+
+
+def test_python_uncertain_effect_state_raises_its_own_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The two evidence classes are different problems for a human."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    authorization = before["authorization"]
+    github.actor_login = "runner"
+    github.comment_author = "runner"
+
+    exit_code, _receipt, _stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {
+                "identity": authorization["action_identity"],
+                "semantic_fingerprint": authorization["semantic_fingerprint"],
+            },
+            evidence_class="uncertain-effect-state",
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    assert after["stop"]["reason"] == "uncertain-effect-state"
+    assert after["stop"]["disposition"] == "attention-required"
+
+
+def test_python_a_corrected_occurrence_clears_its_quarantine(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Evidence names one semantics, not one identity forever.
+
+    Quarantining the identity alone would outlive the Transition owner's own
+    correction: the owner publishes a repaired occurrence, its fingerprint
+    moves, and the evidence that described the broken one would still be
+    holding the repaired one down.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    identity = before["authorization"]["action_identity"]
+    github.actor_login = "runner"
+    github.comment_author = "runner"
+
+    assert (
+        _command_result(
+            "record-dispatch-result",
+            _dispatch_result_request(
+                {"identity": identity, "semantic_fingerprint": "0" * 64}
+            ),
+            github,
+            monkeypatch,
+            capsys,
+        )[0]
+        == 0
+    )
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    [entry] = after["eligibility"]
+    assert "quarantined" not in entry.get("reasons", [])
+    assert after["authorization"]["action_identity"] == identity
+
+
+def test_python_dispatch_evidence_must_be_written_by_its_own_performer(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A record naming a Performer that did not write it is not evidence."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    github.actor_login = "someone-else"
+
+    exit_code, result, _stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {
+                "identity": before["authorization"]["action_identity"],
+                "semantic_fingerprint": before["authorization"]["semantic_fingerprint"],
+            }
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "performer" in result["error"]["message"]
+
+
+def test_python_reconcile_ignores_evidence_its_author_did_not_perform(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reading must apply the same binding writing does.
+
+    Anyone with write access can leave a comment. Only the Performer named in
+    the record can have performed the Dispatch it describes, so a record whose
+    author is not that Performer narrows nothing.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    authorization = before["authorization"]
+    forged = {
+        "action_identity": authorization["action_identity"],
+        "semantic_fingerprint": authorization["semantic_fingerprint"],
+        "performer": "runner",
+        "carrier": _issue(237),
+        "class": "safety-case-violation",
+        "reason": "credential-required",
+        "summary": "Forged.",
+        "evidence": [_issue(237)],
+    }
+    github.append_comment(
+        237, continuation._dispatch_evidence_body(forged), author="impostor"
+    )
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    assert "authorization" in after
+    assert [entry.get("reasons", []) for entry in after["eligibility"]] == [[]]
+
+
+def test_python_reconcile_ignores_a_malformed_evidence_record(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A quarantine is an authority change; it needs the whole record."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    partial = {
+        "class": "safety-case-violation",
+        "action_identity": before["authorization"]["action_identity"],
+    }
+    github.append_comment(
+        237, continuation._dispatch_evidence_body(partial), author="runner"
+    )
+
+    _exit_code, result, _stderr = _command_result(
+        "reconcile",
+        _automation_request(frontier=before["frontier"]),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert "authorization" in result["result"]["automation"]
+    assert not any(
+        diagnostic["code"] == "dispatch_evidence_quarantine"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+
+
+def test_python_automation_scope_can_only_narrow_within_one_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Replaying a frozen frontier must replay the authority that froze with it.
+
+    The frontier alone is not the freeze. A Run that carried its frozen
+    frontier forward but recomputed its scope from whatever the caller supplied
+    next would let a grant added mid-Run authorize an Action the Run was never
+    entitled to -- which is the widening the freeze exists to prevent.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    first = _automation_result(github, monkeypatch, capsys)
+    frozen_scope = first["scope"]
+
+    widened = _automation_request(frontier=first["frontier"])
+    for ceiling in widened["automation"]["scope"]["ceilings"]:
+        ceiling["coverage"]["repositories"].append("octo/elsewhere")
+        ceiling["grants"].append({"kind": "repository-write", "scope": "branch:main"})
+    widened["automation"]["scope"]["prior"] = frozen_scope
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile", widened, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert result["result"]["automation"]["scope"] == frozen_scope
+
+
+def test_python_automation_narrows_a_prior_scope_further(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Narrowing still applies immediately; only widening is refused."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    first = _automation_result(github, monkeypatch, capsys)
+
+    revoked = _automation_request(frontier=first["frontier"])
+    revoked["automation"]["scope"]["prior"] = first["scope"]
+    revoked["automation"]["scope"]["revocations"] = [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    ]
+
+    automation = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        scope=revoked["automation"]["scope"],
+    )
+
+    assert automation["scope"]["grants"] == []
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "grant-missing"
+
+
+def test_python_automation_refuses_an_instruction_mode_the_performer_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Performer must positively declare the Instruction modes it handles.
+
+    The safety case describes the work; it says nothing about whether *this*
+    Performer has a handler for the Instruction's mode. Inferring one from the
+    absence of a declaration is exactly the open-world assumption unattended
+    execution cannot make.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["performer"]["posture"]["instruction_modes"] = ["manual"]
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    automation = result["result"]["automation"]
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["performer-ineligible"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "performer-ineligible"

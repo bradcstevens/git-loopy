@@ -354,6 +354,7 @@ ASSUMPTION_KINDS = frozenset(
 # it is what makes uncertain effect state a recordable Dispatch-evidence class
 # rather than an ordinary retry.
 RETRY_KINDS = frozenset({"at-most-once", "idempotent", "resumable"})
+INSTRUCTION_MODES = frozenset({"command", "manual", "skill"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _WRITE_PERMISSIONS = frozenset({"ADMIN", "MAINTAIN", "WRITE"})
@@ -1331,7 +1332,7 @@ def _validate_action(
         required=frozenset({"mode", "value"}),
         optional=frozenset({"behavior_version", "variant", "advisory_extensions"}),
     )
-    if instruction.get("mode") not in {"skill", "command", "manual"}:
+    if instruction.get("mode") not in INSTRUCTION_MODES:
         raise ContinuationError(
             "completion.actions item.instruction.mode is unsupported"
         )
@@ -1781,6 +1782,10 @@ def _semantic_fingerprint(action: dict[str, Any]) -> str:
         "requirements": action.get("requirements", []),
         "triggers": action.get("triggers", []),
     }
+    # Conditional: a record published under 1.0 or 1.1 has no safety case, and
+    # its fingerprint must stay byte-identical across this contract bump.
+    if "safety_case" in action:
+        semantics["safety_case"] = action["safety_case"]
     return hashlib.sha256(
         _canonical_json(_without_advisory_extensions(semantics)).encode("utf-8")
     ).hexdigest()
@@ -2922,7 +2927,6 @@ _INELIGIBILITY_STOP_REASONS = {
     "grant-missing": "grant-missing",
     "performer-ineligible": "performer-ineligible",
     "not-ready": "awaiting-prerequisites",
-    "quarantined": "safety-case-violation",
     # An AFK-safe claim with no safety case behind it is a defect in the
     # guidance, not a property of the Performer or the Run's authority.
     "safety-case-absent": "guidance-fault",
@@ -2971,7 +2975,9 @@ def _validate_automation(value: Any, name: str) -> dict[str, Any]:
     _fields(
         posture,
         posture_name,
-        required=frozenset({"noninteractive", "satisfied_requirements"}),
+        required=frozenset(
+            {"noninteractive", "satisfied_requirements", "instruction_modes"}
+        ),
         optional=frozenset(),
     )
     if posture.get("noninteractive") is not True:
@@ -2980,6 +2986,18 @@ def _validate_automation(value: Any, name: str) -> dict[str, Any]:
         posture.get("satisfied_requirements"),
         f"{posture_name}.satisfied_requirements",
     )
+    # Closed world: a Performer executes only the Instruction modes it declares
+    # a handler for. Silence is not a claim of universal competence.
+    handled_modes = set()
+    for entry in _array(
+        posture.get("instruction_modes"), f"{posture_name}.instruction_modes"
+    ):
+        mode = _string(entry, f"{posture_name}.instruction_modes item")
+        if mode not in INSTRUCTION_MODES:
+            raise ContinuationError(
+                f"{posture_name}.instruction_modes item is unsupported"
+            )
+        handled_modes.add(mode)
 
     scope_name = f"{name}.scope"
     scope = _object(automation.get("scope"), scope_name)
@@ -2987,7 +3005,7 @@ def _validate_automation(value: Any, name: str) -> dict[str, Any]:
         scope,
         scope_name,
         required=frozenset({"ceilings", "revocations"}),
-        optional=frozenset(),
+        optional=frozenset({"prior"}),
     )
     ceilings = _array(scope.get("ceilings"), f"{scope_name}.ceilings", nonempty=True)
     sources: set[str] = set()
@@ -3054,6 +3072,46 @@ def _validate_automation(value: Any, name: str) -> dict[str, Any]:
     denied |= revocations
     effective_grants = (granted or set()) - denied
 
+    # The frozen scope of a Run is replayed alongside its frozen frontier, and
+    # the two must narrow together. Recomputing authority from whatever the
+    # caller supplies next would let a grant added mid-Run authorize an Action
+    # the Run was never entitled to.
+    if "prior" in scope:
+        prior_name = f"{scope_name}.prior"
+        prior = _object(scope["prior"], prior_name)
+        _fields(
+            prior,
+            prior_name,
+            required=frozenset({"coverage", "grants", "denials"}),
+            optional=frozenset({"frozen"}),
+        )
+        prior_coverage = _object(prior.get("coverage"), f"{prior_name}.coverage")
+        _fields(
+            prior_coverage,
+            f"{prior_name}.coverage",
+            required=frozenset({"repositories"}),
+            optional=frozenset(),
+        )
+        prior_repositories = {
+            _string(entry, f"{prior_name}.coverage.repositories item")
+            for entry in _array(
+                prior_coverage.get("repositories"),
+                f"{prior_name}.coverage.repositories",
+            )
+        }
+        prior_grants = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(prior.get("grants"), f"{prior_name}.grants")
+        }
+        prior_denials = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(prior.get("denials"), f"{prior_name}.denials")
+        }
+        repositories = (repositories or set()) & prior_repositories
+        effective_grants &= prior_grants
+        denied |= prior_denials
+        effective_grants -= denied
+
     frontier: list[dict[str, str]] | None = None
     if "frontier" in automation:
         frontier_name = f"{name}.frontier"
@@ -3078,6 +3136,7 @@ def _validate_automation(value: Any, name: str) -> dict[str, Any]:
         "satisfied_requirements": {
             (entry["kind"], entry["name"]) for entry in satisfied
         },
+        "instruction_modes": handled_modes,
         "repositories": repositories or set(),
         "grants": effective_grants,
         "denials": denied,
@@ -3099,7 +3158,7 @@ def _automation_ineligibility(
     *,
     automation: dict[str, Any],
     frontier: dict[str, str],
-    quarantined: set[str],
+    quarantined: dict[tuple[str, str], str],
 ) -> list[str]:
     """Every typed reason this Action is not Automation-selectable."""
     reasons: set[str] = set()
@@ -3111,7 +3170,7 @@ def _automation_ineligibility(
         reasons.add("outside-frontier")
     if identity in automation["dispatched"]:
         reasons.add("already-dispatched")
-    if identity in quarantined:
+    if (identity, action["semantic_fingerprint"]) in quarantined:
         reasons.add("quarantined")
     if action["interaction"]["classification"] != "AFK-safe":
         reasons.add("human-boundary")
@@ -3130,7 +3189,10 @@ def _automation_ineligibility(
         requirements = {
             (entry["kind"], entry["name"]) for entry in safety_case["requirements"]
         }
-        if not requirements <= automation["satisfied_requirements"]:
+        if (
+            not requirements <= automation["satisfied_requirements"]
+            or action["instruction"]["mode"] not in automation["instruction_modes"]
+        ):
             reasons.add("performer-ineligible")
     return sorted(reasons)
 
@@ -3166,8 +3228,14 @@ def _automation_projection(
         entry["identity"]: entry["semantic_fingerprint"] for entry in frozen
     }
 
+    # Evidence names one *semantics*, not one identity forever: a Transition
+    # owner that publishes a repaired occurrence moves the fingerprint, and the
+    # evidence describing the broken one must stop holding the repaired one
+    # down. The class rides along so the stop can name the right problem.
     quarantined = {
-        str(identity)
+        (str(identity), str(diagnostic["semantic_fingerprint"])): str(
+            diagnostic["class"]
+        )
         for diagnostic in diagnostics
         if diagnostic.get("code") == "dispatch_evidence_quarantine"
         for identity in diagnostic.get("identities", [])
@@ -3184,6 +3252,8 @@ def _automation_projection(
 
     eligibility: list[dict[str, Any]] = []
     report_only: list[dict[str, Any]] = []
+    quarantine_stops: set[str] = set()
+    quarantine_identities: set[str] = set()
     selected: dict[str, Any] | None = None
     for action in actions:
         reasons = _automation_ineligibility(
@@ -3212,6 +3282,11 @@ def _automation_projection(
                     ),
                 }
             )
+        if "quarantined" in reasons:
+            quarantine_stops.add(
+                quarantined[(action["identity"], action["semantic_fingerprint"])]
+            )
+            quarantine_identities.add(action["identity"])
         if not reasons and selected is None:
             selected = action
 
@@ -3241,7 +3316,11 @@ def _automation_projection(
         "report_only": report_only,
     }
 
-    if selected is not None:
+    # A guidance fault is not a property of the selected Action -- the
+    # conflicted or unverifiable fragment never reached ``actions`` at all.
+    # What it makes untrustworthy is the coverage the Run froze, so no Action
+    # inside that frozen description may be dispatched on the strength of it.
+    if selected is not None and not guidance_fault:
         safety_case = selected["safety_case"]
         projection["authorization"] = {
             "action_identity": selected["identity"],
@@ -3266,6 +3345,8 @@ def _automation_projection(
         status=status,
         frontier=frozen,
         guidance_fault=guidance_fault,
+        quarantine_stops=quarantine_stops,
+        quarantine_identities=quarantine_identities,
     )
     return projection
 
@@ -3279,6 +3360,8 @@ def _automation_stop(
     status: str,
     frontier: list[dict[str, str]],
     guidance_fault: bool,
+    quarantine_stops: set[str],
+    quarantine_identities: set[str],
 ) -> dict[str, Any]:
     """Explain, once and in typed terms, why nothing further can be selected."""
     observed: set[str] = set()
@@ -3287,6 +3370,7 @@ def _automation_stop(
             mapped = _INELIGIBILITY_STOP_REASONS.get(reason)
             if mapped is not None:
                 observed.add(mapped)
+    observed |= quarantine_stops
     if guidance_fault:
         observed.add("guidance-fault")
     if status == "complete":
@@ -3302,21 +3386,26 @@ def _automation_stop(
             disposition = candidate_disposition
             break
 
-    decisive = [
-        entry
-        for entry in eligibility
-        if _INELIGIBILITY_STOP_REASONS.get(
-            next(
-                (
-                    item
-                    for item in entry.get("reasons", [])
-                    if _INELIGIBILITY_STOP_REASONS.get(item) == reason
-                ),
-                "",
+    if reason in DISPATCH_EVIDENCE_CLASSES:
+        decisive = [
+            entry for entry in eligibility if entry["identity"] in quarantine_identities
+        ]
+    else:
+        decisive = [
+            entry
+            for entry in eligibility
+            if _INELIGIBILITY_STOP_REASONS.get(
+                next(
+                    (
+                        item
+                        for item in entry.get("reasons", [])
+                        if _INELIGIBILITY_STOP_REASONS.get(item) == reason
+                    ),
+                    "",
+                )
             )
-        )
-        == reason
-    ]
+            == reason
+        ]
     decisive_identities = {entry["identity"] for entry in decisive}
     index = {action["identity"]: action for action in actions}
     next_step: dict[str, Any] | None = None
@@ -3364,11 +3453,16 @@ def _dispatch_evidence_body(record: dict[str, Any]) -> str:
     return f"{_DISPATCH_MARKER}\n```json\n{_canonical_json(record)}\n```"
 
 
-def _parse_dispatch_evidence(comment: ContinuationComment) -> dict[str, Any] | None:
+def _parse_dispatch_evidence(
+    comment: ContinuationComment, *, repository: str
+) -> dict[str, Any] | None:
     """Read one durable Dispatch-evidence record, or ``None``.
 
     Dispatch evidence is deliberately *not* a Producer revision: it carries no
-    lineage, creates and retires nothing, and is read only to quarantine.
+    lineage, creates and retires nothing, and is read only to quarantine. That
+    is exactly why reading applies the *whole* closed schema the writer applied
+    and the same Performer binding: a quarantine is a change of authority, and
+    a fragment naming an identity is not enough to make one.
     """
     if _DISPATCH_MARKER not in comment.body:
         return None
@@ -3381,14 +3475,18 @@ def _parse_dispatch_evidence(comment: ContinuationComment) -> dict[str, Any] | N
         )
     except ValueError:
         return None
-    if not isinstance(record, dict):
+    try:
+        validated = _validate_dispatch(
+            record, "dispatch evidence", repository=repository
+        )
+    except ContinuationError:
         return None
-    if record.get("class") not in DISPATCH_EVIDENCE_CLASSES:
+    dispatch = validated["dispatch"]
+    # Anyone with write access can leave a comment; only the Performer named in
+    # the record can have performed the Dispatch it describes.
+    if dispatch["performer"] != comment.author:
         return None
-    identity = record.get("action_identity")
-    if not isinstance(identity, str):
-        return None
-    return record
+    return dispatch
 
 
 def _validate_dispatch(value: Any, name: str, *, repository: str) -> dict[str, Any]:
@@ -3459,6 +3557,7 @@ def _dispatch_evidence_diagnostics(
             "comment_id": comment_id,
             "class": record["class"],
             "identities": [record["action_identity"]],
+            "semantic_fingerprint": record["semantic_fingerprint"],
         }
         for comment_id, record in sorted(evidence, key=lambda entry: entry[0])
     ]
@@ -3482,6 +3581,11 @@ def _record_dispatch_result(
     )
     dispatch = validated["dispatch"]
     carrier = validated["carrier"]
+    actor, _actor_type = github.authenticated_actor()
+    if actor != dispatch["performer"]:
+        raise ContinuationError(
+            "dispatch.performer must be the authenticated actor writing the record"
+        )
     record = {key: value for key, value in sorted(dispatch.items())}
     _portable_json(record, name="Dispatch evidence")
     evidence_id = _digest(record)
@@ -3556,7 +3660,7 @@ def _reconcile_revision_protocol(
                     }
                 )
                 continue
-            evidence = _parse_dispatch_evidence(comment)
+            evidence = _parse_dispatch_evidence(comment, repository=repository)
             if evidence is not None:
                 dispatch_evidence.append((comment.id, evidence))
                 continue
@@ -4011,11 +4115,11 @@ def _reconcile(
     dispatch_evidence: list[tuple[int, dict[str, Any]]] = []
     for carrier in carriers:
         for comment in carrier.comments:
-            if comment.author not in trusted:
-                continue
-            evidence = _parse_dispatch_evidence(comment)
+            evidence = _parse_dispatch_evidence(comment, repository=repository)
             if evidence is not None:
                 dispatch_evidence.append((comment.id, evidence))
+                continue
+            if comment.author not in trusted:
                 continue
             record = _parse_record(comment)
             if record is None:

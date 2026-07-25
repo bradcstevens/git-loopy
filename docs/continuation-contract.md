@@ -77,7 +77,7 @@ advertising it implements every §9 field — the AFK safety case, the frozen Au
 frontier, typed Performer eligibility, the single DispatchAuthorization, the locked stop
 precedence, and the two Dispatch-evidence classes — and supports the `record-dispatch-result`
 operation. Python advertises `fixed_frontier_authorization: true`; shell and PowerShell advertise
-`false`, accept no record declaring contract 1.2, and continue to fail closed on
+`false` explicitly, accept no record declaring contract 1.2, and continue to fail closed on
 `record-dispatch-result` with `unsupported_operation`.
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
@@ -392,6 +392,11 @@ The case is the single source of truth for those fields: an Action carrying a sa
 also declare `effects`, `requirements`, or `triggers` itself. Only an `AFK-safe` Action may carry
 one — a case on a HITL-required Action is a structural rejection, not a downgrade.
 
+The case participates in the Action's semantic fingerprint. Those fields used to live on the Action
+itself and were hashed there; moving them into the case without moving them into the fingerprint
+would let a case widen its own effects or drop to `at-most-once` retry while its frozen fingerprint
+— and therefore its authorization — stayed valid for the rest of the Run.
+
 An `AFK-safe` Action *without* a safety case is not a rejection: it stays visible, and it is simply
 never selectable. The claim alone does not authorize anything.
 
@@ -400,6 +405,12 @@ dispatch, from the ordered ceilings the caller supplies. Ceilings **intersect** 
 grant absent from any one ceiling is absent from the Run. Denials **accumulate** — a denial in any
 one ceiling denies for the Run. Runtime `revocations` narrow immediately and fold into denials.
 Nothing widens: a grant or capability that appears later waits for a new Run.
+
+The frozen scope is replayed with the frozen frontier. A subsequent Reconciliation in the same Run
+supplies its prior effective scope as `automation.scope.prior`, and the newly computed scope is
+intersected with it and its denials unioned. The frontier alone is not the freeze: a Run that
+carried its frontier forward but recomputed authority from whatever arrived next would let a grant
+added mid-Run authorize work the Run was never entitled to.
 
 **Frozen frontier.** The initial stable Reconciliation freezes every in-coverage Action *identity*
 and *semantic fingerprint*, including Blocked, HITL, ineligible, and quarantined members. Readiness
@@ -414,6 +425,15 @@ returned in `report_only` and neither is ever dispatched.
 `safety-case-absent`. An Action is eligible only when it is current, Ready, conflict-free,
 positively AFK-safe, inside the frozen coverage and frontier, covered by the frozen grants, and
 freshly matched to the Performer's declared noninteractive posture.
+
+The posture is a **closed world**. It declares `satisfied_requirements` *and* the
+`instruction_modes` the Performer has a handler for; an Action whose Instruction mode the Performer
+never claimed is `performer-ineligible`. Silence is never read as universal competence.
+
+A `guidance-fault` prevents authorization outright. The conflicted or unverifiable fragment never
+reaches `actions` at all, so the selectable Action beside it looks healthy — but what the fault
+makes untrustworthy is the *coverage* the Run froze, and nothing inside an untrustworthy
+description of the project may be dispatched on the strength of it.
 
 **DispatchAuthorization.** At most one is returned per Reconciliation. It binds one Action
 occurrence identity, its semantic fingerprint, one Performer, the Workstream anchor, the Target, the
@@ -448,7 +468,15 @@ Strike paths and are never written here. The record carries no Instruction and n
 secret in: an identity, a fingerprint, a Performer, a class, a one-line summary, durable evidence
 references, and — for a violation — one human-boundary reason.
 
+The record is bound to its own Performer at both ends. Writing requires the authenticated actor to
+be the `performer` the record names; reading requires the comment's author to be that same
+Performer, and applies the *whole* closed schema the writer applied. Anyone with write access can
+leave a comment, so a fragment naming an identity is not enough to change a Run's authority.
+
 The record is immutable and **non-Producer**. It never retires the Action or creates a replacement;
 only the Transition owner can. Until one does, the next Reconciliation returns a
-`dispatch_evidence_quarantine` diagnostic naming the affected identities and marks them
-`quarantined`, which raises the corresponding `attention-required` stop.
+`dispatch_evidence_quarantine` diagnostic naming the affected identity *and semantic fingerprint*,
+and marks that exact pair `quarantined` — a Transition owner who publishes a repaired occurrence
+moves the fingerprint and the quarantine lifts with it, rather than holding down the correction it
+asked for. The evidence class selects the stop: `safety-case-violation` and `uncertain-effect-state`
+are different problems for the human who reads them, and both are `attention-required`.

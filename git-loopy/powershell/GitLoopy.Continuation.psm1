@@ -276,6 +276,7 @@ $Script:CapabilityManifest = [ordered]@{
         terminal_rendering = $false
         concurrent_dispatch = $false
         prospective_projection = $false
+        fixed_frontier_authorization = $false
     }
     continuation_modes = [ordered]@{
         default = "off"

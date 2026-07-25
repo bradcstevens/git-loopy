@@ -584,6 +584,7 @@ def test_continuation_fixture_pins_automation_vocabularies() -> None:
     )
     assert set(automation["assumption_kinds"]) == continuation_module.ASSUMPTION_KINDS
     assert set(automation["retry_kinds"]) == continuation_module.RETRY_KINDS
+    assert set(automation["instruction_modes"]) == continuation_module.INSTRUCTION_MODES
     assert (
         set(automation["ineligibility_reasons"])
         == continuation_module.AUTOMATION_INELIGIBILITY_REASONS
@@ -606,7 +607,12 @@ def test_continuation_fixture_pins_automation_vocabularies() -> None:
     assert (
         automation["dispatch_evidence_marker"] == continuation_module._DISPATCH_MARKER
     )
-    for group in ("assumption_kinds", "retry_kinds", "ineligibility_reasons"):
+    for group in (
+        "assumption_kinds",
+        "retry_kinds",
+        "instruction_modes",
+        "ineligibility_reasons",
+    ):
         assert automation[group] == sorted(automation[group])
 
 
