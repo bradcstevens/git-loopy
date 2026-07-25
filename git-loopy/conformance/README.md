@@ -241,6 +241,61 @@ with its `condition`; its second replays that exact frozen frontier and prior sc
 Prerequisite and pins the authorization. Readiness may move within a Run; identity, semantics, and
 authority may not, and only two commands over one transport can show the difference.
 
+Thirty-seven further `["python", "powershell"]` scenarios carry §9 the rest of the way, because a
+distribution that agrees with the oracle on six cases and was never asked about the others is not
+contract-identical — it is untested. They are grouped by the thing they can each get wrong alone:
+
+- **Stop precedence.** Exactly one stop is returned and the first matching reason wins, which is
+  only observable when more than one could match. `automation-reports-a-human-boundary-ahead-of-a-
+  blocker` publishes an Action that is both HITL-required and Blocked and pins `human-boundary`
+  over `awaiting-prerequisites` — the barrier a person can act on, not the more numerous one.
+  `automation-stops-on-awaiting-prerequisites` pins the Blocked case alone,
+  `automation-stops-on-a-drained-frontier` the exhausted one, and
+  `automation-reports-workstreams-terminal-as-the-only-completion` the single reason whose
+  disposition is `complete`.
+- **Grants.** `automation-intersects-global-and-project-ceilings` proves a grant only one ceiling
+  offers is not a grant; `automation-applies-a-ceiling-denial` and
+  `automation-applies-a-runtime-revocation` prove either narrowing removes a shared one; and
+  `automation-refuses-an-effect-outside-the-grant` proves the *safety case's* declared effects are
+  what the grant is measured against, not the Action's Target.
+- **Eligibility.** `automation-satisfies-every-requirement-kind` exercises all six requirement
+  kinds — access, capability, command, evaluator, policy, skill — through one Action, and
+  `automation-reports-an-unsatisfied-evaluator-requirement` and its policy twin prove an unmet one
+  is typed `performer-ineligible` rather than a failure.
+  `automation-matches-requirements-by-exact-name` pins that a name differing only in case is a
+  different requirement, and
+  `automation-refuses-an-instruction-mode-the-performer-cannot-run` pins the same for the
+  Instruction mode a Performer must positively declare.
+  `automation-fails-closed-on-an-interactive-performer` is the other half: an interactive posture
+  is a safety-critical semantic the command refuses outright, not an ineligibility it reports.
+- **The frozen frontier.** `automation-excludes-work-outside-frozen-coverage` proves coverage
+  bounds the frontier itself; `automation-keeps-changed-semantics-report-only` and
+  `automation-keeps-a-newly-produced-action-report-only` prove the two report-only reasons;
+  `automation-binds-the-second-frontier-member-after-the-first` proves independent members drain
+  serially; and `automation-scope-can-only-narrow-within-one-run` and
+  `automation-narrows-a-prior-scope-further` prove a replayed freeze carries its authority with it
+  — narrowing applies immediately, widening is refused.
+- **Dispatch evidence.** `record-dispatch-result-records-uncertain-effect-state` and
+  `automation-stops-on-uncertain-effect-state` pin the second locked class end to end, and
+  `record-dispatch-result-refuses-an-unlocked-evidence-class` pins that an ordinary execution
+  outcome is not a third one. `record-dispatch-result-requires-its-own-performer`,
+  `automation-ignores-evidence-its-author-did-not-perform`, and
+  `automation-ignores-a-malformed-evidence-record` pin the write-side and read-side halves of the
+  same binding: anyone with write access can leave a comment, so a record narrows authority only
+  when its author is the Performer it names and the whole record is there.
+  `automation-clears-quarantine-for-a-corrected-occurrence` proves evidence names one semantics
+  rather than one identity forever.
+- **The safety case as published data.** `publish-accepts-a-positive-versioned-afk-safety-case` and
+  `publish-refuses-a-safety-case-below-contract-1-2` are the version rule; the three
+  `publish-refuses-*` cases beside them pin the closed assumption and retry vocabularies and the
+  requirement that the case restate the exact Instruction, Target, and completion condition it
+  justifies, so a later Instruction change invalidates the argument instead of inheriting it.
+- **Ordering.** `automation-orders-grants-by-code-point`,
+  `automation-orders-denials-by-code-point`, `automation-orders-report-only-successors`, and
+  `automation-orders-secondary-barriers` order hyphen-, underscore-, and case-distinct values that
+  a culture-aware comparison reorders and an ordinal one does not. Ordering is contract, and it is
+  the failure this family has already shipped once.
+
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
 stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather

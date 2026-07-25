@@ -67,8 +67,8 @@ tracker operation. The Python, shell, and PowerShell distributions now advertise
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
 concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by Python
-and PowerShell and fails closed in shell. Python and PowerShell
-advertise `terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
+and PowerShell and fails closed in shell. Python and PowerShell advertise
+`terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
 and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
 lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
@@ -89,9 +89,8 @@ and fails closed rather than ignoring the gated fields: `completion.retirements`
 `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
 ordering rule and every family member implements it.
 
-A distribution advertises the contract versions whose records it accepts. Python advertises
-`["1.0", "1.1", "1.2"]`; PowerShell advertises `["1.0", "1.1", "1.2"]`; shell advertises
-`["1.0", "1.1"]`. Each added version
+A distribution advertises the contract versions whose records it accepts. Python and PowerShell
+advertise `["1.0", "1.1", "1.2"]`; shell advertises `["1.0", "1.1"]`. Each added version
 introduces only optional fields, so a record published under an earlier version stays valid
 without rewriting. A record whose Action carries a `safety_case` **must** declare `1.2`: the
 AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently
