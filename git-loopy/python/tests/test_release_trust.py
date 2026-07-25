@@ -425,6 +425,40 @@ def test_signing_credentials_live_only_in_the_protected_release_environment() ->
         assert "secrets." not in yaml.safe_dump(jobs[name])
 
 
+def _signing_step(policy: release_trust.TrustPolicy) -> dict[str, Any]:
+    """The one step that actually signs: cargo-dist's `dist build`."""
+    build = _workflow(policy)["jobs"][policy.signing_job]
+    steps = [
+        step for step in build["steps"] if "dist build" in str(step.get("run", ""))
+    ]
+    assert len(steps) == 1, [step.get("name") for step in build["steps"]]
+    return steps[0]
+
+
+def test_the_build_asks_for_the_hardened_runtime_the_gate_looks_for() -> None:
+    """AC1: the option that hardens the artifact is the flag that proves it.
+
+    cargo-dist signs with `/usr/bin/codesign --sign ... --options
+    $CODESIGN_OPTIONS`, so that one environment value is the whole of the
+    hardened runtime. Drop it and the artifact still signs, still checksums, and
+    still builds green — it only stops being hardened, which nothing observes
+    until publication refuses seven finished builds. Pinning it against the flag
+    `codesign --display` is read for keeps the two ends one string rather than
+    two that happen to agree.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    environment = _signing_step(policy).get("env", {})
+
+    required = release_trust.hardened_runtime_environment(policy)
+
+    assert required, "no mechanism declares how it asks for the hardened runtime"
+    for name, value in required.items():
+        assert environment.get(name) == value, (
+            f"the signing step must set {name}={value!r}; without it macOS "
+            "artifacts are signed without the hardened runtime"
+        )
+
+
 def test_the_release_reads_no_credential_the_trust_policy_does_not_name() -> None:
     """A secret nobody declared is a signing input nobody reviewed."""
     policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
@@ -436,6 +470,65 @@ def test_the_release_reads_no_credential_the_trust_policy_does_not_name() -> Non
         referenced - set(policy.credentials)
     )
     assert referenced, "the release pipeline reads no signing credential at all"
+
+
+def test_every_declared_credential_actually_reaches_the_signing_job() -> None:
+    """AC2/AC6: a credential that is declared but never wired signs nothing.
+
+    The inverse of the test above, and the one that matters for trust rather
+    than for secrecy. cargo-dist's Windows signer carries the literal string
+    "skipping codesigning, required SSLDOTCOM env-vars aren't set" and its macOS
+    signer warns per target — both exit 0. So deleting one `env:` line stops the
+    signing without stopping the build, and the only thing that would notice is
+    the publication gate, seven finished builds later, and only on the stable
+    channel.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    job = yaml.safe_dump(_workflow(policy)["jobs"][policy.signing_job])
+
+    for mechanism in policy.mechanisms:
+        for credential in mechanism.credentials:
+            assert f"{credential}: ${{{{ secrets.{credential} }}}}" in job, (
+                f"{mechanism.id} declares {credential}, but the signing job "
+                "never hands it to the tool that needs it"
+            )
+
+
+def test_a_credential_written_to_disk_is_removed_on_every_path() -> None:
+    """AC4: a failed step must not leave a signing key behind for the next one.
+
+    `notarytool` needs the App Store Connect private key as a *file*, so that
+    one credential leaves the environment and lands on the runner's disk. Every
+    `run:` block is `bash -e`, so a trailing `rm` runs only when everything
+    above it succeeded — precisely the path where the key does not get deleted
+    is the path where something already went wrong. Removal has to be armed
+    before the key is written, not sequenced after it.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    declared = set(policy.credentials)
+    build = _workflow(policy)["jobs"][policy.signing_job]
+
+    materializing = [
+        step
+        for step in build["steps"]
+        if any(
+            re.search(rf'"\${credential}"\s*>[^>]', str(step.get("run", "")))
+            for credential in declared
+        )
+    ]
+
+    assert materializing, "no step writes a credential to disk; has the gate moved?"
+    for step in materializing:
+        run = str(step["run"])
+        armed = re.search(r"trap\s+'([^']*)'\s+EXIT", run)
+        assert armed, (
+            f"{step.get('name')!r} writes a signing credential to disk without "
+            "arming its removal first"
+        )
+        assert "rm -f" in armed.group(1), (
+            f"{step.get('name')!r} arms a trap that does not remove the "
+            f"credential it wrote: {armed.group(1)!r}"
+        )
 
 
 def test_publication_proves_platform_trust_before_it_uploads_anything() -> None:

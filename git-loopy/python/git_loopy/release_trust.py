@@ -70,6 +70,7 @@ class SigningMechanism:
     cargo_dist_value: Any
     signature_authority_prefix: str | None
     hardened_runtime_flag: str | None
+    hardened_runtime_option_env: str | None
     notarization_accepted_status: str | None
     credentials: tuple[str, ...]
     required_evidence: dict[str, frozenset[str]]
@@ -153,6 +154,7 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
             cargo_dist_value=entry["cargo_dist_value"],
             signature_authority_prefix=entry["signature_authority_prefix"],
             hardened_runtime_flag=entry["hardened_runtime_flag"],
+            hardened_runtime_option_env=entry["hardened_runtime_option_env"],
             notarization_accepted_status=entry["notarization_accepted_status"],
             credentials=tuple(entry["credentials"]),
             required_evidence={
@@ -598,6 +600,38 @@ def observe_artifact(
         )
 
 
+def signing_environment_expression(policy: TrustPolicy) -> str:
+    """The environment a release job enters, by ref.
+
+    A tagged Release enters the protected environment that holds the signing
+    credentials. Everything else — every pull request — enters an environment
+    that holds none, which is what makes "unavailable to pull-request jobs" a
+    property of the platform rather than of a step's `if:`.
+    """
+    return (
+        "${{ startsWith(github.ref, '"
+        f"{policy.protected_ref_prefix}') && '{policy.protected_environment}'"
+        f" || '{policy.unprotected_environment}' }}}}"
+    )
+
+
+def hardened_runtime_environment(policy: TrustPolicy) -> dict[str, str]:
+    """What the signing step must set so its artifacts are built hardened.
+
+    The value is the mechanism's own ``hardened_runtime_flag`` rather than a
+    second copy of it: cargo-dist signs with ``codesign --sign … --options
+    $CODESIGN_OPTIONS``, and ``codesign --display`` reports back
+    ``flags=…(runtime)``. One string asks for the hardened runtime and the same
+    string proves it, so the two ends cannot drift apart.
+    """
+    return {
+        mechanism.hardened_runtime_option_env: mechanism.hardened_runtime_flag
+        for mechanism in policy.mechanisms
+        if mechanism.hardened_runtime_option_env is not None
+        and mechanism.hardened_runtime_flag is not None
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Prove a git-loopy Release carries the trust its channel requires.",
@@ -687,18 +721,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-def signing_environment_expression(policy: TrustPolicy) -> str:
-    """The environment a release job enters, by ref.
-
-    A tagged Release enters the protected environment that holds the signing
-    credentials. Everything else — every pull request — enters an environment
-    that holds none, which is what makes "unavailable to pull-request jobs" a
-    property of the platform rather than of a step's `if:`.
-    """
-    return (
-        "${{ startsWith(github.ref, '"
-        f"{policy.protected_ref_prefix}') && '{policy.protected_environment}'"
-        f" || '{policy.unprotected_environment}' }}}}"
-    )

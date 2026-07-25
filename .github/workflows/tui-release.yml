@@ -244,6 +244,10 @@ jobs:
           key="$RUNNER_TEMP/notary.p8"
           staged="$RUNNER_TEMP/notarize"
           umask 077
+          # Armed before the key exists, not sequenced after it: every `run:`
+          # here is `bash -e`, so a trailing `rm` would be skipped on exactly
+          # the path that already went wrong and left a signing key on disk.
+          trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
           printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$key"
           mkdir -p "$staged"
           tar -xJf "$ARCHIVE" -C "$staged"
@@ -253,7 +257,6 @@ jobs:
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --key "$key" \
             --wait --output-format json > "$RUNNER_TEMP/notary.json"
-          rm -f "$key"
           python3 -c 'import json,os,sys; print("status=" + json.load(open(os.environ["RUNNER_TEMP"] + "/notary.json"))["status"])' >> "$GITHUB_OUTPUT"
 
       # Written where the evidence exists: a macOS runner is the only machine
