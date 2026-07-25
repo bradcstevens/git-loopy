@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from .release_version import is_prerelease
 from .tui_release import (
     ArtifactMetadata,
     PublishedArtifact,
@@ -38,6 +37,7 @@ from .tui_release import (
     load_artifact_metadata,
     published_digest,
     release_artifact_url,
+    require_stable_release,
     select_target,
 )
 
@@ -237,33 +237,19 @@ def require_stable_channel(
 ) -> str:
     """Refuse to publish anything but a stable Release to the tap.
 
-    The channel is the stable one, and an operator running `brew install` never
-    names a version — so the version they get is whatever the tap last wrote
-    down. A prerelease is precisely the Release whose Windows artifact is allowed
-    to be unsigned and whose macOS artifact needs no notary verdict, so letting
-    one reach the tap would publish, under the plain name, the one build the
-    platform-trust gate deliberately holds to a lower bar.
-
-    Two things say which channel a Release is on and they are asked separately.
-    The version string decides what the platform-trust gate *required*; the
-    prerelease flag on the Release itself is what an operator, and this tap
-    resolving "the stable Release", actually sees. The marking is editable after
-    publication and is applied by a different workflow, so a tap that inferred it
-    from the version would be resolving "the stable Release" on the strength of a
-    fact it never read.
+    The rule is not the tap's — every maintained channel resolves "the stable
+    Release" the same way — so it lives with the Release authority in
+    `tui_release` and is named here rather than restated. What is the tap's is
+    only the name in the refusal an operator reads.
     """
-    if is_prerelease(release_version):
-        raise HomebrewChannelError(
-            f"the Homebrew tap is the stable channel: {release_version!r} is a "
-            "prerelease and is published through the GitHub Release alone"
+    try:
+        return require_stable_release(
+            release_version,
+            release_marked_prerelease=release_marked_prerelease,
+            channel="the Homebrew tap",
         )
-    if release_marked_prerelease:
-        raise HomebrewChannelError(
-            f"{release_version!r} is a stable version but the completed Release "
-            "is marked prerelease; the tap publishes what operators see as "
-            "stable, so the two must agree"
-        )
-    return release_version
+    except TuiReleaseError as exc:
+        raise HomebrewChannelError(str(exc)) from exc
 
 
 def render_formula(

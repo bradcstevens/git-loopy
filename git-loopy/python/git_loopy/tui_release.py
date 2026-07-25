@@ -193,6 +193,47 @@ def release_artifact_url(
     )
 
 
+def require_stable_release(
+    release_version: str,
+    *,
+    release_marked_prerelease: bool,
+    channel: str,
+) -> str:
+    """Refuse to publish anything but a stable Release to a package channel.
+
+    Every maintained channel is the stable one, and an operator running `brew
+    install`, `winget install`, or `scoop install` never names a version — so the
+    version they get is whatever that channel last wrote down. A prerelease is
+    precisely the Release whose Windows artifact the platform-trust gate allows
+    to be unsigned and whose macOS artifact needs no notary verdict, so letting
+    one reach a channel would publish, under the plain name, the one build that
+    gate deliberately holds to a lower bar.
+
+    Two things say which channel a Release is on and they are asked separately.
+    The version string decides what the platform-trust gate *required*; the
+    prerelease flag on the Release itself is what an operator, and a channel
+    resolving "the stable Release", actually sees. The marking is editable after
+    publication and is applied by a different workflow, so a channel that
+    inferred it from the version would be resolving "the stable Release" on the
+    strength of a fact it never read.
+
+    One rule for every channel rather than one per channel: a second copy is a
+    second place to relax it, and the two could disagree without either failing.
+    """
+    if is_prerelease(release_version):
+        raise TuiReleaseError(
+            f"{channel} is the stable channel: {release_version!r} is a "
+            "prerelease and is published through the GitHub Release alone"
+        )
+    if release_marked_prerelease:
+        raise TuiReleaseError(
+            f"{release_version!r} is a stable version but the completed Release "
+            f"is marked prerelease; {channel} publishes what operators see as "
+            "stable, so the two must agree"
+        )
+    return release_version
+
+
 def published_artifacts(metadata: ArtifactMetadata) -> tuple[PublishedArtifact, ...]:
     """Every artifact one Release must publish, in declaration order.
 

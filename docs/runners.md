@@ -60,7 +60,7 @@ delivered in later phases, sequenced value-first
   through a clearly marked prerelease. Those rules live in
   [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
   applied by `git_loopy.release_trust`.
-  The first **package channel** now follows that publication: a stable Release
+  The **package channels** now follow that publication: a stable Release
   updates the Homebrew tap from the artifacts it just published — `brew tap
   bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
   re-hashing nothing. What the formula is allowed to say is pinned in
@@ -69,7 +69,16 @@ delivered in later phases, sequenced value-first
   version, URL, host, digest, or coverage that is not this Release's. A
   `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
   one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
-  The `winget`/`scoop` channels are still to come; until a
+  The same Release now also updates the two Windows channels — `winget install
+  bradcstevens.git-loopy-tui` and `scoop install git-loopy-tui` — from the one
+  signed `x86_64-pc-windows-msvc` archive it published. Both are pinned in
+  [`windows-channels.json`](../git-loopy/conformance/windows-channels.json) and
+  enforced by `git_loopy.windows_channels`, which additionally reads that
+  artifact's `.trust.json` receipt: on Windows an operator is shown a publisher
+  rather than a digest, so an unsigned or unattributable archive reaches neither
+  channel, and winget's `Publisher` is proven against the certificate subject
+  the release runner actually observed. Both are `PATH` helpers too — see
+  [the helper's README](../git-loopy/tui/README.md#winget-and-scoop). Until a
   helper is present or selected, the native ports stream plain text and run in
   place from the clone. Both native installers now install both halves of their
   distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,

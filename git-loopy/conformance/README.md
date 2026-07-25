@@ -25,6 +25,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
 | `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 | `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
+| `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -92,6 +93,25 @@ coverage, and the `brew test` version probe are each proven independently, and
 each drift is refused by its own name. The tap credential is not declared here:
 `release-trust.json` is the pipeline's one credential registry, and a channel
 that carried its own list could add one nothing reviewed.
+
+`windows-channels.json` is the fourth, and it holds **two** channels rather than
+one because winget and Scoop install the same single artifact — the signed
+`x86_64-pc-windows-msvc` archive — and differ only in the format they write it
+down in. Splitting them would give one fact two homes that could disagree
+without either failing.
+
+Three things distinguish it from the tap fixture. It records a **signing
+identity**: on Windows an operator is shown a publisher rather than a digest, so
+both channels read that artifact's own `.trust.json` receipt before writing
+anything, and the required evidence is read from `release-trust.json` rather than
+restated — a second list is a second place to relax it. It records **what each
+format cannot carry**, by name and reason, because the two ecosystems are not
+symmetric: Scoop has no publisher field, winget has no post-install hook, and
+left absent each channel would quietly be held to the weaker bar of whichever
+format has fewer fields. And its gate finishes with **canonical equality** —
+each committed file must be byte-for-byte the text this Release generates — so
+reading the claims is what earns each drift its own refusal rather than what
+makes the gate sound.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered

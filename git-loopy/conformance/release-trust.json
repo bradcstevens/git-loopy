@@ -16,6 +16,16 @@
         "name": "HOMEBREW_TAP_TOKEN",
         "job": "homebrew",
         "purpose": "commit the generated formula to the Homebrew tap and open its pull request"
+      },
+      {
+        "name": "WINGET_MANIFESTS_TOKEN",
+        "job": "winget",
+        "purpose": "commit the generated winget manifests to this project's winget-pkgs fork and open its pull request"
+      },
+      {
+        "name": "SCOOP_BUCKET_TOKEN",
+        "job": "scoop",
+        "purpose": "commit the generated bucket manifest to the Scoop bucket and open its pull request"
       }
     ]
   },

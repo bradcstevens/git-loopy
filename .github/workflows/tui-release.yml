@@ -511,3 +511,217 @@ jobs:
             --head "$branch" \
             --base "$base" \
           || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+
+  # The two Windows channels install the one signed `x86_64-pc-windows-msvc`
+  # archive between them, so they read the same completed Release and differ
+  # only in the format they write it down in. Both download the artifact's
+  # `.trust.json` as well as its `.sha256`: on Windows an operator is shown a
+  # publisher rather than a digest, and that name is the Authenticode subject
+  # the release runner observed on the artifact it had just signed.
+  winget:
+    name: Update the winget manifests
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Read the completed Release's checksums, receipts, and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.trust.json' --dir release-receipts
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the winget manifests
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/winget-pkgs
+          token: ${{ secrets.WINGET_MANIFESTS_TOKEN }}
+          path: channel
+
+      - name: Generate the manifests this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels render
+          --channel winget
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Refuse manifests that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels verify
+          --channel winget
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Open or update the channel's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_MANIFESTS_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: channel
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Staged, not `git diff`: a winget version directory is new on every
+          # Release, and an untracked file is not a diff -- so an unstaged check
+          # would report "already published" and open nothing at all.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the channel already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          # The channel is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The installer URL, digest, and publisher are verified against that Release." \
+            --head "$branch" \
+            --base "$base" \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"
+
+  scoop:
+    name: Update the Scoop bucket
+    if: needs.identity.outputs.prerelease == 'false'
+    needs:
+      - identity
+      - publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Read the completed Release's checksums, receipts, and marking
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.sha256' --dir release-checksums
+          gh release download "$RELEASE_TAG" \
+            --pattern '*.trust.json' --dir release-receipts
+          marking=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)
+          echo "prerelease=$marking" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the bucket
+        uses: actions/checkout@v4
+        with:
+          repository: bradcstevens/scoop-git-loopy
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: channel
+
+      - name: Generate the manifest this Release publishes
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels render
+          --channel scoop
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Refuse a manifest that could install another Release
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.windows_channels verify
+          --channel scoop
+          --repository-root .
+          --release-version "${{ needs.identity.outputs.version }}"
+          --release-marked-prerelease "${{ steps.release.outputs.prerelease }}"
+          --checksum-dir release-checksums
+          --receipt-dir release-receipts
+          --channel-root channel
+
+      - name: Open or update the channel's Release pull request
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        working-directory: channel
+        shell: bash
+        run: |
+          branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Staged, not `git diff`: the bucket's first Release has no manifest to
+          # differ from, and an untracked file is not a diff -- so an unstaged
+          # check would report "already published" and open nothing at all.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the channel already publishes $RELEASE_TAG"
+            exit 0
+          fi
+          git commit -m "git-loopy-tui $RELEASE_VERSION"
+          # The channel is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create \
+            --title "git-loopy-tui $RELEASE_VERSION" \
+            --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.windows_channels\`. The download URL and hash are verified against that Release." \
+            --head "$branch" \
+            --base "$base" \
+          || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"

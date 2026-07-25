@@ -160,6 +160,9 @@ otel = [
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
 ]
+release = [
+    { name = "pyyaml" },
+]
 tui = [
     { name = "textual" },
 ]
@@ -175,12 +178,13 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
+    { name = "pyyaml", marker = "extra == 'release'", specifier = ">=6" },
     { name = "rich", specifier = ">=13.7.0,<14" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.86,<6" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.2,<0.0.25" },
 ]
-provides-extras = ["otel", "tui", "dev"]
+provides-extras = ["otel", "tui", "release", "dev"]
 
 [[package]]
 name = "github-copilot-sdk"
