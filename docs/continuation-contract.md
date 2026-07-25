@@ -289,6 +289,14 @@ a Retirement. When discovered records carry receipts, the label-indexed path rep
 `retirements_require_revision_protocol` naming those `revision_ids` rather than silently dropping
 them; `revision_protocol: true` is required to project `retirements`.
 
+Transient retirements are therefore a **revision-protocol guarantee, not a default-path one**. The
+`retirements` key is present only when something was actually retired, and its absence is
+unambiguous because the caller selects the path itself: under `revision_protocol: true` an absent
+key means nothing was retired, while on the label-indexed path it means Retirement was not
+computable at all and the gating diagnostic names every revision whose receipts went unevaluated. A
+Consumer that needs retirement evidence must request the revision protocol; one that does not may
+read the gate as "ask again with lineage".
+
 **Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
 entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other
 Workstream's still-open guidance. `status` is `complete` only when every discovered Workstream has an

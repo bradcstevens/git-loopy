@@ -3478,7 +3478,90 @@ def test_python_reconcile_label_path_gates_retirements_on_revision_protocol(
     assert stderr == ""
 
 
-def test_python_publish_rejects_retirement_with_unsupported_reason(    monkeypatch: pytest.MonkeyPatch,
+def test_python_reconcile_absent_retirements_mean_none_under_revision_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Absence is unambiguous because the caller picks the path.
+
+    One lineage, reconciled both ways. Under the revision protocol the
+    receipts are projected, and the gating diagnostic never fires -- so an
+    absent ``retirements`` key there means "nothing was retired". On the
+    lineage-free label-indexed path the key is absent because Retirement is
+    not computable at all, and the gate says so.
+    """
+    github = _RecordingGitHub()
+    revision_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, revision_request
+    )
+
+    exit_code, quiet, stderr = _command_result(
+        "reconcile", revision_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0, stderr
+    # Nothing has been retired yet, so the key is absent and unaccompanied.
+    assert "retirements" not in quiet["result"]
+    assert not [
+        diagnostic
+        for diagnostic in quiet["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, proven, stderr = _command_result(
+        "reconcile", revision_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0, stderr
+    [receipt] = proven["result"]["retirements"]
+    assert receipt["reason"] == "completed"
+    assert not [
+        diagnostic
+        for diagnostic in proven["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+    exit_code, gated, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0, stderr
+    # Same lineage, same receipts -- but this path may not claim either way.
+    assert "retirements" not in gated["result"]
+    assert [
+        diagnostic
+        for diagnostic in gated["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+
+def test_python_publish_rejects_retirement_with_unsupported_reason(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Retirement shape is validated atomically, just like every other completion field."""

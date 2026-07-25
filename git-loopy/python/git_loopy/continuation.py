@@ -2997,6 +2997,11 @@ def _reconcile_revision_protocol(
             },
             "actions": actions,
             **({"outcomes": outcomes} if outcomes else {}),
+            # Present only when something was actually retired. Absence is
+            # unambiguous for a caller because it chose this path itself:
+            # under the revision protocol absence means "nothing was
+            # retired", and on the label-indexed path it means "not
+            # computable here" (see the gating diagnostic in `_reconcile`).
             **({"retirements": retirements} if retirements else {}),
             **({"delta": delta} if delta is not None else {}),
             "diagnostics": diagnostics,
@@ -3211,11 +3216,7 @@ def _reconcile(
     if revision_protocol:
         return _reconcile_revision_protocol(request, github)
     _trusted_apps(request)
-    carriers = (
-        github.list_all_continuation_carriers(repository)
-        if revision_protocol
-        else github.list_continuation_carriers(repository, _INDEX_LABEL)
-    )
+    carriers = github.list_continuation_carriers(repository, _INDEX_LABEL)
     diagnostics: list[dict[str, Any]] = []
     revision_count = 0
     guidance_entries: list[
@@ -3267,6 +3268,12 @@ def _reconcile(
     # chain. Label-indexed discovery is deliberately lineage-free (the
     # atomic-root capability subset), so it can neither prove nor project a
     # Retirement. Say so rather than silently dropping the receipts.
+    #
+    # The `retirements` key is therefore absent from this path's result
+    # rather than empty: an empty list is the revision protocol's truthful
+    # "nothing was retired", and this path is not entitled to make that
+    # claim. Absence means "not computed here"; the diagnostic below names
+    # every revision whose receipts went unevaluated.
     gated_retirements = sorted(
         str(record["revision_id"])
         for _carrier, _comment, record in guidance_entries
