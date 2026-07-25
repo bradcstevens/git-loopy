@@ -2351,20 +2351,25 @@
           "ok": true,
           "capabilities": {
             "release_version": "0.2.0-dev.0",
-            "continuation_contract_versions": ["1.0", "1.1"],
+            "continuation_contract_versions": ["1.0", "1.1", "1.2"],
             "record_formats": [1],
             "wrapper_contract_version": "1.4",
             "event_schema_version": "1.1",
             "tracker_adapters": {
               "github": {
-                "operations": ["publish", "reconcile", "repair-index"]
+                "operations": [
+                  "publish",
+                  "reconcile",
+                  "record-dispatch-result",
+                  "repair-index"
+                ]
               }
             },
             "operations": {
               "capabilities": true,
               "publish": true,
               "reconcile": true,
-              "record-dispatch-result": false,
+              "record-dispatch-result": true,
               "repair-index": true
             },
             "instruction_handlers": [],
@@ -2376,7 +2381,7 @@
               "prospective_projection": false,
               "terminal_rendering": false,
               "concurrent_dispatch": false,
-              "fixed_frontier_authorization": false
+              "fixed_frontier_authorization": true
             },
             "continuation_modes": {
               "default": "off",
@@ -2460,38 +2465,11 @@
       }
     },
     {
-      "id": "record-dispatch-result-fails-closed-from-file",
-      "distributions": ["shell"],
-      "arguments": [
-        "continuation",
-        "record-dispatch-result",
-        "--input",
-        "$INPUT_FILE"
-      ],
-      "request": {
-        "source": "file",
-        "json": {}
-      },
-      "github_script": [],
-      "expected": {
-        "exit_code": 1,
-        "stdout": {
-          "ok": false,
-          "operation": "record-dispatch-result",
-          "error": {
-            "code": "unsupported_operation",
-            "message": "record-dispatch-result is not supported by this distribution"
-          }
-        },
-        "stderr_contains": "record-dispatch-result is not supported",
-        "github_calls": []
-      }
-    },
-    {
       "id": "automation-binds-one-dispatch",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -2824,7 +2802,8 @@
       "id": "automation-refuses-an-afk-claim-without-a-safety-case",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -3093,7 +3072,8 @@
       "id": "record-dispatch-result-records-a-safety-case-violation",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -3186,7 +3166,8 @@
           "id": "automation-refuses-to-authorize-beside-a-guidance-fault",
           "distributions": [
                 "python",
-                "powershell"
+                "powershell",
+                "shell"
           ],
           "arguments": [
                 "continuation",
@@ -3400,7 +3381,8 @@
       "id": "automation-quarantines-dispatched-semantics",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -3734,7 +3716,7 @@
     },
     {
       "id": "record-dispatch-result-refuses-a-malformed-request-from-file",
-      "distributions": ["python", "powershell"],
+      "distributions": ["python", "powershell", "shell"],
       "arguments": [
         "continuation",
         "record-dispatch-result",
@@ -3764,7 +3746,8 @@
       "id": "automation-reports-a-human-boundary-ahead-of-a-blocker",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -4078,7 +4061,8 @@
       "id": "automation-stops-on-awaiting-prerequisites",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -4430,7 +4414,8 @@
       "id": "automation-keeps-changed-semantics-report-only",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -4760,7 +4745,8 @@
       "id": "automation-keeps-a-newly-produced-action-report-only",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -5080,7 +5066,8 @@
       "id": "automation-intersects-global-and-project-ceilings",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -5385,7 +5372,8 @@
       "id": "automation-applies-a-ceiling-denial",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -5705,7 +5693,8 @@
       "id": "automation-applies-a-runtime-revocation",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -6025,7 +6014,8 @@
       "id": "automation-requires-fresh-matching-performer-posture",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -6336,7 +6326,8 @@
       "id": "automation-refuses-an-instruction-mode-the-performer-cannot-run",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -6651,7 +6642,8 @@
       "id": "automation-excludes-work-outside-frozen-coverage",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -6970,7 +6962,8 @@
       "id": "automation-binds-the-second-frontier-member-after-the-first",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -7443,7 +7436,8 @@
       "id": "automation-stops-on-a-drained-frontier",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -7900,7 +7894,8 @@
       "id": "automation-scope-can-only-narrow-within-one-run",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -8266,7 +8261,8 @@
       "id": "automation-narrows-a-prior-scope-further",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -8609,7 +8605,8 @@
       "id": "record-dispatch-result-records-uncertain-effect-state",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -8704,7 +8701,8 @@
       "id": "automation-stops-on-uncertain-effect-state",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -9048,7 +9046,8 @@
       "id": "record-dispatch-result-requires-its-own-performer",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -9113,7 +9112,8 @@
       "id": "automation-reports-workstreams-terminal-as-the-only-completion",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -9357,7 +9357,8 @@
       "id": "automation-orders-grants-by-code-point",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -9750,7 +9751,8 @@
       "id": "automation-orders-denials-by-code-point",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -10134,7 +10136,8 @@
       "id": "automation-matches-requirements-by-exact-name",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -10449,7 +10452,8 @@
       "id": "automation-refuses-an-effect-outside-the-grant",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -10768,7 +10772,8 @@
       "id": "automation-fails-closed-on-an-interactive-performer",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -10906,7 +10911,8 @@
       "id": "automation-orders-report-only-successors",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -11500,7 +11506,8 @@
       "id": "automation-orders-secondary-barriers",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -12160,7 +12167,8 @@
       "id": "automation-clears-quarantine-for-a-corrected-occurrence",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -12522,7 +12530,8 @@
       "id": "automation-ignores-evidence-its-author-did-not-perform",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -12874,7 +12883,8 @@
       "id": "automation-ignores-a-malformed-evidence-record",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -13226,7 +13236,8 @@
       "id": "record-dispatch-result-refuses-an-unlocked-evidence-class",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -13280,7 +13291,8 @@
       "id": "automation-satisfies-every-requirement-kind",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -13661,7 +13673,8 @@
       "id": "automation-reports-an-unsatisfied-evaluator-requirement",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -14004,7 +14017,8 @@
       "id": "automation-reports-an-unsatisfied-policy-requirement",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -14712,7 +14726,8 @@
       "id": "publish-accepts-a-positive-versioned-afk-safety-case",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -14954,7 +14969,8 @@
       "id": "publish-refuses-a-safety-case-below-contract-1-2",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -15118,7 +15134,8 @@
       "id": "publish-refuses-an-unsupported-assumption-kind",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -15282,7 +15299,8 @@
       "id": "publish-refuses-an-unsupported-retry-kind",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -15446,7 +15464,8 @@
       "id": "publish-refuses-a-safety-case-that-drifts-from-its-action",
       "distributions": [
         "python",
-        "powershell"
+        "powershell",
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -21876,6 +21895,1977 @@
       }
     },
     {
+      "id": "publish-refuses-a-publication-whose-index-label-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [],
+            "token": "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142",
+            "validators": []
+          },
+          "parents": []
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": []
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "label create failed\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: label create failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: label create failed; repair required\n",
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-publication-whose-index-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [],
+            "token": "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142",
+            "validators": []
+          },
+          "parents": []
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": []
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "index label edit failed\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: index label edit failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: index label edit failed; repair required\n",
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-publication-whose-append-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [],
+            "token": "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142",
+            "validators": []
+          },
+          "parents": []
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": []
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "append failed\n",
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: append failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: append failed; repair required\n",
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-publication-whose-author-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [],
+            "token": "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142",
+            "validators": []
+          },
+          "parents": []
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": []
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          },
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "impostor",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "impostor",
+              "type": "User"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"published Producer revision author does not match completion producer; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: published Producer revision author does not match completion producer; repair required\n",
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9001"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-publication-whose-reread-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [],
+            "token": "sha256:b55895cf053aabb584c19ab3b824e3098bd0ac4c14d776d53052df37e4e2c142",
+            "validators": []
+          },
+          "parents": []
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": []
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          },
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```\n<!-- tampered -->",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"Producer revision reread did not match the append; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: Producer revision reread did not match the append; repair required\n",
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9001"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-label-indexed-publication-whose-index-label-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "label create failed\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: label create failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: label create failed; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-label-indexed-publication-whose-index-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "index label edit failed\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: index label edit failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: index label edit failed; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-label-indexed-publication-whose-append-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "append failed\n",
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: append failed; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: append failed; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-label-indexed-publication-whose-author-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          },
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "impostor",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "impostor",
+              "type": "User"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"published Producer revision author does not match completion producer; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: published Producer revision author does not match completion producer; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9001"
+        ]
+      }
+    },
+    {
+      "id": "publish-refuses-a-label-indexed-publication-whose-reread-strands-a-durable-transition",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          },
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"action\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"Publish the specification\",\"target\":{\"kind\":\"issue\",\"number\":239,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"9dd7adee716734397d38946f7db7077281e8ca3ef0a30fed284599a44a845938\",\"semantic_fingerprints\":{\"action\":\"34302ca0fc413414149e67eaa3d06dbf3302ad5e67dc81588b1a34d3dc13d0e7\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```\n<!-- tampered -->",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"Producer revision reread did not match the append; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: Producer revision reread did not match the append; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9001"
+        ]
+      }
+    },
+    {
+      "id": "publish-repairs-an-undecodable-appended-revision-shell",
+      "distributions": [
+        "shell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "stdout": "not json\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: GitHub returned an undecodable appended Producer revision; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: GitHub returned an undecodable appended Producer revision; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -"
+        ]
+      }
+    },
+    {
+      "id": "publish-repairs-an-undecodable-reread-revision-shell",
+      "distributions": [
+        "shell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "action",
+                "summary": "Publish the specification",
+                "kind": "Publish spec",
+                "occurrence": "v1",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 239
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "Approved planning transition.",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9001",
+            "body": "placeholder",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9001",
+          "exit_code": 0,
+          "stdout": "not json\n"
+        }
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"repair_required\",\"message\":\"publication failed after durable transition: GitHub returned an undecodable committed Producer revision; repair required\"}}\n",
+        "stderr_exact": "git-loopy continuation: publication failed after durable transition: GitHub returned an undecodable committed Producer revision; repair required\n",
+        "github_calls": [
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9001"
+        ]
+      }
+    },
+    {
       "id": "reattestation-requires-separate-authority",
       "distributions": [
         "python",
@@ -24456,7 +26446,8 @@
           "id": "automation-blocked-frontier-member-becomes-selectable",
           "distributions": [
                 "python",
-                "powershell"
+                "powershell",
+                "shell"
           ],
           "github_script": [
                 {

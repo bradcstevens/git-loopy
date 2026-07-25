@@ -66,9 +66,9 @@ At the 1.0 foundation gate, every family member advertised the GitHub Adapter bu
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
-concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by Python
-and PowerShell and fails closed in shell. Python and PowerShell advertise
-`terminal_rendering: true`; shell continues to advertise `terminal_rendering: false`
+concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by every
+family member. Python and PowerShell advertise `terminal_rendering: true`; shell continues to
+advertise `terminal_rendering: false`
 and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
 lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
@@ -77,21 +77,29 @@ Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A dist
 advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
 frontier, typed Performer eligibility, the single DispatchAuthorization, the locked stop
 precedence, and the two Dispatch-evidence classes — and supports the `record-dispatch-result`
-operation. Python and PowerShell advertise `fixed_frontier_authorization: true`; shell advertises
-`false` explicitly, accepts no record declaring contract 1.2, and continues to fail closed on
-`record-dispatch-result` with `unsupported_operation`.
+operation. Python, shell, and PowerShell all advertise `fixed_frontier_authorization: true`.
+
+The §9 stop `workstreams-terminal` is derived from a `complete` Reconciliation status over closed
+coverage, and `complete` is derived from the §8 `outcomes` projection. Workstream outcomes and the
+Waiting/guidance/Complete status are therefore **not** gated by `prospective_projection`: they are
+a prerequisite of the locked stop precedence, and a distribution that advertised
+`fixed_frontier_authorization` without them could never return the one stop that means the Run is
+finished. Every family member projects `outcomes` and the three statuses. `prospective_projection`
+continues to gate only the fields §9 does not need — retirement receipts, the refresh delta, and
+the Handoff reference — which is why shell advertises `fixed_frontier_authorization: true` beside
+`prospective_projection: false`.
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
-implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
+implements the §8 fields §9 does not require — retirement receipts, refresh delta, and Handoff
 reference. Python and PowerShell advertise `prospective_projection: true`; shell advertises `false`
 and fails closed rather than ignoring the gated fields: `completion.retirements` is a structural
 `publish` rejection, and `previous_actions` or `handoff` on `reconcile` returns
 `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
 ordering rule and every family member implements it.
 
-A distribution advertises the contract versions whose records it accepts. Python and PowerShell
-advertise `["1.0", "1.1", "1.2"]`; shell advertises `["1.0", "1.1"]`. Each added version
-introduces only optional fields, so a record published under an earlier version stays valid
+A distribution advertises the contract versions whose records it accepts. Python, shell, and
+PowerShell all advertise `["1.0", "1.1", "1.2"]`. Each added version introduces only optional
+fields, so a record published under an earlier version stays valid
 without rewriting. A record whose Action carries a `safety_case` **must** declare `1.2`: the
 AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently
 drop the case while keeping the claim must reject the whole record instead.
@@ -272,6 +280,18 @@ operator and every record author, adds labels to trusted carriers, and removes l
 artifacts with no marked record. Publication still establishes the label before append and rereads
 the exact comment before commit. Any operational failure after the durable workflow transition
 returns `repair_required`; it never falls back to ephemeral guidance or a success-shaped receipt.
+
+"After the durable workflow transition" is not conditional on the revision protocol. The transition
+has already happened by the time `publish` starts, so a failed index label, a failed carrier index
+edit, a failed append, an author that does not match the completion Producer, and a reread that
+does not match the append all strand exactly the same evidence whether or not the request carried
+an `observation`. All five are `repair_required` on both discovery paths in every family member.
+Reading the transition's own evidence happens *before* the index label and is therefore an ordinary
+`github_error`. The reread is issued before the appended author is judged: both describe the same
+post-transition write, so a reader that short-circuits on the author records one call less evidence
+than the operator needs to repair it. A `gh` call that succeeds but answers with something that is
+not a comment object strands the same write and is `repair_required` too; only the human-readable
+detail is the transport's own parse diagnostic and therefore family-local prose.
 
 ## 8. Prospective projection: retirement, ordering, delta, Handoff, and terminal rendering
 

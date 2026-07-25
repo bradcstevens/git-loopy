@@ -180,9 +180,11 @@ diagnostic message everywhere, so accepting the field can never become accepting
 The retirement, HITL-stop, genuine-completion, out-of-order-completion, and Handoff families are
 scoped `["python", "powershell"]` rather than shared. That gap is deliberate and capability-derived,
 not an oversight: shell advertises `prospective_projection: false` and
-`terminal_rendering: false`, never projects `outcomes` or a `complete` status, and holds no retirement
-vocabulary at all, so it cannot run these scenarios as written. Companion scenarios assert that
-gap instead of merely declaring it — shell fails closed on `handoff` and
+`terminal_rendering: false` and holds no retirement vocabulary at all, so it cannot run these
+scenarios as written. It does now project `outcomes` and the `complete` status, because §9's locked
+stop precedence is defined over them — that part of §8 is a prerequisite of
+`fixed_frontier_authorization` rather than something `prospective_projection` gates. Companion
+scenarios assert that gap instead of merely declaring it — shell fails closed on `handoff` and
 `previous_actions` with `unsupported_operation`, so a distribution that silently started accepting
 either would break the fixture.
 
@@ -211,19 +213,18 @@ comment marker. `automation-binds-one-dispatch`,
 `automation-refuses-an-afk-claim-without-a-safety-case`,
 `automation-quarantines-dispatched-semantics`,
 `record-dispatch-result-records-a-safety-case-violation`, and
-`record-dispatch-result-refuses-a-malformed-request-from-file` are scoped
-`["python", "powershell"]` — the two distributions advertising
-`fixed_frontier_authorization` — and pin the authorization, the stop, the quarantine, the exact
-Dispatch-evidence digest, and the request framing byte for byte across both.
+`record-dispatch-result-refuses-a-malformed-request-from-file` pin the authorization, the stop, the
+quarantine, the exact Dispatch-evidence digest, and the request framing byte for byte across every
+family member. They are scoped `["python", "shell", "powershell"]`: all three distributions now
+advertise `fixed_frontier_authorization`, so §9 is shared contract rather than a capability split.
 
-`record-dispatch-result-fails-closed-from-file` is scoped `["shell"]` for the same reason: it
-asserts the absence of what those five scenarios add, so it can only be demonstrated by a
-distribution that does not advertise the capability. Shell also refuses any record declaring
-contract 1.2 by the version rule it already had, so the safety case can never reach a reader that
-would drop it while keeping the AFK-safe claim.
+`record-dispatch-result-fails-closed-from-file` was deleted rather than rescoped. It asserted the
+absence of what those five scenarios add, and no distribution fails closed on
+`record-dispatch-result` any more, so there is no family member left that could demonstrate it.
+Rescoping it to nobody would have left a scenario the suites silently never run.
 
-Two further `["python", "powershell"]` cases pin §9 against the *label-indexed* Reconciliation
-path, where every other Automation case runs. Both were unreachable while a distribution derived
+Two further cases pin §9 against the *label-indexed* Reconciliation path, where every other
+Automation case runs. Both were unreachable while a distribution derived
 Actions differently on that path, and both are eyes the fixture did not previously have.
 
 `automation-refuses-to-authorize-beside-a-guidance-fault` publishes two trusted Producers that
@@ -241,8 +242,8 @@ with its `condition`; its second replays that exact frozen frontier and prior sc
 Prerequisite and pins the authorization. Readiness may move within a Run; identity, semantics, and
 authority may not, and only two commands over one transport can show the difference.
 
-Thirty-seven further `["python", "powershell"]` scenarios carry §9 the rest of the way, because a
-distribution that agrees with the oracle on six cases and was never asked about the others is not
+Thirty-seven further scenarios carry §9 the rest of the way, because a distribution that agrees
+with the oracle on six cases and was never asked about the others is not
 contract-identical — it is untested. They are grouped by the thing they can each get wrong alone:
 
 - **Stop precedence.** Exactly one stop is returned and the first matching reason wins, which is
@@ -295,6 +296,41 @@ contract-identical — it is untested. They are grouped by the thing they can ea
   `automation-orders-secondary-barriers` order hyphen-, underscore-, and case-distinct values that
   a culture-aware comparison reorders and an ordinal one does not. Ordering is contract, and it is
   the failure this family has already shipped once.
+
+All of the above are now scoped `["python", "powershell", "shell"]`. That is the point of having
+generated them from the oracle rather than from one port's tests: they were written before shell
+implemented §9, so widening them was a measurement rather than a transcription.
+
+Ten `publish-refuses-a-…-strands-a-durable-transition` scenarios are the one §9-adjacent group
+shell did not merely have to pass. The durable Transition has already happened when `publish`
+starts, so a failed index label, a failed carrier index edit, a failed append, an author that is
+not the completion Producer, and a reread that does not match the append all strand exactly the
+same evidence — and they do so whether or not the request carried an `observation`.
+`post-transition-publication-failure-requires-repair` and `append-reread-mismatch-requires-repair`
+pinned two of those five steps and only on the revision-protocol path, so a distribution could
+report `github_error` or `invalid_request` on the other three, or on the whole atomic-root path,
+and still pass: it would be telling an unattended Runner to retry a write that can never succeed,
+and telling an operator nothing needs repairing. Shell did exactly that — `github_error` for the
+label and the index edit on *both* paths, and `github_error`/`invalid_request` for the append, the
+author, and the reread on the atomic-root path.
+
+The five failures are pinned once per discovery path, `whose-index-label-`, `whose-index-`,
+`whose-append-`, `whose-author-` and `whose-reread-`, with the `label-indexed-` prefix naming the
+atomic-root twin. Each pair is byte-identical apart from the request's `observation` and the three
+authorization calls the revision protocol adds, which is the whole claim. The author pair also pins
+the *call sequence*: the reread is issued before the appended author is judged, because both are
+the same post-transition write and a distribution that short-circuits leaves the operator one call
+short of the evidence the others record.
+
+`publish-repairs-an-undecodable-appended-revision-shell` and
+`publish-repairs-an-undecodable-reread-revision-shell` pin the sixth post-transition failure and
+are scoped `["shell"]` for a reason the other five are not. A `gh` call that *succeeds* but answers
+with something that is not a comment object leaves the same stranded write, so the code is
+`repair_required` in every family member — but the human-readable detail is the transport's own
+parse diagnostic, and Python's, PowerShell's and shell's decoders cannot produce the same bytes.
+`github_error` and post-transition transport detail are family-local prose throughout this fixture;
+the error *code* is the contract. Scoping these two to shell pins the code where it had regressed
+without pretending three decoders can agree on a parser's wording.
 
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
