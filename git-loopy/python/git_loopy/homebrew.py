@@ -329,8 +329,8 @@ def render_formula(
             "  end",
             "",
             "  test do",
-            f'    assert_match "{release_version}",',
-            f'      shell_output("#{{bin}}/{policy.formula_name} --version")',
+            f'    assert_equal "{policy.formula_name} {release_version}",',
+            f'      shell_output("#{{bin}}/{policy.formula_name} --version").strip',
             "  end",
             "end",
             "",
@@ -356,36 +356,57 @@ class FormulaClaims:
 
     version: str | None
     artifacts: dict[tuple[str, ...], tuple[str, str | None]]
-    proves_version: str | None
+    probe: str
 
 
 def read_formula_claims(formula: str) -> FormulaClaims:
-    """Parse the version, per-platform artifacts, and version probe."""
+    """Parse the version, per-platform artifacts, and version probe.
+
+    Strictly: a line that looks like a declaration but is not one this reader can
+    account for — a trailing comment, a second `url` in the same block, anything
+    Ruby would honour and a line-shaped reader would not — is refused here rather
+    than skipped. What Homebrew fetches is decided by Ruby, and a reader of Ruby
+    that guesses is worse than no reader at all.
+    """
     version: str | None = None
-    proves_version: str | None = None
     artifacts: dict[tuple[str, ...], tuple[str, str | None]] = {}
     stack: list[str] = []
-    probe_window: list[str] = []
+    probe_lines: list[str] = []
 
     for line in formula.splitlines():
         stripped = line.strip()
-        declaration = _DECLARATION.match(line)
-        if declaration is not None:
+        keyword = stripped.split(" ", 1)[0] if stripped else ""
+        if keyword in {"url", "sha256", "version"}:
+            declaration = _DECLARATION.match(line)
+            if declaration is None:
+                raise HomebrewChannelError(
+                    f"formula carries a declaration this gate cannot read: {stripped}"
+                )
             keyword, value = declaration.groups()
             condition = tuple(name for name in stack if name.startswith("on_"))
-            if keyword == "version" and not condition:
+            if keyword == "version":
+                if version is not None:
+                    raise HomebrewChannelError("formula declares a version twice")
                 version = value
             elif keyword == "url":
+                if condition in artifacts:
+                    raise HomebrewChannelError(
+                        f"formula declares two artifacts for {' '.join(condition)}; "
+                        "Ruby would fetch the second"
+                    )
                 artifacts[condition] = (value, None)
-            elif keyword == "sha256" and condition in artifacts:
-                artifacts[condition] = (artifacts[condition][0], value)
+            elif condition in artifacts:
+                fetched, digest = artifacts[condition]
+                if digest is not None:
+                    raise HomebrewChannelError(
+                        f"formula declares two digests for {' '.join(condition)}; "
+                        "Ruby would accept the second"
+                    )
+                artifacts[condition] = (fetched, value)
             continue
 
-        if "assert_match" in stripped or "shell_output" in stripped:
-            probe_window.append(stripped)
-            quoted = re.search(r'assert_match\s+"([^"]*)"', stripped)
-            if quoted is not None:
-                proves_version = quoted.group(1)
+        if "test" in stack:
+            probe_lines.append(stripped)
 
         block = _BLOCK_NAME.match(line)
         if block is not None or _BLOCK_OPEN.match(line):
@@ -393,11 +414,8 @@ def read_formula_claims(formula: str) -> FormulaClaims:
         elif stripped == "end" and stack:
             stack.pop()
 
-    probe = " ".join(probe_window)
-    if "--version" not in probe:
-        proves_version = None
     return FormulaClaims(
-        version=version, artifacts=artifacts, proves_version=proves_version
+        version=version, artifacts=artifacts, probe=" ".join(probe_lines)
     )
 
 
@@ -459,11 +477,38 @@ def verify_formula(
                 f"Release published for {selection.artifact.archive_name}"
             )
 
-    if claims.proves_version != release_version:
+    expected_answer = f"{policy.formula_name} {release_version}"
+    invocation = f'shell_output("#{{bin}}/{policy.formula_name} --version")'
+    asserted = re.search(r'assert_equal\s+"([^"]*)"', claims.probe)
+    if invocation not in claims.probe or (
+        asserted is None or asserted.group(1) != expected_answer
+    ):
         raise HomebrewChannelError(
             f"formula never proves the installed helper reports "
-            f"{release_version!r}: its `brew test` must run "
-            f"`{policy.formula_name} --version`"
+            f"{expected_answer!r}: its `brew test` must run {invocation} and "
+            "compare the whole answer"
+        )
+
+    canonical = render_formula(
+        repository_root,
+        release_version=release_version,
+        release_marked_prerelease=release_marked_prerelease,
+        checksum_dir=checksum_dir,
+    )
+    if formula != canonical:
+        divergence = next(
+            (
+                published
+                for published, expected in zip(
+                    formula.splitlines(), canonical.splitlines()
+                )
+                if published != expected
+            ),
+            "the formula is longer or shorter than the one this Release generates",
+        )
+        raise HomebrewChannelError(
+            "formula is not the text this Release generates, so what it does is "
+            f"not what this gate read: {divergence.strip()!r}"
         )
     return selections
 

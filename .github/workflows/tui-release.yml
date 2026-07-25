@@ -480,19 +480,34 @@ jobs:
         shell: bash
         run: |
           branch="git-loopy-tui-$RELEASE_TAG"
+          base=$(git rev-parse --abbrev-ref HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
+          # Staged, not `git diff`: the tap's first Release has no formula to
+          # differ from, and an untracked file is not a diff -- so an unstaged
+          # check would report "already published" and open nothing at all.
           git add -A
           if git diff --cached --quiet; then
             echo "the tap already publishes $RELEASE_TAG"
             exit 0
           fi
           git commit -m "git-loopy-tui $RELEASE_VERSION"
-          git push --force-with-lease origin "$branch"
+          # The tap is checked out single-branch, so a rerun holds no
+          # remote-tracking ref for this branch and a bare --force-with-lease
+          # would refuse as stale rather than update. Lease against the tip
+          # actually observed instead: a rerun replaces its own branch, and a
+          # commit nobody here saw is still never overwritten.
+          observed=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [ -n "$observed" ]; then
+            git push --force-with-lease="refs/heads/$branch:$observed" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
           gh pr create \
             --title "git-loopy-tui $RELEASE_VERSION" \
             --body "Generated from https://github.com/bradcstevens/git-loopy/releases/tag/$RELEASE_TAG by \`python -m git_loopy.homebrew\`. Every URL and digest is verified against that Release." \
             --head "$branch" \
-            --base main \
+            --base "$base" \
           || gh pr edit "$branch" --title "git-loopy-tui $RELEASE_VERSION"

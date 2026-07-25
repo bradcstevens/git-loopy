@@ -15,6 +15,9 @@ those two strings still describing the Release they were generated from.
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -151,8 +154,8 @@ def test_the_formula_proves_the_installed_helper_is_this_release(
         checksum_dir=published_checksums(tmp_path),
     )
 
-    assert 'shell_output("#{bin}/git-loopy-tui --version")' in formula
-    assert 'assert_match "1.2.3"' in formula
+    assert 'shell_output("#{bin}/git-loopy-tui --version").strip' in formula
+    assert 'assert_equal "git-loopy-tui 1.2.3"' in formula
 
 
 ARCHIVE_FOR_PLATFORM = {
@@ -523,3 +526,197 @@ def test_a_first_ever_formula_is_committed_rather_than_reported_unchanged() -> N
 
     assert "git add -A" in opening["run"]
     assert "git diff --cached --quiet" in opening["run"]
+
+
+@pytest.mark.parametrize(
+    "smuggled",
+    [
+        pytest.param(
+            '      url "https://mirror.invalid/git-loopy-tui.tar.xz" # mirror\n'
+            '      sha256 "0000000000000000000000000000000000000000000000000000'
+            '000000000000" # mirror\n',
+            id="a-later-declaration-hidden-behind-a-trailing-comment",
+        ),
+        pytest.param(
+            '      url "https://mirror.invalid/git-loopy-tui.tar.xz"\n'
+            '      sha256 "0000000000000000000000000000000000000000000000000000'
+            '000000000000"\n',
+            id="a-second-declaration-that-simply-wins-in-ruby",
+        ),
+    ],
+)
+def test_a_formula_cannot_smuggle_a_declaration_past_the_gate(
+    smuggled: str, tmp_path: Path
+) -> None:
+    """Ruby decides what a formula fetches; a reader of Ruby must not guess.
+
+    A second `url` inside the same block is what Homebrew actually uses, and one
+    carrying a trailing comment is invisible to any line-shaped reader. Reading
+    the claims is how each realistic drift earns its own refusal, but it cannot
+    be what makes the gate *sound* — so the published text must also be exactly
+    the text this Release generates, and anything else is refused whether or not
+    the reader understood it.
+    """
+    checksums = published_checksums(tmp_path)
+    formula = homebrew.render_formula(
+        REPOSITORY_ROOT,
+        release_version="1.2.3",
+        release_marked_prerelease=False,
+        checksum_dir=checksums,
+    )
+    marker = '      sha256 "1111111111111111111111111111111111111111111111111111111111111111"\n'
+    assert marker in formula
+    smuggled_formula = formula.replace(marker, marker + smuggled, 1)
+
+    with pytest.raises(homebrew.HomebrewChannelError):
+        homebrew.verify_formula(
+            REPOSITORY_ROOT,
+            smuggled_formula,
+            release_version="1.2.3",
+            release_marked_prerelease=False,
+            checksum_dir=checksums,
+        )
+
+
+def test_the_version_probe_must_actually_run_the_installed_helper(
+    tmp_path: Path,
+) -> None:
+    """A `brew test` that asserts against a literal proves nothing.
+
+    The probe is the only check that happens on the operator's machine, so it has
+    to execute the helper that was installed and compare its whole answer. A
+    substring match would accept `1.2.3-rc.1` for `1.2.3`, and an assertion with
+    no `shell_output` would accept an empty install.
+    """
+    checksums = published_checksums(tmp_path)
+    formula = homebrew.render_formula(
+        REPOSITORY_ROOT,
+        release_version="1.2.3",
+        release_marked_prerelease=False,
+        checksum_dir=checksums,
+    )
+
+    assert 'shell_output("#{bin}/git-loopy-tui --version")' in formula
+    assert 'assert_equal "git-loopy-tui 1.2.3"' in formula
+
+    hollow = re.sub(
+        r"  test do\n(?:.*\n)*?  end\n",
+        '  test do\n    assert_equal "git-loopy-tui 1.2.3", '
+        '"git-loopy-tui 1.2.3" # --version\n  end\n',
+        formula,
+    )
+    assert hollow != formula
+
+    with pytest.raises(homebrew.HomebrewChannelError) as raised:
+        homebrew.verify_formula(
+            REPOSITORY_ROOT,
+            hollow,
+            release_version="1.2.3",
+            release_marked_prerelease=False,
+            checksum_dir=checksums,
+        )
+    assert "never proves the installed helper reports" in str(raised.value)
+
+
+def test_the_tap_push_updates_its_own_branch_on_a_rerun(tmp_path: Path) -> None:
+    """A rerun must be able to replace the branch it opened last time.
+
+    `actions/checkout` fetches one branch, so a rerun holds no remote-tracking
+    ref for the Release branch — and a bare `--force-with-lease` refuses as
+    "stale info" rather than updating. This runs the step's own bash against a
+    real bare remote, twice, which is the only way to find that out.
+    """
+    steps = workflow()["jobs"][FIXTURE["channel_job"]]["steps"]
+    script = next(step for step in steps if "gh pr create" in str(step.get("run", "")))[
+        "run"
+    ]
+    script = script[: script.index("gh pr create")]
+
+    remote = tmp_path / "tap.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", str(remote), str(seed)], check=True)
+    (seed / "README.md").write_text("tap\n", encoding="utf-8")
+    for command in (
+        ["git", "config", "user.email", "t@example.invalid"],
+        ["git", "config", "user.name", "t"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-m", "seed"],
+        ["git", "push", "origin", "main"],
+    ):
+        subprocess.run(command, cwd=seed, check=True)
+
+    def publish(formula: str) -> subprocess.CompletedProcess[str]:
+        checkout = tmp_path / f"tap-{formula}"
+        subprocess.run(
+            ["git", "clone", "--single-branch", str(remote), str(checkout)], check=True
+        )
+        written = checkout / "Formula" / "git-loopy-tui.rb"
+        written.parent.mkdir(parents=True, exist_ok=True)
+        written.write_text(formula, encoding="utf-8")
+        return subprocess.run(
+            ["bash", "-eo", "pipefail", "-c", script],
+            cwd=checkout,
+            env={
+                **os.environ,
+                "RELEASE_TAG": "v1.2.3",
+                "RELEASE_VERSION": "1.2.3",
+            },
+            capture_output=True,
+            text=True,
+        )
+
+    first = publish("first")
+    assert first.returncode == 0, first.stderr
+    rerun = publish("second")
+    assert rerun.returncode == 0, rerun.stderr
+
+    published = subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            str(remote),
+            "show",
+            "git-loopy-tui-v1.2.3:Formula/git-loopy-tui.rb",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert published.stdout == "second"
+
+
+def test_an_unchanged_tap_stops_before_it_opens_a_pull_request(
+    tmp_path: Path,
+) -> None:
+    """Re-running a Release that is already published is not an update."""
+    steps = workflow()["jobs"][FIXTURE["channel_job"]]["steps"]
+    script = next(step for step in steps if "gh pr create" in str(step.get("run", "")))[
+        "run"
+    ]
+
+    remote = tmp_path / "tap.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True)
+    checkout = tmp_path / "tap"
+    subprocess.run(["git", "clone", str(remote), str(checkout)], check=True)
+    (checkout / "README.md").write_text("tap\n", encoding="utf-8")
+    for command in (
+        ["git", "config", "user.email", "t@example.invalid"],
+        ["git", "config", "user.name", "t"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-m", "seed"],
+        ["git", "push", "origin", "main"],
+    ):
+        subprocess.run(command, cwd=checkout, check=True)
+
+    completed = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", script],
+        cwd=checkout,
+        env={**os.environ, "RELEASE_TAG": "v1.2.3", "RELEASE_VERSION": "1.2.3"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "already publishes v1.2.3" in completed.stdout
+    assert "gh" not in completed.stderr
