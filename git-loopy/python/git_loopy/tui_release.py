@@ -52,6 +52,7 @@ class ArtifactTarget:
     build: str
     container: str | None
     packages_install: str | None
+    requires_tool: str | None
 
     @property
     def is_native(self) -> bool:
@@ -139,6 +140,7 @@ def load_artifact_metadata(repository_root: Path) -> ArtifactMetadata:
                 build=str(record["build"]),
                 container=_optional_text(record["container"]),
                 packages_install=_optional_text(record["packages_install"]),
+                requires_tool=_optional_text(record["requires_tool"]),
             )
             for record in document["targets"]
         ),
@@ -532,6 +534,27 @@ def helper_package_is_distributable(repository_root: Path) -> bool:
     return True
 
 
+def helper_release_profile(repository_root: Path) -> dict[str, Any]:
+    """The cargo profile cargo-dist compiles the release artifacts with.
+
+    cargo-dist always builds `--profile dist`, and cargo will not invent a
+    profile it has never been told about. `dist init` normally writes this
+    section; a hand-maintained manifest has to carry it deliberately, and
+    without it every build job dies at `error: profile 'dist' is not defined`
+    *after* the artifact plan has already succeeded — which is the worst place
+    for it, because the plan is what everything else trusts.
+    """
+    manifest = _read_helper_manifest(repository_root)
+    profiles = manifest.get("profile")
+    profile = profiles.get("dist") if isinstance(profiles, dict) else None
+    if not isinstance(profile, dict):
+        raise TuiReleaseError(
+            f"helper manifest {repository_root / HELPER_MANIFEST_PATH} defines "
+            "no [profile.dist], so cargo-dist cannot build it"
+        )
+    return profile
+
+
 def pinned_cargo_dist_version(repository_root: Path) -> str:
     """The exact cargo-dist the release pipeline is allowed to run.
 
@@ -683,12 +706,21 @@ def verify_release_plan(
                 f"the release plan builds {target.triple} in container "
                 f"{image!r}, not the declared {target.container!r}"
             )
-        needs_packages = bool(entry.get("packages_install"))
-        if needs_packages != bool(target.packages_install):
+        # cargo-dist words its provisioning differently from the workflow step
+        # that mirrors it, so the two cannot be compared verbatim. What has to
+        # hold is that both reach for the same tool: "some provisioning
+        # happened" would accept a command that installs nothing.
+        provisioning = str(entry.get("packages_install") or "")
+        if bool(provisioning) != bool(target.packages_install):
             problems.append(
-                f"the release plan {'needs' if needs_packages else 'needs no'} "
+                f"the release plan {'needs' if provisioning else 'needs no'} "
                 f"package installation for {target.triple}, and the declared "
                 f"metadata disagrees"
+            )
+        elif target.requires_tool and target.requires_tool not in provisioning:
+            problems.append(
+                f"the release plan provisions {target.triple} without "
+                f"{target.requires_tool}, which it cannot build without"
             )
 
     if problems:
@@ -707,7 +739,7 @@ def _read_plan(path: Path) -> dict[str, Any]:
     return parsed
 
 
-def _extract_helper(
+def extract_helper(
     archive: Path,
     artifact: PublishedArtifact,
     destination: Path,
@@ -795,7 +827,7 @@ def verify_artifact(
                 "release runner"
             )
         with tempfile.TemporaryDirectory() as scratch:
-            helper = _extract_helper(archive, artifact, Path(scratch))
+            helper = extract_helper(archive, artifact, Path(scratch))
             smoke_test(helper, release_version=release_version)
     return artifact
 

@@ -99,8 +99,11 @@ jobs:
 
   build:
     name: build / ${{ matrix.target }}
-    needs: identity
+    needs:
+      - identity
+      - plan
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     permissions:
       contents: read
     strategy:
@@ -119,20 +122,35 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             build: cross
+            container: ghcr.io/rust-cross/manylinux2014-cross:aarch64
+            packages_install: pip3 install cargo-zigbuild
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             build: native
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-22.04
             build: cross
+            container: messense/rust-musl-cross:aarch64-musl
+            packages_install: pip3 install cargo-zigbuild
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
             build: native
+            packages_install: sudo apt-get update && sudo apt-get install -y musl-tools
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # Three of the seven targets cannot link on a bare runner: both arm64
+      # Linux builds go through cargo-zigbuild inside their cross container, and
+      # x64 musl needs `musl-tools`. `dist plan` is what says so, and the plan
+      # job refuses this list the moment it stops matching. The Rust target
+      # itself is not added here — cargo-dist runs rustup for it.
+      - name: Provision the target toolchain
+        if: matrix.packages_install != ''
+        shell: bash
+        run: ${{ matrix.packages_install }}
 
       # Installed from source at an exact version rather than through a
       # per-platform installer script, so one line covers every runner and the
@@ -208,6 +226,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - identity
+      - plan
       - family-conformance
       - build
     runs-on: ubuntu-latest

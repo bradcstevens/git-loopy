@@ -661,3 +661,56 @@ def test_the_helper_manifest_defines_the_profile_the_toolchain_builds_with() -> 
     profile = tui_release.helper_release_profile(REPOSITORY_ROOT)
 
     assert profile["inherits"] == "release"
+
+
+def test_the_release_pipeline_verifies_a_plan_document_it_was_handed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The entry point the plan job runs, on a plan and on a drifted one."""
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(_release_plan(metadata, version)), encoding="utf-8"
+    )
+
+    argv = [
+        "verify-plan",
+        "--repository-root",
+        str(REPOSITORY_ROOT),
+        "--plan",
+        str(plan_path),
+        "--tag-ref",
+        f"refs/tags/v{version}",
+    ]
+    assert tui_release.main(argv) == 0
+    assert "git-loopy-tui-x86_64-pc-windows-msvc.zip" in capsys.readouterr().out
+
+    plan_path.write_text(
+        json.dumps(_release_plan(metadata, version, github_attestations=False)),
+        encoding="utf-8",
+    )
+    assert tui_release.main(argv) == 1
+    assert "attest" in capsys.readouterr().err
+
+
+def test_a_plan_that_provisions_the_wrong_tool_is_refused() -> None:
+    """"Some provisioning happened" is not the same as "the right one did".
+
+    cargo-dist words its own provisioning differently from the workflow step
+    that mirrors it, so the two cannot be compared verbatim. What has to hold is
+    that both install the same thing: a plan whose arm64 Linux step no longer
+    reaches for cargo-zigbuild is a plan that will not link, however busy its
+    command looks.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    plan = _release_plan(metadata, version)
+    for entry in plan["ci"]["github"]["artifacts_matrix"]["include"]:
+        if entry["targets"] == ["aarch64-unknown-linux-gnu"]:
+            entry["packages_install"] = "exit 99"
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(REPOSITORY_ROOT, plan)
+    assert "cargo-zigbuild" in str(raised.value)

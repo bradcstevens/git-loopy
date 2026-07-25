@@ -87,7 +87,12 @@ def test_publication_waits_for_conformance_and_the_complete_artifact_set() -> No
         == "./.github/workflows/runner-family-gate.yml"
     )
     publish = jobs["publish"]
-    assert set(publish["needs"]) == {"identity", "family-conformance", "build"}
+    assert set(publish["needs"]) == {
+        "identity",
+        "plan",
+        "family-conformance",
+        "build",
+    }
     assert publish["if"].startswith("startsWith(github.ref, 'refs/tags/v')")
     assert publish["permissions"]["attestations"] == "write"
     assert publish["permissions"]["contents"] == "write"
@@ -138,7 +143,7 @@ def test_identity_is_proven_before_anything_is_built() -> None:
     workflow = _load_workflow()
     jobs = workflow["jobs"]
 
-    assert jobs["build"]["needs"] == "identity"
+    assert jobs["build"]["needs"] == ["identity", "plan"]
     assert "git_loopy.tui_release" in _run_text(jobs["identity"])
 
 
@@ -152,7 +157,7 @@ def test_the_build_is_tagged_with_the_release_identity_it_just_proved() -> None:
     workflow = _load_workflow()
     build = workflow["jobs"]["build"]
 
-    assert build["needs"] == "identity"
+    assert "identity" in build["needs"]
     compile_step = [
         step for step in build["steps"] if step.get("name") == "Build the release artifact"
     ]

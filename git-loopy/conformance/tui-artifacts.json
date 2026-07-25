@@ -46,7 +46,8 @@
       "runner": "macos-14",
       "build": "native",
       "container": null,
-      "packages_install": null
+      "packages_install": null,
+      "requires_tool": null
     },
     {
       "triple": "x86_64-apple-darwin",
@@ -56,7 +57,8 @@
       "runner": "macos-15-intel",
       "build": "native",
       "container": null,
-      "packages_install": null
+      "packages_install": null,
+      "requires_tool": null
     },
     {
       "triple": "x86_64-pc-windows-msvc",
@@ -66,7 +68,8 @@
       "runner": "windows-2022",
       "build": "native",
       "container": null,
-      "packages_install": null
+      "packages_install": null,
+      "requires_tool": null
     },
     {
       "triple": "aarch64-unknown-linux-gnu",
@@ -76,7 +79,8 @@
       "runner": "ubuntu-22.04",
       "build": "cross",
       "container": "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
-      "packages_install": "pip3 install cargo-zigbuild"
+      "packages_install": "pip3 install cargo-zigbuild",
+      "requires_tool": "cargo-zigbuild"
     },
     {
       "triple": "x86_64-unknown-linux-gnu",
@@ -86,7 +90,8 @@
       "runner": "ubuntu-22.04",
       "build": "native",
       "container": null,
-      "packages_install": null
+      "packages_install": null,
+      "requires_tool": null
     },
     {
       "triple": "aarch64-unknown-linux-musl",
@@ -96,7 +101,8 @@
       "runner": "ubuntu-22.04",
       "build": "cross",
       "container": "messense/rust-musl-cross:aarch64-musl",
-      "packages_install": "pip3 install cargo-zigbuild"
+      "packages_install": "pip3 install cargo-zigbuild",
+      "requires_tool": "cargo-zigbuild"
     },
     {
       "triple": "x86_64-unknown-linux-musl",
@@ -106,7 +112,8 @@
       "runner": "ubuntu-22.04",
       "build": "native",
       "container": null,
-      "packages_install": "sudo apt-get update && sudo apt-get install -y musl-tools"
+      "packages_install": "sudo apt-get update && sudo apt-get install -y musl-tools",
+      "requires_tool": "musl-tools"
     }
   ],
   "deferred_targets": [

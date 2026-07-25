@@ -22,7 +22,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
-| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
+| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, and the host aliases and selection cases an installer resolves its own artifact with |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. The Continuation harness names every independent
@@ -40,6 +40,14 @@ names — is stated once there, so a renamed artifact cannot leave one consumer
 resolving a name that no longer exists. `git-loopy/tui/Cargo.toml` is what
 actually builds; `git-loopy/python/tests/test_tui_release.py` fails when the two
 disagree.
+
+Three of the seven targets cannot link on a bare runner, so each target also
+declares the container it builds inside and the packages that container needs.
+That provisioning is cargo-dist's answer rather than this repository's, so the
+release pipeline proves it: `dist plan --output-format=json` is checked against
+this fixture before a byte is compiled, and a plan that would build on another
+runner, in another container, or under another toolchain fails the release
+instead of the linker.
 
 Fixture schema 1.1 adds distribution selectors, literal capability scenarios, a
 cross-host transport probe, and multi-command workflows sharing one ordered
