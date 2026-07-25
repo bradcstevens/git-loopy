@@ -908,9 +908,21 @@ def test_skills_commands_never_reach_a_copilot_settings_mutation_api(
         required_skills=(),
         packaged_skills_dir=tmp_path / "packaged",
     )
+    synced = skillscmd.run_skills_sync(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        output_fn=lambda _line: None,
+        client_factory=factory,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
 
-    assert (listed, edited) == (0, 0)
+    assert (listed, edited, synced) == (0, 0, 0)
     assert [client.lifecycle for client in clients] == [
+        ["start", "stop"],
         ["start", "stop"],
         ["start", "stop"],
     ]
@@ -1095,3 +1107,290 @@ def test_skills_edit_without_repository_drops_ancestry_derived_winners(
     assert result == 0
     assert [row.name for row in seen[0].rows] == ["personal"]
     assert seen[0].enabled == ("personal",)
+
+
+def test_sync_plan_applies_copilot_state_and_preserves_fallback_selections() -> None:
+    catalog = SkillCatalog(
+        winners={
+            "added": SkillCatalogWinner("added", "builtin", copilot_enabled=True),
+            "kept": SkillCatalogWinner("kept", "personal", copilot_enabled=True),
+            "removed": SkillCatalogWinner(
+                "removed", "personal", copilot_enabled=False
+            ),
+            "fallback-off": SkillCatalogWinner("fallback-off", "packaged"),
+            "fallback-on": SkillCatalogWinner("fallback-on", "packaged"),
+        }
+    )
+
+    plan = skillscmd.plan_skill_policy_sync(
+        ("kept", "removed", "fallback-on"), catalog
+    )
+
+    assert plan.additions == ("added",)
+    assert plan.removals == ("removed",)
+    assert plan.proposed == ("added", "fallback-on", "kept")
+    assert not plan.is_noop
+
+
+class _FakeCatalogClient:
+    """A Copilot client that only supports the async context-manager lifecycle."""
+
+    async def __aenter__(self) -> _FakeCatalogClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _sync_catalog() -> SkillCatalog:
+    return SkillCatalog(
+        winners={
+            "added": SkillCatalogWinner("added", "builtin", copilot_enabled=True),
+            "kept": SkillCatalogWinner("kept", "personal", copilot_enabled=True),
+            "removed": SkillCatalogWinner(
+                "removed", "personal", copilot_enabled=False
+            ),
+            "fallback-on": SkillCatalogWinner("fallback-on", "packaged"),
+        }
+    )
+
+
+def test_skills_sync_shows_the_delta_and_confirms_before_writing(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        config_path,
+        {"model": "gpt-5.4", "enabled_skills": ["kept", "removed", "fallback-on"]},
+    )
+    trace: list[tuple[str, str]] = []
+    catalog = _sync_catalog()
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    def ask(prompt: str) -> str:
+        trace.append(("prompt", prompt))
+        return "yes"
+
+    def write(path: Path, table: Any) -> None:
+        trace.append(("write", str(path)))
+        settings.write_config(path, table)
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=ask,
+        output_fn=lambda message: trace.append(("out", message)),
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=write,
+    )
+
+    assert result == 0
+    kinds = [kind for kind, _ in trace]
+    rendered = "\n".join(message for kind, message in trace if kind == "out")
+    assert "+ added" in rendered
+    assert "- removed" in rendered
+    assert kinds.index("prompt") < kinds.index("write")
+    assert rendered.index("+ added") < len(rendered)
+    assert tomllib.loads(config_path.read_text(encoding="utf-8")) == {
+        "model": "gpt-5.4",
+        "enabled_skills": ["added", "fallback-on", "kept"],
+    }
+
+
+def test_skills_sync_cancellation_writes_nothing(tmp_path: Path) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(config_path, {"enabled_skills": ["kept", "removed"]})
+    catalog = _sync_catalog()
+    writes: list[Path] = []
+    errors: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda _prompt: "n",
+        output_fn=lambda _message: None,
+        error_fn=errors.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert settings.load_config_table(config_path)["enabled_skills"] == [
+        "kept",
+        "removed",
+    ]
+    assert any("cancelled" in message for message in errors)
+
+
+def test_skills_sync_reports_an_already_matching_policy_without_writing(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"enabled_skills": ["kept", "fallback-on"]},
+    )
+    catalog = SkillCatalog(
+        winners={
+            "kept": SkillCatalogWinner("kept", "personal", copilot_enabled=True),
+            "off": SkillCatalogWinner("off", "personal", copilot_enabled=False),
+            "fallback-on": SkillCatalogWinner("fallback-on", "packaged"),
+        }
+    )
+    writes: list[Path] = []
+    output: list[str] = []
+    prompts: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    def ask(prompt: str) -> str:
+        prompts.append(prompt)
+        return "yes"
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=ask,
+        output_fn=output.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 0
+    assert writes == []
+    assert prompts == []
+    assert any("already matches" in message for message in output)
+
+
+def test_skills_sync_refuses_to_disable_a_required_skill(tmp_path: Path) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(config_path, {"enabled_skills": ["tdd"]})
+    catalog = SkillCatalog(
+        winners={
+            "tdd": SkillCatalogWinner("tdd", "packaged", copilot_enabled=False)
+        }
+    )
+    writes: list[Path] = []
+    errors: list[str] = []
+    prompts: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda prompt: prompts.append(prompt) or "yes",
+        output_fn=lambda _message: None,
+        error_fn=errors.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=("tdd",),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert prompts == []
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["tdd"]
+    assert any("MissingRequiredSkills" in message for message in errors)
+
+
+def test_skills_sync_refuses_to_enable_an_untracked_project_winner(
+    tmp_path: Path,
+) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    settings.write_config(settings.project_config_path(tmp_path), {"enabled_skills": []})
+    catalog = SkillCatalog(
+        winners={
+            "local": SkillCatalogWinner(
+                "local",
+                "project",
+                copilot_enabled=True,
+                project_path=tmp_path / ".copilot" / "skills" / "local",
+            )
+        }
+    )
+    writes: list[Path] = []
+    errors: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda _prompt: "yes",
+        output_fn=lambda _message: None,
+        error_fn=errors.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert any("UntrackedProjectSkills" in message for message in errors)
+
+
+def test_skills_sync_refuses_an_unavailable_skill_inventory(tmp_path: Path) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(config_path, {"enabled_skills": ["kept"]})
+    writes: list[Path] = []
+    errors: list[str] = []
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return SkillCatalog(winners={}, inventory_available=False)
+
+    result = skillscmd.run_skills_sync(
+        scope="project",
+        repo_root=tmp_path,
+        env=env,
+        input_fn=lambda _prompt: "yes",
+        output_fn=lambda _message: None,
+        error_fn=errors.append,
+        client_factory=_FakeCatalogClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+        writer=lambda path, table: writes.append(path),
+    )
+
+    assert result == 1
+    assert writes == []
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["kept"]
+    assert any("SkillInventoryUnavailable" in message for message in errors)

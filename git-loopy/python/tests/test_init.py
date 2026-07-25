@@ -1443,15 +1443,22 @@ def test_run_init_preserves_unrelated_existing_config_keys(tmp_path: Path) -> No
     assert written["enabled_skills"] == ["builtin-on", "packaged-extra", "tdd"]
 
 
-def test_run_init_collects_the_policy_before_the_scaffold_decision(
+def test_run_init_collects_the_policy_last_but_before_every_write(
     tmp_path: Path,
 ) -> None:
-    """Policy sits between routing and scaffolding, and precedes every write."""
-    inp = _Input("1", "4", "n", "n")
-    prompts_when_picked: list[list[str]] = []
+    """The picker runs after the scaffold decision and before any target changes."""
+    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
+    _skill_tree(_project_skills_dir(tmp_path), {"setup-agent-skills": "LOCAL\n"})
+    observed: list[tuple[list[str], bool, bool]] = []
 
     def pick(model: SkillSelectionModel, **_kwargs: object) -> SkillSelectionResult:
-        prompts_when_picked.append(list(inp.prompts))
+        observed.append(
+            (
+                list(inp.prompts),
+                settings.project_config_path(tmp_path).exists(),
+                (tmp_path / "git-loopy" / "PROMPT.md").exists(),
+            )
+        )
         return SkillSelectionResult(model.enabled)
 
     packaged = _packaged(tmp_path)
@@ -1469,6 +1476,67 @@ def test_run_init_collects_the_policy_before_the_scaffold_decision(
     )
 
     assert rc == 0
-    asked = "\n".join(prompts_when_picked[0])
-    assert "routing" in asked.lower()
-    assert "scaffold" not in asked.lower()
+    asked, config_written, prompt_written = observed[0]
+    # Every earlier decision is already in hand — including the scaffold and
+    # refresh answers the policy's Required Skills depend on.
+    joined = "\n".join(asked).lower()
+    assert "routing" in joined
+    assert "scaffold" in joined
+    assert "refresh" in joined
+    # ...and nothing has been written yet (collect-then-commit).
+    assert not config_written
+    assert not prompt_written
+
+
+def test_run_init_drops_a_stale_effort_when_the_new_model_has_none(
+    tmp_path: Path,
+) -> None:
+    """Merging must not strand an effort the newly chosen model cannot use."""
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        config_path, {"model": "claude-opus-4.8", "reasoning_effort": "max"}
+    )
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "n", "n"),  # no effort prompt: the model has none
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-sonnet-4.5", efforts=())],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    assert "reasoning_effort" not in tomllib.loads(config_path.read_text())
+
+
+def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(
+    tmp_path: Path,
+) -> None:
+    """The policy answers to the instructions setup leaves behind, not the old ones."""
+    stale = tmp_path / "git-loopy" / "PROMPT.md"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("---\nrequired-skills: []\n---\n# stale\n", encoding="utf-8")
+    packaged = _packaged(tmp_path)
+    Path(packaged["packaged_prompt"]).write_text(
+        "---\nrequired-skills:\n  - tdd\n---\n# packaged\n", encoding="utf-8"
+    )
+    # Resolve Required Skills from the prompt rather than an injected list.
+    packaged.pop("required_skills")
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert written["enabled_skills"] == ["tdd"]

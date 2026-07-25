@@ -54,6 +54,7 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     gate_reasoning_effort,
 )
+from git_loopy.prompt import PromptMetadataError, resolve_required_skills
 from git_loopy.interactive.models import (
     ModelChoice,
     default_cursor_index,
@@ -501,6 +502,64 @@ class _SkillPolicyUnavailable(Exception):
     """Raised when a Skill policy cannot be resolved; setup writes nothing."""
 
 
+def _post_setup_required_skills(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    prompt_path: Path,
+    prompt_source: Path,
+    scaffold: bool,
+    required_skills: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """The Required Skills of the instructions this setup will leave behind.
+
+    A Skill policy is only valid against the **Run instructions** that resolve
+    once setup finishes. Reading the *current* prompt would let a wizard that
+    also scaffolds a ``PROMPT.md`` persist a policy its own scaffold immediately
+    invalidates, so this mirrors :func:`git_loopy.prompt.load_prompt` precedence
+    with the about-to-be-scaffolded prompt substituted at its own scope.
+    """
+    if required_skills is not None:
+        return tuple(required_skills)
+
+    def _is_target(candidate: Path) -> bool:
+        """Whether ``candidate`` is the prompt this setup is about to write.
+
+        Path equality is not enough: on a case-insensitive filesystem the
+        lower-precedence ``prompt.md`` candidate and the ``PROMPT.md`` target are
+        the same file, and reading it would resolve the *stale* requirements.
+        """
+        if candidate == prompt_path:
+            return True
+        try:
+            return (
+                candidate.exists()
+                and prompt_path.exists()
+                and candidate.samefile(prompt_path)
+            )
+        except OSError:
+            return False
+
+    candidates: list[Path] = []
+    if repo_root is not None:
+        candidates.append(repo_root / "git-loopy" / "prompt.md")
+        candidates.append(repo_root / "git-loopy" / settings.PROMPT_FILENAME)
+    candidates.append(settings.global_prompt_path(env))
+    try:
+        text = prompt_source.read_text(encoding="utf-8")
+        for candidate in candidates:
+            if scaffold and _is_target(candidate):
+                break
+            if candidate.exists():
+                text = candidate.read_text(encoding="utf-8")
+                break
+        return resolve_required_skills(text).required_skills
+    except (OSError, PromptMetadataError) as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot resolve Required Skills: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _collect_skill_policy(
     *,
     scope: str,
@@ -546,24 +605,6 @@ def _collect_skill_policy(
         raise _SkillPolicyUnavailable(
             f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
         ) from exc
-
-
-def _minimal_skill_policy(
-    *,
-    repo_root: Path | None,
-    env: Mapping[str, str],
-    required_skills: Sequence[str] | None,
-) -> tuple[str, ...]:
-    """The Minimal Skill policy: exactly the active instructions' Required Skills.
-
-    Unattended setup persists this rather than importing machine-specific
-    Copilot state (ADR-0015), so it never constructs a Copilot client.
-    """
-    from git_loopy.skillscmd import resolve_policy_required_skills
-
-    return tuple(
-        sorted(set(resolve_policy_required_skills(repo_root, env, required_skills)))
-    )
 
 
 def _resolve_scope(
@@ -626,7 +667,7 @@ def run_init(
     picker_runner: Any = None,
     git: Any = None,
     required_skills: Sequence[str] | None = None,
-    writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config,
+    writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -661,6 +702,7 @@ def run_init(
     # detect pre-existing catalog skills BEFORE anything is written (collect-then-commit).
     targets = _resolve_targets(resolved_scope, repo_root, env)
     skills_source = packaged_skills or _packaged_skills_path()
+    prompt_source = packaged_prompt or _packaged_prompt_path()
 
     try:
         if assume_yes:
@@ -669,10 +711,21 @@ def run_init(
             routing = None
             scaffold = True
             overwrite_skills = True
-            enabled_skills = _minimal_skill_policy(
-                repo_root=repo_root if resolved_scope == "project" else None,
-                env=env,
-                required_skills=required_skills,
+            # The Minimal Skill policy: exactly the Required Skills, and never a
+            # machine-specific Copilot import (ADR-0015). No client is built.
+            enabled_skills = tuple(
+                sorted(
+                    set(
+                        _post_setup_required_skills(
+                            repo_root=repo_root,
+                            env=env,
+                            prompt_path=targets.prompt_path,
+                            prompt_source=prompt_source,
+                            scaffold=scaffold,
+                            required_skills=required_skills,
+                        )
+                    )
+                )
             )
         else:
             model, effort = _collect_model_and_effort(
@@ -697,19 +750,6 @@ def run_init(
                 )
                 else None
             )
-            enabled_skills = _collect_skill_policy(
-                scope=resolved_scope,
-                repo_root=repo_root,
-                env=env,
-                input_fn=input_fn,
-                output_fn=output_fn,
-                client_factory=client_factory,
-                discoverer=discoverer,
-                picker_runner=picker_runner,
-                git=git,
-                required_skills=required_skills,
-                packaged_skills_dir=skills_source,
-            )
             destination = (
                 "the global scope (the shared, machine-wide skills location)"
                 if resolved_scope == "global"
@@ -726,6 +766,28 @@ def run_init(
                 scaffold=scaffold,
                 skills_dir=targets.skills_dir,
                 skills_source=skills_source,
+            )
+            # Last, because the policy must answer to the Run instructions this
+            # setup will leave behind — which the scaffold decision determines.
+            enabled_skills = _collect_skill_policy(
+                scope=resolved_scope,
+                repo_root=repo_root,
+                env=env,
+                input_fn=input_fn,
+                output_fn=output_fn,
+                client_factory=client_factory,
+                discoverer=discoverer,
+                picker_runner=picker_runner,
+                git=git,
+                required_skills=_post_setup_required_skills(
+                    repo_root=repo_root,
+                    env=env,
+                    prompt_path=targets.prompt_path,
+                    prompt_source=prompt_source,
+                    scaffold=scaffold,
+                    required_skills=required_skills,
+                ),
+                packaged_skills_dir=skills_source,
             )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
@@ -744,6 +806,10 @@ def run_init(
     values["model"] = model
     if effort is not None:
         values["reasoning_effort"] = effort
+    else:
+        # The wizard owns this key: a model with no reasoning must not inherit
+        # the previous model's effort just because the merge preserved it.
+        values.pop("reasoning_effort", None)
     if routing is not None:
         values["routing"] = {
             key: {"model": route_model, "effort": route_effort}
@@ -754,7 +820,6 @@ def run_init(
     output_fn(f"Wrote {targets.config_path}")
 
     if scaffold:
-        prompt_source = packaged_prompt or _packaged_prompt_path()
         _scaffold_prompt(targets.prompt_path, prompt_source)
         output_fn(f"Wrote {targets.prompt_path}")
         if skills_source.is_dir():
