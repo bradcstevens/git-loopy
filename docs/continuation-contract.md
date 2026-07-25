@@ -3,7 +3,7 @@
 > The separately versioned, language-neutral contract for Workflow Continuation across the
 > git-loopy Runner family. Domain terms are defined in [`CONTEXT.md`](../CONTEXT.md).
 
-**Continuation contract version:** 1.1
+**Continuation contract version:** 1.2
 
 **Record format:** 1
 
@@ -72,6 +72,14 @@ and fail closed on `reconcile --terminal` with `unsupported_operation` until the
 land. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
 `repair-index`. Mode is `off`.
 
+Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A distribution
+advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
+frontier, typed Performer eligibility, the single DispatchAuthorization, the locked stop
+precedence, and the two Dispatch-evidence classes — and supports the `record-dispatch-result`
+operation. Python advertises `fixed_frontier_authorization: true`; shell and PowerShell advertise
+`false`, accept no record declaring contract 1.2, and continue to fail closed on
+`record-dispatch-result` with `unsupported_operation`.
+
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
 implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
 reference. Python advertises `prospective_projection: true`; shell and PowerShell advertise `false`
@@ -80,9 +88,12 @@ and fail closed rather than ignoring the gated fields: `completion.retirements` 
 `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
 ordering rule and every family member implements it.
 
-Every distribution advertises `continuation_contract_versions: ["1.0", "1.1"]` and accepts a
-completion record declaring either. Contract 1.1 adds only optional fields, so a record published
-under 1.0 stays valid without rewriting.
+A distribution advertises the contract versions whose records it accepts. Python advertises
+`["1.0", "1.1", "1.2"]`; shell and PowerShell advertise `["1.0", "1.1"]`. Each added version
+introduces only optional fields, so a record published under an earlier version stays valid
+without rewriting. A record whose Action carries a `safety_case` **must** declare `1.2`: the
+AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently
+drop the case while keeping the claim must reject the whole record instead.
 
 ## 5. Event observations
 
@@ -94,8 +105,8 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.4,
-Continuation contract 1.1, record format 1, Wrapper contract 1.4, and Event schema 1.1.
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.5,
+Continuation contract 1.2, record format 1, Wrapper contract 1.4, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
 objects are supplied through the declared stdin or file source. `$INPUT_FILE` is the fixture
@@ -362,3 +373,82 @@ rendering stays bounded no matter how large the projection is. `--terminal` is a
 `reconcile`; any other operation rejects it as a malformed invocation and exits `2` per §3. It is
 never mixed with machine JSON on the same invocation. Independent verified guidance remains usable
 even while unrelated occurrences sit in Needs attention.
+
+
+## 9. Fixed-frontier Automation authorization
+
+Gated by the optional `fixed_frontier_authorization` capability. This section decides *whether* one
+Action may be dispatched to one Performer. It never executes one: `reconcile` returns an
+authorization, and the Runner that acts on it is out of scope here.
+
+**AFK safety case (`completion.actions[].safety_case`).** An Action may only be dispatched
+unattended when its Transition owner published the positive case that justifies it. The case is
+versioned and covers the *exact* occurrence: its `instruction`, `target`, and `completion_condition`
+must equal the Action's own, so a case can never be written for a different Instruction variant than
+the one that runs. It also declares `effects` (the bounded authority the Instruction consumes),
+typed `assumptions`, typed `requirements` (the noninteractive capability and access the Performer
+must already hold), a `retry` strategy, and the exceptional HITL `triggers` that end the Dispatch.
+The case is the single source of truth for those fields: an Action carrying a safety case may not
+also declare `effects`, `requirements`, or `triggers` itself. Only an `AFK-safe` Action may carry
+one — a case on a HITL-required Action is a structural rejection, not a downgrade.
+
+An `AFK-safe` Action *without* a safety case is not a rejection: it stays visible, and it is simply
+never selectable. The claim alone does not authorize anything.
+
+**Frozen scope.** One Run's Automation coverage and execution grants are computed once, before
+dispatch, from the ordered ceilings the caller supplies. Ceilings **intersect** — a repository or
+grant absent from any one ceiling is absent from the Run. Denials **accumulate** — a denial in any
+one ceiling denies for the Run. Runtime `revocations` narrow immediately and fold into denials.
+Nothing widens: a grant or capability that appears later waits for a new Run.
+
+**Frozen frontier.** The initial stable Reconciliation freezes every in-coverage Action *identity*
+and *semantic fingerprint*, including Blocked, HITL, ineligible, and quarantined members. Readiness
+of a frozen member may change during the Run — an initially Blocked member whose Prerequisites
+become satisfied becomes selectable. Identity and semantics may not: an Action the freeze never saw
+is `newly-produced`, and a frozen identity whose fingerprint moved is `changed-semantics`. Both are
+returned in `report_only` and neither is ever dispatched.
+
+**Eligibility.** Each current Action returns `automation_selectable` plus, when false, its typed
+`reasons` drawn from `already-dispatched`, `grant-missing`, `human-boundary`, `not-ready`,
+`outside-coverage`, `outside-frontier`, `performer-ineligible`, `quarantined`, and
+`safety-case-absent`. An Action is eligible only when it is current, Ready, conflict-free,
+positively AFK-safe, inside the frozen coverage and frontier, covered by the frozen grants, and
+freshly matched to the Performer's declared noninteractive posture.
+
+**DispatchAuthorization.** At most one is returned per Reconciliation. It binds one Action
+occurrence identity, its semantic fingerprint, one Performer, the Workstream anchor, the Target, the
+safety case version, the completion condition, and the case's bounded effects, requirements, retry
+strategy, and triggers. Ordering is the §8 ordering rule: the first selectable Action wins.
+
+**Stop.** Exactly one stop is returned, and exactly one of `authorization` or `stop` is present. The
+disposition is `complete`, `expected-boundary`, or `attention-required`, derived from the locked
+reason precedence, strongest first:
+
+| Reason | Disposition |
+| --- | --- |
+| `workstreams-terminal` | `complete` |
+| `safety-case-violation` | `attention-required` |
+| `uncertain-effect-state` | `attention-required` |
+| `guidance-fault` | `attention-required` |
+| `human-boundary` | `expected-boundary` |
+| `grant-missing` | `expected-boundary` |
+| `performer-ineligible` | `expected-boundary` |
+| `frontier-drained` | `expected-boundary` |
+| `awaiting-prerequisites` | `expected-boundary` |
+
+`workstreams-terminal` is the only completion. Every other stop states its nonterminal status, one
+trustworthy next Action or readiness condition, decisive durable evidence, secondary barriers,
+report-only successors, and the explicit statement that no successor Action was executed.
+
+**Dispatch evidence (`record-dispatch-result`).** Only two exceptional classes are recordable:
+`safety-case-violation` (the Dispatch met a boundary the published case said it would not) and
+`uncertain-effect-state` (a non-retry-safe effect whose state cannot be determined). Ordinary
+success and ordinary execution failure stay in the Runner's existing artifacts, Events, retry, and
+Strike paths and are never written here. The record carries no Instruction and no field to put a
+secret in: an identity, a fingerprint, a Performer, a class, a one-line summary, durable evidence
+references, and — for a violation — one human-boundary reason.
+
+The record is immutable and **non-Producer**. It never retires the Action or creates a replacement;
+only the Transition owner can. Until one does, the next Reconciliation returns a
+`dispatch_evidence_quarantine` diagnostic naming the affected identities and marks them
+`quarantined`, which raises the corresponding `attention-required` stop.

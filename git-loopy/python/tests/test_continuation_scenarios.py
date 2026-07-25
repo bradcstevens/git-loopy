@@ -4347,3 +4347,587 @@ def test_python_publish_locks_semantic_fingerprint_cases(
     assert stdout == expected["stdout_exact"]
     assert stderr == expected["stderr_exact"]
     assert github.calls == expected["github_calls"]
+
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization (issue #254)
+# ---------------------------------------------------------------------------
+
+
+def _afk_safety_case(action: dict[str, Any]) -> dict[str, Any]:
+    """A positive AFK safety case that covers ``action`` exactly."""
+    return {
+        "version": "1",
+        "instruction": copy.deepcopy(action["instruction"]),
+        "target": copy.deepcopy(action["target"]),
+        "completion_condition": copy.deepcopy(action["completion_condition"]),
+        "effects": [{"kind": "tracker-write", "scope": "issue:octo/example#239"}],
+        "assumptions": [
+            {
+                "kind": "durable-inputs-fixed",
+                "statement": "The approved map is already published.",
+            }
+        ],
+        "requirements": [
+            {"kind": "skill", "name": "to-spec"},
+            {"kind": "access", "name": "tracker-write"},
+        ],
+        "retry": {"kind": "idempotent"},
+        "triggers": [],
+    }
+
+
+def _afk_publish_request() -> dict[str, Any]:
+    """A publish request whose single Action carries its own safety case."""
+    request = _valid_publish_request("shared-continue")
+    request["completion"]["continuation_contract_version"] = "1.2"
+    action = request["completion"]["actions"][0]
+    action["safety_case"] = _afk_safety_case(action)
+    return request
+
+
+def test_python_publish_accepts_a_positive_versioned_afk_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An AFK-safe Action may carry the versioned safety case that justifies it."""
+    request = _afk_publish_request()
+    github = _RecordingGitHub()
+
+    exit_code, result, stderr = _publish_result(request, github, monkeypatch, capsys)
+
+    assert exit_code == 0
+    assert result["ok"] is True
+    assert stderr == ""
+
+
+def test_python_publish_refuses_a_safety_case_below_contract_1_2(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A 1.1 reader would drop the safety case and keep the AFK-safe claim.
+
+    The claim is what authorizes unattended Dispatch, so a record that carries
+    one field without the other must not be publishable at all.
+    """
+    request = _afk_publish_request()
+    request["completion"]["continuation_contract_version"] = "1.1"
+    github = _RecordingGitHub()
+
+    exit_code, result, _stderr = _publish_result(request, github, monkeypatch, capsys)
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "1.2" in result["error"]["message"]
+    assert github.calls == []
+
+
+def _automation_request(**overrides: Any) -> dict[str, Any]:
+    """A reconcile request that also asks for one fixed-frontier authorization."""
+    automation: dict[str, Any] = {
+        "performer": {
+            "id": "runner",
+            "posture": {
+                "noninteractive": True,
+                "satisfied_requirements": [
+                    {"kind": "skill", "name": "to-spec"},
+                    {"kind": "access", "name": "tracker-write"},
+                ],
+            },
+        },
+        "scope": {
+            "ceilings": [
+                {
+                    "source": "global",
+                    "coverage": {"repositories": ["octo/example"]},
+                    "grants": [
+                        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+                    ],
+                    "denials": [],
+                },
+                {
+                    "source": "project",
+                    "coverage": {"repositories": ["octo/example"]},
+                    "grants": [
+                        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+                    ],
+                    "denials": [],
+                },
+            ],
+            "revocations": [],
+        },
+    }
+    automation.update(overrides)
+    return {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "automation": automation,
+    }
+
+
+def _publish_afk_action(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> dict[str, Any]:
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    exit_code, _result, _stderr = _publish_result(request, github, monkeypatch, capsys)
+    assert exit_code == 0
+    return action
+
+
+def test_python_reconcile_binds_one_dispatch_authorization_to_a_frozen_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One Ready, AFK-safe, in-scope, in-frontier Action binds one Dispatch."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        _automation_request(),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    [action] = result["result"]["actions"]
+    assert automation["frontier"]["actions"] == [
+        {
+            "identity": action["identity"],
+            "semantic_fingerprint": action["semantic_fingerprint"],
+        }
+    ]
+    authorization = automation["authorization"]
+    assert authorization["action_identity"] == action["identity"]
+    assert authorization["semantic_fingerprint"] == action["semantic_fingerprint"]
+    assert authorization["performer"] == "runner"
+    assert authorization["safety_case_version"] == "1"
+    assert authorization["completion_condition"] == action["completion_condition"]
+    assert authorization["effects"] == [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    ]
+    assert authorization["retry"] == {"kind": "idempotent"}
+    assert "stop" not in automation
+
+
+def _automation_result(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    **overrides: Any,
+) -> dict[str, Any]:
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        _automation_request(**overrides),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert stderr == ""
+    return result["result"]["automation"]
+
+
+def test_python_automation_refuses_an_afk_claim_without_a_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An AFK-safe classification is never upgraded to eligibility on its own."""
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    [entry] = automation["eligibility"]
+    assert entry["automation_selectable"] is False
+    assert entry["reasons"] == ["safety-case-absent"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "guidance-fault"
+    assert automation["stop"]["disposition"] == "attention-required"
+
+
+def test_python_automation_reports_a_human_boundary_ahead_of_a_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stop precedence prefers the barrier a person can act on."""
+    request = _valid_publish_request("shared-continue")
+    action = request["completion"]["actions"][0]
+    action["kind"] = "Resolve decision"
+    action["interaction"] = {
+        "classification": "HITL-required",
+        "evidence": {
+            "kind": "human-boundary",
+            "reason": "human-decision",
+            "resolution_condition": {
+                "kind": "issue-closed",
+                "target": _issue(239),
+            },
+        },
+    }
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["human-boundary", "not-ready"]
+    stop = automation["stop"]
+    assert stop["reason"] == "human-boundary"
+    assert stop["disposition"] == "expected-boundary"
+    assert stop["successor_executed"] is False
+    assert stop["nonterminal_status"] == "guidance"
+
+
+def test_python_automation_stops_on_awaiting_prerequisites(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frozen frontier member that is merely Blocked is an expected boundary."""
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    stop = automation["stop"]
+    assert stop["reason"] == "awaiting-prerequisites"
+    assert stop["disposition"] == "expected-boundary"
+    assert stop["next"]["kind"] == "action"
+    assert stop["next"]["readiness"] == "Blocked"
+    assert stop["next"]["condition"] == {"kind": "issue-open", "target": _issue(501)}
+    assert stop["evidence"] == [_issue(239)]
+    assert stop["report_only_successors"] == []
+    assert stop["statement"] == (
+        "No successor Action was executed by this Reconciliation."
+    )
+
+
+def test_python_automation_lets_a_frozen_blocked_member_become_selectable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Readiness may change inside the frozen frontier; identity may not."""
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    frozen = _automation_result(github, monkeypatch, capsys)["frontier"]
+    assert len(frozen["actions"]) == 1
+
+    github.issues[501] = "OPEN"
+    automation = _automation_result(github, monkeypatch, capsys, frontier=frozen)
+
+    assert automation["frontier"] == frozen
+    assert (
+        automation["authorization"]["action_identity"]
+        == (frozen["actions"][0]["identity"])
+    )
+
+
+def test_python_automation_keeps_changed_semantics_report_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frozen identity whose semantics moved is reported, never dispatched."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    frozen = _automation_result(github, monkeypatch, capsys)["frontier"]
+    stale = {
+        "actions": [
+            {
+                "identity": frozen["actions"][0]["identity"],
+                "semantic_fingerprint": "0" * 64,
+            }
+        ]
+    }
+
+    automation = _automation_result(github, monkeypatch, capsys, frontier=stale)
+
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["outside-frontier"]
+    assert automation["report_only"] == [
+        {
+            "identity": frozen["actions"][0]["identity"],
+            "semantic_fingerprint": frozen["actions"][0]["semantic_fingerprint"],
+            "reason": "changed-semantics",
+        }
+    ]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "frontier-drained"
+
+
+def test_python_automation_keeps_a_newly_produced_action_report_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run never adds work its initial Reconciliation did not freeze."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    empty_frontier: dict[str, Any] = {"actions": []}
+
+    automation = _automation_result(
+        github, monkeypatch, capsys, frontier=empty_frontier
+    )
+
+    assert [entry["reason"] for entry in automation["report_only"]] == [
+        "newly-produced"
+    ]
+    assert automation["stop"]["reason"] == "frontier-drained"
+    assert automation["stop"]["disposition"] == "expected-boundary"
+
+
+def test_python_automation_intersects_global_and_project_ceilings(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A grant only one ceiling offers is not a grant."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["scope"]["ceilings"][1]["grants"] = []
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["scope"]["grants"] == []
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["grant-missing"]
+    assert automation["stop"]["reason"] == "grant-missing"
+    assert automation["stop"]["disposition"] == "expected-boundary"
+
+
+def test_python_automation_accumulates_denials_and_runtime_revocations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One ceiling's denial, or a runtime revocation, removes a shared grant."""
+    grant = {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    for narrowing in ("denials", "revocations"):
+        github = _RecordingGitHub()
+        _publish_afk_action(github, monkeypatch, capsys)
+        request = _automation_request()
+        if narrowing == "denials":
+            request["automation"]["scope"]["ceilings"][1]["denials"] = [grant]
+        else:
+            request["automation"]["scope"]["revocations"] = [grant]
+
+        exit_code, result, stderr = _command_result(
+            "reconcile", request, github, monkeypatch, capsys
+        )
+
+        assert exit_code == 0, narrowing
+        assert stderr == ""
+        automation = result["result"]["automation"]
+        assert automation["scope"]["grants"] == [], narrowing
+        assert automation["scope"]["denials"] == [grant], narrowing
+        assert "authorization" not in automation, narrowing
+
+
+def test_python_automation_requires_fresh_matching_performer_posture(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unmet Eligibility requirement is typed ineligibility, not a failure."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["performer"]["posture"]["satisfied_requirements"] = [
+        {"kind": "access", "name": "tracker-write"}
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["performer-ineligible"]
+    assert automation["stop"]["reason"] == "performer-ineligible"
+
+
+def test_python_automation_excludes_work_outside_frozen_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Coverage bounds the frontier itself, not just selection."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    for ceiling in request["automation"]["scope"]["ceilings"]:
+        ceiling["coverage"]["repositories"] = ["octo/other"]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["frontier"]["actions"] == []
+    [entry] = automation["eligibility"]
+    assert "outside-coverage" in entry["reasons"]
+    assert automation["stop"]["reason"] == "frontier-drained"
+
+
+def _publish_two_afk_actions(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request = _afk_publish_request()
+    first = request["completion"]["actions"][0]
+    second = copy.deepcopy(first)
+    second["key"] = "second"
+    second["summary"] = "Publish the second specification"
+    second["target"] = _issue(240)
+    second["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    second["safety_case"] = _afk_safety_case(second)
+    request["completion"]["actions"].append(second)
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+
+def test_python_automation_binds_one_action_at_a_time_from_the_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run drains independent frontier members serially, never in one bind."""
+    github = _RecordingGitHub()
+    _publish_two_afk_actions(github, monkeypatch, capsys)
+
+    first = _automation_result(github, monkeypatch, capsys)
+    assert len(first["frontier"]["actions"]) == 2
+    first_identity = first["authorization"]["action_identity"]
+
+    second = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        dispatched=[first_identity],
+    )
+    second_identity = second["authorization"]["action_identity"]
+    assert second_identity != first_identity
+
+    drained = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        dispatched=[first_identity, second_identity],
+    )
+    assert "authorization" not in drained
+    assert drained["stop"]["reason"] == "frontier-drained"
+
+
+def test_python_automation_reports_workstreams_terminal_as_the_only_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Only a verified terminal outcome over closed coverage completes a Run."""
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+    ]
+    request = _automation_request()
+    request["revision_protocol"] = True
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["frontier"]["actions"] == []
+    stop = automation["stop"]
+    assert stop["reason"] == "workstreams-terminal"
+    assert stop["disposition"] == "complete"
+    assert stop["nonterminal_status"] == "complete"
+    assert stop["outcomes"] == result["result"]["outcomes"]
+    assert automation["validators"] == result["result"]["observation"]["validators"]
+
+
+def _dispatch_result_request(
+    action: dict[str, Any],
+    *,
+    evidence_class: str = "safety-case-violation",
+    **overrides: Any,
+) -> dict[str, Any]:
+    dispatch: dict[str, Any] = {
+        "action_identity": action["identity"],
+        "semantic_fingerprint": action["semantic_fingerprint"],
+        "performer": "runner",
+        "carrier": _issue(237),
+        "class": evidence_class,
+        "summary": "The Instruction required a credential no grant covers.",
+        "evidence": [_issue(237)],
+    }
+    if evidence_class == "safety-case-violation":
+        dispatch["reason"] = "credential-required"
+    dispatch.update(overrides)
+    return {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "dispatch": dispatch,
+    }
+
+
+def test_python_record_dispatch_result_quarantines_a_safety_case_violation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Dispatch evidence is durable, non-Producer, and quarantines the Action."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    identity = before["authorization"]["action_identity"]
+    fingerprint = before["authorization"]["semantic_fingerprint"]
+
+    exit_code, receipt, stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {"identity": identity, "semantic_fingerprint": fingerprint}
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    assert receipt["ok"] is True
+    assert receipt["operation"] == "record-dispatch-result"
+    assert receipt["receipt"]["status"] == "committed"
+    assert receipt["receipt"]["class"] == "safety-case-violation"
+    assert receipt["receipt"]["action_identity"] == identity
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+    [entry] = after["eligibility"]
+    assert entry["reasons"] == ["quarantined"]
+    assert "authorization" not in after
+    assert after["stop"]["reason"] == "safety-case-violation"
+    assert after["stop"]["disposition"] == "attention-required"

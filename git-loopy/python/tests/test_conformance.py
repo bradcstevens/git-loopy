@@ -538,7 +538,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.4"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.5"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -574,6 +574,40 @@ def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:
     registered = _CONTINUATION_SCENARIOS["revision_protocol"]["diagnostic_codes"]
     assert set(registered) == continuation_module.RECONCILE_DIAGNOSTIC_CODES
     assert registered == sorted(registered)
+
+
+def test_continuation_fixture_pins_automation_vocabularies() -> None:
+    automation = _CONTINUATION_SCENARIOS["automation"]
+    assert (
+        automation["safety_case_contract_version"]
+        == continuation_module.SAFETY_CASE_CONTRACT_VERSION
+    )
+    assert set(automation["assumption_kinds"]) == continuation_module.ASSUMPTION_KINDS
+    assert set(automation["retry_kinds"]) == continuation_module.RETRY_KINDS
+    assert (
+        set(automation["ineligibility_reasons"])
+        == continuation_module.AUTOMATION_INELIGIBILITY_REASONS
+    )
+    assert (
+        set(automation["report_only_reasons"])
+        == continuation_module.AUTOMATION_REPORT_ONLY_REASONS
+    )
+    assert (
+        tuple(
+            (entry["reason"], entry["disposition"])
+            for entry in automation["stop_precedence"]
+        )
+        == continuation_module.AUTOMATION_STOP_PRECEDENCE
+    )
+    assert (
+        set(automation["dispatch_evidence_classes"])
+        == continuation_module.DISPATCH_EVIDENCE_CLASSES
+    )
+    assert (
+        automation["dispatch_evidence_marker"] == continuation_module._DISPATCH_MARKER
+    )
+    for group in ("assumption_kinds", "retry_kinds", "ineligibility_reasons"):
+        assert automation[group] == sorted(automation[group])
 
 
 def test_continuation_fixture_pins_completion_vocabularies() -> None:

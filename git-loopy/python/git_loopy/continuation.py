@@ -20,8 +20,9 @@ from git_loopy.gh import (
 )
 from git_loopy.release_version import read_runtime_release_version
 
-CONTINUATION_CONTRACT_VERSION = "1.1"
-SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1")
+CONTINUATION_CONTRACT_VERSION = "1.2"
+SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1", "1.2")
+SAFETY_CASE_CONTRACT_VERSION = "1.2"
 RECORD_FORMAT = 1
 WRAPPER_CONTRACT_VERSION = "1.4"
 EVENT_SCHEMA_VERSION = "1.1"
@@ -32,13 +33,20 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     "wrapper_contract_version": WRAPPER_CONTRACT_VERSION,
     "event_schema_version": EVENT_SCHEMA_VERSION,
     "tracker_adapters": {
-        "github": {"operations": ["publish", "reconcile", "repair-index"]}
+        "github": {
+            "operations": [
+                "publish",
+                "reconcile",
+                "record-dispatch-result",
+                "repair-index",
+            ]
+        }
     },
     "operations": {
         "capabilities": True,
         "publish": True,
         "reconcile": True,
-        "record-dispatch-result": False,
+        "record-dispatch-result": True,
         "repair-index": True,
     },
     "instruction_handlers": [],
@@ -49,6 +57,7 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
         "immutable_producer_revisions": True,
         "prospective_projection": True,
         "terminal_rendering": True,
+        "fixed_frontier_authorization": True,
         "concurrent_dispatch": False,
     },
     "continuation_modes": {
@@ -170,6 +179,7 @@ _COVERAGE_UNCERTAINTY_CODES = frozenset(
 RECONCILE_DIAGNOSTIC_CODES = frozenset(
     {
         "action_conflict",
+        "dispatch_evidence_quarantine",
         "handoff_action_unavailable",
         "handoff_context_unavailable",
         "index_label_missing",
@@ -325,6 +335,25 @@ _REQUIREMENT_KINDS = frozenset(
     {"access", "capability", "command", "evaluator", "policy", "skill"}
 )
 _TRIGGER_KINDS = HUMAN_BOUNDARY_REASONS
+# The typed safety assumptions an AFK safety case may declare. A Transition
+# owner states why unattended completion is safe; free prose would let a
+# Producer justify anything, so the vocabulary is closed and pinned by the
+# shared fixture.
+ASSUMPTION_KINDS = frozenset(
+    {
+        "bounded-effect-scope",
+        "durable-inputs-fixed",
+        "no-human-decision",
+        "noninteractive-environment",
+        "objective-completion",
+        "stable-external-state",
+    }
+)
+# How a Performer may repeat the Instruction after a failed attempt.
+# `at-most-once` is the honest answer for an effect that cannot be replayed;
+# it is what makes uncertain effect state a recordable Dispatch-evidence class
+# rather than an ordinary retry.
+RETRY_KINDS = frozenset({"at-most-once", "idempotent", "resumable"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _WRITE_PERMISSIONS = frozenset({"ADMIN", "MAINTAIN", "WRITE"})
@@ -976,6 +1005,83 @@ def _triggers(
     return result, local_references
 
 
+def _safety_case(
+    value: Any,
+    name: str,
+    *,
+    repository: str,
+    action: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Structurally validate one positive versioned AFK safety case.
+
+    The safety case is the Transition owner's evidence-backed argument that
+    every permitted completion path of *this* Action occurrence is unattended.
+    It is therefore bound to the Action it justifies: the exact Instruction
+    variant, the exact Target, and the exact objective completion condition
+    must be restated here, so a later Instruction or Target change invalidates
+    the argument instead of silently inheriting it.
+    """
+    entry = _object(value, name)
+    _fields(
+        entry,
+        name,
+        required=frozenset(
+            {
+                "version",
+                "instruction",
+                "target",
+                "completion_condition",
+                "effects",
+                "assumptions",
+                "requirements",
+                "retry",
+                "triggers",
+            }
+        ),
+        optional=frozenset({"advisory_extensions"}),
+    )
+    _string(entry.get("version"), f"{name}.version")
+    for field in ("instruction", "target", "completion_condition"):
+        if entry.get(field) != action.get(field):
+            raise ContinuationError(
+                f"{name}.{field} must match the Action it justifies"
+            )
+    _typed_semantics(
+        entry.get("effects"),
+        f"{name}.effects",
+        kinds=_EFFECT_KINDS,
+        second_field="scope",
+    )
+    _typed_semantics(
+        entry.get("assumptions"),
+        f"{name}.assumptions",
+        kinds=ASSUMPTION_KINDS,
+        second_field="statement",
+    )
+    _typed_semantics(
+        entry.get("requirements"),
+        f"{name}.requirements",
+        kinds=_REQUIREMENT_KINDS,
+        second_field="name",
+    )
+    retry_name = f"{name}.retry"
+    retry = _object(entry.get("retry"), retry_name)
+    _fields(
+        retry,
+        retry_name,
+        required=frozenset({"kind"}),
+        optional=frozenset({"advisory_extensions"}),
+    )
+    if retry.get("kind") not in RETRY_KINDS:
+        raise ContinuationError(f"{retry_name}.kind is unsupported")
+    _validated_triggers, local_references = _triggers(
+        entry.get("triggers"),
+        f"{name}.triggers",
+        repository=repository,
+    )
+    return entry, local_references
+
+
 def _validate_retirement(
     value: Any,
     name: str,
@@ -1179,6 +1285,7 @@ def _validate_action(
     *,
     repository: str,
     transition_owner: str,
+    contract_version: str,
 ) -> tuple[dict[str, Any], list[str]]:
     action = _object(value, "completion.actions item")
     _fields(
@@ -1203,6 +1310,7 @@ def _validate_action(
                 "context_references",
                 "effects",
                 "requirements",
+                "safety_case",
                 "triggers",
                 "advisory_extensions",
             }
@@ -1315,6 +1423,26 @@ def _validate_action(
         repository=repository,
     )
     local_references.extend(trigger_local_references)
+    if "safety_case" in action:
+        if contract_version != SAFETY_CASE_CONTRACT_VERSION:
+            raise ContinuationError(
+                "a safety case requires Continuation contract version "
+                f"{SAFETY_CASE_CONTRACT_VERSION}"
+            )
+        if classification != "AFK-safe":
+            raise ContinuationError("only AFK-safe Actions may carry a safety case")
+        for field in ("effects", "requirements", "triggers"):
+            if field in action:
+                raise ContinuationError(
+                    f"completion.actions item.safety_case owns {field}; declare it once"
+                )
+        _validated_case, case_local_references = _safety_case(
+            action["safety_case"],
+            "completion.actions item.safety_case",
+            repository=repository,
+            action=action,
+        )
+        local_references.extend(case_local_references)
     return action, local_references
 
 
@@ -1480,6 +1608,7 @@ def _validate_completion(
                 item,
                 repository=repository,
                 transition_owner=transition_owner,
+                contract_version=str(completion.get("continuation_contract_version")),
             )
             key = str(action["key"])
             if key in keys:
@@ -2726,12 +2855,654 @@ def _derive_actions(
             # Only surface unsatisfied prerequisites for Blocked Actions,
             # preserving the exact existing Ready-only command framing.
             item["unsatisfied_prerequisites"] = canonical["unsatisfied"]
+        if "safety_case" in action:
+            # The positive AFK safety case is Action semantics a Consumer must
+            # be able to read; it is what an authorization is bound to.
+            item["safety_case"] = action["safety_case"]
         actions.append(item)
     actions.sort(key=_continuation_view_order_key)
     for item in actions:
         del item["_topological_layer"]
         del item["_local_order_index"]
     return actions, diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization
+#
+# Reconciliation derives what is true. This section decides, for one Performer
+# and one frozen Run boundary, which of those Actions that Performer could be
+# authorized to perform unattended -- and, when none can be, says exactly why.
+# It never performs an Action, and it never widens anything: every rule here
+# can only remove an Action from consideration.
+# ---------------------------------------------------------------------------
+
+# Typed reasons one in-coverage Action is not Automation-selectable. A Run may
+# read these; it may never invent one, and a missing reason is never a pass.
+AUTOMATION_INELIGIBILITY_REASONS = frozenset(
+    {
+        "already-dispatched",
+        "grant-missing",
+        "human-boundary",
+        "not-ready",
+        "outside-coverage",
+        "outside-frontier",
+        "performer-ineligible",
+        "quarantined",
+        "safety-case-absent",
+    }
+)
+# The locked Automation stop precedence, strongest first. Exactly one stop is
+# returned and the first matching reason wins, so a Run that is both blocked on
+# a human boundary and waiting on a Prerequisite reports the human boundary --
+# the thing a person can act on -- rather than the more numerous barrier.
+AUTOMATION_STOP_PRECEDENCE: tuple[tuple[str, str], ...] = (
+    ("workstreams-terminal", "complete"),
+    ("safety-case-violation", "attention-required"),
+    ("uncertain-effect-state", "attention-required"),
+    ("guidance-fault", "attention-required"),
+    ("human-boundary", "expected-boundary"),
+    ("grant-missing", "expected-boundary"),
+    ("performer-ineligible", "expected-boundary"),
+    ("frontier-drained", "expected-boundary"),
+    ("awaiting-prerequisites", "expected-boundary"),
+)
+# Why a current Action is visible to the Run but never selectable by it: its
+# semantics moved after the freeze, or the freeze never saw it at all.
+AUTOMATION_REPORT_ONLY_REASONS = frozenset({"changed-semantics", "newly-produced"})
+AUTOMATION_STOP_REASONS = frozenset(entry[0] for entry in AUTOMATION_STOP_PRECEDENCE)
+AUTOMATION_STOP_DISPOSITIONS = frozenset(
+    entry[1] for entry in AUTOMATION_STOP_PRECEDENCE
+)
+# Which ineligibility reason raises which stop. Reasons absent from this map
+# describe an Action the Run was never entitled to consider (report-only,
+# out of coverage, already dispatched) and so cannot themselves stop a Run.
+_INELIGIBILITY_STOP_REASONS = {
+    "human-boundary": "human-boundary",
+    "grant-missing": "grant-missing",
+    "performer-ineligible": "performer-ineligible",
+    "not-ready": "awaiting-prerequisites",
+    "quarantined": "safety-case-violation",
+    # An AFK-safe claim with no safety case behind it is a defect in the
+    # guidance, not a property of the Performer or the Run's authority.
+    "safety-case-absent": "guidance-fault",
+}
+
+
+def _scope_entries(value: Any, name: str) -> list[dict[str, str]]:
+    """Validate one typed effect-scope list and return it deduplicated."""
+    entries = _typed_semantics(value, name, kinds=_EFFECT_KINDS, second_field="scope")
+    return [{"kind": entry["kind"], "scope": entry["scope"]} for entry in entries]
+
+
+def _requirement_entries(value: Any, name: str) -> list[dict[str, str]]:
+    entries = _typed_semantics(
+        value, name, kinds=_REQUIREMENT_KINDS, second_field="name"
+    )
+    return [{"kind": entry["kind"], "name": entry["name"]} for entry in entries]
+
+
+def _sorted_pairs(entries: list[dict[str, str]], second: str) -> list[dict[str, str]]:
+    unique = {(entry["kind"], entry[second]) for entry in entries}
+    return [{"kind": kind, second: value} for kind, value in sorted(unique)]
+
+
+def _validate_automation(value: Any, name: str) -> dict[str, Any]:
+    """Validate the caller's Automation scope, posture, and frozen frontier."""
+    automation = _object(value, name)
+    _fields(
+        automation,
+        name,
+        required=frozenset({"performer", "scope"}),
+        optional=frozenset({"frontier", "dispatched"}),
+    )
+
+    performer_name = f"{name}.performer"
+    performer = _object(automation.get("performer"), performer_name)
+    _fields(
+        performer,
+        performer_name,
+        required=frozenset({"id", "posture"}),
+        optional=frozenset(),
+    )
+    performer_id = _string(performer.get("id"), f"{performer_name}.id")
+    posture_name = f"{performer_name}.posture"
+    posture = _object(performer.get("posture"), posture_name)
+    _fields(
+        posture,
+        posture_name,
+        required=frozenset({"noninteractive", "satisfied_requirements"}),
+        optional=frozenset(),
+    )
+    if posture.get("noninteractive") is not True:
+        raise ContinuationError(f"{posture_name}.noninteractive must be true")
+    satisfied = _requirement_entries(
+        posture.get("satisfied_requirements"),
+        f"{posture_name}.satisfied_requirements",
+    )
+
+    scope_name = f"{name}.scope"
+    scope = _object(automation.get("scope"), scope_name)
+    _fields(
+        scope,
+        scope_name,
+        required=frozenset({"ceilings", "revocations"}),
+        optional=frozenset(),
+    )
+    ceilings = _array(scope.get("ceilings"), f"{scope_name}.ceilings", nonempty=True)
+    sources: set[str] = set()
+    repositories: set[str] | None = None
+    granted: set[tuple[str, str]] | None = None
+    denied: set[tuple[str, str]] = set()
+    for index, item in enumerate(ceilings):
+        ceiling_name = f"{scope_name}.ceilings[{index}]"
+        ceiling = _object(item, ceiling_name)
+        _fields(
+            ceiling,
+            ceiling_name,
+            required=frozenset({"source", "coverage", "grants", "denials"}),
+            optional=frozenset(),
+        )
+        source = _string(ceiling.get("source"), f"{ceiling_name}.source")
+        if source not in {"global", "project"}:
+            raise ContinuationError(f"{ceiling_name}.source is unsupported")
+        if source in sources:
+            raise ContinuationError(f"{ceiling_name}.source is declared twice")
+        sources.add(source)
+        coverage_name = f"{ceiling_name}.coverage"
+        coverage = _object(ceiling.get("coverage"), coverage_name)
+        _fields(
+            coverage,
+            coverage_name,
+            required=frozenset({"repositories"}),
+            optional=frozenset(),
+        )
+        ceiling_repositories = {
+            _string(entry, f"{coverage_name}.repositories item")
+            for entry in _array(
+                coverage.get("repositories"),
+                f"{coverage_name}.repositories",
+                nonempty=True,
+            )
+        }
+        # Ceilings intersect: a Run observes only what every ceiling admits.
+        repositories = (
+            ceiling_repositories
+            if repositories is None
+            else repositories & ceiling_repositories
+        )
+        ceiling_grants = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(ceiling.get("grants"), f"{ceiling_name}.grants")
+        }
+        granted = ceiling_grants if granted is None else granted & ceiling_grants
+        # Denials accumulate: one ceiling's refusal is the Run's refusal.
+        denied |= {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(
+                ceiling.get("denials"), f"{ceiling_name}.denials"
+            )
+        }
+    revocations = {
+        (entry["kind"], entry["scope"])
+        for entry in _scope_entries(
+            scope.get("revocations"), f"{scope_name}.revocations"
+        )
+    }
+    # A revocation observed during the Run narrows immediately and is
+    # indistinguishable from a denial thereafter.
+    denied |= revocations
+    effective_grants = (granted or set()) - denied
+
+    frontier: list[dict[str, str]] | None = None
+    if "frontier" in automation:
+        frontier_name = f"{name}.frontier"
+        declared = _object(automation["frontier"], frontier_name)
+        _fields(
+            declared,
+            frontier_name,
+            required=frozenset({"actions"}),
+            optional=frozenset(),
+        )
+        frontier = _validate_previous_actions(
+            declared.get("actions"), f"{frontier_name}.actions"
+        )
+
+    dispatched = [
+        _string(entry, f"{name}.dispatched item")
+        for entry in _array(automation.get("dispatched", []), f"{name}.dispatched")
+    ]
+
+    return {
+        "performer_id": performer_id,
+        "satisfied_requirements": {
+            (entry["kind"], entry["name"]) for entry in satisfied
+        },
+        "repositories": repositories or set(),
+        "grants": effective_grants,
+        "denials": denied,
+        "frontier": frontier,
+        "dispatched": set(dispatched),
+    }
+
+
+def _action_repositories(action: dict[str, Any]) -> set[str]:
+    return {
+        str(reference["repository"])
+        for reference in (action["workstream_anchor"], action["target"])
+        if isinstance(reference, dict) and "repository" in reference
+    }
+
+
+def _automation_ineligibility(
+    action: dict[str, Any],
+    *,
+    automation: dict[str, Any],
+    frontier: dict[str, str],
+    quarantined: set[str],
+) -> list[str]:
+    """Every typed reason this Action is not Automation-selectable."""
+    reasons: set[str] = set()
+    identity = action["identity"]
+    if not _action_repositories(action) <= automation["repositories"]:
+        reasons.add("outside-coverage")
+    frozen_fingerprint = frontier.get(identity)
+    if frozen_fingerprint != action["semantic_fingerprint"]:
+        reasons.add("outside-frontier")
+    if identity in automation["dispatched"]:
+        reasons.add("already-dispatched")
+    if identity in quarantined:
+        reasons.add("quarantined")
+    if action["interaction"]["classification"] != "AFK-safe":
+        reasons.add("human-boundary")
+    if action["readiness"] != "Ready":
+        reasons.add("not-ready")
+    safety_case = action.get("safety_case")
+    if safety_case is None:
+        # An AFK-safe classification without its positive safety case is an
+        # assertion, not an argument. Absence is never upgraded to eligibility.
+        if "human-boundary" not in reasons:
+            reasons.add("safety-case-absent")
+    else:
+        effects = {(entry["kind"], entry["scope"]) for entry in safety_case["effects"]}
+        if not effects <= automation["grants"]:
+            reasons.add("grant-missing")
+        requirements = {
+            (entry["kind"], entry["name"]) for entry in safety_case["requirements"]
+        }
+        if not requirements <= automation["satisfied_requirements"]:
+            reasons.add("performer-ineligible")
+    return sorted(reasons)
+
+
+def _automation_projection(
+    request: dict[str, Any],
+    *,
+    actions: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+    status: str,
+    validators: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project one Performer's authorization decision over a frozen frontier."""
+    automation = _validate_automation(request["automation"], "automation")
+
+    # The frontier freezes at the first stable Reconciliation of the Run and is
+    # replayed by the caller thereafter. Every in-coverage identity is frozen,
+    # including Blocked, HITL-required, ineligible, and quarantined members --
+    # otherwise a member that later became Ready would look like a newcomer.
+    if automation["frontier"] is None:
+        frozen = [
+            {
+                "identity": action["identity"],
+                "semantic_fingerprint": action["semantic_fingerprint"],
+            }
+            for action in actions
+            if _action_repositories(action) <= automation["repositories"]
+        ]
+    else:
+        frozen = automation["frontier"]
+    frontier_index = {
+        entry["identity"]: entry["semantic_fingerprint"] for entry in frozen
+    }
+
+    quarantined = {
+        str(identity)
+        for diagnostic in diagnostics
+        if diagnostic.get("code") == "dispatch_evidence_quarantine"
+        for identity in diagnostic.get("identities", [])
+    }
+    # A conflicted or unverifiable fragment never reaches ``actions`` at all,
+    # so a guidance fault is observed from the diagnostics rather than from any
+    # one Action. It must still stop the Run: the frontier it froze is not a
+    # trustworthy description of the project.
+    guidance_fault = any(
+        diagnostic.get("code") in _COVERAGE_UNCERTAINTY_CODES
+        or diagnostic.get("code") in {"action_conflict", "prerequisite_cycle"}
+        for diagnostic in diagnostics
+    )
+
+    eligibility: list[dict[str, Any]] = []
+    report_only: list[dict[str, Any]] = []
+    selected: dict[str, Any] | None = None
+    for action in actions:
+        reasons = _automation_ineligibility(
+            action,
+            automation=automation,
+            frontier=frontier_index,
+            quarantined=quarantined,
+        )
+        entry: dict[str, Any] = {
+            "identity": action["identity"],
+            "semantic_fingerprint": action["semantic_fingerprint"],
+            "automation_selectable": not reasons,
+        }
+        if reasons:
+            entry["reasons"] = reasons
+        eligibility.append(entry)
+        if "outside-frontier" in reasons:
+            report_only.append(
+                {
+                    "identity": action["identity"],
+                    "semantic_fingerprint": action["semantic_fingerprint"],
+                    "reason": (
+                        "changed-semantics"
+                        if action["identity"] in frontier_index
+                        else "newly-produced"
+                    ),
+                }
+            )
+        if not reasons and selected is None:
+            selected = action
+
+    projection: dict[str, Any] = {
+        "performer": automation["performer_id"],
+        "scope": {
+            "coverage": {"repositories": sorted(automation["repositories"])},
+            "grants": _sorted_pairs(
+                [
+                    {"kind": kind, "scope": scope}
+                    for kind, scope in automation["grants"]
+                ],
+                "scope",
+            ),
+            "denials": _sorted_pairs(
+                [
+                    {"kind": kind, "scope": scope}
+                    for kind, scope in automation["denials"]
+                ],
+                "scope",
+            ),
+            "frozen": True,
+        },
+        "frontier": {"actions": frozen},
+        "validators": validators,
+        "eligibility": eligibility,
+        "report_only": report_only,
+    }
+
+    if selected is not None:
+        safety_case = selected["safety_case"]
+        projection["authorization"] = {
+            "action_identity": selected["identity"],
+            "semantic_fingerprint": selected["semantic_fingerprint"],
+            "performer": automation["performer_id"],
+            "workstream_anchor": selected["workstream_anchor"],
+            "target": selected["target"],
+            "safety_case_version": safety_case["version"],
+            "completion_condition": selected["completion_condition"],
+            "effects": _sorted_pairs(safety_case["effects"], "scope"),
+            "requirements": _sorted_pairs(safety_case["requirements"], "name"),
+            "retry": safety_case["retry"],
+            "triggers": safety_case["triggers"],
+        }
+        return projection
+
+    projection["stop"] = _automation_stop(
+        actions=actions,
+        eligibility=eligibility,
+        report_only=report_only,
+        outcomes=outcomes,
+        status=status,
+        frontier=frozen,
+        guidance_fault=guidance_fault,
+    )
+    return projection
+
+
+def _automation_stop(
+    *,
+    actions: list[dict[str, Any]],
+    eligibility: list[dict[str, Any]],
+    report_only: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    status: str,
+    frontier: list[dict[str, str]],
+    guidance_fault: bool,
+) -> dict[str, Any]:
+    """Explain, once and in typed terms, why nothing further can be selected."""
+    observed: set[str] = set()
+    for entry in eligibility:
+        for reason in entry.get("reasons", []):
+            mapped = _INELIGIBILITY_STOP_REASONS.get(reason)
+            if mapped is not None:
+                observed.add(mapped)
+    if guidance_fault:
+        observed.add("guidance-fault")
+    if status == "complete":
+        observed.add("workstreams-terminal")
+    if not frontier:
+        observed.add("frontier-drained")
+
+    reason = "frontier-drained"
+    disposition = "expected-boundary"
+    for candidate, candidate_disposition in AUTOMATION_STOP_PRECEDENCE:
+        if candidate in observed:
+            reason = candidate
+            disposition = candidate_disposition
+            break
+
+    decisive = [
+        entry
+        for entry in eligibility
+        if _INELIGIBILITY_STOP_REASONS.get(
+            next(
+                (
+                    item
+                    for item in entry.get("reasons", [])
+                    if _INELIGIBILITY_STOP_REASONS.get(item) == reason
+                ),
+                "",
+            )
+        )
+        == reason
+    ]
+    decisive_identities = {entry["identity"] for entry in decisive}
+    index = {action["identity"]: action for action in actions}
+    next_step: dict[str, Any] | None = None
+    if decisive:
+        primary = index.get(decisive[0]["identity"])
+        if primary is not None:
+            next_step = {
+                "kind": "action",
+                "identity": primary["identity"],
+                "summary": primary["summary"],
+                "readiness": primary["readiness"],
+            }
+            if primary.get("unsatisfied_prerequisites"):
+                next_step["condition"] = primary["unsatisfied_prerequisites"][0]
+
+    return {
+        "disposition": disposition,
+        "reason": reason,
+        "nonterminal_status": status,
+        **({"next": next_step} if next_step is not None else {}),
+        "evidence": [
+            index[identity]["target"]
+            for identity in sorted(decisive_identities)
+            if identity in index
+        ],
+        "secondary_barriers": [
+            {"identity": entry["identity"], "reasons": entry["reasons"]}
+            for entry in eligibility
+            if entry.get("reasons") and entry["identity"] not in decisive_identities
+        ],
+        "report_only_successors": report_only,
+        "outcomes": outcomes,
+        "successor_executed": False,
+        "statement": "No successor Action was executed by this Reconciliation.",
+    }
+
+
+DISPATCH_EVIDENCE_CLASSES = frozenset(
+    {"safety-case-violation", "uncertain-effect-state"}
+)
+_DISPATCH_MARKER = "<!-- git-loopy-continuation-dispatch:1 -->"
+
+
+def _dispatch_evidence_body(record: dict[str, Any]) -> str:
+    return f"{_DISPATCH_MARKER}\n```json\n{_canonical_json(record)}\n```"
+
+
+def _parse_dispatch_evidence(comment: ContinuationComment) -> dict[str, Any] | None:
+    """Read one durable Dispatch-evidence record, or ``None``.
+
+    Dispatch evidence is deliberately *not* a Producer revision: it carries no
+    lineage, creates and retires nothing, and is read only to quarantine.
+    """
+    if _DISPATCH_MARKER not in comment.body:
+        return None
+    _marker, _, remainder = comment.body.partition(_DISPATCH_MARKER)
+    _before, _, fenced = remainder.partition("```json\n")
+    body, _, _after = fenced.partition("\n```")
+    try:
+        record = json.loads(
+            body, object_pairs_hook=_unique_object, parse_float=_reject_float
+        )
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("class") not in DISPATCH_EVIDENCE_CLASSES:
+        return None
+    identity = record.get("action_identity")
+    if not isinstance(identity, str):
+        return None
+    return record
+
+
+def _validate_dispatch(value: Any, name: str, *, repository: str) -> dict[str, Any]:
+    """Validate one exceptional Dispatch-evidence record before it is written.
+
+    Only two classes exist, and neither carries an Instruction: ordinary
+    success and ordinary execution failure stay in the Runner's existing
+    artifacts, Events, retry, and Strike paths. The record's shape is what
+    keeps a runnable Instruction or a secret out of a durable comment -- there
+    is no field to put one in.
+    """
+    dispatch = _object(value, name)
+    _fields(
+        dispatch,
+        name,
+        required=frozenset(
+            {
+                "action_identity",
+                "semantic_fingerprint",
+                "performer",
+                "carrier",
+                "class",
+                "summary",
+                "evidence",
+            }
+        ),
+        optional=frozenset({"reason"}),
+    )
+    for field in ("action_identity", "semantic_fingerprint"):
+        digest = _string(dispatch.get(field), f"{name}.{field}")
+        if not _DIGEST_RE.fullmatch(digest):
+            raise ContinuationError(f"{name}.{field} must be a sha256 digest")
+    _string(dispatch.get("performer"), f"{name}.performer")
+    summary = _string(dispatch.get("summary"), f"{name}.summary")
+    if "\n" in summary or "\r" in summary:
+        raise ContinuationError(f"{name}.summary must be one line")
+    evidence_class = _string(dispatch.get("class"), f"{name}.class")
+    if evidence_class not in DISPATCH_EVIDENCE_CLASSES:
+        raise ContinuationError(f"{name}.class is unsupported")
+    if evidence_class == "safety-case-violation":
+        reason = _string(dispatch.get("reason"), f"{name}.reason")
+        if reason not in HUMAN_BOUNDARY_REASONS:
+            raise ContinuationError(f"{name}.reason is unsupported")
+    elif "reason" in dispatch:
+        raise ContinuationError(
+            f"{name}.reason belongs only to a safety-case-violation"
+        )
+    carrier = _issue_locator(dispatch.get("carrier"), f"{name}.carrier", repository)
+    for index, item in enumerate(
+        _array(dispatch.get("evidence"), f"{name}.evidence", nonempty=True)
+    ):
+        _durable_reference(item, f"{name}.evidence[{index}]", repository)
+    return {"dispatch": dispatch, "carrier": carrier}
+
+
+def _dispatch_evidence_diagnostics(
+    evidence: list[tuple[int, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Quarantine the smallest justified scope named by Dispatch evidence.
+
+    The record is immutable and non-Producer: it never retires the Action or
+    creates a replacement. Only the Transition owner can do that, so until it
+    does, the named semantics stay visible and stay unselectable.
+    """
+    return [
+        {
+            "code": "dispatch_evidence_quarantine",
+            "comment_id": comment_id,
+            "class": record["class"],
+            "identities": [record["action_identity"]],
+        }
+        for comment_id, record in sorted(evidence, key=lambda entry: entry[0])
+    ]
+
+
+def _record_dispatch_result(
+    request: dict[str, Any],
+    github: ContinuationGitHubClient,
+) -> dict[str, Any]:
+    _fields(
+        request,
+        "request",
+        required=frozenset({"repository", "trusted_producers", "dispatch"}),
+        optional=frozenset({"trusted_apps"}),
+    )
+    repository = _repository(request)
+    _trusted_producers(request)
+    _trusted_apps(request)
+    validated = _validate_dispatch(
+        request["dispatch"], "dispatch", repository=repository
+    )
+    dispatch = validated["dispatch"]
+    carrier = validated["carrier"]
+    record = {key: value for key, value in sorted(dispatch.items())}
+    _portable_json(record, name="Dispatch evidence")
+    evidence_id = _digest(record)
+    committed = github.append_issue_comment(
+        repository,
+        carrier["number"],
+        _dispatch_evidence_body(record),
+    )
+    return {
+        "ok": True,
+        "operation": "record-dispatch-result",
+        "receipt": {
+            "status": "committed",
+            "dispatch_evidence_id": evidence_id,
+            "class": record["class"],
+            "action_identity": record["action_identity"],
+            "semantic_fingerprint": record["semantic_fingerprint"],
+            "carrier": carrier,
+            "comment": {"id": committed.id, "url": committed.url},
+        },
+    }
 
 
 def _reconcile_revision_protocol(
@@ -2746,6 +3517,7 @@ def _reconcile_revision_protocol(
     diagnostics: list[dict[str, Any]] = []
     entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]] = []
     carriers_with_records: set[int] = set()
+    dispatch_evidence: list[tuple[int, dict[str, Any]]] = []
     carriers_with_trusted_markers: set[int] = set()
 
     for carrier in carriers:
@@ -2783,6 +3555,10 @@ def _reconcile_revision_protocol(
                         "comment_id": comment.id,
                     }
                 )
+                continue
+            evidence = _parse_dispatch_evidence(comment)
+            if evidence is not None:
+                dispatch_evidence.append((comment.id, evidence))
                 continue
             try:
                 record = _parse_record(comment)
@@ -2940,6 +3716,7 @@ def _reconcile_revision_protocol(
         guidance_entries, github=github, repository=repository
     )
     diagnostics.extend(action_diagnostics)
+    diagnostics.extend(_dispatch_evidence_diagnostics(dispatch_evidence))
     outcomes = _workstream_outcomes(guidance_entries)
     # A complete all-state read establishes closed coverage only when every
     # discovered lineage remains trustworthy. A malformed, incomplete, or
@@ -2985,31 +3762,41 @@ def _reconcile_revision_protocol(
         "heads": heads,
         "validators": validators,
     }
+    result = {
+        "status": status,
+        "observed": {
+            "repository": repository,
+            "indexed_carriers": len(indexed_numbers),
+            "producer_revisions": len(entries),
+        },
+        "actions": actions,
+        **({"outcomes": outcomes} if outcomes else {}),
+        # Always present, so absence never carries meaning. Here the list
+        # is the projection's own answer: empty means nothing was retired
+        # by this refresh. The label-indexed path emits the same key with
+        # a gating diagnostic that marks it as uncomputed instead.
+        "retirements": retirements,
+        **({"delta": delta} if delta is not None else {}),
+        "diagnostics": diagnostics,
+        "observation": {
+            "heads": heads,
+            "token": "sha256:" + _digest(observation_source),
+            "validators": validators,
+        },
+    }
+    if "automation" in request:
+        result["automation"] = _automation_projection(
+            request,
+            actions=actions,
+            outcomes=outcomes,
+            diagnostics=diagnostics,
+            status=status,
+            validators=validators,
+        )
     return {
         "ok": True,
         "operation": "reconcile",
-        "result": {
-            "status": status,
-            "observed": {
-                "repository": repository,
-                "indexed_carriers": len(indexed_numbers),
-                "producer_revisions": len(entries),
-            },
-            "actions": actions,
-            **({"outcomes": outcomes} if outcomes else {}),
-            # Always present, so absence never carries meaning. Here the list
-            # is the projection's own answer: empty means nothing was retired
-            # by this refresh. The label-indexed path emits the same key with
-            # a gating diagnostic that marks it as uncomputed instead.
-            "retirements": retirements,
-            **({"delta": delta} if delta is not None else {}),
-            "diagnostics": diagnostics,
-            "observation": {
-                "heads": heads,
-                "token": "sha256:" + _digest(observation_source),
-                "validators": validators,
-            },
-        },
+        "result": result,
     }
 
 
@@ -3221,9 +4008,14 @@ def _reconcile(
     guidance_entries: list[
         tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
     ] = []
+    dispatch_evidence: list[tuple[int, dict[str, Any]]] = []
     for carrier in carriers:
         for comment in carrier.comments:
             if comment.author not in trusted:
+                continue
+            evidence = _parse_dispatch_evidence(comment)
+            if evidence is not None:
+                dispatch_evidence.append((comment.id, evidence))
                 continue
             record = _parse_record(comment)
             if record is None:
@@ -3247,6 +4039,7 @@ def _reconcile(
         guidance_entries, github=github, repository=repository
     )
     diagnostics.extend(action_diagnostics)
+    diagnostics.extend(_dispatch_evidence_diagnostics(dispatch_evidence))
     outcomes = _workstream_outcomes(guidance_entries)
     # Label-indexed discovery is not a complete, paginated all-state read, so
     # it never has closed coverage and must never claim project-wide
@@ -3297,6 +4090,23 @@ def _reconcile(
         **({"delta": delta} if delta is not None else {}),
         "diagnostics": diagnostics,
     }
+    if "automation" in request:
+        result["automation"] = _automation_projection(
+            request,
+            actions=actions,
+            outcomes=outcomes,
+            diagnostics=diagnostics,
+            status=status,
+            validators=[
+                {
+                    "comment_id": comment.id,
+                    "sha256": hashlib.sha256(comment.body.encode("utf-8")).hexdigest(),
+                }
+                for _carrier, comment, _record in sorted(
+                    guidance_entries, key=lambda entry: entry[1].id
+                )
+            ],
+        )
     return {
         "ok": True,
         "operation": "reconcile",
@@ -3565,6 +4375,8 @@ def run_command(
             result = _publish(request, _make_github_client())
         elif operation == "reconcile":
             result = _reconcile(request, _make_github_client())
+        elif operation == "record-dispatch-result":
+            result = _record_dispatch_result(request, _make_github_client())
         elif operation == "repair-index":
             result = _repair_index(request, _make_github_client())
         else:
