@@ -57,6 +57,17 @@ GIT_LOOPY_RUN_ID=""
 GIT_LOOPY_STARTED_AT=""
 GIT_LOOPY_REPLAY_PATH=""
 
+# Where a serialized Event goes *live*. The replay log is written unconditionally
+# and first, so it stays the authoritative record no matter what the live
+# destination does; this indirection only decides who else sees the same bytes.
+# `lib/tui.sh` points it at the TUI helper's stdin for an interactive Run and
+# points it back here — permanently — the moment that child stops reading.
+GIT_LOOPY_LIVE_SINK="git_loopy_live_sink_stdout"
+
+git_loopy_live_sink_stdout() {
+  printf '%s\n' "$1"
+}
+
 _GIT_LOOPY_CROCKFORD_ALPHABET="0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _GIT_LOOPY_RUN_ID_PATTERN='^[0-9A-HJKMNP-TV-Z]{26}$'
 _GIT_LOOPY_TIMESTAMP_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$'
@@ -300,5 +311,5 @@ git_loopy_emit_event() {
 
   mkdir -p "$(dirname "$GIT_LOOPY_REPLAY_PATH")" || return 1
   printf '%s\n' "$line" >>"$GIT_LOOPY_REPLAY_PATH" || return 1
-  printf '%s\n' "$line"
+  "$GIT_LOOPY_LIVE_SINK" "$line"
 }

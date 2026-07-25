@@ -1811,4 +1811,109 @@ jq -se '
   ' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON" >/dev/null
 ) || fail "wall-clock adjustment changed monotonic shell lifecycle durations"
 
+# The shared TUI helper (PRD #173). Every case below drives the real entrypoint
+# against a fake `git-loopy-tui` that records what it was asked to do, so
+# discovery, the compatibility probe, transport, mid-Run failure, and teardown
+# are observed at the process boundary rather than asserted about in-process.
+#
+# `FAKE_TUI_STDIN` is what the child actually received; the replay log is what
+# the Run recorded. The two must agree, because the contract's "serialize once"
+# rule means the live destination and the replay log are the same bytes.
+write_fake_tui() {
+  local path="$1"
+  local label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat >"$path" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+label="$label"
+EOF
+  cat >>"$path" <<'EOF'
+if [[ "${1:-}" == "--schema-version" ]]; then
+  version="${FAKE_TUI_VERSION:-0.0.0}"
+  minimum="${FAKE_TUI_MIN_SCHEMA:-1}"
+  maximum="${FAKE_TUI_MAX_SCHEMA:-1}"
+  if [[ -n "${FAKE_TUI_PROBE:-}" ]]; then
+    printf '%s\n' "$FAKE_TUI_PROBE"
+  else
+    printf '{"name": "git-loopy-tui", "version": "%s", ' "$version"
+    printf '"min_event_schema_version": %s, ' "$minimum"
+    printf '"max_event_schema_version": %s, ' "$maximum"
+    printf '"wrapper_contract_version": "1.0"}\n'
+  fi
+  exit "${FAKE_TUI_PROBE_STATUS:-0}"
+fi
+printf '%s\n' "$label" >>"$FAKE_TUI_STARTED"
+delivered=0
+while IFS= read -r line; do
+  delivered=$((delivered + 1))
+  printf '%s\n' "$line" >>"$FAKE_TUI_STDIN"
+  if [[ -n "${FAKE_TUI_EXIT_AFTER:-}" ]] && ((delivered >= FAKE_TUI_EXIT_AFTER)); then
+    exit "${FAKE_TUI_EXIT_CODE:-0}"
+  fi
+done
+if [[ -n "${FAKE_TUI_LINGER_SECONDS:-}" ]]; then
+  sleep "$FAKE_TUI_LINGER_SECONDS"
+fi
+exit 0
+EOF
+  chmod +x "$path"
+}
+
+setup_tui_env() {
+  local prefix="$1"
+  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started"
+  export FAKE_TUI_STDIN="$temp_dir/$prefix-tui.stdin"
+  export FAKE_TUI_STARTED="$temp_dir/$prefix-tui.started"
+  # A clone-local helper is an artifact of this distribution, so contract §16
+  # requires exact Release-version equality; the default fake is a well-installed
+  # one and a case that wants drift says so explicitly.
+  export FAKE_TUI_VERSION="$expected_release_version"
+  unset FAKE_TUI_PROBE FAKE_TUI_PROBE_STATUS FAKE_TUI_EXIT_AFTER \
+    FAKE_TUI_EXIT_CODE FAKE_TUI_LINGER_SECONDS
+  export FAKE_TUI_MIN_SCHEMA=1
+  export FAKE_TUI_MAX_SCHEMA=1
+}
+
+replay_log_for() {
+  local repo="$1"
+  local log
+  log="$(find "$repo/.git-loopy/logs" -name '*.jsonl' -print -quit 2>/dev/null)"
+  [[ -n "$log" ]] || fail "no replay log under $repo"
+  printf '%s\n' "$log"
+}
+
+# The whole interactive path in one case: the clone-local helper is discovered,
+# probed, started, and fed. Because the live destination *is* the child, stdout
+# carries no Event stream at all — and the replay log still holds every byte.
+tui_repo="$temp_dir/tui-delivery"
+tui_bin="$temp_dir/tui-delivery-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "delivery"
+export FAKE_GH_LOG="$temp_dir/tui-delivery-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-delivery-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-delivery.stdout" "$temp_dir/tui-delivery.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "interactive empty-pool Run exit"
+[[ -s "$FAKE_TUI_STARTED" ]] || fail "interactive Run never started the helper"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" "helper discovery precedence"
+[[ ! -s "$temp_dir/tui-delivery.stdout" ]] ||
+  fail "interactive Run also wrote the Event stream to stdout"
+assert_equal \
+  "$(<"$(replay_log_for "$tui_repo")")" \
+  "$(<"$FAKE_TUI_STDIN")" \
+  "helper stdin and replay log parity"
+grep -q '"type": "wrapper.run.end"' "$FAKE_TUI_STDIN" ||
+  fail "helper never received the final Run event"
+
 printf 'shell Orchestrator boundary: ok\n'

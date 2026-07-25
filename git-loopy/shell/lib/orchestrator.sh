@@ -18,6 +18,8 @@ _GIT_LOOPY_RELEASE_VERSION_PATH="$_git_loopy_orchestrator_dir/../../../VERSION"
 source "$_git_loopy_orchestrator_dir/events.sh"
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/continuation.sh"
+# shellcheck disable=SC1091
+source "$_git_loopy_orchestrator_dir/tui.sh"
 
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()
@@ -32,6 +34,8 @@ GIT_LOOPY_MAX_ITERATIONS=0
 GIT_LOOPY_REPO_ROOT=""
 GIT_LOOPY_PROMPT_PATH=""
 GIT_LOOPY_POOL_JSON='[]'
+# Tri-state interactive request: "on", "off", or empty for "no flag given".
+GIT_LOOPY_INTERACTIVE_FLAG=""
 
 git_loopy_usage() {
   cat <<'EOF'
@@ -52,6 +56,9 @@ Options:
   --disable-skill SKILL         Closed-world Skill policy; not yet supported by
                                 the shell Orchestrator (fails closed).
   --send-timeout-seconds N
+  --interactive                 Drive the shared git-loopy-tui helper when a
+                                compatible one is discoverable.
+  --no-interactive              Keep raw JSONL on stdout (CI-safe).
   --version
   -h, --help
 EOF
@@ -330,6 +337,9 @@ git_loopy_resolve_config() {
   local positional_seen=0
   local -a cli_tools=()
   local -a cli_skills=()
+  # Tri-state, exactly like the Python reference: empty means "no flag", so the
+  # environment and then TTY auto-detection still get their turn.
+  local interactive_flag=""
   GIT_LOOPY_SKILL_POLICY_FLAGS_SEEN=()
 
   while (($# > 0)); do
@@ -412,6 +422,14 @@ git_loopy_resolve_config() {
         ;;
       --send-timeout-seconds=*)
         send_timeout="${1#*=}"
+        shift
+        ;;
+      --interactive)
+        interactive_flag="on"
+        shift
+        ;;
+      --no-interactive)
+        interactive_flag="off"
         shift
         ;;
       --)
@@ -519,6 +537,7 @@ git_loopy_resolve_config() {
   GIT_LOOPY_ISSUE_SOURCE="$issue_source"
   GIT_LOOPY_MAX_NMT_STRIKES="$((10#$max_strikes))"
   GIT_LOOPY_SEND_TIMEOUT_SECONDS="$send_timeout"
+  GIT_LOOPY_INTERACTIVE_FLAG="$interactive_flag"
 }
 
 git_loopy_is_afk_ready() {
@@ -1849,6 +1868,14 @@ git_loopy_run_discovery() {
 
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
   git_loopy_ensure_gitignore_entry "$GIT_LOOPY_REPO_ROOT" || return 1
+  # Earn the live interface before the first Event exists, so the very first
+  # `wrapper.run.start` already goes to its final destination and the helper
+  # never has to be handed a partially replayed Run.
+  git_loopy_tui_begin \
+    "$GIT_LOOPY_REPO_ROOT" \
+    "$GIT_LOOPY_INTERACTIVE_FLAG" \
+    "${GIT_LOOPY_INTERACTIVE:-}" \
+    "$release_version"
   _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
   _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
   _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
@@ -2158,6 +2185,10 @@ git_loopy_main() {
   git_loopy_monotonic_clock_start || return 1
   local run_status=0
   git_loopy_run_discovery || run_status=$?
+  # Teardown lives here, not inside the Run, so every exit path — clean, stuck,
+  # or an early `return 1` — reaps the child exactly once. It deliberately cannot
+  # change `run_status`: a presentation failure is not a Run failure.
+  git_loopy_tui_finish
   git_loopy_monotonic_clock_stop
   return "$run_status"
 }
