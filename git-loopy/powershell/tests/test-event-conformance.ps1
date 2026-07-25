@@ -92,6 +92,27 @@ foreach ($Case in $Fixture["serialization_cases"]) {
     Assert-Equal $Case["jsonl"] $Actual "serialization fixture: $($Case["id"])"
 }
 
+function Add-RollupEnvelope {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Rollup
+    )
+
+    # The rollup is an Iteration-end payload, not a whole Event. Wrap it in one
+    # fixed envelope so the comparison exercises the contract's envelope-first
+    # key order and nested value serialization.
+    $Event = [ordered]@{
+        ts = "2026-05-16T00:00:00.000Z"
+        run_id = "01HXR0000000000000000000AA"
+        iter = 1
+        type = "wrapper.iteration.end"
+    }
+    foreach ($Key in $Rollup.Keys) {
+        $Event[$Key] = $Rollup[$Key]
+    }
+    return $Event
+}
+
 foreach (
     $Case in @(
         $Fixture["normalized_rollup_cases"] |
@@ -99,6 +120,62 @@ foreach (
     )
 ) {
     $InputFacts = $Case["input"]
+    if ($InputFacts.Contains("iterations")) {
+        # A multi-Iteration case drives the stateful lifecycle accumulator — the
+        # same production seam the Run loop uses — so per-issue cumulative Active
+        # time, retroactive fallback binding, and first-activation identity are
+        # pinned across Iterations rather than only inside one rollup call.
+        $Actual = [object[]]@(
+            foreach ($IterationFacts in $InputFacts["iterations"]) {
+                foreach ($FixtureEvent in $IterationFacts["events"]) {
+                    $Observed = $FixtureEvent["observed_monotonic"]
+                    $LifecycleEvent = [ordered]@{}
+                    foreach ($Key in $FixtureEvent.Keys) {
+                        if ($Key -ceq "observed_monotonic") { continue }
+                        $LifecycleEvent[$Key] = $FixtureEvent[$Key]
+                    }
+                    Update-GitLoopyIterationLifecycle `
+                        -LifecycleEvent $LifecycleEvent `
+                        -ObservedMonotonic $Observed
+                }
+                $Finish = $IterationFacts["finish"]
+                $FinishArguments = @{
+                    FinishedMonotonic = $Finish["finished_monotonic"]
+                    Strikes = $Finish["strikes"]
+                }
+                foreach ($Name in @("commits", "auto_closures", "pr_advances")) {
+                    if ($Finish.Contains($Name)) {
+                        $Parameter = switch ($Name) {
+                            "commits" { "Commits" }
+                            "auto_closures" { "AutoClosures" }
+                            "pr_advances" { "PrAdvances" }
+                        }
+                        $FinishArguments[$Parameter] = $Finish[$Name]
+                    }
+                }
+                if ($Finish.Contains("terminal_outcome")) {
+                    $FinishArguments["TerminalOutcome"] = $Finish["terminal_outcome"]
+                }
+                Get-GitLoopyCurrentIterationRollup @FinishArguments
+            }
+        )
+        $ExpectedLines = @(
+            $Case["expected"] | ForEach-Object {
+                ConvertTo-GitLoopyJsonLine -Event (Add-RollupEnvelope -Rollup $_)
+            }
+        )
+        $ActualLines = @(
+            $Actual | ForEach-Object {
+                ConvertTo-GitLoopyJsonLine -Event (Add-RollupEnvelope -Rollup $_)
+            }
+        )
+        Assert-Equal (
+            [string]::Join("", $ExpectedLines)
+        ) (
+            [string]::Join("", $ActualLines)
+        ) "normalized rollup fixture: $($Case["id"])"
+        continue
+    }
     $RollupArguments = @{
         IterationStartedMonotonic = $InputFacts["iteration_started_monotonic"]
         FinishedMonotonic = $InputFacts["finished_monotonic"]
@@ -130,28 +207,12 @@ foreach (
         $RollupArguments["TerminalOutcome"] = $InputFacts["terminal_outcome"]
     }
     $Actual = Get-GitLoopyIterationRollup @RollupArguments
-    $ExpectedEvent = [ordered]@{
-        ts = "2026-05-16T00:00:00.000Z"
-        run_id = "01HXR0000000000000000000AA"
-        iter = 1
-        type = "wrapper.iteration.end"
-    }
-    foreach ($Key in $Case["expected"].Keys) {
-        $ExpectedEvent[$Key] = $Case["expected"][$Key]
-    }
-    $ActualEvent = [ordered]@{
-        ts = "2026-05-16T00:00:00.000Z"
-        run_id = "01HXR0000000000000000000AA"
-        iter = 1
-        type = "wrapper.iteration.end"
-    }
-    foreach ($Key in $Actual.Keys) {
-        $ActualEvent[$Key] = $Actual[$Key]
-    }
     Assert-Equal (
-        ConvertTo-GitLoopyJsonLine -Event $ExpectedEvent
+        ConvertTo-GitLoopyJsonLine -Event (
+            Add-RollupEnvelope -Rollup $Case["expected"]
+        )
     ) (
-        ConvertTo-GitLoopyJsonLine -Event $ActualEvent
+        ConvertTo-GitLoopyJsonLine -Event (Add-RollupEnvelope -Rollup $Actual)
     ) "normalized rollup fixture: $($Case["id"])"
 }
 

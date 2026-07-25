@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.0",
+  "fixture_schema_version": "1.1",
   "wrapper_contract_version": "1.3",
   "event_schema_version": "1.1",
   "semantic_contract": {
@@ -61,6 +61,53 @@
         "scope": "issue_across_contributions"
       }
     ],
+    "iteration_breakdown_columns": [
+      {
+        "key": "contribution",
+        "label": "Contribution",
+        "scope": "issue_contribution_identity"
+      },
+      {
+        "key": "outcome",
+        "label": "Outcome",
+        "scope": "iteration_outcome"
+      },
+      {
+        "key": "duration_seconds",
+        "label": "Duration",
+        "scope": "iteration_monotonic_duration"
+      },
+      {
+        "key": "status",
+        "label": "Status",
+        "scope": "issue_in_contribution"
+      },
+      {
+        "key": "active_seconds",
+        "label": "Active",
+        "scope": "issue_agent_work_in_contribution"
+      },
+      {
+        "key": "tokens_in",
+        "label": "Tokens in",
+        "scope": "issue_in_contribution"
+      },
+      {
+        "key": "tokens_out",
+        "label": "Tokens out",
+        "scope": "issue_in_contribution"
+      },
+      {
+        "key": "cost_usd",
+        "label": "Cost",
+        "scope": "issue_in_contribution"
+      },
+      {
+        "key": "peak_context_window",
+        "label": "Peak Context fill",
+        "scope": "issue_in_contribution"
+      }
+    ],
     "placeholders": {
       "unknown": "—",
       "observed_zero": 0,
@@ -90,7 +137,8 @@
         "model": "gpt-5.6-sol",
         "reasoning_effort": "high",
         "max_strikes": 3,
-        "local_utc_offset_minutes": -360
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 42
       },
       "events": [
         {
@@ -401,6 +449,8 @@
                     "kind": "iteration",
                     "iteration": 1,
                     "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
                     "status": "closed",
                     "active_seconds": 4.0,
                     "consumption": {
@@ -425,6 +475,443 @@
                     "at": "2026-05-15T18:00:02-06:00",
                     "kind": "unclassified",
                     "text": "Working on #42"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "native-orchestrator-unavailable-capabilities",
+      "inputs": {
+        "model": "claude-opus-4.8",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": 330,
+        "drill_in_issue": 7
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.2.0-dev.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": false,
+            "token_usage": false,
+            "context_window": false,
+            "skill_consultation": false,
+            "cost": false
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:00.500Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:00.600Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 1,
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            7,
+            9
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 7,
+          "activated_at": "2026-05-16T00:00:01.000Z",
+          "binding_source": "working_marker"
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 1,
+          "type": "agent.output",
+          "text": "Advancing #7",
+          "kind": "unclassified"
+        },
+        {
+          "ts": "2026-05-16T00:00:30.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "advanced",
+          "duration_seconds": 29.5,
+          "summary": {
+            "model": null,
+            "tokens_in": null,
+            "tokens_out": null,
+            "observed_tokens": null,
+            "cost_usd": null,
+            "tool_count": null,
+            "skill_call_count": null,
+            "skills_consulted": null,
+            "commits": 2,
+            "auto_closures": 0,
+            "pr_advances": 1,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 7,
+              "status": "advanced",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 29.0,
+              "cumulative_active_seconds": 29.0,
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:30.500Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 2,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:31.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 2,
+          "type": "wrapper.issue.activated",
+          "issue": 7,
+          "activated_at": "2026-05-16T00:00:31.000Z",
+          "binding_source": "working_marker"
+        },
+        {
+          "ts": "2026-05-16T00:00:50.000Z",
+          "run_id": "01HXR0000000000000000000EE",
+          "iter": 2,
+          "type": "wrapper.iteration.end",
+          "outcome": "closed",
+          "duration_seconds": 19.5,
+          "summary": {
+            "model": null,
+            "tokens_in": null,
+            "tokens_out": null,
+            "observed_tokens": null,
+            "cost_usd": null,
+            "tool_count": null,
+            "skill_call_count": null,
+            "skills_consulted": null,
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 7,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": "2026-05-16T00:00:50.000Z",
+              "issue_elapsed_seconds": 49.0,
+              "active_seconds": 19.0,
+              "cumulative_active_seconds": 48.0,
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 5,
+          "render_at_utc": "2026-05-16T00:00:02.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000EE",
+                "model": "claude-opus-4.8",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-16T05:30:00+05:30",
+                "elapsed_seconds": 2.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": 7,
+                "active_seconds": 1.0,
+                "context_fill": {
+                  "availability": "unavailable",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "cost_usd"
+                ],
+                "rows": [
+                  {
+                    "issue": 7,
+                    "status": "active",
+                    "started_at": "2026-05-16T05:30:01+05:30",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "cost_usd": null
+                  },
+                  {
+                    "issue": 9,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "cost_usd": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": 7,
+                "lines": [
+                  {
+                    "at": "2026-05-16T05:30:02+05:30",
+                    "kind": "unclassified",
+                    "text": "Advancing #7"
+                  }
+                ]
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 7,
+                "status": "active",
+                "started_at": "2026-05-16T05:30:01+05:30",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 1.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 7,
+                "lines": [
+                  {
+                    "at": "2026-05-16T05:30:02+05:30",
+                    "kind": "unclassified",
+                    "text": "Advancing #7"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 9,
+          "render_at_utc": "2026-05-16T00:00:50.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000EE",
+                "model": "claude-opus-4.8",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-16T05:30:00+05:30",
+                "elapsed_seconds": 50.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "unavailable",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "cost_usd"
+                ],
+                "rows": [
+                  {
+                    "issue": 9,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "cost_usd": null
+                  },
+                  {
+                    "issue": 7,
+                    "status": "closed",
+                    "started_at": "2026-05-16T05:30:01+05:30",
+                    "active_seconds": 48.0,
+                    "closed_at": "2026-05-16T05:30:50+05:30",
+                    "iteration_count": 2,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "cost_usd": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 29.5,
+                    "model": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "observed_tokens": null,
+                    "cost_usd": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 2,
+                    "auto_closures": 0,
+                    "pr_advances": 1,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 19.5,
+                    "model": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "observed_tokens": null,
+                    "cost_usd": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 7,
+                "status": "closed",
+                "started_at": "2026-05-16T05:30:01+05:30",
+                "closed_at": "2026-05-16T05:30:50+05:30",
+                "issue_elapsed_seconds": 49.0,
+                "active_seconds": 48.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 29.5,
+                    "status": "advanced",
+                    "active_seconds": 29.0,
+                    "consumption": {
+                      "model": null,
+                      "tokens_in": null,
+                      "tokens_out": null
+                    },
+                    "cost_usd": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 19.5,
+                    "status": "closed",
+                    "active_seconds": 19.0,
+                    "consumption": {
+                      "model": null,
+                      "tokens_in": null,
+                      "tokens_out": null
+                    },
+                    "cost_usd": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 7,
+                "lines": [
+                  {
+                    "at": "2026-05-16T05:30:02+05:30",
+                    "kind": "unclassified",
+                    "text": "Advancing #7"
                   }
                 ]
               }

@@ -286,13 +286,24 @@ expected toolkit-neutral Dashboard and per-issue drill-in model.
 
 The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
 `detail header -> Iteration breakdown -> Log`. Queue columns are ordered `Issue | Status | Started
-| Active | Closed | Iters | Tokens in | Tokens out | Cost`. Context fill is current-Iteration
-scoped; Queue accounting and the Log aggregate one issue across contributions; each Summary row is
-one Iteration or Lane contribution; and the Iteration breakdown is the same ordered contribution
-set counted by `Iters`.
+| Active | Closed | Iters | Tokens in | Tokens out | Cost`. Iteration-breakdown columns are ordered
+`Contribution | Outcome | Duration | Status | Active | Tokens in | Tokens out | Cost | Peak Context
+fill`, where `Outcome` and `Duration` are the owning Iteration's own disposition and monotonic
+duration while `Status` and `Active` remain scoped to the issue within that contribution. Context
+fill is current-Iteration scoped; Queue accounting and the Log aggregate one issue across
+contributions; each Summary row is one Iteration or Lane contribution; and the Iteration breakdown
+is the same ordered contribution set counted by `Iters`.
 
-An unavailable value projects to an em dash, while observed none remains `0` or `[]`. Renderers
-localize UTC timestamps from the supplied display-zone input but preserve monotonic durations.
+An unavailable value projects to an em dash, while observed none remains `0` or `[]`. A
+capability an Orchestrator declares unavailable at Run start arrives as a `null` normalized
+measurement, and renderers MUST project it as unknown rather than as an observed `0`, `[]`, or a
+substituted configured value — including a contribution whose whole `consumption` record is
+unavailable. Renderers localize UTC timestamps from the supplied display-zone input but preserve
+monotonic durations.
+This rule binds every renderer surface for a Run, not just the live band: the
+per-Iteration frozen artifact and the run-end totals artifact project the same unknowns, and a
+cumulative total is unknown only when every completed Iteration in it declared that measurement
+unavailable.
 Glyphs, colors, widths, responsive truncation, keybindings, and toolkit widget structure are not
 contractual. Future renderer issue #143 MUST consume this seam rather than redefine its inventory
 or semantic meaning.

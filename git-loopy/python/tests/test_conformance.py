@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.console import Console
 
 from git_loopy import events as events_module
 from git_loopy import continuation as continuation_module
@@ -18,10 +20,13 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
-from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
+from git_loopy.interactive.state import LiveRunState
+from git_loopy.interactive.view_model import project_run_view
 from git_loopy.pricing import Pricing
+from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.sources import is_afk_ready
 from git_loopy.ui import RunSummary
+from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
     CLOSE_KEYWORD_RE,
     NMTStrikeStateMachine,
@@ -132,6 +137,53 @@ def test_exit_code_fixture(case: dict[str, Any]) -> None:
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
 _DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
+_PYTHON_ROLLUP_CASES = [
+    case
+    for case in _EVENT_SCHEMA["normalized_rollup_cases"]
+    if case["orchestrator"] == "python"
+]
+
+
+class _FixtureClock:
+    value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+def test_event_fixture_covers_python_normalized_rollup() -> None:
+    assert _PYTHON_ROLLUP_CASES
+
+
+@pytest.mark.parametrize(
+    "case",
+    _PYTHON_ROLLUP_CASES,
+    ids=lambda case: case["id"],
+)
+def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
+    assert case["input"]["pricing"] == {"models": {}}
+    clock = _FixtureClock()
+    rollup = IterationRollupAccumulator(
+        pricing=Pricing(models={}),
+        monotonic=clock,
+    )
+    actual = []
+    for iteration in case["input"]["iterations"]:
+        for fixture_event in iteration["events"]:
+            event = dict(fixture_event)
+            clock.value = float(event.pop("observed_monotonic"))
+            rollup.observe(event)
+        finish = iteration["finish"]
+        clock.value = float(finish["finished_monotonic"])
+        actual.append(
+            rollup.finish(
+                iter_num=finish["iteration"],
+                strikes=finish["strikes"],
+                outcome=finish.get("terminal_outcome"),
+            )
+        )
+
+    assert actual == case["expected"]
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -232,7 +284,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.0"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.1"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -276,6 +328,17 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "tokens_out",
         "cost_usd",
     ]
+    assert [column["label"] for column in contract["iteration_breakdown_columns"]] == [
+        "Contribution",
+        "Outcome",
+        "Duration",
+        "Status",
+        "Active",
+        "Tokens in",
+        "Tokens out",
+        "Cost",
+        "Peak Context fill",
+    ]
     assert contract["placeholders"] == {
         "unknown": "\u2014",
         "observed_zero": 0,
@@ -301,6 +364,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     case = _DASHBOARD_INSIGHTS["cases"][0]
     assert case["id"] == "baseline-closed-iteration"
     assert case["inputs"]["local_utc_offset_minutes"] == -360
+    assert case["inputs"]["drill_in_issue"] == 42
     reference_run_start = next(
         fixture_case["event"]
         for fixture_case in _EVENT_SCHEMA["serialization_cases"]
@@ -350,111 +414,58 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert queue_row["iteration_count"] == len(breakdown) == 1
     assert queue_row["closed_at"] == "2026-05-15T18:00:05-06:00"
     assert expected["drill_in"]["detail_header"]["issue_elapsed_seconds"] == 4.0
+    # AC5: a contribution row carries its Iteration's own outcome and monotonic
+    # duration alongside the issue-scoped Status and Active time.
+    assert breakdown[0]["outcome"] == "closed"
+    assert breakdown[0]["duration_seconds"] == 4.0
 
 
-def test_python_live_state_matches_dashboard_queue_and_drill_in_fixture() -> None:
-    case = _DASHBOARD_INSIGHTS["cases"][0]
-    offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
-    run_started = datetime.fromisoformat(case["events"][0]["ts"].replace("Z", "+00:00"))
+def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None:
+    for case in _DASHBOARD_INSIGHTS["cases"]:
+        offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
+        run_started = datetime.fromisoformat(
+            case["events"][0]["ts"].replace("Z", "+00:00")
+        )
+        clock = _FixtureClock()
+        state = LiveRunState(
+            model=case["inputs"]["model"],
+            reasoning_effort=case["inputs"]["reasoning_effort"],
+            monotonic=clock,
+            wall_clock=lambda: (
+                run_started + timedelta(seconds=clock.value)
+            ).astimezone(offset),
+        )
+        summary = RunSummary(pricing=Pricing(models={}))
+        renderer = Renderer(
+            console=Console(file=StringIO(), force_terminal=False),
+            summary=summary,
+        )
 
-    class _Clock:
-        value = 0.0
-
-        def __call__(self) -> float:
-            return self.value
-
-    clock = _Clock()
-    state = LiveRunState(
-        run_id="",
-        model=case["inputs"]["model"],
-        reasoning_effort=case["inputs"]["reasoning_effort"],
-        monotonic=clock,
-        wall_clock=lambda: (run_started + timedelta(seconds=clock.value)).astimezone(
-            offset
-        ),
-    )
-
-    applied = 0
-    for snapshot in case["snapshots"]:
-        event_count = snapshot["after_event_count"]
-        for event in case["events"][applied:event_count]:
-            at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
-            clock.value = (at - run_started).total_seconds()
-            state.render(event)
-        applied = event_count
-
-        expected = snapshot["expected"]
-        actual_queue = []
-        for row in queue_rows(state):
-            actual_queue.append(
-                {
-                    "issue": row.ref,
-                    "status": row.status,
-                    "started_at": (
-                        row.started_wall.isoformat() if row.started_wall else None
-                    ),
-                    "active_seconds": row.active_seconds,
-                    "closed_at": (
-                        row.closed_wall.isoformat() if row.closed_wall else None
-                    ),
-                    "iteration_count": row.iteration_count,
-                    "tokens_in": (row.usage.tokens_in if row.usage_observed else None),
-                    "tokens_out": (
-                        row.usage.tokens_out if row.usage_observed else None
-                    ),
-                    "cost_usd": row.cost_usd,
-                }
+        applied = 0
+        for snapshot in case["snapshots"]:
+            for event in case["events"][applied : snapshot["after_event_count"]]:
+                at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
+                clock.value = (at - run_started).total_seconds()
+                state.render(event)
+                renderer.render(event)
+            applied = snapshot["after_event_count"]
+            render_at = datetime.fromisoformat(
+                snapshot["render_at_utc"].replace("Z", "+00:00")
             )
-        assert actual_queue == expected["dashboard"]["queue"]["rows"]
+            clock.value = (render_at - run_started).total_seconds()
 
-        detail = issue_detail(state, 42)
-        assert {
-            "issue": detail.ref,
-            "status": detail.status,
-            "started_at": (
-                detail.started_wall.isoformat() if detail.started_wall else None
-            ),
-            "closed_at": (
-                detail.closed_wall.isoformat() if detail.closed_wall else None
-            ),
-            "issue_elapsed_seconds": detail.issue_elapsed_seconds,
-            "active_seconds": detail.active_seconds,
-            "iteration_count": len(detail.contributions),
-        } == expected["drill_in"]["detail_header"]
-        assert [
-            {
-                "kind": contribution.kind,
-                "iteration": contribution.iteration,
-                "lane": contribution.lane,
-                "status": contribution.status,
-                "active_seconds": contribution.active_seconds,
-                "consumption": {
-                    "model": contribution.usage.model,
-                    "tokens_in": contribution.usage.tokens_in,
-                    "tokens_out": contribution.usage.tokens_out,
-                },
-                "cost_usd": contribution.cost_usd,
-                "peak_context_window": (
-                    {
-                        "current_tokens": contribution.peak_context_window.current_tokens,
-                        "token_limit": contribution.peak_context_window.token_limit,
-                        "effective_target_tokens": contribution.peak_context_window.effective_target_tokens,
-                        "effective_ceiling_tokens": contribution.peak_context_window.effective_ceiling_tokens,
-                    }
-                    if contribution.peak_context_window
-                    else None
-                ),
-            }
-            for contribution in detail.contributions
-        ] == expected["drill_in"]["iteration_breakdown"]["rows"]
-        assert [
-            {
-                "at": line.timestamp.isoformat() if line.timestamp else None,
-                "kind": line.kind,
-                "text": line.text,
-            }
-            for line in state.log(42)
-        ] == expected["drill_in"]["log"]["lines"]
+            actual = project_run_view(
+                state,
+                summary,
+                issue=case["inputs"]["drill_in_issue"],
+            )
+            assert list(actual["dashboard"]) == _DASHBOARD_INSIGHTS[
+                "semantic_contract"
+            ]["dashboard_band_order"]
+            assert list(actual["drill_in"]) == _DASHBOARD_INSIGHTS[
+                "semantic_contract"
+            ]["drill_in_band_order"]
+            assert actual == snapshot["expected"]
 
 
 @pytest.mark.parametrize(
@@ -669,3 +680,99 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
 
     assert result == (case["expected"]["model"], case["expected"]["effort"])
     assert bool(warnings) is case["warns"]
+
+
+def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
+    """The fixture separates an unavailable measurement from an observed none.
+
+    A native Orchestrator declares token, Context-fill, Skill, and Cost
+    telemetry unavailable in its Run-start capability manifest and sends those
+    normalized measurements as ``null``. The semantic view must project them as
+    unknown while the counters it *can* observe stay exact, and while the
+    SDK-backed baseline case keeps its observed-empty ``[]`` Skills list.
+    """
+    baseline, native = _DASHBOARD_INSIGHTS["cases"]
+    assert baseline["id"] == "baseline-closed-iteration"
+    assert native["id"] == "native-orchestrator-unavailable-capabilities"
+
+    capabilities = native["events"][0]["insight_capabilities"]
+    # Exactly the family contract's native-Orchestrator manifest.
+    assert (
+        capabilities
+        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["shell"]
+        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["powershell"]
+    )
+    assert set(capabilities) == set(_EVENT_SCHEMA["insight_capabilities"]["names"])
+    assert capabilities["token_usage"] is False
+    assert capabilities["context_window"] is False
+    assert capabilities["skill_consultation"] is False
+    assert capabilities["cost"] is False
+
+    # A half-hour display zone proves localization is a real conversion rather
+    # than an hour-granular offset.
+    assert native["inputs"]["local_utc_offset_minutes"] == 330
+
+    live, final = native["snapshots"]
+    assert live["expected"]["dashboard"]["header"]["context_fill"] == {
+        "availability": "unavailable",
+        "current_tokens": None,
+        "token_limit": None,
+        "percentage": None,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+    # Queue ordering: the active issue first, then queued, then history.
+    assert [row["status"] for row in live["expected"]["dashboard"]["queue"]["rows"]] == [
+        "active",
+        "queued",
+    ]
+    expected = final["expected"]
+    assert [row["status"] for row in expected["dashboard"]["queue"]["rows"]] == [
+        "queued",
+        "closed",
+    ]
+
+    closed_row = expected["dashboard"]["queue"]["rows"][1]
+    assert closed_row["issue"] == 7
+    # Unavailable Consumption stays unknown; Iters and Active time do not.
+    assert closed_row["tokens_in"] is None
+    assert closed_row["tokens_out"] is None
+    assert closed_row["cost_usd"] is None
+    assert closed_row["iteration_count"] == 2
+    assert closed_row["active_seconds"] == 48.0
+
+    summary_rows = expected["dashboard"]["summary"]["rows"]
+    breakdown = expected["drill_in"]["iteration_breakdown"]["rows"]
+    # The Iteration breakdown is the same contribution set counted by Iters.
+    assert len(summary_rows) == len(breakdown) == closed_row["iteration_count"]
+    for row in summary_rows:
+        for unavailable in (
+            "model",
+            "tokens_in",
+            "tokens_out",
+            "observed_tokens",
+            "cost_usd",
+            "tool_count",
+            "skill_call_count",
+            "skills_consulted",
+            "peak_context_window",
+        ):
+            assert row[unavailable] is None, unavailable
+    # Observed counters stay exact, including an observed zero.
+    assert [(row["commits"], row["auto_closures"], row["pr_advances"]) for row in summary_rows] == [
+        (2, 0, 1),
+        (1, 1, 0),
+    ]
+    assert [(row["outcome"], row["duration_seconds"]) for row in breakdown] == [
+        ("advanced", 29.5),
+        ("closed", 19.5),
+    ]
+    assert all(
+        row["consumption"] == {"model": None, "tokens_in": None, "tokens_out": None}
+        for row in breakdown
+    )
+
+    # Observed-empty is not unavailable: the SDK-backed case keeps `[]`.
+    baseline_summary = baseline["snapshots"][-1]["expected"]["dashboard"]["summary"]
+    assert baseline_summary["rows"][0]["skills_consulted"] == []
+    assert baseline_summary["rows"][0]["tool_count"] == 0

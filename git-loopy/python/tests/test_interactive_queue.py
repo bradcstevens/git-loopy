@@ -343,6 +343,8 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
         {
             "type": events_module.WRAPPER_ITERATION_END,
             "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 4.0,
             "issues": [
                 {
                     "issue": 42,
@@ -385,9 +387,12 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
             kind="iteration",
             iteration=1,
             lane=None,
+            outcome="closed",
+            duration_seconds=4.0,
             status="closed",
             active_seconds=4.0,
             usage=UsageTally(model="claude-opus-4.8", tokens_in=100, tokens_out=50),
+            usage_observed=True,
             cost_usd=0.0004,
             peak_context_window=state_module.ContextWindowSnapshot(
                 current_tokens=12_000,
@@ -725,3 +730,88 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
         assert r.usage.model is not None  # every worked issue recorded its model
         per_issue_cost += r.usage.cost(_PRICING) or Decimal(0)
     assert per_issue_cost == totals.cost_usd
+
+
+def test_unavailable_normalized_consumption_stays_unknown_not_zero() -> None:
+    """A native Orchestrator without token telemetry must not report ``0``.
+
+    The Wrapper contract forbids reporting an unavailable counter as an
+    observed zero, so a normalized contribution whose ``consumption`` tokens are
+    ``null`` leaves the Queue row's Consumption unknown (the Dashboard's em
+    dash) instead of claiming zero tokens were spent.
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 42)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "advanced",
+            "duration_seconds": 30.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "advanced",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 29.0,
+                    "cumulative_active_seconds": 29.0,
+                    "consumption": {
+                        "model": None,
+                        "tokens_in": None,
+                        "tokens_out": None,
+                    },
+                    "cost_usd": None,
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    row = queue_rows(state)[0]
+    assert row.usage_observed is False
+    assert row.cost_usd is None
+
+    contribution = state_module.issue_detail(state, 42).contributions[0]
+    assert contribution.usage_observed is False
+
+
+def test_observed_zero_normalized_consumption_stays_zero() -> None:
+    """An observed-none Consumption remains ``0``, not the unknown em dash."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 42)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "no-progress",
+            "duration_seconds": 3.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "no-progress",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 2.0,
+                    "cumulative_active_seconds": 2.0,
+                    "consumption": {
+                        "model": "claude-opus-4.8",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                    },
+                    "cost_usd": None,
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    row = queue_rows(state)[0]
+    assert row.usage_observed is True
+    assert row.usage == UsageTally(model="claude-opus-4.8", tokens_in=0, tokens_out=0)
