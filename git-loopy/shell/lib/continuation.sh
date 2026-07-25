@@ -437,14 +437,18 @@ _git_loopy_continuation_validate_portable_json() {
   validation="$(
     jq -cn --argjson request "$request" '
       def validate($name; $depth):
-        if $depth > 16 then
-          error($name + " exceeds maximum nesting depth 16")
-        elif type == "object" then
-          to_entries[]
-          | (.key | validate($name; $depth + 1)),
-            (.value | validate($name; $depth + 1))
+        if type == "object" then
+          if $depth + 1 > 16 then
+            error($name + " exceeds maximum nesting depth 16")
+          else
+            to_entries[]
+            | (.key | validate($name; $depth + 1)),
+              (.value | validate($name; $depth + 1))
+          end
         elif type == "array" then
-          if length > 256 then
+          if $depth + 1 > 16 then
+            error($name + " exceeds maximum nesting depth 16")
+          elif length > 256 then
             error($name + " array exceeds maximum length 256")
           else
             .[] | validate($name; $depth + 1)
@@ -467,7 +471,7 @@ _git_loopy_continuation_validate_portable_json() {
           empty
         end;
       try (
-        $request | validate("request"; 1),
+        $request | validate("request"; 0),
         {ok: true}
       ) catch {ok: false, message: .}
     ' | tail -n 1

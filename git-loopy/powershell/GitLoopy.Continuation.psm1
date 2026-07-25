@@ -2788,6 +2788,11 @@ function Invoke-GitLoopyContinuationPublish {
             ) `
             -InputValue ([ordered]@{ body = $Record.Body }) `
             -Context "appending the Producer revision"
+        if ($Appended -isnot [Collections.IDictionary]) {
+            throw [GitLoopyContinuationGitHubException]::new(
+                "decoding appending the Producer revision"
+            )
+        }
         $CommentId = $Appended["id"]
         $Committed = Invoke-GitLoopyGitHub `
             -Arguments @(
