@@ -84,6 +84,42 @@ enabled project Skill that is not git-tracked blocks the save. `git-loopy init
 without contacting the machine's Copilot inventory, which keeps a first CI setup
 reproducible. Change a saved policy later with `git-loopy skills edit`.
 
+#### The Skill picker has two renderings, and one set of rules
+
+Every path that asks you to choose Skills — `init`, `skills edit`, and the
+one-time legacy migration below — opens the *same* picker over the *same*
+selection state. Only the drawing differs, and git-loopy picks the drawing for
+you:
+
+| | Full-screen picker | Plain picker |
+| --- | --- | --- |
+| Used when | stdout is a terminal **and** the `[tui]` extra is installed | anywhere else — a pipe, CI, `--no-interactive`, or no `[tui]` extra |
+| Search | type to filter, live | type the text, then Enter |
+| Toggle | `Space` on the highlighted row | the row's number |
+| Clear the filter | delete the search text | an empty line |
+| Move | `Up` / `Down` | — the list is numbered |
+| Save | `Enter` | `done`, then confirm |
+| Cancel | `Esc` or `Ctrl+C` | `q` |
+
+The full-screen picker is **optional, never required**. `pip install
+'git-loopy[tui]'` (or `uv sync --extra tui`) enables it; without the extra the
+plain picker runs and nothing is lost — the two are interchangeable and return
+the same selection. git-loopy probes for the extra without importing it, so a
+base install never pays for a dependency it does not have.
+
+Both renderings obey identical rules, because both read one shared model:
+
+- **Filtering never changes a selection.** Skills you enabled that the current
+  search hides stay enabled and are saved. Canonical Skill names never contain a
+  space, which is exactly why `Space` is free to mean "toggle" while you type.
+- **Required Skills are marked and locked on.** Switching one off is refused in
+  place, with the reason shown; it is not a save-time surprise.
+- **An untracked project Skill is visible but locked off.** It stays listed —
+  with the reason — so you can see what would need committing, rather than
+  vanishing from a catalog you are trying to reason about.
+- **Save is refused, not silently corrected**, whenever the selection would not
+  validate; the refusal names the offending Skill.
+
 Copilot's own enabled state has no authority over a saved Skill policy — once
 established, the policy changes only through an explicit git-loopy action. When
 you *do* want to re-import it, `git-loopy skills sync` is that explicit action:

@@ -72,6 +72,115 @@ def test_plain_picker_searches_without_losing_selection_and_locks_invalid_rows()
     assert "not git-tracked" in rendered
 
 
+def test_picker_selection_takes_textual_only_with_the_extra_and_a_terminal() -> None:
+    """The optional picker is an *alternate renderer*, never a new requirement.
+
+    Both implementations drive the same :class:`SkillSelectionModel` and return
+    the same :class:`SkillSelectionResult`, so choosing between them is purely a
+    question of what the invocation can render. Missing ``[tui]`` or a
+    non-terminal stdout (a pipe, CI) keeps the plain-terminal path that the base
+    installation has always had.
+    """
+    assert (
+        skillscmd.select_skill_picker(isatty=True, textual_importable=True)
+        is skillscmd.run_textual_skill_picker
+    )
+    assert (
+        skillscmd.select_skill_picker(isatty=False, textual_importable=True)
+        is run_plain_skill_picker
+    )
+    assert (
+        skillscmd.select_skill_picker(isatty=True, textual_importable=False)
+        is run_plain_skill_picker
+    )
+
+
+def test_skill_policy_commands_never_import_textual_on_the_plain_path() -> None:
+    """Probing for the optional extra must not cost — or require — importing it.
+
+    Run in a clean subprocess so the assertion is deterministic regardless of
+    what the in-process session already imported. This is what keeps ``--help``,
+    every non-interactive command, and the base test suite free of the ``[tui]``
+    extra: the probe is ``importlib.util.find_spec``, and the Textual picker is
+    imported only inside :func:`skillscmd.run_textual_skill_picker`.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from git_loopy import skillscmd\n"
+        "assert skillscmd.select_skill_picker(\n"
+        "    isatty=False, textual_importable=True\n"
+        ") is skillscmd.run_plain_skill_picker\n"
+        # The real resolver runs its own probe; a non-TTY subprocess must land
+        # on the plain picker without Textual ever being imported.
+        "assert skillscmd._resolve_picker_runner(None) is skillscmd.run_plain_skill_picker\n"
+        "assert 'textual' not in sys.modules, 'textual imported on the plain path'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"lazy-import guard failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+def test_skills_edit_without_an_injected_picker_resolves_one_at_the_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real invocation picks its renderer through ``select_skill_picker``.
+
+    ``skills edit`` and ``init`` share :func:`collect_skill_policy`, so the
+    renderer decision belongs there once rather than in each command. Pinning
+    the *call* keeps the two commands from drifting apart; the decision itself
+    is pinned by ``test_picker_selection_takes_textual_only_with_the_extra``.
+    """
+    env = {"HOME": str(tmp_path / "home")}
+    catalog = SkillCatalog(
+        winners={"alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)}
+    )
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return catalog
+
+    calls: list[dict[str, object]] = []
+
+    def fake_select(**kwargs: object) -> Any:
+        calls.append(kwargs)
+        return lambda model, **_: SkillSelectionResult(model.enabled)
+
+    monkeypatch.setattr(skillscmd, "select_skill_picker", fake_select)
+    monkeypatch.setattr(skillscmd, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(skillscmd, "_textual_importable", lambda: False)
+
+    result = run_skills_edit(
+        scope="global",
+        repo_root=tmp_path,
+        env=env,
+        client_factory=FakeClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=("alpha",),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert calls == [{"isatty": True, "textual_importable": False}]
+
+
 def test_skills_edit_first_global_policy_seeds_from_copilot_and_packaged_fallback(
     tmp_path: Path,
 ) -> None:

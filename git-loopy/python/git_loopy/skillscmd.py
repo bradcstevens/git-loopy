@@ -198,6 +198,75 @@ def run_plain_skill_picker(
             output_fn(f"  Cannot toggle: {exc}.")
 
 
+def run_textual_skill_picker(
+    model: SkillSelectionModel,
+    *,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> SkillSelectionResult | None:
+    """Run the optional ``[tui]`` picker; return ``None`` on cancel.
+
+    Signature-compatible with :func:`run_plain_skill_picker` so the two are
+    interchangeable behind :data:`PickerRunner`. ``input_fn`` and ``output_fn``
+    are accepted and unused: a fullscreen app owns the terminal itself, and
+    accepting them is what lets one collection seam call either implementation
+    without knowing which it got.
+
+    Textual is imported **here**, not at module import, so ``--help``, every
+    non-interactive command, and the base test suite never pay for — or require
+    — the optional extra.
+    """
+    from .interactive.skill_picker_app import SkillPickerApp
+
+    return SkillPickerApp(model).run()
+
+
+def select_skill_picker(
+    *,
+    isatty: bool,
+    textual_importable: bool,
+) -> PickerRunner:
+    """Pick the renderer for one policy edit: optional TUI, else plain terminal.
+
+    The plain-terminal picker is the base installation's guarantee, so it is the
+    fallback for every invocation that cannot render a fullscreen app — the
+    ``[tui]`` extra absent, or stdout not a terminal. Both implementations drive
+    the same :class:`SkillSelectionModel` and return the same
+    :class:`SkillSelectionResult`, so this decides presentation only.
+    """
+    if isatty and textual_importable:
+        return run_textual_skill_picker
+    return run_plain_skill_picker
+
+
+def _stdout_isatty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):  # pragma: no cover - closed/replaced stream
+        return False
+
+
+def _textual_importable() -> bool:
+    """Probe the ``[tui]`` extra without importing it.
+
+    Reuses the interactive path's pure probe (``importlib.util.find_spec``), so
+    checking costs no Textual import and no screen side effects.
+    """
+    from .interactive.detect import textual_available
+
+    return textual_available()
+
+
+def _resolve_picker_runner(picker_runner: PickerRunner | None) -> PickerRunner:
+    """Honour an injected picker; otherwise choose one for this invocation."""
+    if picker_runner is not None:
+        return picker_runner
+    return select_skill_picker(
+        isatty=_stdout_isatty(),
+        textual_importable=_textual_importable(),
+    )
+
+
 @dataclass(frozen=True)
 class SkillPolicySyncPlan:
     """One reviewable Skill baseline delta, computed before anything is written.
@@ -629,7 +698,7 @@ def collect_skill_policy(
     output_fn: Callable[[str], None] = print,
     client_factory: ClientFactory | None = None,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
-    picker_runner: PickerRunner = run_plain_skill_picker,
+    picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
     packaged_skills_dir: Path | None = None,
@@ -643,11 +712,15 @@ def collect_skill_policy(
     Persisting the result belongs to the caller, which is what lets ``init``
     fold the policy into its own single collect-then-commit Config write.
 
+    An omitted ``picker_runner`` is resolved by :func:`select_skill_picker`, so
+    the optional-TUI decision is made once here rather than in each command.
+
     Raises :class:`SkillPolicyCancelled` when the operator cancels, and any
     member of :data:`SKILL_POLICY_FAILURES` when the policy cannot be resolved.
     The discovery workspace is gone before this returns, so a caller that writes
     afterwards can never leave a changed Config behind a teardown failure.
     """
+    runner = _resolve_picker_runner(picker_runner)
     context = _collect_policy_context(
         scope=scope,
         repo_root=repo_root,
@@ -665,7 +738,7 @@ def collect_skill_policy(
         required=context.required,
         tracked_project_skills=context.tracked,
     )
-    result = picker_runner(model, input_fn=input_fn, output_fn=output_fn)
+    result = runner(model, input_fn=input_fn, output_fn=output_fn)
     if result is None:
         raise SkillPolicyCancelled
     _validate_policy(result.enabled, scope=scope, context=context)
@@ -682,7 +755,7 @@ def run_skills_edit(
     error_fn: Callable[[str], None] | None = None,
     client_factory: ClientFactory | None = None,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
-    picker_runner: PickerRunner = run_plain_skill_picker,
+    picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
     packaged_skills_dir: Path | None = None,
@@ -762,7 +835,7 @@ def run_skill_policy_migration(
     error_fn: Callable[[str], None] | None = None,
     client_factory: ClientFactory | None = None,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
-    picker_runner: PickerRunner = run_plain_skill_picker,
+    picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
     packaged_skills_dir: Path | None = None,
