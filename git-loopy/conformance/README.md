@@ -17,6 +17,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
+| `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
@@ -85,6 +86,18 @@ A skill is **consulted** once per Iteration when either an explicit `skill`
 tool call names it or any tool-call argument references
 `.copilot/skills/<name>/SKILL.md`. Consulted names are deduplicated and sorted;
 catalog globs that do not identify a concrete `<name>` do not count.
+
+`skill-policy.json` is a different fact from `skill-consultation.json`:
+consultation is what one Iteration *used*, policy is what the whole Run *may
+use*. Its `resolution_cases` drive the production resolver seam — the same one
+Run preflight calls — so an adapter passes only by resolving, never by
+restating; `startup_cases` drive the production startup classifier that decides
+whether a Run offers a one-time migration; and `event_payload_cases` drive the
+production redacted audit projection. Because Skill policy is Python-first, the
+fixture names its own transition state: `native_transition.implemented` lists
+the distributions that resolve a policy, and `native_transition.fail_closed`
+lists the ones that must abort before source collection when they detect any
+`native_transition.policy_surfaces` entry.
 
 The Python reference adapter is
 [`python/tests/test_conformance.py`](../python/tests/test_conformance.py). The

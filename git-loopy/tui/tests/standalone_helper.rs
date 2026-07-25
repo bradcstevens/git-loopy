@@ -57,7 +57,7 @@ fn the_schema_probe_reports_compatibility_without_reading_stdin() {
             "version": env!("CARGO_PKG_VERSION"),
             "min_event_schema_version": 1,
             "max_event_schema_version": 1,
-            "wrapper_contract_version": "1.3",
+            "wrapper_contract_version": "1.4",
         }),
         "the probe is the Orchestrator's whole compatibility answer"
     );

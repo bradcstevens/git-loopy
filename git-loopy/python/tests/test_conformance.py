@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 from rich.console import Console
@@ -22,8 +22,28 @@ from git_loopy.config import (
 )
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.view_model import project_run_view
+from git_loopy.config import (
+    SkillPolicyInput,
+    SkillPolicyInputs,
+)
 from git_loopy.pricing import Pricing
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.skill_exposure import SkillExposure
+from git_loopy.skill_policy import (
+    MissingEnabledSkills,
+    MissingRequiredSkills,
+    SkillCatalog,
+    SkillCatalogWinner,
+    SkillInventoryUnavailable,
+    SkillPolicyFallback,
+    SkillPolicyResolutionError,
+    SkillPolicyScope,
+    SkillPolicyStartupState,
+    UntrackedProjectSkills,
+    classify_skill_policy_startup,
+    resolve_skill_policy,
+)
+from git_loopy.skill_run_preflight import RunSkillPreflight
 from git_loopy.sources import is_afk_ready
 from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
@@ -199,7 +219,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.3"
+    assert _EVENT_SCHEMA["contract_version"] == "1.4"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -272,6 +292,29 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "peak_context_window",
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
+        },
+        "wrapper.skill_policy.resolved": {
+            "required_when_present": [
+                "base_scope",
+                "enabled",
+                "fallback",
+                "legacy_denied",
+                "migration_warning",
+                "required",
+                "source_kinds",
+            ],
+            "base_scope_values": ["project", "global", "minimal"],
+            "fallback_values": ["minimal", "migration", None],
+            "sorted_projections": [
+                "enabled",
+                "legacy_denied",
+                "required",
+                "source_kinds",
+            ],
+            "redacted": (
+                "Skill identity is the canonical name: no absolute path, home "
+                "directory, exposure directory, or Skill content may appear."
+            ),
         },
     }
     assert _EVENT_SCHEMA["value_semantics"] == {
@@ -769,3 +812,266 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
     baseline_summary = baseline["snapshots"][-1]["expected"]["dashboard"]["summary"]
     assert baseline_summary["rows"][0]["skills_consulted"] == []
     assert baseline_summary["rows"][0]["tool_count"] == 0
+
+
+_SKILL_POLICY = _load_fixture("skill-policy.json")
+
+_SKILL_POLICY_ERRORS: Mapping[str, type[SkillPolicyResolutionError]] = {
+    "inventory_unavailable": SkillInventoryUnavailable,
+    "missing_enabled_skills": MissingEnabledSkills,
+    "missing_required_skills": MissingRequiredSkills,
+    "untracked_project_skills": UntrackedProjectSkills,
+}
+
+
+def _skill_policy_catalog(case: Mapping[str, Any]) -> SkillCatalog:
+    fixture = case["catalog"]
+    return SkillCatalog(
+        winners={
+            winner["name"]: SkillCatalogWinner(
+                name=winner["name"],
+                source_kind=winner["source_kind"],
+            )
+            for winner in fixture["winners"]
+        },
+        inventory_available=fixture.get("inventory_available", True),
+    )
+
+
+def _skill_policy_inputs(case: Mapping[str, Any]) -> SkillPolicyInputs:
+    fixture = case["inputs"]
+
+    def scope(key: str) -> SkillPolicyInput:
+        entry = fixture.get(key)
+        if entry is None:
+            return SkillPolicyInput()
+        return SkillPolicyInput(present=True, names=tuple(entry))
+
+    return SkillPolicyInputs(
+        project=scope("project"),
+        global_=scope("global"),
+        environment=scope("environment"),
+        enable_skills=frozenset(fixture.get("enable_skills", ())),
+        disable_skills=frozenset(fixture.get("disable_skills", ())),
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["resolution_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_resolution_fixture(case: dict[str, Any]) -> None:
+    """Every policy case runs through the production resolver, not a restatement."""
+    kwargs: dict[str, Any] = {
+        "catalog": _skill_policy_catalog(case),
+        "required_skills": tuple(case["required_skills"]),
+        "legacy_denied": tuple(case.get("legacy_denied", ())),
+        "tracked_project_skills": tuple(
+            winner["name"]
+            for winner in case["catalog"]["winners"]
+            if winner.get("tracked", False)
+        ),
+    }
+    if "fallback" in case:
+        kwargs["fallback"] = SkillPolicyFallback(case["fallback"])
+
+    if "expected_error" in case:
+        expected = _SKILL_POLICY_ERRORS[case["expected_error"]]
+        with pytest.raises(expected) as raised:
+            resolve_skill_policy(_skill_policy_inputs(case), **kwargs)
+        assert list(raised.value.names) == case["expected_error_names"]
+        return
+
+    policy = resolve_skill_policy(_skill_policy_inputs(case), **kwargs)
+    expected = case["expected"]
+    assert policy.base_scope.value == expected["base_scope"]
+    assert list(policy.enabled) == expected["enabled"]
+    assert list(policy.required) == expected["required"]
+    assert list(policy.legacy_denied) == expected["legacy_denied"]
+    assert dict(policy.source_kinds) == expected["source_kinds"]
+    assert (
+        policy.fallback.value if policy.fallback is not None else None
+    ) == expected["fallback"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["startup_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_startup_fixture(case: dict[str, Any]) -> None:
+    """Absent Config and a Config that predates the key are different answers.
+
+    Both currently resolve to the Minimal Skill policy, so the resolver cannot
+    tell them apart; the classifier is where the family draws the line that
+    decides whether a Run offers a one-time migration.
+    """
+    state = classify_skill_policy_startup(
+        _skill_policy_inputs(case),
+        config_present=case["config_present"],
+    )
+    assert state.value == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["event_payload_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_event_payload_fixture(case: dict[str, Any], tmp_path: Path) -> None:
+    """The redacted audit projection is built from the frozen Run policy itself."""
+    resolution = next(
+        entry
+        for entry in _SKILL_POLICY["resolution_cases"]
+        if entry["id"] == case["resolution_case"]
+    )
+    catalog = _skill_policy_catalog(resolution)
+    policy = resolve_skill_policy(
+        _skill_policy_inputs(resolution),
+        catalog=catalog,
+        required_skills=tuple(resolution["required_skills"]),
+        fallback=SkillPolicyFallback(resolution.get("fallback", "minimal")),
+        legacy_denied=tuple(resolution.get("legacy_denied", ())),
+        tracked_project_skills=tuple(
+            winner["name"]
+            for winner in resolution["catalog"]["winners"]
+            if winner.get("tracked", False)
+        ),
+    )
+    preflight = RunSkillPreflight(
+        exposure=SkillExposure(policy=policy, catalog=catalog, directory=tmp_path),
+        migration_warning=case["migration_warning"],
+    )
+
+    payload = preflight.event_payload
+    assert payload == case["expected_payload"]
+    assert list(payload) == sorted(payload), "payload keys are emitted sorted"
+    # Dict equality above is order-blind, and `source_kinds` is the one nested
+    # object here: without this, a projection that emitted discovery order would
+    # still pass while producing a line no other Run could reproduce byte for byte.
+    assert list(payload["source_kinds"]) == sorted(payload["source_kinds"])
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_SKILL_POLICY_RESOLVED
+    ]
+    assert sorted(payload) == contract["required_when_present"]
+    for projection in contract["sorted_projections"]:
+        assert list(payload[projection]) == sorted(payload[projection]), projection
+        # The fixture is what the native ports copy, so an unsorted expectation
+        # would teach them the wrong lesson even while Python stayed correct.
+        expected_projection = case["expected_payload"][projection]
+        assert list(expected_projection) == sorted(expected_projection), projection
+
+
+def test_skill_policy_event_payload_carries_no_filesystem_location() -> None:
+    """A Skill is identified by canonical name, so no path can reach the replay log.
+
+    ``SkillCatalogWinner`` knows the absolute ``path`` a Skill was resolved from
+    and the exposure knows the Run-scoped directory it was copied into. Neither
+    is a policy identity, and both would leak an operator's home directory into
+    a shared replay log, so the projection must reduce to names and source kinds.
+    """
+    home = Path("/Users/operator/.copilot/skills/tdd")
+    catalog = SkillCatalog(
+        winners={
+            "tdd": SkillCatalogWinner(
+                name="tdd",
+                source_kind="personal",
+                description="Test-driven development",
+                path=home,
+            )
+        }
+    )
+    policy = resolve_skill_policy(
+        SkillPolicyInputs(global_=SkillPolicyInput(present=True, names=("tdd",))),
+        catalog=catalog,
+        required_skills=("tdd",),
+    )
+    payload = RunSkillPreflight(
+        exposure=SkillExposure(
+            policy=policy,
+            catalog=catalog,
+            directory=Path("/tmp/run-workspace/exposure"),
+        ),
+        migration_warning=False,
+    ).event_payload
+
+    rendered = json.dumps(payload)
+    assert str(home) not in rendered
+    assert "/Users/" not in rendered
+    assert "exposure" not in rendered
+
+
+def test_skill_policy_fixture_exercises_every_scope_fallback_and_failure() -> None:
+    """A new resolution outcome cannot land with no case pinning it.
+
+    The parametrized cases prove the outcomes the fixture *names*; this proves
+    the fixture names them all. Without it a fifth validation failure — or a
+    third fallback reason — could ship green, and the ports built against this
+    suite would inherit a hole rather than a contract.
+    """
+    cases = _SKILL_POLICY["resolution_cases"]
+    assert {case["expected"]["base_scope"] for case in cases if "expected" in case} == {
+        scope.value for scope in SkillPolicyScope
+    }
+    assert {case["expected"]["fallback"] for case in cases if "expected" in case} == {
+        None,
+        *(reason.value for reason in SkillPolicyFallback),
+    }
+    assert {
+        case["expected_error"] for case in cases if "expected_error" in case
+    } == set(_SKILL_POLICY_ERRORS)
+    assert set(_SKILL_POLICY_ERRORS.values()) == {
+        subclass
+        for subclass in SkillPolicyResolutionError.__subclasses__()
+    }
+    assert {case["expected"] for case in _SKILL_POLICY["startup_cases"]} == {
+        state.value for state in SkillPolicyStartupState
+    }
+    assert set(_SKILL_POLICY["source_kinds"]) >= {
+        winner["source_kind"]
+        for case in cases
+        for winner in case["catalog"]["winners"]
+    }
+
+
+def test_run_skill_policy_and_iteration_consultation_stay_separate_facts() -> None:
+    """Availability is Run-level; consultation is per-Iteration observed behaviour.
+
+    Deriving either from the other would be the cheap mistake: a Run that
+    *enabled* six Skills and consulted one is not a Run that consulted six, and
+    an Iteration that consulted a Skill proves nothing about the boundary the
+    next Iteration inherits. The two fixtures therefore share no seam, and this
+    pins that they disagree freely.
+    """
+    catalog = SkillCatalog(
+        winners={
+            name: SkillCatalogWinner(name=name, source_kind="packaged")
+            for name in ("code-review", "prototype", "tdd")
+        }
+    )
+    policy = resolve_skill_policy(
+        SkillPolicyInputs(
+            global_=SkillPolicyInput(
+                present=True, names=("code-review", "prototype", "tdd")
+            )
+        ),
+        catalog=catalog,
+        required_skills=("tdd",),
+    )
+    payload = RunSkillPreflight(
+        exposure=SkillExposure(
+            policy=policy, catalog=catalog, directory=Path("/tmp/exposure")
+        ),
+        migration_warning=False,
+    ).event_payload
+
+    summary = RunSummary(pricing=Pricing(models={}))
+    snap = summary.on_iteration_start(iter_num=1)
+    summary.record_tool_call(tool_name="skill", arguments={"skill": "tdd"})
+
+    # Available but never consulted; consulted is a strict subset here and need
+    # not be one at all — the policy payload is unchanged by either.
+    assert payload["enabled"] == ["code-review", "prototype", "tdd"]
+    assert sorted(snap.skills_consulted) == ["tdd"]
+    assert snap.skill_count == 1

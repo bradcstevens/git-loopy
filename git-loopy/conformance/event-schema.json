@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.3",
+  "contract_version": "1.4",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -87,6 +87,21 @@
         "peak_context_window"
       ],
       "consumption_required": ["model", "tokens_in", "tokens_out"]
+    },
+    "wrapper.skill_policy.resolved": {
+      "required_when_present": [
+        "base_scope",
+        "enabled",
+        "fallback",
+        "legacy_denied",
+        "migration_warning",
+        "required",
+        "source_kinds"
+      ],
+      "base_scope_values": ["project", "global", "minimal"],
+      "fallback_values": ["minimal", "migration", null],
+      "sorted_projections": ["enabled", "legacy_denied", "required", "source_kinds"],
+      "redacted": "Skill identity is the canonical name: no absolute path, home directory, exposure directory, or Skill content may appear."
     }
   },
   "value_semantics": {
@@ -995,6 +1010,26 @@
         ]
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 0.5, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 0.5, \"cumulative_active_seconds\": 0.5, \"consumption\": {\"model\": null, \"tokens_in\": 0, \"tokens_out\": 0}, \"cost_usd\": null, \"peak_context_window\": null}], \"outcome\": \"no_progress\", \"summary\": {\"model\": null, \"tokens_in\": 0, \"tokens_out\": 0, \"observed_tokens\": 0, \"cost_usd\": null, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 1, \"peak_context_window\": null}}\n"
+    },
+    {
+      "id": "redacted-skill-policy-resolution",
+      "event": {
+        "source_kinds": {
+          "house-style": "project",
+          "tdd": "packaged"
+        },
+        "required": ["tdd"],
+        "migration_warning": false,
+        "ts": "2026-05-16T00:00:00.500Z",
+        "legacy_denied": ["prototype"],
+        "type": "wrapper.skill_policy.resolved",
+        "iter": null,
+        "fallback": null,
+        "run_id": "01HXR0000000000000000000DD",
+        "enabled": ["house-style", "tdd"],
+        "base_scope": "project"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.skill_policy.resolved\", \"base_scope\": \"project\", \"enabled\": [\"house-style\", \"tdd\"], \"fallback\": null, \"legacy_denied\": [\"prototype\"], \"migration_warning\": false, \"required\": [\"tdd\"], \"source_kinds\": {\"house-style\": \"project\", \"tdd\": \"packaged\"}}\n"
     }
   ]
 }

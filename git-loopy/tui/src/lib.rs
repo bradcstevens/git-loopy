@@ -39,4 +39,4 @@ pub use view::{
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 
 /// The Wrapper-contract version whose Dashboard seam this core implements.
-pub const WRAPPER_CONTRACT_VERSION: &str = "1.3";
+pub const WRAPPER_CONTRACT_VERSION: &str = "1.4";

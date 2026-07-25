@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.4",
+  "source_kinds": [
+    "project",
+    "inherited",
+    "personal",
+    "plugin",
+    "custom",
+    "builtin",
+    "packaged"
+  ],
+  "startup_states": [
+    "unconfigured",
+    "legacy",
+    "configured"
+  ],
+  "fallback_reasons": [
+    "minimal",
+    "migration"
+  ],
+  "startup_cases": [
+    {
+      "id": "no-config-anywhere-is-unconfigured",
+      "config_present": false,
+      "inputs": {},
+      "expected": "unconfigured"
+    },
+    {
+      "id": "config-without-the-policy-key-is-legacy",
+      "config_present": true,
+      "inputs": {},
+      "expected": "legacy"
+    },
+    {
+      "id": "project-scope-is-configured",
+      "config_present": true,
+      "inputs": { "project": ["tdd"] },
+      "expected": "configured"
+    },
+    {
+      "id": "global-scope-is-configured",
+      "config_present": true,
+      "inputs": { "global": ["tdd"] },
+      "expected": "configured"
+    },
+    {
+      "id": "explicit-empty-project-scope-is-configured",
+      "config_present": true,
+      "inputs": { "project": [] },
+      "expected": "configured"
+    },
+    {
+      "id": "environment-replacement-is-configured",
+      "config_present": true,
+      "inputs": { "environment": ["tdd"] },
+      "expected": "configured"
+    },
+    {
+      "id": "run-overlay-leaves-a-legacy-base-unmigrated",
+      "config_present": true,
+      "inputs": { "enable_skills": ["tdd"] },
+      "expected": "legacy"
+    }
+  ],
+  "resolution_cases": [
+    {
+      "id": "global-scope-selected-when-project-key-is-absent",
+      "catalog": {
+        "winners": [
+          { "name": "code-review", "source_kind": "packaged" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "global": ["code-review", "tdd"] },
+      "expected": {
+        "base_scope": "global",
+        "enabled": ["code-review", "tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "code-review": "packaged", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "project-scope-replaces-the-global-policy-rather-than-unioning-it",
+      "catalog": {
+        "winners": [
+          { "name": "code-review", "source_kind": "packaged" },
+          { "name": "prototype", "source_kind": "personal" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": {
+        "project": ["prototype", "tdd"],
+        "global": ["code-review", "tdd"]
+      },
+      "expected": {
+        "base_scope": "project",
+        "enabled": ["prototype", "tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "prototype": "personal", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "explicit-empty-project-policy-is-a-real-empty-policy-not-inheritance",
+      "catalog": {
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": [],
+      "inputs": { "project": [], "global": ["tdd"] },
+      "expected": {
+        "base_scope": "project",
+        "enabled": [],
+        "required": [],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": {}
+      }
+    },
+    {
+      "id": "environment-exactly-replaces-the-configured-base-policy",
+      "catalog": {
+        "winners": [
+          { "name": "code-review", "source_kind": "packaged" },
+          { "name": "prototype", "source_kind": "packaged" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": {
+        "project": ["code-review", "prototype", "tdd"],
+        "environment": ["tdd"]
+      },
+      "expected": {
+        "base_scope": "project",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "explicit-empty-environment-replacement-clears-the-configured-base",
+      "catalog": {
+        "winners": [
+          { "name": "prototype", "source_kind": "packaged" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": [],
+      "inputs": { "global": ["prototype", "tdd"], "environment": [] },
+      "expected": {
+        "base_scope": "global",
+        "enabled": [],
+        "required": [],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": {}
+      }
+    },
+    {
+      "id": "environment-replacement-without-a-configured-scope-still-reports-minimal",
+      "catalog": {
+        "winners": [
+          { "name": "prototype", "source_kind": "packaged" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "environment": ["prototype", "tdd"] },
+      "expected": {
+        "base_scope": "minimal",
+        "enabled": ["prototype", "tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": "minimal",
+        "source_kinds": { "prototype": "packaged", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "run-enable-overlay-adds-to-the-base-policy-without-persisting",
+      "catalog": {
+        "winners": [
+          { "name": "diagnosing-bugs", "source_kind": "builtin" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "global": ["tdd"], "enable_skills": ["diagnosing-bugs"] },
+      "expected": {
+        "base_scope": "global",
+        "enabled": ["diagnosing-bugs", "tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "diagnosing-bugs": "builtin", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "disable-wins-over-both-the-base-policy-and-a-same-run-enable",
+      "catalog": {
+        "winners": [
+          { "name": "diagnosing-bugs", "source_kind": "builtin" },
+          { "name": "prototype", "source_kind": "plugin" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": {
+        "project": ["prototype", "tdd"],
+        "enable_skills": ["diagnosing-bugs"],
+        "disable_skills": ["diagnosing-bugs", "prototype"]
+      },
+      "expected": {
+        "base_scope": "project",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "deprecated-legacy-denial-subtracts-from-the-effective-set",
+      "catalog": {
+        "winners": [
+          { "name": "prototype", "source_kind": "custom" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "global": ["prototype", "tdd"] },
+      "legacy_denied": ["prototype"],
+      "expected": {
+        "base_scope": "global",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": ["prototype"],
+        "fallback": null,
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "legacy-denial-of-an-absent-name-is-recorded-without-changing-the-set",
+      "catalog": {
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "global": ["tdd"] },
+      "legacy_denied": ["never-enabled"],
+      "expected": {
+        "base_scope": "global",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": ["never-enabled"],
+        "fallback": null,
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "minimal-fallback-enables-exactly-the-required-skills",
+      "catalog": {
+        "winners": [
+          { "name": "code-review", "source_kind": "packaged" },
+          { "name": "prototype", "source_kind": "personal" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["code-review", "tdd"],
+      "inputs": {},
+      "expected": {
+        "base_scope": "minimal",
+        "enabled": ["code-review", "tdd"],
+        "required": ["code-review", "tdd"],
+        "legacy_denied": [],
+        "fallback": "minimal",
+        "source_kinds": { "code-review": "packaged", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "unattended-migration-records-migration-as-its-fallback-reason",
+      "catalog": {
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": {},
+      "fallback": "migration",
+      "expected": {
+        "base_scope": "minimal",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": "migration",
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "an-enabled-name-with-no-catalog-winner-fails-preflight",
+      "catalog": {
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "project": ["retired-skill", "tdd", "typo-skill"] },
+      "expected_error": "missing_enabled_skills",
+      "expected_error_names": ["retired-skill", "typo-skill"]
+    },
+    {
+      "id": "disabling-a-required-skill-fails-preflight",
+      "catalog": {
+        "winners": [
+          { "name": "code-review", "source_kind": "packaged" },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["code-review", "tdd"],
+      "inputs": {
+        "global": ["code-review", "tdd"],
+        "disable_skills": ["code-review"]
+      },
+      "expected_error": "missing_required_skills",
+      "expected_error_names": ["code-review"]
+    },
+    {
+      "id": "a-legacy-denial-cannot-quietly-remove-a-required-skill",
+      "catalog": {
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "global": ["tdd"] },
+      "legacy_denied": ["tdd"],
+      "expected_error": "missing_required_skills",
+      "expected_error_names": ["tdd"]
+    },
+    {
+      "id": "an-enabled-untracked-project-winner-fails-preflight",
+      "catalog": {
+        "winners": [
+          { "name": "house-style", "source_kind": "project", "tracked": false },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "project": ["house-style", "tdd"] },
+      "expected_error": "untracked_project_skills",
+      "expected_error_names": ["house-style"]
+    },
+    {
+      "id": "a-git-tracked-project-winner-is-a-shareable-repository-contract",
+      "catalog": {
+        "winners": [
+          { "name": "house-style", "source_kind": "project", "tracked": true },
+          { "name": "tdd", "source_kind": "packaged" }
+        ]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "project": ["house-style", "tdd"] },
+      "expected": {
+        "base_scope": "project",
+        "enabled": ["house-style", "tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": null,
+        "source_kinds": { "house-style": "project", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "unavailable-inventory-fails-an-explicitly-configured-policy",
+      "catalog": {
+        "inventory_available": false,
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": { "project": ["tdd"] },
+      "expected_error": "inventory_unavailable",
+      "expected_error_names": ["tdd"]
+    },
+    {
+      "id": "unavailable-inventory-still-serves-the-minimal-fallback",
+      "catalog": {
+        "inventory_available": false,
+        "winners": [{ "name": "tdd", "source_kind": "packaged" }]
+      },
+      "required_skills": ["tdd"],
+      "inputs": {},
+      "expected": {
+        "base_scope": "minimal",
+        "enabled": ["tdd"],
+        "required": ["tdd"],
+        "legacy_denied": [],
+        "fallback": "minimal",
+        "source_kinds": { "tdd": "packaged" }
+      }
+    }
+  ],
+  "event_payload_cases": [
+    {
+      "id": "resolved-project-policy-projects-sorted-redacted-names",
+      "resolution_case": "project-scope-replaces-the-global-policy-rather-than-unioning-it",
+      "migration_warning": false,
+      "expected_payload": {
+        "base_scope": "project",
+        "enabled": ["prototype", "tdd"],
+        "fallback": null,
+        "legacy_denied": [],
+        "migration_warning": false,
+        "required": ["tdd"],
+        "source_kinds": { "prototype": "personal", "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "minimal-fallback-and-prompt-migration-are-both-visible",
+      "resolution_case": "unattended-migration-records-migration-as-its-fallback-reason",
+      "migration_warning": true,
+      "expected_payload": {
+        "base_scope": "minimal",
+        "enabled": ["tdd"],
+        "fallback": "migration",
+        "legacy_denied": [],
+        "migration_warning": true,
+        "required": ["tdd"],
+        "source_kinds": { "tdd": "packaged" }
+      }
+    },
+    {
+      "id": "legacy-denials-stay-visible-in-the-audit-projection",
+      "resolution_case": "deprecated-legacy-denial-subtracts-from-the-effective-set",
+      "migration_warning": false,
+      "expected_payload": {
+        "base_scope": "global",
+        "enabled": ["tdd"],
+        "fallback": null,
+        "legacy_denied": ["prototype"],
+        "migration_warning": false,
+        "required": ["tdd"],
+        "source_kinds": { "tdd": "packaged" }
+      }
+    }
+  ],
+  "native_transition": {
+    "implemented": ["python"],
+    "fail_closed": ["shell", "powershell"],
+    "policy_surfaces": [
+      "GIT_LOOPY_ENABLED_SKILLS",
+      "--enable-skill",
+      "--disable-skill",
+      "enabled_skills"
+    ]
+  }
+}
