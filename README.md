@@ -148,7 +148,9 @@ flowchart TD
 
 The [workflow guide](docs/workflow.md) expands this path. The
 [concepts guide](docs/concepts.md) explains the context model, the [Wrapper
-contract](docs/wrapper-contract.md) defines every Orchestrator's behavior, and
+contract](docs/wrapper-contract.md) defines every Orchestrator's behavior,
+[`docs/skill-policy.md`](docs/skill-policy.md) covers the closed-world **Skill
+policy** that decides which Skills a Run may load, and
 [`docs/runners.md`](docs/runners.md) documents the Runner family — the
 [Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and
 [PowerShell](git-loopy/powershell/README.md) Orchestrators available today.

@@ -202,7 +202,9 @@ diagnostic naming the surface:
 The deprecated legacy guards — `GIT_LOOPY_DENY_SKILLS` and `--deny-skill` — are
 **not** a closed-world surface. They keep resolving and running unchanged.
 
-Use the Python Orchestrator until this port reaches native Config parity.
+Use the Python Orchestrator until this port reaches native Config parity, or
+remove the policy surface from the environment and Config this port is reading.
+The operator guide is [`docs/skill-policy.md`](../../docs/skill-policy.md).
 
 ---
 

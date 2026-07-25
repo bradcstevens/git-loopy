@@ -84,6 +84,11 @@ enabled project Skill that is not git-tracked blocks the save. `git-loopy init
 without contacting the machine's Copilot inventory, which keeps a first CI setup
 reproducible. Change a saved policy later with `git-loopy skills edit`.
 
+Setup is where a policy is *established*; everything else about operating one —
+the Config surfaces, the `git-loopy skills` commands, the resolved-policy audit
+event, the Python-first family transition, and every preflight failure with its
+recovery command — is in [`docs/skill-policy.md`](skill-policy.md).
+
 #### The Skill picker has two renderings, and one set of rules
 
 Every path that asks you to choose Skills — `init`, `skills edit`, and the
@@ -360,6 +365,7 @@ GitHub, GitLab, local markdown, or "other" (free-form). There's no plugin to hun
 
 **Next:**
 - [`docs/workflow.md`](workflow.md) — the complete planning-to-review workflow.
+- [`docs/skill-policy.md`](skill-policy.md) — operating the closed-world Skill policy: Config surfaces, `git-loopy skills`, migration, audit, and troubleshooting.
 - [`docs/customization.md`](customization.md) — deeper tailoring of `AGENTS.md`, `PROMPT.md`, and the per-repo skill config.
 - [`docs/runners.md`](runners.md) — the Runner family, invocation, and contract.
 - Back to [`README.md`](../README.md).

@@ -196,9 +196,45 @@ Run consumes their durable output. `PROMPT.md` keeps the reusable execution
 discipline while avoiding a second human-driven orchestrator inside an
 Iteration.
 
+## The closed-world Skill policy is Python-first
+
+Routing decides which Skill an Iteration *reaches for*. The **Skill policy**
+(ADR-0015, [contract §17](wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
+decides which Skills the Run may load at all — and it is not yet implemented
+identically across the family.
+
+| Orchestrator | Closed-world Skill policy |
+| --- | --- |
+| **Python** reference | **Implemented.** Resolves, freezes, enforces, and audits the policy. |
+| **shell** port | **Fails closed.** No `config.toml` tier yet, so it refuses to start. |
+| **PowerShell** port | **Fails closed.** Same reason, same behaviour. |
+
+A port that cannot honour a policy must not quietly ignore one: running an
+Iteration on a *wider* capability set than the operator configured is exactly
+what §17.6 exists to prevent. So the shell and PowerShell Orchestrators **abort
+before source collection and before Copilot is invoked**, exiting `1` with a
+diagnostic naming the surface they found:
+
+| Surface | Detected as |
+| --- | --- |
+| `GIT_LOOPY_ENABLED_SKILLS` | present — *including* an explicit empty value, which is a real empty policy |
+| `--enable-skill` | recognised as a policy overlay, never as an unknown option, and never applied |
+| `--disable-skill` | the same |
+| `enabled_skills` | any assignment of the key in a project or global `config.toml` |
+
+The deprecated legacy guards — `deny_skills`, `GIT_LOOPY_DENY_SKILLS`, and
+`--deny-skill` — are **not** a closed-world surface. They keep resolving and
+running unchanged on every port.
+
+Until the native ports reach Config parity, either use the Python Orchestrator
+for a Run with a configured policy, or remove the policy surfaces from the
+environment and Config that the native port is reading. The full operator guide
+is [`docs/skill-policy.md`](skill-policy.md).
+
 ---
 
 **Next:**
+- [`docs/skill-policy.md`](skill-policy.md) — establishing, inspecting, changing, migrating, and troubleshooting the closed-world Skill policy.
 - [`docs/workflow.md`](workflow.md) — where autonomous execution fits in the complete planning-to-review loop.
 - [`docs/customization.md`](customization.md) — adjusting `AGENTS.md` feedback loops and `PROMPT.md` skill routing.
 - [`git-loopy/python/README.md`](../git-loopy/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.

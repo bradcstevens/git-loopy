@@ -178,9 +178,19 @@ uv run --project git-loopy/python git-loopy --select-model
 # Tolerate more no-progress iterations before aborting (default: 3).
 GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
 
-# Deny a tool or skill at the SDK permission gate (repeatable, additive
-# with GIT_LOOPY_DENY_TOOLS / GIT_LOOPY_DENY_SKILLS env vars).
+# Deprecated: deny a tool or skill at the SDK permission gate (repeatable,
+# additive with GIT_LOOPY_DENY_TOOLS / the deprecated GIT_LOOPY_DENY_SKILLS).
+# `--deny-skill` is deprecated — prefer the closed-world Skill policy below.
 uv run --project git-loopy/python git-loopy --deny-tool bash --deny-skill handoff
+
+# Closed-world **Skill policy** (ADR-0015): temporarily widen or narrow the
+# configured allowlist for one Run. Repeatable; disable wins on a conflict.
+uv run --project git-loopy/python git-loopy --enable-skill handoff
+uv run --project git-loopy/python git-loopy --disable-skill prototype
+
+# Replace the configured base Skill policy outright for one Run. An explicitly
+# empty value is a real empty policy, not "unset".
+GIT_LOOPY_ENABLED_SKILLS=tdd,code-review uv run --project git-loopy/python git-loopy
 
 # Opt into Parallel mode (ADR-0008): work up to N `parallel-safe` issues
 # concurrently, each in its own git worktree + branch. Bare `--parallel`
@@ -223,8 +233,9 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
 | `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | **Parallel mode** only (ADR-0008): a shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Wave. Ignored by the serial path. |
+| `GIT_LOOPY_ENABLED_SKILLS`            | unset                          | **Exact replacement** of the configured base **Skill policy** (ADR-0015) for one Run — comma-separated canonical Skill names. *Presence*, not content, is what counts: an explicitly empty value is a real empty policy (which then fails preflight for omitting the **Required Skills**), while leaving it unset keeps the project / global `enabled_skills`. Because it replaces the base policy it also suppresses the one-time legacy-Config migration offer. See [`docs/skill-policy.md`](../../docs/skill-policy.md). |
 | `GIT_LOOPY_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
-| `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | Comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags.                                                                                   |
+| `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | **Deprecated** final guard (contract §17.2): comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags and across config tiers — it only ever subtracts, and a denial that would remove a Required Skill is a validation failure rather than a quiet subtraction. Prefer omitting the name from `enabled_skills`. |
 | `GIT_LOOPY_PRICING_FILE`              | packaged `pricing.toml`        | Explicit `pricing.toml` path. A malformed file aborts the run with exit `1` (no silent fallback — operator intent is preserved).                                                                                 |
 | `GIT_LOOPY_OTEL_ENABLED`              | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
@@ -235,7 +246,8 @@ Copilot, network access, or the TUI.
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `-v` / `-vv` / `-vvv`,
-`--no-reasoning`, `--deny-tool`, `--deny-skill`, `--interactive` /
+`--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
+`--deny-skill` (deprecated), `--interactive` /
 `--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
@@ -271,20 +283,32 @@ include_prs = true
 otel_enabled = false
 interactive = false
 send_timeout_seconds = 7200
+enabled_skills = ["tdd", "code-review"]
 deny_tools = ["bash"]
-deny_skills = []
+deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
 ```
 
 The **persisted** knobs are `model`, `reasoning_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `otel_enabled`, `interactive`,
-`send_timeout_seconds`, and the two denylists. The model/effort **capability
-gate** (below) still applies to a config-supplied model. The two denylists are
+`send_timeout_seconds`, `enabled_skills`, and the two denylists. The
+model/effort **capability gate** (below) still applies to a config-supplied
+model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
 overridden — matching the security-positive env-var behavior. **Per-run-only**
 knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
 verbosity, `--no-reasoning`, `--parallel`, and `GIT_LOOPY_PRICING_FILE`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
+
+`enabled_skills` is the one key that does **not** union: it is the closed-world
+**Skill policy** allowlist (ADR-0015), and a project value *replaces* the global
+one rather than merging with it. An absent key inherits the next scope down and
+ultimately resolves to the **Minimal Skill policy** (the Required Skills only),
+while `enabled_skills = []` is a real, deliberately empty policy. Manage it with
+`git-loopy skills list` / `git-loopy skills edit` / `git-loopy skills sync`
+rather than by hand; the complete operator guide — seeding, migration, CI
+behaviour, the resolved-policy audit event, and every preflight failure with its
+recovery command — is [`docs/skill-policy.md`](../../docs/skill-policy.md).
 
 ---
 
