@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import tarfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,43 @@ def test_the_published_artifact_set_is_named_the_same_way_everywhere() -> None:
             "git-loopy-tui",
         ),
     }
+
+
+def test_every_channel_resolves_one_artifact_url_for_one_release() -> None:
+    """The URL an installer downloads from is shared, not re-guessed per channel.
+
+    The shell and PowerShell installers, the Homebrew formula, and the
+    winget/Scoop manifests all address the same bytes. A second opinion about
+    where a Release publishes them is a channel that installs something else.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+
+    assert (
+        tui_release.release_artifact_url(
+            metadata,
+            release_version="9.9.9",
+            artifact="git-loopy-tui-aarch64-apple-darwin.tar.xz",
+        )
+        == "https://github.com/bradcstevens/git-loopy/releases/download/"
+        "v9.9.9/git-loopy-tui-aarch64-apple-darwin.tar.xz"
+    )
+
+
+def test_the_download_url_cannot_drift_from_the_repository_it_publishes_from() -> None:
+    """One repository, declared once in the helper manifest.
+
+    The template is duplicated into the shared fixture so no installer has to
+    parse `Cargo.toml`, which makes drift the risk this pins: a fork or a rename
+    that moved the manifest but not the fixture would keep every channel
+    downloading from the old repository's Releases.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    manifest = tomllib.loads(
+        (REPOSITORY_ROOT / tui_release.HELPER_MANIFEST_PATH).read_text(encoding="utf-8")
+    )
+
+    repository = manifest["package"]["repository"]
+    assert metadata.release_download_url_template.startswith(f"{repository}/releases/")
 
 
 def _write_artifact(directory: Path, name: str, payload: bytes) -> Path:

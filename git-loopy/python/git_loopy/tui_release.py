@@ -88,6 +88,7 @@ class ArtifactMetadata:
     checksum_name_template: str
     checksum_algorithm: str
     archive_formats: dict[str, tuple[str, str]]
+    release_download_url_template: str
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,26 @@ def load_artifact_metadata(repository_root: Path) -> ArtifactMetadata:
             )
             for host_os, record in document["archive_formats"].items()
         },
+        release_download_url_template=str(document["release_download_url_template"]),
+    )
+
+
+def release_artifact_url(
+    metadata: ArtifactMetadata,
+    *,
+    release_version: str,
+    artifact: str,
+) -> str:
+    """Where one Release publishes one artifact.
+
+    Every distribution channel — both installers, the Homebrew tap, the winget
+    and Scoop manifests — downloads the same bytes, so the address is derived
+    from one shared template rather than restated per channel. A channel that
+    resolves its own URL is a channel that can install a different Release.
+    """
+    return metadata.release_download_url_template.format(
+        version=release_version,
+        artifact=artifact,
     )
 
 

@@ -5,6 +5,7 @@
   "archive_name_template": "{command}-{target}.{extension}",
   "checksum_name_template": "{archive}.sha256",
   "checksum_algorithm": "sha256",
+  "release_download_url_template": "https://github.com/bradcstevens/git-loopy/releases/download/v{version}/{artifact}",
   "archive_formats": {
     "macos": {
       "extension": "tar.xz",
