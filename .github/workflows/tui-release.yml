@@ -55,6 +55,43 @@ jobs:
           ${{ startsWith(github.ref, 'refs/tags/v') && format('--tag-ref {0}', github.ref) || '' }}
           --github-output "$GITHUB_OUTPUT"
 
+  plan:
+    name: Prove the release plan
+    needs: identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Install the pinned release toolchain
+        shell: bash
+        env:
+          CARGO_DIST_VERSION: "0.32.0"
+        run: |
+          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          dist --version | grep -q "$CARGO_DIST_VERSION"
+
+      # cargo-dist decides two things this repository cannot commit: whether it
+      # can see the helper package at all, and which runner and container each
+      # target actually needs. Both are proven against VERSION, the helper
+      # manifest, and the shared artifact metadata before a byte is compiled —
+      # and on pull requests too, where this is the whole of "validate".
+      - name: Refuse a plan that disagrees with the declared Release
+        shell: bash
+        env:
+          TAG_REF: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref || '' }}
+        run: |
+          ( cd git-loopy/tui && dist plan --output-format=json ) > plan.json
+          uv run --project git-loopy/python --all-extras \
+            python -m git_loopy.tui_release verify-plan \
+            --repository-root . \
+            --plan plan.json \
+            ${TAG_REF:+--tag-ref "$TAG_REF"}
+
   family-conformance:
     name: Prove Runner-family Conformance
     needs: identity

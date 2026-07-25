@@ -439,3 +439,225 @@ def test_a_native_build_verifies_the_artifact_it_just_produced(tmp_path: Path) -
         )
         == 0
     )
+
+
+def test_the_helper_package_is_visible_to_the_release_toolchain() -> None:
+    """`publish = false` hides a binary from cargo-dist entirely.
+
+    The helper is never published to crates.io, so its manifest says
+    `publish = false` — and cargo-dist reads that as "this package has nothing
+    to release", refusing the whole workspace before it plans a single
+    artifact. The opt-in has to be explicit, or the release pipeline fails at
+    its first command for a reason that looks nothing like the cause.
+    """
+    assert tui_release.helper_package_is_distributable(REPOSITORY_ROOT) is True
+
+
+def _planned_artifacts(metadata: tui_release.ArtifactMetadata) -> dict[str, Any]:
+    """The artifact half of a `dist plan`, derived from the declared set."""
+    planned: dict[str, Any] = {}
+    for artifact in tui_release.published_artifacts(metadata):
+        planned[artifact.archive_name] = {
+            "kind": "executable-zip",
+            "name": artifact.archive_name,
+            "checksum": artifact.checksum_name,
+            "target_triples": [artifact.target.triple],
+        }
+        planned[artifact.checksum_name] = {
+            "kind": "checksum",
+            "name": artifact.checksum_name,
+            "checksum": None,
+            "target_triples": [artifact.target.triple],
+        }
+    planned["sha256.sum"] = {
+        "kind": "unified-checksum",
+        "name": "sha256.sum",
+        "checksum": None,
+        "target_triples": None,
+    }
+    return planned
+
+
+def _release_plan(
+    metadata: tui_release.ArtifactMetadata,
+    version: str,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """A `dist plan --output-format=json` document for the declared Release."""
+    plan = {
+        "dist_version": "0.32.0",
+        "announcement_tag": f"v{version}",
+        "github_attestations": True,
+        "artifacts": _planned_artifacts(metadata),
+        "ci": {
+            "github": {
+                "artifacts_matrix": {
+                    "include": [
+                        {
+                            "runner": target.runner,
+                            "targets": [target.triple],
+                            **(
+                                {"container": {"image": target.container}}
+                                if target.container
+                                else {}
+                            ),
+                            **(
+                                {"packages_install": target.packages_install}
+                                if target.packages_install
+                                else {}
+                            ),
+                        }
+                        for target in metadata.targets
+                    ]
+                },
+                "pr_run_mode": "plan",
+            }
+        },
+    }
+    plan.update(overrides)
+    return plan
+
+
+def test_the_release_plan_agrees_with_the_declared_artifact_set() -> None:
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+
+    verified = tui_release.verify_release_plan(
+        REPOSITORY_ROOT,
+        _release_plan(metadata, version),
+    )
+
+    assert [artifact.target.triple for artifact in verified] == [
+        target.triple for target in metadata.targets
+    ]
+
+
+def test_a_plan_that_would_build_a_different_artifact_set_is_refused() -> None:
+    """cargo-dist decides what is actually built; the fixture decides what is
+    published. A Release where those disagree ships a name nothing resolves."""
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    plan = _release_plan(metadata, version)
+    del plan["artifacts"]["git-loopy-tui-x86_64-pc-windows-msvc.zip"]
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(REPOSITORY_ROOT, plan)
+    assert "x86_64-pc-windows-msvc" in str(raised.value)
+
+
+def test_a_plan_from_a_different_toolchain_is_refused() -> None:
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(
+            REPOSITORY_ROOT,
+            _release_plan(metadata, version, dist_version="0.33.0"),
+        )
+    assert "0.33.0" in str(raised.value)
+
+
+def test_a_plan_that_would_publish_an_unchecksummed_artifact_is_refused() -> None:
+    """AC4: every archive and every generated installer carries a checksum.
+
+    Expressed as a rule over the plan rather than as a list of the artifacts
+    that happen to exist today, so enabling a cargo-dist installer later cannot
+    quietly ship one nothing can verify.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    plan = _release_plan(metadata, version)
+    plan["artifacts"]["git-loopy-tui-installer.sh"] = {
+        "kind": "installer",
+        "name": "git-loopy-tui-installer.sh",
+        "checksum": None,
+        "target_triples": [],
+    }
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(REPOSITORY_ROOT, plan)
+    assert "git-loopy-tui-installer.sh" in str(raised.value)
+
+
+def test_a_plan_that_would_not_attest_its_artifacts_is_refused() -> None:
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(
+            REPOSITORY_ROOT,
+            _release_plan(metadata, version, github_attestations=False),
+        )
+    assert "attest" in str(raised.value)
+
+
+def test_a_plan_announcing_another_release_is_refused() -> None:
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(
+            REPOSITORY_ROOT,
+            _release_plan(metadata, version, announcement_tag="v9.9.9"),
+        )
+    assert "v9.9.9" in str(raised.value)
+
+
+def test_the_build_matrix_carries_the_provisioning_each_target_needs() -> None:
+    """AC2: three of the seven targets cannot build on a bare runner.
+
+    cargo-dist's plan prescribes a cross container for both arm64 Linux targets
+    and `musl-tools` for x64 musl. A matrix that omits them fails at the linker,
+    so the provisioning is declared beside the target it belongs to rather than
+    left to whoever writes the workflow.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+
+    assert {
+        target.triple: (target.runner, target.container, target.packages_install)
+        for target in metadata.targets
+    } == {
+        "aarch64-apple-darwin": ("macos-14", None, None),
+        "x86_64-apple-darwin": ("macos-15-intel", None, None),
+        "x86_64-pc-windows-msvc": ("windows-2022", None, None),
+        "aarch64-unknown-linux-gnu": (
+            "ubuntu-22.04",
+            "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
+            "pip3 install cargo-zigbuild",
+        ),
+        "x86_64-unknown-linux-gnu": ("ubuntu-22.04", None, None),
+        "aarch64-unknown-linux-musl": (
+            "ubuntu-22.04",
+            "messense/rust-musl-cross:aarch64-musl",
+            "pip3 install cargo-zigbuild",
+        ),
+        "x86_64-unknown-linux-musl": (
+            "ubuntu-22.04",
+            None,
+            "sudo apt-get update && sudo apt-get install -y musl-tools",
+        ),
+    }
+
+
+def test_a_plan_that_would_build_on_another_runner_is_refused() -> None:
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    plan = _release_plan(metadata, version)
+    plan["ci"]["github"]["artifacts_matrix"]["include"][0]["runner"] = "macos-13"
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.verify_release_plan(REPOSITORY_ROOT, plan)
+    assert "macos-13" in str(raised.value)
+
+
+def test_the_helper_manifest_defines_the_profile_the_toolchain_builds_with() -> None:
+    """cargo-dist compiles with `--profile dist`, which cargo will not invent.
+
+    `dist init` normally writes this section; a hand-maintained manifest has to
+    carry it deliberately, and without it every one of the seven build jobs dies
+    at `error: profile 'dist' is not defined` after the artifact plan has already
+    succeeded.
+    """
+    profile = tui_release.helper_release_profile(REPOSITORY_ROOT)
+
+    assert profile["inherits"] == "release"

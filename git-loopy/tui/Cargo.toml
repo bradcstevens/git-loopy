@@ -5,7 +5,19 @@ edition = "2021"
 rust-version = "1.74"
 description = "Shared git-loopy TUI helper: the semantic Dashboard core plus the standalone renderer binary."
 license = "MIT"
+# cargo-dist refuses `ci = ["github"]` without a repository URL, and the
+# generated download links in every Release artifact resolve against it.
+repository = "https://github.com/bradcstevens/git-loopy"
 publish = false
+
+# `publish = false` keeps the helper off crates.io — and cargo-dist reads it as
+# "this package has nothing to release", refusing the whole workspace before it
+# plans a single artifact. This is the documented opt-in that puts the binary
+# back in view; `test_tui_release.py` fails without it, because the alternative
+# is a release pipeline that dies at its first command complaining about an
+# empty workspace.
+[package.metadata.dist]
+dist = true
 
 # ADR-0013 locks one Cargo package with two targets, not two behaviour forks:
 # `git_loopy_tui` is embedded in-process by the future Rust Orchestrator, and

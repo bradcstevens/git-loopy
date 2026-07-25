@@ -50,6 +50,8 @@ class ArtifactTarget:
     libc: str | None
     runner: str
     build: str
+    container: str | None
+    packages_install: str | None
 
     @property
     def is_native(self) -> bool:
@@ -97,6 +99,11 @@ class PublishedArtifact:
     executable_name: str
 
 
+def _optional_text(value: Any) -> str | None:
+    """A fixture field that is either a string or deliberately absent."""
+    return None if value is None else str(value)
+
+
 def _read_fixture(repository_root: Path) -> dict[str, Any]:
     path = repository_root / ARTIFACT_METADATA_PATH
     try:
@@ -130,6 +137,8 @@ def load_artifact_metadata(repository_root: Path) -> ArtifactMetadata:
                 libc=None if record["libc"] is None else str(record["libc"]),
                 runner=str(record["runner"]),
                 build=str(record["build"]),
+                container=_optional_text(record["container"]),
+                packages_install=_optional_text(record["packages_install"]),
             )
             for record in document["targets"]
         ),
@@ -497,6 +506,32 @@ def helper_dist_configuration(repository_root: Path) -> dict[str, Any]:
     return configuration
 
 
+def helper_package_is_distributable(repository_root: Path) -> bool:
+    """Whether cargo-dist can see the helper binary at all.
+
+    The helper is never published to crates.io, so its manifest says
+    `publish = false` — and cargo-dist treats that as "this package has nothing
+    to release", refusing the entire workspace before it plans one artifact.
+    `[package.metadata.dist] dist = true` is the documented opt-in, and it has
+    to be explicit: without it the pipeline fails at its first command with a
+    diagnostic about an empty workspace, which points nowhere near the cause.
+    """
+    manifest = _read_helper_manifest(repository_root)
+    package = manifest.get("package")
+    metadata = package.get("metadata") if isinstance(package, dict) else None
+    configuration = metadata.get("dist") if isinstance(metadata, dict) else None
+    opted_in = (
+        configuration.get("dist") if isinstance(configuration, dict) else None
+    )
+    if opted_in is not True:
+        raise TuiReleaseError(
+            f"helper manifest {repository_root / HELPER_MANIFEST_PATH} sets "
+            "publish = false without [package.metadata.dist] dist = true, so "
+            "cargo-dist has nothing to release"
+        )
+    return True
+
+
 def pinned_cargo_dist_version(repository_root: Path) -> str:
     """The exact cargo-dist the release pipeline is allowed to run.
 
@@ -516,6 +551,160 @@ def pinned_cargo_dist_version(repository_root: Path) -> str:
             f"{pinned!r}, artifact metadata names {declared!r}"
         )
     return pinned
+
+
+def _plan_field(plan: dict[str, Any], key: str) -> Any:
+    if key not in plan:
+        raise TuiReleaseError(f"the release plan declares no {key!r}")
+    return plan[key]
+
+
+def planned_builds(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """cargo-dist's own answer to "how is each target built".
+
+    Which runner, inside which container, after installing what. The hand-written
+    workflow restates this, and restating it is exactly how three of the seven
+    targets came to be scheduled onto runners that cannot link them.
+    """
+    ci = _plan_field(plan, "ci")
+    github = ci.get("github") if isinstance(ci, dict) else None
+    matrix = github.get("artifacts_matrix") if isinstance(github, dict) else None
+    include = matrix.get("include") if isinstance(matrix, dict) else None
+    if not isinstance(include, list):
+        raise TuiReleaseError("the release plan declares no GitHub build matrix")
+
+    builds: dict[str, dict[str, Any]] = {}
+    for entry in include:
+        for triple in entry.get("targets", []):
+            builds[str(triple)] = entry
+    return builds
+
+
+def verify_release_plan(
+    repository_root: Path,
+    plan: dict[str, Any],
+    *,
+    tag_ref: str | None = None,
+) -> tuple[PublishedArtifact, ...]:
+    """Prove cargo-dist would build exactly the Release this repository declares.
+
+    Four authorities have to agree before a byte is compiled: `VERSION` says
+    which Release this is, the helper manifest says what `--version` will answer,
+    the shared artifact metadata says what installers and package channels will
+    resolve, and cargo-dist's plan says what will actually be produced. Only the
+    last one is discovered rather than committed, so it is the one that has to be
+    checked at release time instead of in a unit test — and it is checked against
+    the other three rather than merely printed.
+    """
+    metadata = load_artifact_metadata(repository_root)
+    release_version = helper_release_version(repository_root, tag_ref=tag_ref)
+    helper_package_is_distributable(repository_root)
+
+    pinned = pinned_cargo_dist_version(repository_root)
+    planned_toolchain = _plan_field(plan, "dist_version")
+    if planned_toolchain != pinned:
+        raise TuiReleaseError(
+            f"the release plan was produced by cargo-dist {planned_toolchain!r}, "
+            f"not the pinned {pinned!r}"
+        )
+
+    announced = _plan_field(plan, "announcement_tag")
+    if announced != f"v{release_version}":
+        raise TuiReleaseError(
+            f"the release plan announces {announced!r}, not "
+            f"'v{release_version}' from VERSION"
+        )
+
+    if _plan_field(plan, "github_attestations") is not True:
+        raise TuiReleaseError(
+            "the release plan would publish artifacts it does not attest"
+        )
+
+    artifacts = _plan_field(plan, "artifacts")
+    if not isinstance(artifacts, dict):
+        raise TuiReleaseError("the release plan declares no artifacts")
+
+    # A rule over every planned artifact rather than a list of the ones that
+    # exist today: enabling a cargo-dist installer later must not be able to
+    # ship one nothing can verify.
+    for name, record in sorted(artifacts.items()):
+        kind = record.get("kind")
+        if kind in ("checksum", "unified-checksum"):
+            continue
+        if not record.get("checksum"):
+            raise TuiReleaseError(
+                f"the release plan would publish {name} ({kind}) with no "
+                f"{metadata.checksum_algorithm} checksum"
+            )
+
+    declared = published_artifacts(metadata)
+    planned_archives = {
+        str(record.get("name")): record
+        for record in artifacts.values()
+        if record.get("kind") == "executable-zip"
+    }
+    problems: list[str] = []
+    for artifact in declared:
+        record = planned_archives.pop(artifact.archive_name, None)
+        if record is None:
+            problems.append(
+                f"the release plan builds no {artifact.archive_name} for "
+                f"{artifact.target.triple}"
+            )
+            continue
+        if record.get("checksum") != artifact.checksum_name:
+            problems.append(
+                f"the release plan checksums {artifact.archive_name} as "
+                f"{record.get('checksum')!r}, not {artifact.checksum_name!r}"
+            )
+        if list(record.get("target_triples") or []) != [artifact.target.triple]:
+            problems.append(
+                f"the release plan builds {artifact.archive_name} for "
+                f"{record.get('target_triples')}, not {artifact.target.triple}"
+            )
+    for surplus in sorted(planned_archives):
+        problems.append(f"the release plan builds an undeclared {surplus}")
+
+    builds = planned_builds(plan)
+    for target in metadata.targets:
+        entry = builds.get(target.triple)
+        if entry is None:
+            problems.append(f"the release plan schedules no build for {target.triple}")
+            continue
+        if entry.get("runner") != target.runner:
+            problems.append(
+                f"the release plan builds {target.triple} on "
+                f"{entry.get('runner')!r}, not the declared {target.runner!r}"
+            )
+        container = entry.get("container")
+        image = container.get("image") if isinstance(container, dict) else None
+        if _optional_text(image) != target.container:
+            problems.append(
+                f"the release plan builds {target.triple} in container "
+                f"{image!r}, not the declared {target.container!r}"
+            )
+        needs_packages = bool(entry.get("packages_install"))
+        if needs_packages != bool(target.packages_install):
+            problems.append(
+                f"the release plan {'needs' if needs_packages else 'needs no'} "
+                f"package installation for {target.triple}, and the declared "
+                f"metadata disagrees"
+            )
+
+    if problems:
+        raise TuiReleaseError("; ".join(problems))
+    return declared
+
+
+def _read_plan(path: Path) -> dict[str, Any]:
+    raw = sys.stdin.read() if str(path) == "-" else path.read_text(encoding="utf-8")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TuiReleaseError(f"the release plan is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise TuiReleaseError("the release plan must be an object")
+    return parsed
 
 
 def _extract_helper(
@@ -668,6 +857,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="append the resolved version and tag to this GitHub output file",
     )
 
+    plan = commands.add_parser(
+        "verify-plan",
+        parents=[common],
+        help="prove cargo-dist would build exactly the declared Release",
+    )
+    plan.add_argument(
+        "--plan",
+        type=Path,
+        required=True,
+        help="a `dist plan --output-format=json` document, or - for stdin",
+    )
+    plan.add_argument("--tag-ref", help="the publication ref, when tagging")
+
     artifact = commands.add_parser(
         "verify-artifact",
         parents=[common],
@@ -709,6 +911,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     handle.write(f"version={version}\n")
                     handle.write(f"tag=v{version}\n")
             print(version)
+        elif args.command == "verify-plan":
+            for artifact in verify_release_plan(
+                args.repository_root,
+                _read_plan(args.plan),
+                tag_ref=args.tag_ref,
+            ):
+                print(artifact.archive_name)
         elif args.command == "verify-artifact":
             artifact = verify_artifact(
                 args.repository_root,

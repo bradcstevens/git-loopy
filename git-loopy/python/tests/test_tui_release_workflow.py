@@ -161,3 +161,58 @@ def test_the_build_is_tagged_with_the_release_identity_it_just_proved() -> None:
         "RELEASE_TAG": "${{ needs.identity.outputs.tag }}"
     }
     assert '--tag "$RELEASE_TAG"' in compile_step[0]["run"]
+
+
+def test_the_matrix_provisions_the_toolchain_each_target_needs() -> None:
+    """AC2: three of the seven targets cannot link on a bare runner.
+
+    Both arm64 Linux targets build inside a cross container and x64 musl needs
+    `musl-tools`. The matrix carries what the shared metadata declares, so a
+    workflow that scheduled a target onto a runner that cannot build it fails
+    here rather than at the linker, seven jobs into a tagged release.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    workflow = _load_workflow()
+
+    matrix = workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
+    assert {entry["target"]: entry.get("container") for entry in matrix} == {
+        target.triple: target.container for target in metadata.targets
+    }
+    assert {entry["target"]: entry.get("packages_install") for entry in matrix} == {
+        target.triple: target.packages_install for target in metadata.targets
+    }
+
+    container = workflow["jobs"]["build"].get("container")
+    assert container == "${{ matrix.container }}", (
+        "a cross target that is not actually run inside its container builds "
+        "against the host toolchain and fails at the linker"
+    )
+
+
+def test_the_plan_is_proven_before_any_target_is_built() -> None:
+    """The check that would have caught a pipeline that could not build at all.
+
+    cargo-dist refuses a `publish = false` package outright, and it resolves its
+    own runners and containers. Both are discovered rather than committed, so
+    the plan is verified against `VERSION`, the helper manifest, and the shared
+    artifact metadata before a byte is compiled — and on pull requests too,
+    where it is the whole of AC7's "validate".
+    """
+    workflow = _load_workflow()
+    plan = workflow["jobs"]["plan"]
+
+    assert plan["needs"] == "identity"
+    assert plan.get("permissions", {}).get("contents") == "read"
+    assert "environment" not in plan
+
+    run_text = _run_text(plan)
+    assert "dist plan --output-format=json" in run_text
+    assert "git_loopy.tui_release verify-plan" in run_text
+
+    assert "plan" in workflow["jobs"]["build"]["needs"]
+    assert "plan" in workflow["jobs"]["publish"]["needs"]
+
+
+def test_the_helper_package_opts_back_into_the_release_toolchain() -> None:
+    """`publish = false` hides the binary from cargo-dist entirely."""
+    assert tui_release.helper_package_is_distributable(REPOSITORY_ROOT) is True

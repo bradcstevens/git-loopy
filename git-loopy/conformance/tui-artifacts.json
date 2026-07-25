@@ -44,7 +44,9 @@
       "arch": "arm64",
       "libc": null,
       "runner": "macos-14",
-      "build": "native"
+      "build": "native",
+      "container": null,
+      "packages_install": null
     },
     {
       "triple": "x86_64-apple-darwin",
@@ -52,7 +54,9 @@
       "arch": "x64",
       "libc": null,
       "runner": "macos-15-intel",
-      "build": "native"
+      "build": "native",
+      "container": null,
+      "packages_install": null
     },
     {
       "triple": "x86_64-pc-windows-msvc",
@@ -60,7 +64,9 @@
       "arch": "x64",
       "libc": null,
       "runner": "windows-2022",
-      "build": "native"
+      "build": "native",
+      "container": null,
+      "packages_install": null
     },
     {
       "triple": "aarch64-unknown-linux-gnu",
@@ -68,7 +74,9 @@
       "arch": "arm64",
       "libc": "gnu",
       "runner": "ubuntu-22.04",
-      "build": "cross"
+      "build": "cross",
+      "container": "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
+      "packages_install": "pip3 install cargo-zigbuild"
     },
     {
       "triple": "x86_64-unknown-linux-gnu",
@@ -76,7 +84,9 @@
       "arch": "x64",
       "libc": "gnu",
       "runner": "ubuntu-22.04",
-      "build": "native"
+      "build": "native",
+      "container": null,
+      "packages_install": null
     },
     {
       "triple": "aarch64-unknown-linux-musl",
@@ -84,7 +94,9 @@
       "arch": "arm64",
       "libc": "musl",
       "runner": "ubuntu-22.04",
-      "build": "cross"
+      "build": "cross",
+      "container": "messense/rust-musl-cross:aarch64-musl",
+      "packages_install": "pip3 install cargo-zigbuild"
     },
     {
       "triple": "x86_64-unknown-linux-musl",
@@ -92,7 +104,9 @@
       "arch": "x64",
       "libc": "musl",
       "runner": "ubuntu-22.04",
-      "build": "native"
+      "build": "native",
+      "container": null,
+      "packages_install": "sudo apt-get update && sudo apt-get install -y musl-tools"
     }
   ],
   "deferred_targets": [
