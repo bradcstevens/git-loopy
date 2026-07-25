@@ -663,6 +663,208 @@
           }
         ]
       }
+    },
+    {
+      "id": "powershell-repeated-issue-excludes-inactive-gap",
+      "orchestrator": "powershell",
+      "input": {
+        "iterations": [
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 1,
+                "ts": "2026-05-16T00:00:00.000Z",
+                "observed_monotonic": 30
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 1,
+                "issue": 84,
+                "activated_at": "2026-05-16T00:00:10.000Z",
+                "binding_source": "working_marker",
+                "observed_monotonic": 30
+              }
+            ],
+            "finish": {
+              "iteration": 1,
+              "strikes": 1,
+              "finished_monotonic": 32
+            }
+          },
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 2,
+                "ts": "2026-05-16T00:00:20.000Z",
+                "observed_monotonic": 40
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 2,
+                "issue": 84,
+                "activated_at": "2026-05-16T00:00:20.000Z",
+                "binding_source": "working_marker",
+                "observed_monotonic": 40
+              }
+            ],
+            "finish": {
+              "iteration": 2,
+              "strikes": 1,
+              "terminal_outcome": "gone",
+              "finished_monotonic": 44
+            }
+          }
+        ]
+      },
+      "expected": [
+        {
+          "outcome": "no_progress",
+          "duration_seconds": 2,
+          "summary": {
+            "model": null,
+            "tokens_in": null,
+            "tokens_out": null,
+            "observed_tokens": null,
+            "cost_usd": null,
+            "tool_count": null,
+            "skill_call_count": null,
+            "skills_consulted": null,
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 84,
+              "status": "no-progress",
+              "first_started_at": "2026-05-16T00:00:10.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 2,
+              "cumulative_active_seconds": 2,
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "outcome": "gone",
+          "duration_seconds": 4,
+          "summary": {
+            "model": null,
+            "tokens_in": null,
+            "tokens_out": null,
+            "observed_tokens": null,
+            "cost_usd": null,
+            "tool_count": null,
+            "skill_call_count": null,
+            "skills_consulted": null,
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 84,
+              "status": "gone",
+              "first_started_at": "2026-05-16T00:00:10.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 4,
+              "cumulative_active_seconds": 6,
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "powershell-fallback-binding-retains-pre-marker-time",
+      "orchestrator": "powershell",
+      "input": {
+        "iterations": [
+          {
+            "events": [
+              {
+                "type": "wrapper.iteration.start",
+                "iter": 1,
+                "ts": "2026-05-16T00:00:00.000Z",
+                "observed_monotonic": 100
+              },
+              {
+                "type": "wrapper.issue.activated",
+                "iter": 1,
+                "issue": 55,
+                "activated_at": "2026-05-16T00:00:00.000Z",
+                "binding_source": "single_member_pool",
+                "observed_monotonic": 106
+              }
+            ],
+            "finish": {
+              "iteration": 1,
+              "strikes": 0,
+              "commits": 1,
+              "finished_monotonic": 110
+            }
+          }
+        ]
+      },
+      "expected": [
+        {
+          "outcome": "advanced",
+          "duration_seconds": 10,
+          "summary": {
+            "model": null,
+            "tokens_in": null,
+            "tokens_out": null,
+            "observed_tokens": null,
+            "cost_usd": null,
+            "tool_count": null,
+            "skill_call_count": null,
+            "skills_consulted": null,
+            "commits": 1,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 55,
+              "status": "advanced",
+              "first_started_at": "2026-05-16T00:00:00.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 10,
+              "cumulative_active_seconds": 10,
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
+              "cost_usd": null,
+              "peak_context_window": null
+            }
+          ]
+        }
+      ]
     }
   ],
   "serialization_cases": [

@@ -1396,6 +1396,75 @@ $script:GitLoopyWarnedMarkerRefs = [Collections.Generic.HashSet[string]]::new(
 # produce — never a wrapper auto-closure.
 $script:GitLoopySourceClosedRefs = [Collections.Generic.List[string]]::new()
 
+function Update-GitLoopyIterationLifecycle {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$LifecycleEvent,
+        [Parameter(Mandatory)]
+        [object]$ObservedMonotonic
+    )
+
+    # Fold one normalized lifecycle Event into the Iteration rollup accumulator.
+    # This is the whole Orchestrator-owned seam for Iteration and issue *timing*:
+    # `wrapper.iteration.start` opens a fresh Iteration and `wrapper.issue.activated`
+    # binds its Active issue exactly once. Per-issue facts that outlive one
+    # Iteration — first activation and cumulative Active time — deliberately
+    # survive the reset so a repeated issue accrues only the time it was actually
+    # Active and never the inactive gap between Iterations.
+    #
+    # Durations come from the caller's monotonic reading, never from the UTC
+    # timestamps: those are durable lifecycle facts that a wall-clock adjustment
+    # may move backwards.
+    switch ([string]$LifecycleEvent["type"]) {
+        "wrapper.iteration.start" {
+            $script:GitLoopyIterationStartedMonotonic = $ObservedMonotonic
+            $script:GitLoopyActiveRef = $null
+            $script:GitLoopyActiveStartedAt = $null
+            $script:GitLoopyActiveStartedMonotonic = 0
+            $script:GitLoopyActiveClosedAt = $null
+            $script:GitLoopyActiveClosedMonotonic = $null
+            return
+        }
+        "wrapper.issue.activated" {
+            # The first valid activation binds immutably; a conflicting later
+            # marker is diagnosed by the caller and never rebinds.
+            if ($null -ne $script:GitLoopyActiveRef) {
+                return
+            }
+            $Issue = $LifecycleEvent["issue"]
+            $ActivatedAt = [string]$LifecycleEvent["activated_at"]
+            if ($null -eq $Issue -or [string]::IsNullOrEmpty($ActivatedAt)) {
+                return
+            }
+            $Ref = [string]$Issue
+            $script:GitLoopyActiveRef = $Ref
+            $script:GitLoopyActiveStartedAt = $ActivatedAt
+            # A Working marker declares the issue as the agent starts on it, so
+            # its Active time begins at the marker. Every fallback binding is
+            # recognized only after the fact, so it is attributed retroactively
+            # to the Iteration start and keeps the pre-marker work visible.
+            $script:GitLoopyActiveStartedMonotonic = if (
+                [string]$LifecycleEvent["binding_source"] -ceq "working_marker"
+            ) {
+                $ObservedMonotonic
+            }
+            else {
+                $script:GitLoopyIterationStartedMonotonic
+            }
+            if (-not $script:GitLoopyIssueFirstStartedAt.ContainsKey($Ref)) {
+                $script:GitLoopyIssueFirstStartedAt[$Ref] = (
+                    $script:GitLoopyActiveStartedAt
+                )
+                $script:GitLoopyIssueFirstStartedMonotonic[$Ref] = (
+                    $script:GitLoopyActiveStartedMonotonic
+                )
+            }
+            return
+        }
+    }
+}
+
 function Publish-GitLoopyActiveBinding {
     param(
         [Parameter(Mandatory)]
@@ -1415,27 +1484,22 @@ function Publish-GitLoopyActiveBinding {
     if ($null -ne $script:GitLoopyActiveRef) {
         return $false
     }
-    $script:GitLoopyActiveRef = $Ref
-    $script:GitLoopyActiveStartedAt = Get-GitLoopyIsoTimestamp -Timestamp $ObservedAt
-    $script:GitLoopyActiveStartedMonotonic = if ($Source -ceq "working_marker") {
-        Get-GitLoopyMonotonicSeconds
-    }
-    else {
-        $script:GitLoopyIterationStartedMonotonic
-    }
-    if (-not $script:GitLoopyIssueFirstStartedAt.ContainsKey($Ref)) {
-        $script:GitLoopyIssueFirstStartedAt[$Ref] = $script:GitLoopyActiveStartedAt
-        $script:GitLoopyIssueFirstStartedMonotonic[$Ref] = (
-            $script:GitLoopyActiveStartedMonotonic
-        )
-    }
+    $ActivatedAt = Get-GitLoopyIsoTimestamp -Timestamp $ObservedAt
+    Update-GitLoopyIterationLifecycle `
+        -LifecycleEvent ([ordered]@{
+            type = $EventTypes["WRAPPER_ISSUE_ACTIVATED"]
+            issue = $Ref
+            activated_at = $ActivatedAt
+            binding_source = $Source
+        }) `
+        -ObservedMonotonic (Get-GitLoopyMonotonicSeconds)
     $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_ISSUE_ACTIVATED"] `
         -Iteration $Iteration `
         -Payload ([ordered]@{
-            activated_at = Get-GitLoopyIsoTimestamp -Timestamp $ObservedAt
+            activated_at = $ActivatedAt
             binding_source = $Source
             issue = $Issue
         }) `
@@ -2330,12 +2394,12 @@ function Invoke-GitLoopyDiscovery {
         $Iteration = $NextIteration
 
         $script:GitLoopyIterationStartedAt = [DateTimeOffset]::UtcNow
-        $script:GitLoopyIterationStartedMonotonic = Get-GitLoopyMonotonicSeconds
-        $script:GitLoopyActiveRef = $null
-        $script:GitLoopyActiveStartedAt = $null
-        $script:GitLoopyActiveStartedMonotonic = 0
-        $script:GitLoopyActiveClosedAt = $null
-        $script:GitLoopyActiveClosedMonotonic = $null
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{
+                type = $EventTypes["WRAPPER_ITERATION_START"]
+                iter = $Iteration
+            }) `
+            -ObservedMonotonic (Get-GitLoopyMonotonicSeconds)
         $script:GitLoopyWarnedMarkerRefs.Clear()
         $script:GitLoopySourceClosedRefs.Clear()
         Write-GitLoopyEvent `
@@ -2661,6 +2725,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyPoolActionableCloseReferences",
     "Test-GitLoopyIterationProgress",
     "Get-GitLoopyIterationRollup",
+    "Update-GitLoopyIterationLifecycle",
+    "Get-GitLoopyCurrentIterationRollup",
     "Step-GitLoopyStrikeState",
     "Test-GitLoopyCheckpointMessage",
     "Get-GitLoopyCheckpointMessage",
