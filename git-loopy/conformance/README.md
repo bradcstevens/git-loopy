@@ -222,6 +222,25 @@ distribution that does not advertise the capability. Shell also refuses any reco
 contract 1.2 by the version rule it already had, so the safety case can never reach a reader that
 would drop it while keeping the AFK-safe claim.
 
+Two further `["python", "powershell"]` cases pin §9 against the *label-indexed* Reconciliation
+path, where every other Automation case runs. Both were unreachable while a distribution derived
+Actions differently on that path, and both are eyes the fixture did not previously have.
+
+`automation-refuses-to-authorize-beside-a-guidance-fault` publishes two trusted Producers that
+disagree about the same Action occurrence. The conflicted fragment never reaches `actions` at all,
+so the world looks empty and healthy — which is exactly why the case is needed: it is the only
+scenario anywhere proving that `action_conflict` reaches the *stop* rather than being a diagnostic
+a Run may authorize past. A derivation that silently picked one of the two claims would return an
+`authorization` here and pass every other Automation case.
+
+The `automation-blocked-frontier-member-becomes-selectable` workflow is the §8/§9 hinge that no
+single scenario can express: an initially Blocked member of the frozen frontier becoming selectable
+once its Prerequisite is satisfied. Its first command pins `readiness: "Blocked"`,
+`unsatisfied_prerequisites`, the `not-ready` ineligibility and the `awaiting-prerequisites` stop
+with its `condition`; its second replays that exact frozen frontier and prior scope over a closed
+Prerequisite and pins the authorization. Readiness may move within a Run; identity, semantics, and
+authority may not, and only two commands over one transport can show the difference.
+
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
 stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather

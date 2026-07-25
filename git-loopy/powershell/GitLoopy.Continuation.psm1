@@ -6540,9 +6540,9 @@ function Invoke-GitLoopyContinuationReconcile {
     # protocol reaches. The path decides which carriers are visible; it never
     # decides what an Action means. A private, narrower derivation here would
     # leave a Prerequisite unevaluated and -- worse -- let two disagreeing
-    # Producers each contribute a healthy-looking Action that §9 would then
-    # authorize, where the shared derivation raises `action_conflict` and the
-    # guidance fault refuses the Dispatch outright.
+    # Producers each contribute a healthy-looking Action that section 9 would
+    # then authorize, where the shared derivation raises `action_conflict` and
+    # the guidance fault refuses the Dispatch outright.
     $Derived = Get-GitLoopyDerivedActions `
         -GuidanceEntries $GuidanceEntries `
         -Repository $Repository

@@ -257,6 +257,16 @@ Callers select the Python, shell, or PowerShell immutable-revision capability wi
 Supplying `parents` or `reattestation` without an observation is invalid rather than silently
 ignored.
 
+The subset narrows *discovery*, never *derivation*. Both paths decide what an Action means through
+the same evaluation: the same Prerequisite and completion-condition evaluators, the same stable
+fact reads, the same readiness and `unsatisfied_prerequisites`, the same union basis and
+provenance, and the same `action_conflict`, `prerequisite_cycle`, `unverified_completion`, and
+`unverified_prerequisite` diagnostics. A path-local derivation is a rejection, not an
+implementation choice: an §9 authorization is computed over whatever `actions` and `diagnostics`
+Reconciliation returned, so a narrower label-indexed derivation would drop the very
+`action_conflict` that makes the frozen coverage untrustworthy and authorize a Dispatch the
+revision-protocol path refuses.
+
 Normal Reconciliation reports missing or stale index labels but never mutates them. Python, shell,
 and PowerShell `repair-index` are the only index mutation paths. Each command authenticates the
 operator and every record author, adds labels to trusted carriers, and removes labels only from
