@@ -1012,3 +1012,86 @@ def test_skills_list_reports_an_unusable_workspace_as_a_diagnostic(
         "git-loopy: unable to discover Skill inventory: "
         "OSError: no space for a discovery workspace"
     ]
+
+
+def _ancestry_catalog() -> SkillCatalog:
+    """A catalog as Copilot would report it from a temp dir inside a checkout."""
+    return SkillCatalog(
+        winners={
+            "ancestor-project": SkillCatalogWinner(
+                "ancestor-project", "project", copilot_enabled=True
+            ),
+            "ancestor-inherited": SkillCatalogWinner(
+                "ancestor-inherited", "inherited", copilot_enabled=True
+            ),
+            "personal": SkillCatalogWinner(
+                "personal", "personal", copilot_enabled=True
+            ),
+        }
+    )
+
+
+def test_skills_list_without_repository_drops_ancestry_derived_winners(
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return _ancestry_catalog()
+
+    output: list[str] = []
+
+    result = run_skills_list(
+        repo_root=None,
+        env={"HOME": str(tmp_path / "home")},
+        output_fn=output.append,
+        client_factory=FakeClient,
+        discoverer=discover,
+        enabled_skills=(),
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert [line.split("\t")[4] for line in output[1:]] == ["personal"]
+
+
+def test_skills_edit_without_repository_drops_ancestry_derived_winners(
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(client: Any, **kwargs: object) -> SkillCatalog:
+        return _ancestry_catalog()
+
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    result = run_skills_edit(
+        scope=None,
+        repo_root=None,
+        env={"HOME": str(tmp_path / "home")},
+        output_fn=lambda _line: None,
+        client_factory=FakeClient,
+        discoverer=discover,
+        picker_runner=pick,
+        required_skills=(),
+        packaged_skills_dir=tmp_path / "packaged",
+    )
+
+    assert result == 0
+    assert [row.name for row in seen[0].rows] == ["personal"]
+    assert seen[0].enabled == ("personal",)

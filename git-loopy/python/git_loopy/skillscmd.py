@@ -367,6 +367,30 @@ def _repo_less_root(workspace: Path) -> Path:
     return root
 
 
+_WORKSPACE_DERIVED_SOURCES = frozenset({"project", "inherited"})
+
+
+def _without_workspace_derived_winners(catalog: SkillCatalog) -> SkillCatalog:
+    """Drop winners only a workspace ancestry could have produced.
+
+    Catalog discovery runs Copilot from an isolated temporary working
+    directory, and Copilot resolves its own ``project`` / ``inherited`` sources
+    by walking that directory's ancestors. When ``TMPDIR`` happens to sit inside
+    an unrelated checkout, that walk reports the unrelated repository's Skills.
+    With no repository of our own there is nothing such a winner could
+    legitimately be, so it is dropped rather than listed, seeded, or offered for
+    selection.
+    """
+    return SkillCatalog(
+        winners={
+            name: winner
+            for name, winner in catalog.winners.items()
+            if winner.source_kind not in _WORKSPACE_DERIVED_SOURCES
+        },
+        inventory_available=catalog.inventory_available,
+    )
+
+
 def run_skills_edit(
     *,
     scope: str | None,
@@ -419,6 +443,8 @@ def run_skills_edit(
                     discovery_directory=discovery_directory,
                 )
             )
+            if repo_root is None:
+                catalog = _without_workspace_derived_winners(catalog)
             if git is None:
                 from .git import SubprocessGitClient
 
@@ -556,6 +582,8 @@ def run_skills_list(
                     discovery_directory=discovery_directory,
                 )
             )
+            if repo_root is None:
+                catalog = _without_workspace_derived_winners(catalog)
     except (
         OSError,
         RuntimeError,
