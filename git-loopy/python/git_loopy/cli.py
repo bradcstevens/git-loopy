@@ -498,10 +498,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "Interactive first-run setup wizard. Chooses a scope (global or "
             "project), seeds model / reasoning effort from the live model list, "
-            "writes config.toml, and — default yes — scaffolds an editable "
-            "PROMPT.md override and git-loopy's agent skills. Writes config and "
-            "exits; it never starts the loop. Cancelling writes nothing and "
-            "exits non-zero."
+            "establishes the closed-world Skill policy through the same "
+            "searchable picker as `git-loopy skills edit`, writes config.toml, "
+            "and — default yes — scaffolds an editable PROMPT.md override and "
+            "git-loopy's agent skills. Writes config and exits; it never starts "
+            "the loop. Cancelling writes nothing and exits non-zero."
         ),
     )
     _add_scope_flags(init)
@@ -513,7 +514,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Assume defaults and never prompt (CI-friendly). Uses the project "
             "scope unless --global is given, the built-in default model / "
-            "effort, and scaffolds the prompt + skills."
+            "effort, and scaffolds the prompt + skills. Persists the Minimal "
+            "Skill policy (only the Required Skills) without contacting the "
+            "machine's Copilot Skill inventory."
         ),
     )
 

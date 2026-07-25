@@ -74,6 +74,16 @@ missing catalog skills. This installs the commands but does not configure their
 issue tracker, labels, or domain layout - that is
 [Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
 
+Interactive `init` also establishes the scope's **Skill policy** — the
+closed-world set of Skills a Run may expose — through the same searchable
+picker as [`git-loopy skills edit`](../git-loopy/python/README.md). It is seeded
+from an existing lower-scope git-loopy policy, or, when none exists, from a
+fresh Copilot Skill baseline; Required Skills cannot be saved disabled, and an
+enabled project Skill that is not git-tracked blocks the save. `git-loopy init
+--yes` persists the **Minimal Skill policy** — exactly the Required Skills —
+without contacting the machine's Copilot inventory, which keeps a first CI setup
+reproducible. Change a saved policy later with `git-loopy skills edit`.
+
 ### 1.3 Alternative: copy the source catalog manually
 
 Use a manual copy when Python or `uv` is not available yet, or when you want

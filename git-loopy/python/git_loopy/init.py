@@ -13,17 +13,27 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   and its live-model ``fetch_choices`` seam, so no test touches the real TTY,
   ``~/.config``, ``~/.copilot``, or a live backend (prior art:
   ``tests/test_cli_interactive.py``).
-* **Collect-then-commit.** Every decision (scope, model, effort, whether to
-  scaffold assets, and — on a re-run — whether to refresh pre-existing catalog
-  skills) is gathered *first*; the target skills dir is resolved during collect
-  so existing catalog skills are detected before anything is written. Nothing is
-  written until all prompts succeed, so **cancelling writes nothing, runs
-  nothing, and exits non-zero** (``q`` / ``quit`` / EOF / Ctrl-C at any prompt).
-* **SDK-free until it fetches.** The model list is the only thing that touches
-  the SDK, and only on the interactive path; ``git-loopy init --yes`` uses the
-  built-in default model / effort and never imports the SDK. The model rows reuse
+* **Collect-then-commit.** Every decision (scope, model, effort, the closed-world
+  **Skill policy**, whether to scaffold assets, and — on a re-run — whether to
+  refresh pre-existing catalog skills) is gathered *first*; the target skills dir
+  is resolved during collect so existing catalog skills are detected before
+  anything is written. Nothing is written until all prompts succeed, so
+  **cancelling writes nothing, runs nothing, and exits non-zero** (``q`` /
+  ``quit`` / EOF / Ctrl-C at any prompt). The write itself merges into any
+  existing Config at that scope, so keys the wizard does not own survive.
+* **SDK-free until it fetches.** The model list and the Skill catalog are the only
+  things that touch the SDK, and only on the interactive path; ``git-loopy init
+  --yes`` uses the built-in default model / effort and persists the **Minimal
+  Skill policy** (exactly the **Required Skills**) without contacting the
+  machine's Copilot Skill inventory. The model rows reuse
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
   Textual), rendered as a **plain-text numbered list** — no ``[tui]`` extra.
+
+The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
+the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
+baseline seeding rule, one picker, and one set of Required-Skill and
+project-tracking validations (ADR-0015). A policy that cannot be resolved fails
+setup outright — it is never downgraded to an open world.
 
 Precedence note: what the wizard writes is ordinary persisted Config, so a later
 CLI flag / env var still overrides it (ADR-0006's chain is unchanged).
@@ -35,7 +45,7 @@ import shutil
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -487,6 +497,75 @@ def _collect_skill_overwrite(
     )
 
 
+class _SkillPolicyUnavailable(Exception):
+    """Raised when a Skill policy cannot be resolved; setup writes nothing."""
+
+
+def _collect_skill_policy(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    client_factory: Callable[[], Any] | None,
+    discoverer: Any,
+    picker_runner: Any,
+    git: Any,
+    required_skills: Sequence[str] | None,
+    packaged_skills_dir: Path,
+) -> tuple[str, ...]:
+    """Collect one Skill policy through the shared ``skills edit`` seam.
+
+    Cancelling the picker is an ordinary wizard cancellation, so it joins the
+    collect phase's single :class:`InitCancelled` path and writes nothing.
+    """
+    from git_loopy import skillscmd
+
+    options: dict[str, Any] = {}
+    if discoverer is not None:
+        options["discoverer"] = discoverer
+    if picker_runner is not None:
+        options["picker_runner"] = picker_runner
+    try:
+        return skillscmd.collect_skill_policy(
+            scope=scope,
+            repo_root=repo_root,
+            env=env,
+            input_fn=input_fn,
+            output_fn=output_fn,
+            client_factory=client_factory,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
+            **options,
+        )
+    except skillscmd.SkillPolicyCancelled as exc:
+        raise InitCancelled from exc
+    except skillscmd.SKILL_POLICY_FAILURES as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _minimal_skill_policy(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    required_skills: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """The Minimal Skill policy: exactly the active instructions' Required Skills.
+
+    Unattended setup persists this rather than importing machine-specific
+    Copilot state (ADR-0015), so it never constructs a Copilot client.
+    """
+    from git_loopy.skillscmd import resolve_policy_required_skills
+
+    return tuple(
+        sorted(set(resolve_policy_required_skills(repo_root, env, required_skills)))
+    )
+
+
 def _resolve_scope(
     scope: str | None,
     *,
@@ -542,6 +621,12 @@ def run_init(
     default_model: str | None = None,
     default_effort: object = _UNSET,
     warn: Callable[[str], None] | None = None,
+    client_factory: Callable[[], Any] | None = None,
+    discoverer: Any = None,
+    picker_runner: Any = None,
+    git: Any = None,
+    required_skills: Sequence[str] | None = None,
+    writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -584,6 +669,11 @@ def run_init(
             routing = None
             scaffold = True
             overwrite_skills = True
+            enabled_skills = _minimal_skill_policy(
+                repo_root=repo_root if resolved_scope == "project" else None,
+                env=env,
+                required_skills=required_skills,
+            )
         else:
             model, effort = _collect_model_and_effort(
                 input_fn=input_fn,
@@ -607,6 +697,19 @@ def run_init(
                 )
                 else None
             )
+            enabled_skills = _collect_skill_policy(
+                scope=resolved_scope,
+                repo_root=repo_root,
+                env=env,
+                input_fn=input_fn,
+                output_fn=output_fn,
+                client_factory=client_factory,
+                discoverer=discoverer,
+                picker_runner=picker_runner,
+                git=git,
+                required_skills=required_skills,
+                packaged_skills_dir=skills_source,
+            )
             destination = (
                 "the global scope (the shared, machine-wide skills location)"
                 if resolved_scope == "global"
@@ -627,9 +730,18 @@ def run_init(
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
+    except _SkillPolicyUnavailable as exc:
+        # A Skill policy that cannot be resolved is never silently downgraded to
+        # an open world: setup fails with the whole scope untouched.
+        warn(f"{exc}; nothing was written.")
+        return 1
 
     # Commit phase — every decision is in hand, so nothing above wrote anything.
-    values: dict[str, object] = {"model": model}
+    # The wizard owns only the keys it collected: everything else in an existing
+    # Config at this scope (including a routing table the operator declined to
+    # revisit) survives the write untouched.
+    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+    values["model"] = model
     if effort is not None:
         values["reasoning_effort"] = effort
     if routing is not None:
@@ -637,7 +749,8 @@ def run_init(
             key: {"model": route_model, "effort": route_effort}
             for key, (route_model, route_effort) in routing.items()
         }
-    settings.write_config(targets.config_path, values)
+    values["enabled_skills"] = list(enabled_skills)
+    writer(targets.config_path, values)
     output_fn(f"Wrote {targets.config_path}")
 
     if scaffold:
