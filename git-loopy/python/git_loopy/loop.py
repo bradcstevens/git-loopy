@@ -109,6 +109,7 @@ import logging
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -123,6 +124,7 @@ from git_loopy import events as events_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import rolling_scheduler
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, resolve_iteration_model
@@ -136,6 +138,7 @@ from git_loopy.persist import (
 from git_loopy.pricing import Pricing, PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.rolling_pool import RollingPool
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
@@ -143,7 +146,9 @@ from git_loopy.sources import (
     AfkReadyItem,
     GitHubIssueSource,
     IssueSource,
+    LABEL_PARALLEL_SAFE,
     PrdsIssueSource,
+    RollingIssueSource,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
 from git_loopy.skill_exposure import SkillExposureError
@@ -248,8 +253,9 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
     """Construct the per-invocation runner-side Integration gate (#60, ADR-0009).
 
     Factored to its own module-level function — mirroring :func:`_make_git_client`
-    / :func:`_make_github_client` — so the later Wave/Lane orchestrator (#61) and
-    Integration slices (#62/#63) inject it, and their tests monkeypatch it
+    / :func:`_make_github_client` — so the Parallel-mode orchestrator (#61,
+    now Rolling-dispatch #219/ADR-0020) and Integration slices (#62/#63)
+    inject it, and their tests monkeypatch it
     (``monkeypatch.setattr("git_loopy.loop._make_gate_runner", ...)``) to a scripted
     ``tests.fakes.FakeGateRunner``. Production callers get a
     :class:`~git_loopy.gate.AgentsMdGateRunner`, which runs a worktree's ``AGENTS.md``
@@ -267,7 +273,8 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     """Construct the per-Lane worktree setup seam (#65, ADR-0008).
 
     Factored to its own module-level function — mirroring :func:`_make_gate_runner`
-    — so the Wave orchestrator (#61) injects it and tests monkeypatch it
+    — so the Parallel-mode orchestrator (#61, now Rolling-dispatch #219/ADR-0020)
+    injects it and tests monkeypatch it
     (``monkeypatch.setattr("git_loopy.loop._make_worktree_setup", ...)``) to a
     scripted fake. Production callers get a
     :class:`~git_loopy.worktree.CommandWorktreeSetup` bound to the
@@ -572,12 +579,19 @@ class _Loop:
 
     def _new_active_issue_binding(
         self,
-        iter_num: int,
+        iter_num: int | None,
         *,
         allowed_refs: Iterable[int | str],
         lane_issue: int | str | None = None,
     ) -> ActiveIssueBinding:
-        """Create the immutable Active-issue publisher for one Iteration or Lane."""
+        """Create the immutable Active-issue publisher for one Iteration or Lane.
+
+        ``iter_num`` is ``None`` for a Lane contribution under Rolling
+        dispatch (#219, ADR-0020): a contribution outlives any single round
+        or session number, so its ``wrapper.issue.activated`` carries
+        ``iter: null`` like every other Lane-scoped event, distinguished
+        instead by ``lane_issue``.
+        """
 
         def publish(ref: int | str, source: str, at: datetime) -> None:
             envelope = events_module.make_event(
@@ -1157,22 +1171,18 @@ class _Loop:
 
 
 @dataclass
-class _Lane:
-    """One Parallel-mode Lane: an issue pinned to its own worktree + branch.
+class _LaneWork:
+    """Mutable per-Lane-contribution state: worktree, branch, and pre-SHA.
 
-    Bundles the per-Lane state the Wave orchestrator threads from worktree
-    creation, through the concurrent session, to post-barrier accounting: the
-    :class:`~git_loopy.sources.AfkReadyItem` it works, the branch cut for it,
-    the worktree path, the root-bound child :class:`~git_loopy.git.GitClient`
-    addressing that worktree, and the pre-session head SHA captured at creation
-    for per-Lane commit accounting.
-
-    The ``(model, reasoning_effort)`` the Lane runs on is resolved **once** at
-    Lane creation (:func:`~git_loopy.config.resolve_iteration_model`, #147) from
-    the Active issue's ``task-type:`` labels, and reused for BOTH this Lane's
-    work session and its Integration / auto-resolution session (#148) — so a
-    Lane resolves its route exactly once. An unlabelled Lane (or an unknown /
-    conflicting label) carries the gated global default.
+    Keyed by :attr:`~git_loopy.rolling_scheduler.Contribution.contribution_id`
+    (never ``lane_id``) in ``_ParallelLoop._lane_work`` — #219 §7 / ADR-0020
+    make a Lane contribution outlive the reusable Lane slot it started in:
+    admission to **Integration** frees that slot for another issue while this
+    state, and the contribution's own Integration handling, continue. The
+    resolved ``(model, reasoning_effort)`` pair lives on the
+    :class:`~git_loopy.rolling_scheduler.Contribution` itself, not here, since
+    the scheduler is the authority that minted it at
+    :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`.
     """
 
     item: AfkReadyItem
@@ -1180,57 +1190,76 @@ class _Lane:
     path: Path
     git: git_module.GitClient
     pre_sha: str | None = None
-    model: str | None = None
-    reasoning_effort: str | None = None
 
 
-def _lane_sort_key(lane: _Lane) -> tuple[int, int, str]:
-    """Ascending, deterministic Integration order for a Wave's Lanes.
+_ROLLING_EMPTY_POLL_INTERVAL = 1.0
+"""Seconds between idle ``confirm_empty`` retries under Rolling dispatch.
 
-    Lanes are only ever created for **integer** issue numbers (Wave eligibility
-    requires an ``int`` ref), so this orders by that number. The leading
-    discriminator keeps the key total-orderable even if a non-int ref ever
-    slipped through — ints first (by value), then any string refs
-    (lexicographically) — so the sort can never raise on a mixed key.
-    """
-    ref = lane.item.ref
-    if isinstance(ref, int):
-        return (0, ref, "")
-    return (1, 0, str(ref))
+:meth:`~git_loopy.rolling_pool.RollingPool.confirm_empty` always forces an
+immediate membership refresh, bypassing its own demand-gated backoff window
+(#219 §2.14) — so a driver loop that called it in a tight spin would hammer
+the source. This is the guard between retries while genuinely idle (no Lane
+work in flight, nothing currently refillable, no serial turn granted).
+"""
 
 
 class _ParallelLoop:
-    """Opt-in Parallel-mode Wave/Lane orchestrator (#61, ADR-0008).
+    """Rolling-dispatch Parallel-mode orchestrator (#219, ADR-0020).
 
-    The concurrent-execution core: each *round* is either a **Wave** — up to
-    ``config.parallel`` **Lanes**, each an agent working one ``parallel-safe``
-    issue in its own git worktree + branch, run concurrently on one long-lived
-    client via :func:`asyncio.gather` and pinned to its worktree via the SDK's
-    per-session ``working_directory`` — or, when fewer than two eligible issues
-    are available, a single serial **Iteration** fallback (the proven path), so
-    opting into Parallel mode never strands eligible work.
+    Retires the **Wave** barrier (#61, ADR-0008): rather than grouping Lanes
+    into a cohort, waiting for the slowest, and integrating the batch, a Run
+    now owns reusable **Lane** slots that the
+    :class:`~git_loopy.rolling_scheduler.RollingScheduler` reserves, fills,
+    and releases continuously (:meth:`_drive_rolling`). A single eligible
+    ``parallel-safe`` issue starts in a Lane immediately — there is no
+    "wait for a second issue" threshold — and a finished Lane's slot refills
+    the moment its **Lane contribution** is admitted or terminates, without
+    waiting on any other Lane. One Lane's worktree setup may freely overlap
+    another Lane's agent session, and both may overlap **Integration**.
 
-    Eligibility is a **human assertion**, never inferred: only pool items
-    carrying ``parallel-safe`` (alongside ``ready-for-agent``) may become a
-    Lane. Commit accounting is per-Lane (each branch's own pre/post SHA) and a
-    per-worktree Checkpoint (ADR-0004) runs on each Lane branch; at the Wave
-    barrier the worktrees are torn down (branches kept as breadcrumbs).
+    Eligibility is still a **human assertion**, never inferred: only pool
+    items carrying ``parallel-safe`` (alongside ``ready-for-agent``) may ever
+    become a Lane contribution — enforced by
+    :func:`~git_loopy.rolling_pool.is_parallel_safe`, the
+    :class:`~git_loopy.rolling_pool.RollingPool` cache's default eligibility
+    predicate. Candidate discovery reads that cheap, continuously-refreshed
+    Pool membership cache and pays the authoritative per-issue read only at
+    pickup, immediately before reservation
+    (:meth:`~git_loopy.sources.RollingIssueSource.pickup`) — both already
+    handled internally by :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`.
+    An issue whose agent session has started may never take a second Lane in
+    this Run (the scheduler's own ``_worked`` guard, #219 §1.7).
 
-    **Integration (#62, ADR-0009).** A Wave ends by landing its green Lanes on
-    base: for each finished Lane branch in ascending issue-number order, merge
-    into base, re-run the feedback loops from the runner side via the injected
-    :class:`~git_loopy.gate.GateRunner` as the load-bearing gate, and on green
-    close the issue (the same runner-driven closure as serial mode) + delete the
-    integrated branch — a successful Integration is the round's Strike progress
-    signal. This is the **happy path only**; conflict / red-gate handling
-    (revert + auto-resolution + serial fallback) is the next slice (#63), so a
-    failed Lane is skipped here and its branch kept as a breadcrumb.
+    **Integration (#62, #63, ADR-0009)** is unchanged in mechanism — merge,
+    re-gate from the runner side via the injected
+    :class:`~git_loopy.gate.GateRunner`, close on green (the same
+    runner-driven closure as serial mode), or revert / abort and hand a red
+    Lane to bounded auto-resolution (:meth:`_auto_resolve_lane`) before
+    falling back to a serial Iteration. It is serialized against every other
+    contribution's Integration via ``self._integration_lock`` so the shared
+    main worktree never sees two concurrent merges, but it runs *inline*
+    inside whichever Lane's lifecycle task got admitted
+    (:meth:`_integrate_contribution`) rather than behind a barrier, so other
+    Lanes' setup and sessions are never blocked on it. Because a contribution
+    outlives its Lane slot, all of this is threaded by
+    :attr:`~git_loopy.rolling_scheduler.Contribution.contribution_id`, never
+    by ``lane_id`` (#219 §7).
 
-    Composes a serial :class:`_Loop` (``self._serial``) both for the serial
-    fallback rounds and to share ONE Strike machine, event emitter, summary,
-    and Checkpoint policy — so a Wave round and a serial round tick the same
-    Strike machine and write one consistent event / counter stream. The serial
-    path is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
+    A source that cannot support Rolling dispatch (only
+    :class:`~git_loopy.sources.GitHubIssueSource` implements
+    :class:`~git_loopy.sources.RollingIssueSource` today — the PRDs backend
+    has no ``parallel-safe`` label concept) degrades Parallel mode entirely to
+    the serial path (:meth:`_drive_serial_only`), so opting into Parallel mode
+    never strands eligible work.
+
+    Composes a serial :class:`_Loop` (``self._serial``) both for serial
+    Iterations (plain ``ready-for-agent`` work the scheduler's serial-latch /
+    quiescence protocol grants exclusive ownership of base,
+    :meth:`_maybe_request_serial_for_plain_work`) and to share ONE Strike
+    machine, event emitter, summary, and Checkpoint policy — so a Lane
+    contribution finalizing and a serial Iteration tick the same Strike
+    machine and write one consistent event / counter stream. The serial path
+    is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
     ``config.parallel > 1``.
     """
 
@@ -1266,8 +1295,8 @@ class _ParallelLoop:
         self._diag = diag
         # Injected runner-side Integration gate (#60, ADR-0009): re-runs the
         # feedback loops from the runner side as the load-bearing gate when
-        # landing a Lane branch on base. Consumed by `_integrate_wave` (#62);
-        # the conflict / red-gate recovery paths are the next slice (#63).
+        # landing a Lane branch on base (:meth:`_integrate_lane`); the
+        # conflict / red-gate recovery path is :meth:`_auto_resolve_lane`.
         self._gate_runner = gate_runner
         # Injected per-Lane worktree setup (#65, ADR-0008): after a Lane's
         # worktree is created and before its agent session starts, prepare its
@@ -1276,16 +1305,59 @@ class _ParallelLoop:
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
-        # Issues already dispatched to a Lane this run. A Lane branch name is
-        # derived from the issue number, so re-dispatching the same issue would
-        # collide on ``git worktree add -b``; tracking worked refs keeps a Wave
-        # idempotent across rounds — a still-open issue falls through to a
-        # serial Iteration, never a second Lane.
-        self._worked: set[int | str] = set()
-        # Compose a serial ``_Loop`` for fallback rounds AND to share its Strike
-        # machine / event emitter / summary counters / Checkpoint policy, so a
-        # Wave round and a serial fallback round tick ONE Strike machine and
-        # write ONE consistent event + counter stream.
+
+        # Rolling dispatch (#219, ADR-0020) needs the two extra Pool
+        # operations `RollingIssueSource` defines. Only the GitHub backend
+        # implements them today; a source that does not (the PRDs backend has
+        # no `parallel-safe` label concept) can never offer Lane work, so
+        # Parallel mode degrades entirely to the serial path (`drive`).
+        self._pool: RollingPool | None = None
+        self._scheduler: rolling_scheduler.RollingScheduler | None = None
+        if isinstance(source, RollingIssueSource):
+            self._pool = RollingPool(diag=diag, source=source, clock=time.monotonic)
+            self._scheduler = rolling_scheduler.RollingScheduler(
+                diag=diag,
+                pool=self._pool,
+                lane_cap=config.parallel,
+                max_iterations=config.max_iterations,
+            )
+        self._rolling_capable = self._scheduler is not None
+
+        # Per-Lane-contribution state, keyed by `contribution_id` (never
+        # `lane_id`) so it survives the reusable Lane slot moving on to
+        # another issue once this contribution is admitted (#219 §7).
+        self._lane_work: dict[str, _LaneWork] = {}
+        # Serializes Integration (merge / gate / land / auto-resolve) across
+        # concurrently-admitted contributions, so the shared main worktree
+        # never sees two merges at once — without blocking any OTHER Lane's
+        # worktree setup or agent session (criteria #2/#3, ADR-0020).
+        self._integration_lock = asyncio.Lock()
+        # Every in-flight Lane lifecycle task (`_run_lane_lifecycle`), tracked
+        # so the driver can `asyncio.wait(..., FIRST_COMPLETED)` on the first
+        # one to finish and immediately reserve into the capacity it freed —
+        # the continuously-refilling replacement for the Wave's
+        # `asyncio.gather`-then-proceed barrier.
+        self._pending: set[asyncio.Task[None]] = set()
+        # Run-wide monotonic sequence for `IterationSession.iter_num` tagging
+        # (raw JSONL / OTel tagging only — Lane contribution accounting is
+        # keyed by `contribution_id`, per #219 §7, never by this number).
+        # Rolling dispatch has no "round", so there is no natural iteration
+        # number to reuse; this keeps every session's tag unique and
+        # increasing, mirroring the retired Wave's per-round counter.
+        self._iter_seq = 0
+        # The first unhandled exception surfaced by a Lane lifecycle task.
+        # A bare `asyncio.Task` swallows an exception silently (it only logs
+        # "exception was never retrieved") — `_guarded_lane_lifecycle` stashes
+        # it here so `_drive_rolling` can re-raise it on its own task and
+        # preserve the "crashed" outcome / exit-code contract the retired
+        # Wave's single `try/except` around the whole round loop gave.
+        self._crash: BaseException | None = None
+
+        # Compose a serial `_Loop` for serial Iterations AND to share its
+        # Strike machine / event emitter / summary counters / Checkpoint
+        # policy, so a Lane contribution finalizing and a serial Iteration
+        # tick ONE Strike machine and write ONE consistent event + counter
+        # stream.
         self._serial = _Loop(
             config=config,
             release_version=release_version,
@@ -1302,14 +1374,27 @@ class _ParallelLoop:
             include_prs=include_prs,
         )
 
+    def _alloc_iter_num(self) -> int:
+        """Allocate the next Run-wide sequence number for session tagging.
+
+        See :attr:`_iter_seq` — shared by Lane work sessions and
+        auto-resolution sessions so the whole Run reads as one increasing
+        timeline, same as the retired Wave's per-round counter.
+        """
+        self._iter_seq += 1
+        return self._iter_seq
+
     async def drive(self) -> int:
-        """Drive the Parallel-mode round loop to its terminal outcome.
+        """Drive Rolling dispatch (#219, ADR-0020) to its terminal outcome.
 
         Mirrors :meth:`_Loop.drive` — same preflight, ``wrapper.run.start`` /
-        ``wrapper.run.end`` envelope, ``max_iterations`` cap, and exit-code
-        contract — but each round is either a **Wave** (>= 2 eligible
-        ``parallel-safe`` issues) or a single serial **Iteration** fallback. The
-        shared Strike machine ticks exactly once per round.
+        ``wrapper.run.end`` envelope, and exit-code contract — but delegates
+        the round loop itself to :meth:`_drive_rolling` when the source
+        supports it, else :meth:`_drive_serial_only`. Both own their own
+        ``max_iterations`` cap-check and outcome mapping; this method owns
+        only the single ``wrapper.run.start``/``.end`` pair (calling
+        ``self._serial.drive()`` instead would double-emit both, since it
+        carries the identical pair).
         """
         self._serial._emit_skill_policy_resolved()
         rc = self._source.preflight()
@@ -1327,37 +1412,25 @@ class _ParallelLoop:
             max_nmt_strikes=self._config.max_nmt_strikes,
         )
 
-        exit_code = exit_code_for("iteration_cap")
         outcome_label = "iteration_cap"
-        iter_num = 0
+        exit_code = exit_code_for("iteration_cap")
+        iterations_run = 0
         try:
             try:
-                while True:
-                    iter_num += 1
-                    if (
-                        self._config.max_iterations != 0
-                        and iter_num > self._config.max_iterations
-                    ):
-                        outcome_label = "iteration_cap"
-                        break
-
-                    outcome, _commits, _closures = await self._run_one_round(
-                        iter_num
+                if self._rolling_capable:
+                    outcome_label, exit_code, iterations_run = (
+                        await self._drive_rolling()
                     )
-                    if outcome == "empty_pool":
-                        outcome_label = "empty_pool"
-                        exit_code = exit_code_for("empty_pool")
-                        break
-                    if outcome == "aborted":
-                        outcome_label = "stuck"
-                        exit_code = exit_code_for("stuck")
-                        break
+                else:
+                    outcome_label, exit_code, iterations_run = (
+                        await self._drive_serial_only()
+                    )
             except Exception as exc:
                 outcome_label = "crashed"
                 exit_code = 1
                 self._diag.error(
-                    "git-loopy parallel round %d crashed: %s: %s",
-                    iter_num, type(exc).__name__, exc,
+                    "git-loopy parallel run crashed: %s: %s",
+                    type(exc).__name__, exc,
                 )
                 raise
         finally:
@@ -1366,46 +1439,176 @@ class _ParallelLoop:
                     events_module.WRAPPER_RUN_END,
                     iter_num=None,
                     outcome=outcome_label,
-                    iterations_run=(
-                        iter_num
-                        if outcome_label != "iteration_cap"
-                        else iter_num - 1
-                    ),
+                    iterations_run=iterations_run,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
         return exit_code
 
-    async def _run_one_round(self, iter_num: int) -> tuple[str, int, int]:
-        """Run one round: a Wave when eligible, else a serial Iteration.
+    async def _drive_serial_only(self) -> tuple[str, int, int]:
+        """Drive every round as a serial Iteration (source not Rolling-capable).
 
-        Peeks the AFK-ready pool and counts eligible ``parallel-safe`` issues
-        (int-ref, carrying the label, not already worked this run). Two or more
-        dispatches a Wave; otherwise the round is a single serial Iteration —
-        the proven path that also handles the empty pool, a lone issue, and any
-        plain ``ready-for-agent`` work — so Parallel mode drains everything.
+        A source that does not implement
+        :class:`~git_loopy.sources.RollingIssueSource` (the PRDs backend) has
+        no ``parallel-safe`` label concept and can never offer Lane work, so
+        Parallel mode degrades entirely to the proven serial path — every
+        round is a plain ``_Loop`` Iteration. Mirrors :meth:`_Loop.drive`'s
+        own round loop (cap check, outcome mapping) exactly, but calls
+        ``self._serial._run_one_iteration`` directly rather than
+        ``self._serial.drive()`` so :meth:`drive` above owns the single
+        ``wrapper.run.start``/``.end`` pair.
         """
-        pool = self._collect_pool_safely()
-        eligible = [
-            item
-            for item in pool
-            if isinstance(item.ref, int)
-            and "parallel-safe" in item.labels
-            and item.ref not in self._worked
-        ]
-        if len(eligible) >= 2:
-            return await self._run_one_wave(iter_num, eligible)
-        # < 2 fresh eligible parallel-safe issues: a normal serial Iteration.
-        # It re-collects the pool itself (authoritative) and owns the
-        # empty-pool / single-issue exit semantics.
-        return await self._serial._run_one_iteration(iter_num)
+        iter_num = 0
+        while True:
+            iter_num += 1
+            if (
+                self._config.max_iterations != 0
+                and iter_num > self._config.max_iterations
+            ):
+                return "iteration_cap", exit_code_for("iteration_cap"), iter_num - 1
+            outcome, _commits, _closures = await self._serial._run_one_iteration(
+                iter_num
+            )
+            if outcome == "empty_pool":
+                return "empty_pool", exit_code_for("empty_pool"), iter_num
+            if outcome == "aborted":
+                return "stuck", exit_code_for("stuck"), iter_num
+
+    async def _drive_rolling(self) -> tuple[str, int, int]:
+        """Drive Rolling dispatch to its terminal outcome (#219, ADR-0020).
+
+        Each turn: reserve every currently refillable **Lane**
+        (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`) and
+        spawn one lifecycle task per reservation (:meth:`_run_lane_lifecycle`)
+        FIRST — so a single freshly eligible ``parallel-safe`` issue is never
+        made to wait behind co-occurring plain work (#219 §1.4, criterion #9)
+        — no barrier: a finished Lane's slot refills the instant its
+        contribution is admitted or terminates, while every other Lane's
+        worktree setup and session continue unblocked. THEN latch serial
+        demand for any plain (non-``parallel-safe``) ``ready-for-agent`` work
+        (:meth:`_maybe_request_serial_for_plain_work` — a no-op once already
+        latched): this only ever withholds *new* reservations
+        (:attr:`~git_loopy.rolling_scheduler.RollingScheduler.refillable`),
+        never an already-open Lane, and the scheduler only grants the actual
+        serial turn once every open Lane has drained
+        (:attr:`~git_loopy.rolling_scheduler.RollingScheduler.quiescent`) — so
+        latching it early (as soon as any plain work is seen) merely stops
+        further refill while in-flight Lanes finish, rather than preempting
+        them. Concurrency never exceeds the scheduler's own
+        :attr:`~git_loopy.rolling_scheduler.RollingScheduler.effective_limit`,
+        since ``reserve`` is the only place a Lane is ever claimed. Drains to
+        completion via
+        :attr:`~git_loopy.rolling_scheduler.RollingScheduler.quiescent` and
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.confirm_empty`.
+        """
+        assert self._scheduler is not None  # guarded by `self._rolling_capable`
+        scheduler = self._scheduler
+        scheduler.start()
+        self._crash = None
+
+        try:
+            while True:
+                if self._crash is not None:
+                    raise self._crash
+
+                for reservation in scheduler.reserve():
+                    task = asyncio.create_task(
+                        self._guarded_lane_lifecycle(reservation)
+                    )
+                    self._pending.add(task)
+
+                self._maybe_request_serial_for_plain_work()
+
+                # `serial_turn()` itself has no `max_iterations` awareness (it
+                # only gates on the serial latch + full quiescence, #219
+                # §5.5-5.6) — unlike `reserve()`, whose `refillable` already
+                # folds `remaining_units` in. So the driver pre-checks the
+                # budget itself, mirroring serial mode's own pre-check
+                # (`_drive_serial_only`): once the cap is spent, a newly
+                # latched serial demand (e.g. a REASON_SERIAL_FALLBACK from an
+                # unpublished Lane) is left latched but un-run, and the very
+                # next idle-check below reports `iteration_cap` instead.
+                if (
+                    scheduler.remaining_units != 0
+                    and scheduler.serial_turn()
+                ):
+                    await self._serial._run_one_iteration(self._alloc_iter_num())
+                    # Reconcile the shared `max_iterations` budget into the
+                    # scheduler's own ledger: it only spends a unit at
+                    # `start_session` (Lane sessions), so a serial
+                    # Iteration's unit is folded in here rather than tracked
+                    # by a second, divergeable counter.
+                    scheduler._units_spent += 1
+                    scheduler.serial_finished()
+                    continue
+
+                if self._pending:
+                    done, _pending = await asyncio.wait(
+                        self._pending, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    self._pending -= done
+                    continue
+
+                # Fully idle: nothing pending, nothing just reserved, no
+                # serial turn granted. `self._pending` empty implies
+                # `scheduler.quiescent` — a contribution's Lane task never
+                # returns until its whole Integration cascade (including any
+                # parked contribution it admits from the FIFO) has finished
+                # (see `_integrate_contribution`) — so it is safe to ask the
+                # scheduler for a terminal outcome here.
+                if scheduler.abort_latched and scheduler.quiescent:
+                    return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                if scheduler.remaining_units == 0 and scheduler.quiescent:
+                    return (
+                        "iteration_cap",
+                        exit_code_for("iteration_cap"),
+                        scheduler._units_spent,
+                    )
+                if scheduler.confirm_empty():
+                    return (
+                        "empty_pool",
+                        exit_code_for("empty_pool"),
+                        scheduler._units_spent,
+                    )
+                await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
+        finally:
+            if self._pending:
+                for task in self._pending:
+                    task.cancel()
+                await asyncio.gather(*self._pending, return_exceptions=True)
+                self._pending.clear()
+
+    def _maybe_request_serial_for_plain_work(self) -> None:
+        """Latch serial demand for plain (non-``parallel-safe``) ready work.
+
+        #219 §1.4 retires the Wave's ">= 2 eligible" threshold for
+        ``parallel-safe`` issues entirely (see :meth:`_drive_rolling`) — but a
+        plain ``ready-for-agent`` issue (no ``parallel-safe`` label), a pull
+        request, or a PRDs-backend item is never Lane work
+        (:func:`~git_loopy.rolling_pool.is_parallel_safe`), and Pool
+        membership only ever surfaces Parallel-safe candidates to the
+        scheduler — so nothing inside the scheduler can ever discover that
+        demand on its own. The driver peeks the full AFK-ready pool once per
+        turn (mirroring how often the retired Wave's own
+        ``_collect_pool_safely`` ran) and asks the scheduler to latch serial
+        ownership (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`)
+        the moment it finds anything else. A no-op once already latched.
+        """
+        assert self._scheduler is not None
+        if self._scheduler.serial_latched:
+            return
+        for item in self._collect_pool_safely():
+            if isinstance(item.ref, int) and LABEL_PARALLEL_SAFE in item.labels:
+                continue
+            self._scheduler.request_serial(ref=item.ref, reason="not_parallel_safe")
+            return
 
     def _collect_pool_safely(self) -> list[AfkReadyItem]:
-        """Peek the AFK-ready pool for the Wave-vs-serial decision.
+        """Peek the full AFK-ready pool for the plain-work serial-demand check.
 
-        A source failure degrades to an empty pool (the serial fallback then
-        re-collects and owns the real error path), so a transient collection
-        error never crashes the round loop.
+        A source failure degrades to an empty pool (a genuine serial
+        Iteration re-collects the pool itself and owns the real error path),
+        so a transient collection error never crashes the driver loop.
         """
         try:
             return list(self._source.collect_afk_ready())
@@ -1416,31 +1619,106 @@ class _ParallelLoop:
             )
             return []
 
-    async def _run_one_wave(
-        self, iter_num: int, eligible: list[AfkReadyItem]
-    ) -> tuple[str, int, int]:
-        """Dispatch a Wave of up to N concurrent, isolated Lanes.
+    async def _guarded_lane_lifecycle(
+        self, reservation: rolling_scheduler.Reservation
+    ) -> None:
+        """Run one reservation's lifecycle, capturing any crash for the driver.
 
-        Creates a worktree + branch per Lane (cut from base, in a sibling
-        directory outside the repo), runs N :class:`IterationSession`s
-        concurrently on one client via :func:`asyncio.gather` — each pinned to
-        its Lane's worktree via ``working_directory`` — then, at the Wave
-        barrier, does per-Lane commit accounting + a per-worktree Checkpoint and
-        tears the worktrees down (keeping branches as breadcrumbs), then runs
-        :meth:`_integrate_wave` to land the green Lanes on base and close their
-        issues in ascending issue-number order (#62).
+        A bare :class:`asyncio.Task` swallows an unhandled exception silently
+        (it only logs "exception was never retrieved" once garbage
+        collected), which would quietly stop driving that Lane without ever
+        surfacing to :meth:`_drive_rolling` — this stashes the first crash in
+        :attr:`_crash` for the driver to re-raise on its own task, preserving
+        the retired Wave's "crashed" outcome / exit-code contract.
         """
-        self._serial._emit(
-            events_module.WRAPPER_ITERATION_START, iter_num=iter_num
-        )
-        lane_items = eligible[: self._config.parallel]
-        self._serial._emit(
-            events_module.WRAPPER_AFK_READY_COLLECTED,
-            iter_num=iter_num,
-            issues=[item.ref for item in lane_items],
-        )
+        try:
+            await self._run_lane_lifecycle(reservation)
+        except Exception as exc:  # pragma: no cover - defensive
+            if self._crash is None:
+                self._crash = exc
+
+    async def _run_lane_lifecycle(
+        self, reservation: rolling_scheduler.Reservation
+    ) -> None:
+        """One reservation's full lifecycle: setup, session, finish, Integration.
+
+        The concurrent unit of Rolling dispatch (#219, ADR-0020): worktree
+        creation, per-Lane setup, and the agent session for THIS reservation
+        overlap with every other Lane's lifecycle task and any in-flight
+        Integration — there is no barrier (criteria #2, #3). A worktree
+        creation failure releases the reservation with no trace
+        (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.release`, §3.3)
+        — no Lane contribution, no Summary row, no consumed
+        ``max_iterations`` unit, no Strike, and the candidate stays eligible.
+        Everything past that point mints a **Lane contribution** via
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`
+        and is tracked by ``contribution_id`` — never ``lane_id`` — in
+        ``self._lane_work`` (#219 §7), so it survives its Lane slot being
+        freed for reuse. A contribution admitted to Integration is finished
+        inline, still inside this task, serialized against every other
+        contribution's Integration via ``self._integration_lock``.
+        """
+        assert self._scheduler is not None
+        scheduler = self._scheduler
+        item = reservation.item
+        ref = item.ref
+        if not isinstance(ref, int):
+            # Rolling-eligible candidates are always int refs
+            # (`is_parallel_safe` requires it); this only defends a future
+            # non-int ref from ever reaching a worktree/branch-name helper
+            # that assumes one.
+            scheduler.release(reservation)
+            return
 
         base = self._resolve_base_ref()
+        branch = git_module.lane_branch_name(self._run_id, ref)
+        path = _lane_worktree_path(self._repo_root, self._run_id, ref)
+        try:
+            wt_git = self._git.add_worktree(path, branch=branch, base=base)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "worktree add for issue #%s failed: %s; releasing reservation",
+                ref, exc,
+            )
+            scheduler.release(reservation)
+            return
+
+        lane_work = _LaneWork(item=item, branch=branch, path=path, git=wt_git)
+        try:
+            lane_work.pre_sha = wt_git.head_sha()
+        except git_module.GitError as exc:
+            self._diag.warning("lane #%s pre head_sha failed: %s", ref, exc)
+
+        # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
+        # the structural per-Lane seam per-issue routing hangs off (#148). An
+        # unknown / conflicting label warns on the existing per-issue
+        # diagnostics channel; an unlabelled Lane (or routing-off) yields the
+        # gated global default. `start_session` binds the pair onto the
+        # Contribution, reused for this Lane's work AND its later
+        # auto-resolution sessions.
+        model, reasoning_effort = resolve_iteration_model(
+            self._config,
+            item.labels,
+            warn=lambda message, _ref=ref: self._diag.warning(
+                "lane #%s routing: %s", _ref, message
+            ),
+        )
+
+        # Prepare the freshly created worktree before its agent session
+        # starts (#65). Non-fatal: a broken environment still lets the agent
+        # try, and one Lane's setup can never take down another's task.
+        self._setup_lane_worktree(lane_work)
+
+        contribution = scheduler.start_session(
+            reservation, model=model, reasoning_effort=reasoning_effort
+        )
+        self._lane_work[contribution.contribution_id] = lane_work
+
+        lane_binding = self._serial._new_active_issue_binding(
+            None, allowed_refs=(ref,), lane_issue=ref
+        )
+        lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
+
         try:
             recent = self._git.recent_commits(5)
         except git_module.GitError as exc:
@@ -1450,131 +1728,58 @@ class _ParallelLoop:
             recent = []
         commits_block = _format_recent_commits(recent)
 
-        # 1) Create each Lane's worktree + branch (before the barrier). A failed
-        #    add (e.g. a leftover branch) drops just that Lane and leaves its
-        #    issue un-worked so it can fall through to a later round.
-        lanes: list[_Lane] = []
-        for item in lane_items:
-            ref = item.ref
-            if not isinstance(ref, int):
-                # Eligibility (see `_run_one_round`) already guarantees an
-                # int issue number; this narrows the type for the branch-name
-                # helper and defends against a future non-int ref slipping in.
-                continue
-            branch = git_module.lane_branch_name(self._run_id, ref)
-            path = _lane_worktree_path(self._repo_root, self._run_id, ref)
+        await self._run_lane_session(contribution, lane_work, commits_block)
+
+        changed, checkpoint_ok = self._account_lane(contribution, lane_work)
+
+        if checkpoint_ok:
             try:
-                wt_git = self._git.add_worktree(path, branch=branch, base=base)
+                self._git.remove_worktree(lane_work.path, force=True)
             except git_module.GitError as exc:
                 self._diag.warning(
-                    "worktree add for issue #%s failed: %s; skipping lane",
-                    ref, exc,
+                    "worktree remove for %s failed: %s", lane_work.path, exc
                 )
-                continue
-            lane = _Lane(item=item, branch=branch, path=path, git=wt_git)
-            # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
-            # the structural per-Lane seam per-issue routing hangs off (#148).
-            # An unknown / conflicting label warns on the existing per-issue
-            # diagnostics channel (scoped to this Lane's ref); an unlabelled
-            # Lane (or routing-off) yields the gated global default. The pair is
-            # reused for this Lane's work AND auto-resolution sessions.
-            lane.model, lane.reasoning_effort = resolve_iteration_model(
-                self._config,
-                item.labels,
-                warn=lambda message, _ref=ref: self._diag.warning(
-                    "lane #%s routing: %s", _ref, message
-                ),
-            )
-            try:
-                lane.pre_sha = wt_git.head_sha()
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "lane #%s pre head_sha failed: %s", ref, exc
-                )
-            lanes.append(lane)
-            self._worked.add(ref)
-            lane_binding = self._serial._new_active_issue_binding(
-                iter_num, allowed_refs=(ref,), lane_issue=ref
-            )
-            lane_binding.bind(
-                ref,
-                source="lane_pickup",
-                at=datetime.now(timezone.utc),
-            )
-            # Prepare the freshly created worktree before its agent session
-            # starts (#65): run GIT_LOOPY_WORKTREE_SETUP, or a best-effort
-            # auto-detected install, so the feedback loops can run in the Lane.
-            self._setup_lane_worktree(lane)
-
-        # 2) Dispatch the Lanes concurrently, joined at the Wave barrier. One
-        #    long-lived client hosts N sessions, each pinned to its worktree.
-        if lanes:
-            await asyncio.gather(
-                *(
-                    self._run_lane_session(iter_num, lane, commits_block)
-                    for lane in lanes
-                )
+        else:
+            # §3.10: a Checkpoint failure preserves the dirty branch and
+            # worktree for forensics / recovery rather than tearing it down.
+            self._diag.warning(
+                "lane #%s checkpoint failed; preserving worktree %s",
+                ref, lane_work.path,
             )
 
-        # 3) Per-Lane accounting + per-worktree Checkpoint (sequential and
-        #    deterministic), then tear the worktree down. Run after the barrier
-        #    so the concurrent phase is pure session work. Branches survive the
-        #    teardown (kept as breadcrumbs) so Integration can land them next.
-        total_commits = 0
-        for lane in lanes:
-            total_commits += self._account_lane(iter_num, lane)
-            try:
-                self._git.remove_worktree(lane.path, force=True)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "worktree remove for %s failed: %s", lane.path, exc
-                )
-
-        # 3.5) Integration (#62 + #63, ADR-0009): serialized, deterministic land
-        #     of the green Lane branches on base + issue closure, with revert +
-        #     bounded auto-resolution + serial fallback for red / conflicting
-        #     Lanes so base stays green. Operates on branch names in the main
-        #     worktree, so it runs after the Lane worktrees are gone and before
-        #     the round's single Strike tick.
-        published_issues = await self._integrate_wave(iter_num, lanes)
-
-        # 4) Strike tick — once per round. A successful Integration is the round's
-        #    progress signal (ADR-0009): Lane commits count only once they LAND on
-        #    base, so a round that lands nothing adds a strike even if the agents
-        #    committed inside their worktrees.
-        outcome = self._tick_round(
-            iter_num, commits=0, closures=len(published_issues)
+        disposition = scheduler.finish_work(
+            contribution, changed=changed, checkpoint_ok=checkpoint_ok
         )
+        if disposition == rolling_scheduler.TERMINAL:
+            self._lane_work.pop(contribution.contribution_id, None)
+            self._apply_strike_reaction(contribution)
+            return
+        if disposition == rolling_scheduler.ADMITTED:
+            await self._integrate_contribution(contribution)
+            return
+        # PARKED (§3.9, §4.1): the H=2 Integration backlog is full, so this
+        # contribution's Lane is retained and its state stays in
+        # `self._lane_work`. It is finalized later, from inside whichever
+        # OTHER contribution's `finalize()` drains the FIFO — see
+        # `_integrate_contribution`'s recursive admission handling.
 
-        self._serial._finish_iteration(
-            iter_num,
-            outcome="aborted" if outcome == "aborted" else "parallel",
-            advanced_issues=published_issues,
-        )
-
-        if outcome == "aborted":
-            return ("aborted", total_commits, len(published_issues))
-        return ("continue", total_commits, len(published_issues))
-
-    def _setup_lane_worktree(self, lane: _Lane) -> None:
+    def _setup_lane_worktree(self, lane_work: _LaneWork) -> None:
         """Prepare a Lane's freshly created worktree before its session (#65).
 
         Runs the injected :class:`~git_loopy.worktree.WorktreeSetup` — the
         configured ``GIT_LOOPY_WORKTREE_SETUP`` command or a best-effort
-        auto-detected install — in ``lane.path``. Called synchronously in the
-        worktree-creation phase, so setup completes for every Lane **before** the
-        concurrent session barrier. A setup **failure is surfaced** (a warning,
-        never silently ignored) but never aborts the Wave: a broken environment
-        still lets the agent try (its own feedback loops then fail visibly), and
-        one Lane's setup can never take down the barrier — consistent with the
-        bulletproof-Lane discipline of :meth:`_run_lane_session`.
+        auto-detected install — in ``lane_work.path``. A setup **failure is
+        surfaced** (a warning, never silently ignored) but never aborts the
+        Lane: a broken environment still lets the agent try (its own feedback
+        loops then fail visibly), and one Lane's setup can never take down
+        another Lane's concurrent task.
         """
         try:
-            result = self._worktree_setup.run(lane.path)
-        except Exception as exc:  # never let setup abort the Wave
+            result = self._worktree_setup.run(lane_work.path)
+        except Exception as exc:  # never let setup abort the Lane
             self._diag.warning(
                 "worktree setup for issue #%s raised %s: %s; continuing",
-                lane.item.ref, type(exc).__name__, exc,
+                lane_work.item.ref, type(exc).__name__, exc,
             )
             return
         if not result.ran:
@@ -1582,46 +1787,61 @@ class _ParallelLoop:
         if result.passed:
             self._diag.info(
                 "worktree setup for issue #%s ran %r",
-                lane.item.ref, result.command,
+                lane_work.item.ref, result.command,
             )
             return
         self._diag.warning(
             "worktree setup for issue #%s FAILED (exit %s): %r; continuing "
             "(agent will still run). Output tail: %s",
-            lane.item.ref, result.returncode, result.command,
+            lane_work.item.ref, result.returncode, result.command,
             result.output_tail,
         )
 
     async def _run_lane_session(
-        self, iter_num: int, lane: _Lane, commits_block: str
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        commits_block: str,
     ) -> None:
-        """Run one Lane's SDK session, pinned to its worktree.
+        """Run one Lane contribution's SDK session, pinned to its worktree.
 
-        The only concurrent phase of a Wave. Bulletproof by construction — a
-        timeout, a send failure, or a session-lifecycle error is logged and
-        swallowed so one Lane can never abort the :func:`asyncio.gather` join or
-        the barrier teardown; the post-barrier accounting then records that Lane
-        as no-progress.
+        Concurrent by construction with every other Lane's session and any
+        in-flight Integration (#219, ADR-0020) — bulletproof like the retired
+        Wave's ``_run_lane_session``: a timeout, a send failure, or a
+        session-lifecycle error is logged and swallowed so one Lane can never
+        abort another's task or the driver loop; the caller then accounts and
+        finishes the contribution as no-progress.
         """
         prompt = (
             f"Previous commits: {commits_block} "
-            f"Issues: {lane.item.rendered_block} {self._prompt_text}"
+            f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
         )
         send_timeout = self._config.send_timeout_seconds
         try:
+            # Deliberately no `event_observer=self._rollup`: unlike the serial
+            # `_Loop` (which feeds every `IterationSession` into the single
+            # `IterationRollupAccumulator` "current iteration" slot), Lane
+            # sessions run concurrently and would corrupt that single slot.
+            # Known, documented gap (#219/#306): Lane-derived token/cost usage
+            # never reaches the Run summary's per-iteration rollup or a
+            # `wrapper.iteration.end` event -- Lane contributions never emit
+            # `wrapper.iteration.start`/`.end` at all. Commits, auto-closures,
+            # and Strike accounting for Lane work are still fully tracked
+            # (`wrapper.commit.recorded`, `wrapper.auto_close`,
+            # `wrapper.strike` via `_apply_strike_reaction`) -- only the
+            # summary-table cost/token rollup is not.
             async with IterationSession(
                 self._client,
                 config=self._config,
                 event_log=self._writers.event_log,
                 sinks=self._sinks,
                 run_id=self._run_id,
-                iter_num=iter_num,
-                model=lane.model,
-                reasoning_effort=lane.reasoning_effort,
-                working_directory=str(lane.git.root),
-                issue_ref=lane.item.ref,
+                iter_num=self._alloc_iter_num(),
+                model=contribution.model,
+                reasoning_effort=contribution.reasoning_effort,
+                working_directory=str(lane_work.git.root),
+                issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
-                event_observer=self._serial._rollup,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
@@ -1631,174 +1851,229 @@ class _ParallelLoop:
                     self._diag.warning(
                         "lane #%s send_and_wait timed out after %ss; "
                         "treating as no-progress",
-                        lane.item.ref, send_timeout,
+                        lane_work.item.ref, send_timeout,
                     )
                 except Exception as exc:
                     self._diag.warning(
                         "lane #%s send_and_wait raised %s: %s; "
                         "treating as no-progress",
-                        lane.item.ref, type(exc).__name__, exc,
+                        lane_work.item.ref, type(exc).__name__, exc,
                     )
         except Exception as exc:
             self._diag.error(
                 "lane #%s IterationSession lifecycle failed: %s: %s",
-                lane.item.ref, type(exc).__name__, exc,
+                lane_work.item.ref, type(exc).__name__, exc,
             )
 
-    def _account_lane(self, iter_num: int, lane: _Lane) -> int:
-        """Post-barrier per-Lane commit accounting + per-worktree Checkpoint.
+    def _account_lane(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> tuple[bool, bool]:
+        """Post-session per-Lane commit accounting + per-worktree Checkpoint.
 
         Reads the Lane branch's post-session head, emits one
         ``wrapper.commit.recorded`` per new commit (each Lane's Consumption
-        attributed to its own issue), then captures any dirty / untracked work
-        in a per-worktree Checkpoint on the Lane branch (ADR-0004) so no agent
-        work is lost before teardown. Returns the Lane's new-commit count for
-        the round's Strike accounting.
+        attributed to its own issue), then captures any dirty / untracked
+        work in a per-worktree Checkpoint on the Lane branch (ADR-0004).
+
+        Returns:
+            ``(changed, checkpoint_ok)`` for
+            :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work`
+            (#219 §3.7-3.10): ``changed`` is ``True`` iff the branch carries
+            durable work — an agent commit or a successful Checkpoint commit
+            both count (§3.9) — and ``checkpoint_ok`` is ``False`` only on an
+            actual Checkpoint *failure*, never on "nothing to checkpoint".
         """
-        wt_git = lane.git
-        if lane.pre_sha is None:
+        wt_git = lane_work.git
+        ref = lane_work.item.ref
+        if lane_work.pre_sha is None:
             new_commits: list[git_module.Commit] = []
         else:
             try:
                 head = wt_git.head_sha()
-                new_commits = wt_git.commits_between(lane.pre_sha, head)
+                new_commits = wt_git.commits_between(lane_work.pre_sha, head)
             except git_module.GitError as exc:
                 self._diag.warning(
-                    "lane #%s commit accounting failed: %s",
-                    lane.item.ref, exc,
+                    "lane #%s commit accounting failed: %s", ref, exc
                 )
                 new_commits = []
 
         for c in new_commits:
             self._serial._emit(
                 events_module.WRAPPER_COMMIT_RECORDED,
-                iter_num=iter_num,
+                iter_num=None,
                 sha=c.sha,
                 subject=c.subject,
                 date=c.date,
-                lane_issue=lane.item.ref,
+                lane_issue=ref,
             )
 
-        self._maybe_checkpoint_lane(iter_num, lane)
-        return len(new_commits)
+        checkpoint_sha, checkpoint_ok = self._maybe_checkpoint_lane(lane_work)
+        changed = bool(new_commits) or checkpoint_sha is not None
+        return changed, checkpoint_ok
 
     def _maybe_checkpoint_lane(
-        self, iter_num: int, lane: _Lane
-    ) -> str | None:
+        self, lane_work: _LaneWork
+    ) -> tuple[str | None, bool]:
         """Per-worktree Checkpoint on a Lane branch (ADR-0004, per-Lane).
 
         Mirrors :meth:`_Loop._maybe_checkpoint` but scoped to the Lane's own
-        worktree and attributed to the Lane's issue, so uncommitted agent work
-        in a Lane is captured on that Lane's branch before the barrier tears the
-        worktree down. Non-fatal — a git error warns and returns ``None``.
+        worktree and attributed to the Lane's issue.
+
+        Returns:
+            ``(sha, ok)`` — ``ok`` is ``False`` only when the dirty-check or
+            the checkpoint commit itself failed, never when there was simply
+            nothing to checkpoint, so :meth:`_run_lane_lifecycle` can tell
+            "clean, nothing to do" apart from "a real failure" per §3.10 (a
+            Checkpoint failure preserves the dirty worktree instead of
+            tearing it down).
         """
-        wt_git = lane.git
+        wt_git = lane_work.git
+        ref = lane_work.item.ref
         try:
             dirty = wt_git.is_dirty()
             untracked = wt_git.has_untracked()
         except git_module.GitError as exc:
             self._diag.warning(
-                "lane #%s checkpoint dirty-check failed: %s; skipping",
-                lane.item.ref, exc,
+                "lane #%s checkpoint dirty-check failed: %s; skipping", ref, exc
             )
-            return None
+            return None, False
         if not (dirty or untracked):
-            return None
+            return None, True
         try:
             wt_git.add_all()
-            sha = wt_git.commit(checkpoint_message(lane.item.ref))
+            sha = wt_git.commit(checkpoint_message(ref))
         except git_module.GitError as exc:
             self._diag.warning(
                 "lane #%s checkpoint commit failed: %s; continuing without it",
-                lane.item.ref, exc,
+                ref, exc,
             )
-            return None
+            return None, False
         self._serial._emit(
             events_module.WRAPPER_CHECKPOINT_RECORDED,
-            iter_num=iter_num,
+            iter_num=None,
             sha=sha,
-            issue=lane.item.ref,
-            lane_issue=lane.item.ref,
+            issue=ref,
+            lane_issue=ref,
         )
-        return sha
+        return sha, True
 
-    async def _integrate_wave(
-        self, iter_num: int, lanes: list[_Lane]
-    ) -> set[int | str]:
-        """Serialized, robust Integration for a Wave's Lanes (#62 + #63, ADR-0009).
+    async def _integrate_contribution(
+        self, contribution: rolling_scheduler.Contribution
+    ) -> None:
+        """Integrate one admitted contribution, then drain whatever it frees.
 
-        Lands each green Lane branch on base in **ascending issue-number order**
-        (see :func:`_lane_sort_key`), keeping the base branch always green and
-        never waiting on a human. Per Lane, in order (see :meth:`_integrate_lane`):
-
-        1. Merge the Lane branch into base and re-run the full feedback loops from
-           the *runner* side via the injected :class:`~git_loopy.gate.GateRunner`.
-        2. On **green**, land it — close the issue via the same runner-driven
-           closure as serial mode (``source.handle_completions`` -> ``gh issue
-           close`` + the ``Closes #N`` backstop, one ``wrapper.auto_close`` per
-           closure) and delete the integrated Lane branch — and count it a success
-           (the round's Strike progress signal).
-        3. A merge **conflict** (:meth:`~git_loopy.git.GitClient.abort_merge`) or a
-           clean merge whose gate goes **red** or cannot run
-           (:meth:`~git_loopy.git.GitClient.revert_merge`) is undone so base stays
-           green, then handed to a bounded (K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS`)
-           auto-resolution agent in a dedicated integration worktree on base
-           (:meth:`_auto_resolve_lane`). A green attempt lands and counts as a
-           success; after K failures the issue falls back to a serial Iteration
-           with exactly one breadcrumb comment and its Lane branch is kept.
-
-        Returns the issues whose Lane contributions reached green publication —
-        via the happy path or auto-resolution. Their count is the Wave's Strike
-        progress, while their identities distinguish published-but-unclosed work
-        from unpublished contributions in the normalized Iteration rollup.
+        Runs from inside whichever Lane lifecycle task got ``ADMITTED`` (or
+        recursively, from inside another contribution's own ``finalize()``,
+        for one newly-admitted from the parked FIFO) — serialized against
+        every other contribution's Integration via ``self._integration_lock``
+        so the shared main worktree never sees two concurrent merges, while
+        every OTHER Lane's worktree setup and session continue unblocked
+        (#219, ADR-0020, criteria #2/#3). A contribution's Lane slot is
+        already free the instant it was admitted
+        (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work`);
+        this only finishes the contribution itself, tracked by
+        ``contribution_id`` — never ``lane_id`` — so it correctly survives
+        that Lane moving on to a new issue (#219 §7, criterion #7).
         """
-        published: set[int | str] = set()
-        for lane in sorted(lanes, key=_lane_sort_key):
-            if await self._integrate_lane(iter_num, lane):
-                published.add(lane.item.ref)
-        return published
+        assert self._scheduler is not None
+        async with self._integration_lock:
+            lane_work = self._lane_work.pop(contribution.contribution_id, None)
+            if lane_work is None:  # pragma: no cover - defensive
+                self._diag.error(
+                    "integration #%s: missing lane state for contribution %s",
+                    contribution.ref, contribution.contribution_id,
+                )
+                published = False
+            else:
+                published = await self._integrate_lane(contribution, lane_work)
+            newly_admitted = self._scheduler.finalize(
+                contribution, published=published
+            )
+            self._apply_strike_reaction(contribution)
+        for admitted in newly_admitted:
+            await self._integrate_contribution(admitted)
 
-    async def _integrate_lane(self, iter_num: int, lane: _Lane) -> int:
-        """Integrate one Lane; return ``1`` if it landed green, else ``0``.
+    def _apply_strike_reaction(
+        self, contribution: rolling_scheduler.Contribution
+    ) -> None:
+        """Tick the shared Strike machine once per finalized contribution.
 
-        The happy path (#62): merge -> gate -> on green :meth:`_land_lane`. On a
-        conflicting merge, or a clean merge whose gate goes red / cannot run, the
-        merge is undone so base stays green and the Lane is handed to
-        :meth:`_auto_resolve_lane` (#63).
+        #219 §7.4, §7.6: the scheduler records ``STRIKE_RESET`` /
+        ``STRIKE_ADD`` on the finalized row rather than ticking the machine
+        itself — it belongs to the composed serial ``self._serial`` because a
+        serial Iteration ticks the identical one. This replaces the retired
+        Wave's once-per-round ``_tick_round``: under Rolling dispatch there
+        is no round, so the reaction is applied the instant EACH contribution
+        finalizes, whether that is a ``TERMINAL`` disposition straight out of
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work` or a
+        post-Integration
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finalize`.
         """
-        ref = lane.item.ref
+        assert self._scheduler is not None
+        reset = contribution.strike_reaction == rolling_scheduler.STRIKE_RESET
+        outcome = self._serial._strike_machine.tick(
+            commits_in_iter=1 if reset else 0,
+            auto_closures_in_iter=0,
+        )
+        if outcome == "aborted" or not reset:
+            self._serial._emit(
+                events_module.WRAPPER_STRIKE,
+                iter_num=None,
+                strikes=self._serial._strike_machine.strikes,
+                max_strikes=self._config.max_nmt_strikes,
+                outcome=("abort" if outcome == "aborted" else "warn"),
+            )
+        if outcome == "aborted":
+            self._scheduler.strike_limit_reached()
+
+    async def _integrate_lane(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> bool:
+        """Integrate one admitted Lane contribution; return whether it landed green.
+
+        The happy path (#62, adapted for #219/ADR-0020): merge -> gate -> on
+        green :meth:`_land_lane`. On a conflicting merge, or a clean merge
+        whose gate goes red / cannot run, the merge is undone so base stays
+        green and the contribution is handed to :meth:`_auto_resolve_lane`
+        (#63).
+        """
+        ref = contribution.ref
         try:
             pre_base = self._git.head_sha()
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: base head_sha failed: %s; skipping", ref, exc
             )
-            return 0
+            return False
 
         # 1) Attempt the clean landing.
         try:
-            self._git.merge(lane.branch)
+            self._git.merge(lane_work.branch)
         except git_module.GitError as exc:
             # A conflicting merge: unwind it (base untouched) and auto-resolve.
             self._diag.warning(
                 "integration #%s: merge of %s conflicted: %s; aborting and "
                 "auto-resolving",
-                ref, lane.branch, exc,
+                ref, lane_work.branch, exc,
             )
             self._abort_merge_safely(ref)
-            return await self._auto_resolve_lane(iter_num, lane)
+            return await self._auto_resolve_lane(contribution, lane_work)
 
         # 2) Merge landed cleanly — gate it from the runner side.
         if self._gate_green(ref, "post-merge"):
             if not self._base_advanced(pre_base, ref):
-                return 0
-            self._land_lane(iter_num, lane, pre_base)
-            return 1
+                return False
+            self._land_lane(contribution, lane_work, pre_base)
+            return True
 
         # 3) Clean merge but a red / un-runnable gate: revert so base stays
         #    green, then auto-resolve.
         self._revert_merge_safely(ref)
-        return await self._auto_resolve_lane(iter_num, lane)
+        return await self._auto_resolve_lane(contribution, lane_work)
 
     def _base_advanced(self, pre_base: str, ref: int | str) -> bool:
         """Return whether Integration published a new base head."""
@@ -1871,14 +2146,17 @@ class _ParallelLoop:
                 ref, exc,
             )
 
-    def _land_lane(self, iter_num: int, lane: _Lane, pre_base: str) -> None:
-        """Finish a green landing: close the issue + delete the integrated branch."""
-        self._close_landed(iter_num, lane.item, pre_base)
-        self._delete_branch_safely(lane.item.ref, lane.branch)
-
-    def _close_landed(
-        self, iter_num: int, item: AfkReadyItem, pre_base: str
+    def _land_lane(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        pre_base: str,
     ) -> None:
+        """Finish a green landing: close the issue + delete the integrated branch."""
+        self._close_landed(lane_work.item, pre_base)
+        self._delete_branch_safely(contribution.ref, lane_work.branch)
+
+    def _close_landed(self, item: AfkReadyItem, pre_base: str) -> None:
         """Close a landed issue via the serial closure path + emit ``auto_close``.
 
         Reads the commits the landing added to base (``pre_base`` -> current
@@ -1901,7 +2179,7 @@ class _ParallelLoop:
         ):
             self._serial._emit(
                 events_module.WRAPPER_AUTO_CLOSE,
-                iter_num=iter_num,
+                iter_num=None,
                 issue=completion.ref,
                 sha=completion.sha,
                 shas=list(completion.shas),
@@ -1917,26 +2195,31 @@ class _ParallelLoop:
                 "integration #%s: delete of %s failed: %s", ref, branch, exc
             )
 
-    async def _auto_resolve_lane(self, iter_num: int, lane: _Lane) -> int:
-        """Bounded auto-resolution for a reverted / aborted Lane (#63, ADR-0009).
+    async def _auto_resolve_lane(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> bool:
+        """Bounded auto-resolution for a reverted / aborted contribution (#63, ADR-0009).
 
         Creates ONE dedicated integration worktree on base and, up to
         K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times, runs a fresh resolution
-        agent session pinned to it (:meth:`_run_resolution_session`) and re-gates
-        that worktree. The first **green** attempt merges the integration branch
-        onto base, closes the issue, deletes both the integration branch and the
-        (now-landed) Lane branch, and returns ``1``. If all K attempts stay red
-        the Lane falls back to a serial Iteration
-        (:meth:`_fallback_lane_to_serial`) and returns ``0``. The integration
-        worktree and branch are always reaped; the Lane branch is kept only on
-        failure (a breadcrumb).
+        agent session pinned to it (:meth:`_run_resolution_session`) and
+        re-gates that worktree. The first **green** attempt merges the
+        integration branch onto base, closes the issue, deletes both the
+        integration branch and the (now-landed) Lane branch, and returns
+        ``True``. If all K attempts stay red the contribution falls back to
+        a serial Iteration (:meth:`_fallback_lane_to_serial`) and returns
+        ``False``. The integration worktree and branch are always reaped; the
+        Lane branch is kept only on failure (a breadcrumb).
         """
-        ref = lane.item.ref
+        ref = contribution.ref
         if not isinstance(ref, int):
-            # Auto-resolution addresses one integer issue (its worktree / branch
-            # names derive from the number); a non-int ref cannot be recovered.
-            self._fallback_lane_to_serial(lane)
-            return 0
+            # Auto-resolution addresses one integer issue (its worktree /
+            # branch names derive from the number); a non-int ref cannot be
+            # recovered.
+            self._fallback_lane_to_serial(lane_work)
+            return False
 
         base = self._resolve_base_ref()
         int_branch = git_module.integration_branch_name(self._run_id, ref)
@@ -1951,8 +2234,8 @@ class _ParallelLoop:
                 "falling back to serial",
                 ref, exc,
             )
-            self._fallback_lane_to_serial(lane)
-            return 0
+            self._fallback_lane_to_serial(lane_work)
+            return False
 
         landed = False
         try:
@@ -1967,7 +2250,7 @@ class _ParallelLoop:
                     )
                     break
                 await self._run_resolution_session(
-                    iter_num, lane, int_git, attempt
+                    contribution, lane_work, int_git, attempt
                 )
                 if not self._gate_green(
                     ref, f"auto-resolution attempt {attempt}", int_path
@@ -1985,8 +2268,8 @@ class _ParallelLoop:
                     continue
                 if not self._base_advanced(pre_base, ref):
                     continue
-                self._close_landed(iter_num, lane.item, pre_base)
-                self._delete_branch_safely(ref, lane.branch)
+                self._close_landed(lane_work.item, pre_base)
+                self._delete_branch_safely(ref, lane_work.branch)
                 landed = True
                 break
         finally:
@@ -2000,14 +2283,14 @@ class _ParallelLoop:
             self._delete_branch_safely(ref, int_branch)
 
         if not landed:
-            self._fallback_lane_to_serial(lane)
-            return 0
-        return 1
+            self._fallback_lane_to_serial(lane_work)
+            return False
+        return True
 
     async def _run_resolution_session(
         self,
-        iter_num: int,
-        lane: _Lane,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
         int_git: git_module.GitClient,
         attempt: int,
     ) -> None:
@@ -2016,12 +2299,13 @@ class _ParallelLoop:
         A fresh :class:`IterationSession` pinned to the dedicated integration
         worktree, tasked to merge the Lane branch, resolve conflicts, make the
         feedback loops pass, and commit. Runs on the SAME ``(model, effort)``
-        the Lane resolved once at pickup (#148), so a Lane's route is bound once
-        and reused for its work and its recovery sessions alike. Bulletproof
-        like :meth:`_run_lane_session` — a timeout or error is logged and
-        swallowed so the attempt just reads as still-red and the bound advances.
+        the contribution resolved once at pickup (#148), so a Lane's route is
+        bound once and reused for its work and its recovery sessions alike.
+        Bulletproof like :meth:`_run_lane_session` — a timeout or error is
+        logged and swallowed so the attempt just reads as still-red and the
+        bound advances.
         """
-        prompt = self._resolution_prompt(lane, attempt)
+        prompt = self._resolution_prompt(contribution, lane_work, attempt)
         send_timeout = self._config.send_timeout_seconds
         try:
             async with IterationSession(
@@ -2030,13 +2314,12 @@ class _ParallelLoop:
                 event_log=self._writers.event_log,
                 sinks=self._sinks,
                 run_id=self._run_id,
-                iter_num=iter_num,
-                model=lane.model,
-                reasoning_effort=lane.reasoning_effort,
+                iter_num=self._alloc_iter_num(),
+                model=contribution.model,
+                reasoning_effort=contribution.reasoning_effort,
                 working_directory=str(int_git.root),
-                issue_ref=lane.item.ref,
+                issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
-                event_observer=self._serial._rollup,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(prompt, timeout=send_timeout)
@@ -2044,72 +2327,57 @@ class _ParallelLoop:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s timed out "
                         "after %ss; treating as still-red",
-                        lane.item.ref, attempt, send_timeout,
+                        contribution.ref, attempt, send_timeout,
                     )
                 except Exception as exc:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s raised "
                         "%s: %s; treating as still-red",
-                        lane.item.ref, attempt, type(exc).__name__, exc,
+                        contribution.ref, attempt, type(exc).__name__, exc,
                     )
         except Exception as exc:
             self._diag.error(
                 "integration #%s: auto-resolution session lifecycle failed: "
                 "%s: %s",
-                lane.item.ref, type(exc).__name__, exc,
+                contribution.ref, type(exc).__name__, exc,
             )
 
-    def _resolution_prompt(self, lane: _Lane, attempt: int) -> str:
+    def _resolution_prompt(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        attempt: int,
+    ) -> str:
         """The dedicated auto-resolution brief (#63).
 
-        Unlike a Lane / serial prompt this is not issue-collection work: it asks
-        the agent to merge the Lane branch into the integration worktree's base,
-        fix any conflicts, make the feedback loops green, and commit — driving a
-        clean Integration the runner can then land.
+        Unlike a Lane / serial prompt this is not issue-collection work: it
+        asks the agent to merge the Lane branch into the integration
+        worktree's base, fix any conflicts, make the feedback loops green,
+        and commit — driving a clean Integration the runner can then land.
         """
         return (
             f"Auto-resolution attempt {attempt} of "
-            f"{_AUTO_RESOLUTION_MAX_ATTEMPTS} for issue #{lane.item.ref}. Merge "
-            f"branch {lane.branch} into this integration worktree's base branch, "
-            f"resolve any merge conflicts, make all feedback loops in AGENTS.md "
-            f"pass, and commit the result. {self._prompt_text}"
+            f"{_AUTO_RESOLUTION_MAX_ATTEMPTS} for issue #{contribution.ref}. "
+            f"Merge branch {lane_work.branch} into this integration "
+            "worktree's base branch, resolve any merge conflicts, make all "
+            f"feedback loops in AGENTS.md pass, and commit the result. "
+            f"{self._prompt_text}"
         )
 
-    def _fallback_lane_to_serial(self, lane: _Lane) -> None:
+    def _fallback_lane_to_serial(self, lane_work: _LaneWork) -> None:
         """Terminal auto-resolution failure -> fall back to a serial Iteration (#63).
 
-        Posts exactly one automated breadcrumb comment on the issue and leaves it
-        **OPEN** — and in :attr:`_worked`, so it is never re-Laned — so a later
-        round, finding no fresh eligible ``parallel-safe`` work, runs a serial
-        ``_run_one_iteration`` (the proven safe path) that re-collects the issue
-        and works it. The failed Lane branch is intentionally **kept** (never
-        deleted) as a breadcrumb.
+        Posts exactly one automated breadcrumb comment on the issue and
+        leaves it **OPEN** — and latched into the scheduler's own
+        Run-scoped ``_worked`` guard (set at :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`),
+        so it is never re-Laned — so a later serial Iteration (granted via
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`,
+        automatically requested by :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finalize`
+        on this exact fallback) re-collects the issue and works it. The
+        failed Lane branch is intentionally **kept** (never deleted) as a
+        breadcrumb.
         """
-        self._source.comment(lane.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
-
-    def _tick_round(
-        self, iter_num: int, *, commits: int, closures: int
-    ) -> str:
-        """Tick the shared Strike machine once for a round + emit its event.
-
-        A single tick per round (a Wave or a serial Iteration), mirroring the
-        serial loop's step-10 semantics: progress (a Lane commit or a closure)
-        resets strikes, a no-progress round adds one, and the threshold aborts
-        the run.
-        """
-        outcome = self._serial._strike_machine.tick(
-            commits_in_iter=commits,
-            auto_closures_in_iter=closures,
-        )
-        if outcome == "aborted" or (commits == 0 and closures == 0):
-            self._serial._emit(
-                events_module.WRAPPER_STRIKE,
-                iter_num=iter_num,
-                strikes=self._serial._strike_machine.strikes,
-                max_strikes=self._config.max_nmt_strikes,
-                outcome=("abort" if outcome == "aborted" else "warn"),
-            )
-        return outcome
+        self._source.comment(lane_work.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
 
     def _resolve_base_ref(self) -> str:
         """The base ref new Lane branches are cut from.
@@ -2393,9 +2661,10 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         return exit_code_for("preflight_failed")
 
     # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
-    # Wave/Lane orchestrator with the injected runner-side Integration gate
-    # (#60); serial (the default, parallel == 1) drives the existing loop
-    # byte-for-byte unchanged. Both expose the same ``drive()`` contract.
+    # Rolling-dispatch orchestrator (#219, ADR-0020) with the injected
+    # runner-side Integration gate (#60); serial (the default, parallel == 1)
+    # drives the existing loop byte-for-byte unchanged. Both expose the same
+    # ``drive()`` contract.
     loop: _Loop | _ParallelLoop
     if config.parallel > 1:
         loop = _ParallelLoop(

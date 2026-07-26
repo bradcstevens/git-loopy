@@ -639,9 +639,9 @@ class GitHubIssueSource:
         """Post one breadcrumb comment via the injected client (non-fatal).
 
         Only integer issue refs are commentable; a non-int ref, or a client
-        failure, is logged and swallowed so a failed breadcrumb never aborts the
-        Wave barrier — the issue simply falls through to a serial **Iteration**
-        without the note.
+        failure, is logged and swallowed so a failed breadcrumb never aborts
+        the calling Run — the issue simply falls through to a serial
+        **Iteration** without the note.
         """
         if not isinstance(ref, int):
             return

@@ -1,34 +1,49 @@
-"""End-to-end integration tests for Parallel mode (#61/#62, ADR-0008/0009).
+"""End-to-end integration tests for Parallel mode (#219, ADR-0008/0009/0020).
 
-Drives the opt-in Wave/Lane orchestrator through the public
-:func:`git_loopy.loop.run` seam with the SDK + git / gh / gate seams faked,
-asserting the **observable effects** of concurrent isolated execution — one
-worktree + branch per Lane created in a sibling directory, each session pinned
-to its Lane's worktree via ``working_directory``, per-Lane commits landing on
-Lane branches, and the worktrees torn down at the Wave barrier — not internal
-call ordering.
+Drives the Rolling-dispatch orchestrator (retiring the Wave barrier, #306)
+through the public :func:`git_loopy.loop.run` seam with the SDK + git / gh /
+gate seams faked, asserting the **observable effects** of concurrent isolated
+execution — one worktree + branch per Lane created in a sibling directory,
+each session pinned to its Lane's worktree via ``working_directory``,
+per-Lane commits landing on Lane branches, and a Lane's worktree torn down
+the moment ITS OWN contribution finishes (never waiting on any other Lane) —
+not internal call ordering.
 
 The fakes here (unlike the serial ``test_iteration_end_to_end`` client) record
 the per-session ``working_directory`` and route each Lane's simulated agent
 commit to the *right* worktree's child :class:`~tests.fakes.FakeGitClient`, so
-the test can prove per-Lane isolation. At the Wave barrier **Integration** (#62)
-lands each green Lane's branch on base in ascending issue-number order, gates it
-via the injected :class:`~git_loopy.gate.GateRunner`, and closes the issue with
-the serial closure semantics; a red gate skips the Lane and keeps its branch as
-a breadcrumb (revert + auto-resolution is #63).
+the test can prove per-Lane isolation. As each Lane contribution finishes,
+**Integration** (#62) lands its branch on base in ascending issue-number
+order (serialized across concurrently-admitted contributions via an internal
+lock, never blocking any OTHER Lane's setup or session), gates it via the
+injected :class:`~git_loopy.gate.GateRunner`, and closes the issue with the
+serial closure semantics; a red gate reverts/aborts the Lane and hands it to
+bounded auto-resolution before falling back to a serial Iteration.
 
-**Drain-everything (#67, ADR-0008).** A Parallel run interleaves Waves for the
-``parallel-safe`` issues with serial Iterations for every other
-``ready-for-agent`` issue, in one run, draining all eligible work with the
-Strike machine ticking once per round (a Wave or a serial Iteration): see
-:func:`test_parallel_run_drains_waves_then_serial_in_one_run`.
+**A single eligible ``parallel-safe`` issue starts a Lane immediately**
+(#219 §1.4) — the retired Wave's ">= 2 eligible" threshold is gone; see
+:func:`test_parallel_single_eligible_issue_starts_lane_immediately`.
+
+**No barrier — continuous refill (#219 §1.3, criteria #2/#3).** A finished
+Lane's slot becomes available for refill the instant its contribution is
+admitted or terminates, without waiting for any other Lane; one Lane's
+worktree setup may freely overlap another Lane's agent session. See
+:func:`test_parallel_lane_refills_without_waiting_for_sibling` and
+:func:`test_parallel_lane_cap_never_exceeded_under_bursty_refill`.
+
+**Drain-everything (#67, ADR-0008).** A Parallel run interleaves Lane work for
+the ``parallel-safe`` issues with serial Iterations for every other
+``ready-for-agent`` issue, in one run, draining all eligible work. Under
+Rolling dispatch the shared Strike machine reacts once per **finalized Lane
+contribution** (not once per round, since there is no round) — see
+:func:`test_parallel_run_drains_lanes_then_serial_in_one_run`.
 
 **Per-Lane worktree setup (#65, ADR-0008).** Before a Lane's session starts the
 runner prepares its worktree via the injected
 :class:`~git_loopy.worktree.WorktreeSetup` (``GIT_LOOPY_WORKTREE_SETUP`` or a
-best-effort auto-detect); the setup runs once per Lane creation, before the
-concurrent barrier, and a failure is surfaced (in the diagnostics log) rather
-than aborting the Wave: see the ``test_parallel_wave_*worktree_setup*`` tests.
+best-effort auto-detect); the setup runs once per Lane creation, before that
+Lane's session, and a failure is surfaced (in the diagnostics log) rather than
+aborting the Lane: see the ``test_parallel_*worktree_setup*`` tests.
 """
 
 from __future__ import annotations
@@ -298,16 +313,20 @@ def _wire_repo(
 # ---------------------------------------------------------------------------
 
 
-def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
-    """A two-Lane Wave, then Integration lands + closes both green Lanes.
+def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
+    """Two eligible Lanes run concurrently; Integration lands + closes both.
 
     Both issues carry ``ready-for-agent`` + ``parallel-safe``, so with
-    ``parallel=2`` the round is a Wave. Asserts (observable effects only): one
-    worktree + Lane branch per issue created in a sibling directory, each
-    session pinned to its Lane's worktree via ``working_directory``, each Lane's
-    commit landing on its own branch, the worktrees torn down at the barrier,
-    then Integration (#62) merging both green Lanes onto base and closing their
-    issues in ascending issue-number order with the integrated branches deleted.
+    ``parallel=2`` both start a Lane (#219 §1.4 — no "wait for a second
+    issue" threshold; see also
+    :func:`test_parallel_single_eligible_issue_starts_lane_immediately`).
+    Asserts (observable effects only): one worktree + Lane branch per issue
+    created in a sibling directory, each session pinned to its Lane's
+    worktree via ``working_directory``, each Lane's commit landing on its own
+    branch, the worktrees torn down once each Lane's own contribution
+    finishes, then Integration (#62) merging both green Lanes onto base and
+    closing their issues in ascending issue-number order with the integrated
+    branches deleted.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -336,7 +355,7 @@ def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -381,8 +400,8 @@ def test_parallel_run_dispatches_two_lane_wave(tmp_path, monkeypatch) -> None:
         f"expected one commit per Lane, got {len(commit_events)}"
     )
 
-    # Worktrees torn down at the Wave barrier (before Integration lands the
-    # branches), keeping the branches as breadcrumbs for the merge.
+    # Each Lane's worktree is torn down once its OWN contribution finishes
+    # (no barrier — see `_run_lane_lifecycle`), and none are left live.
     assert len(fake_git.worktree_removes) == 2
     assert set(fake_git.worktree_removes) == add_paths
     assert fake_git.active_worktrees == []
@@ -404,7 +423,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
 ) -> None:
     """Each Lane resolves its own (model, effort) at Active-issue pickup (#148).
 
-    A two-Lane Wave where issue 42 carries ``task-type:docs`` — routed to
+    A two-Lane Run where issue 42 carries ``task-type:docs`` — routed to
     ``gpt-5-mini @ medium`` by the run config's ``[routing]`` map — and issue 43
     is unlabelled (so it keeps the global default ``claude-opus-4.8 @ max``).
     Asserts, at the session-creation seam, that each Lane opens its session on
@@ -441,7 +460,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -510,7 +529,7 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -575,7 +594,7 @@ def test_parallel_lane_routing_warning_surfaces_per_issue(
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -605,9 +624,13 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     explicit runner stamp rather than the ``<working issue=N>`` marker: the Lane
     session stamps its recorded events (here the per-turn ``usage.tokens``), and
     the runner stamps the per-Lane ``commit.recorded`` / ``auto_close`` emits.
-    This pins that end-to-end — every per-Lane event names its issue, and the
-    Wave-scope envelopes (run / iteration boundaries) stay unstamped so the
-    serial dispatch is untouched.
+    This pins that end-to-end — every per-Lane event names its issue.
+
+    Under Rolling dispatch (#219, ADR-0020) a Lane contribution has no
+    "round", so it never emits ``wrapper.iteration.start``/``.end`` (that
+    would corrupt the single-slot rollup accumulator if two Lanes were
+    in flight at once) — a known, deliberate scope limitation of #306; this
+    test also pins that gap so a future rollup slice has a clear before/after.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -634,7 +657,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -669,14 +692,9 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     for e in auto_closes:
         assert e["lane_issue"] == e["issue"]
 
-    # Wave-scope envelopes stay unstamped — the serial dispatch is untouched.
+    # Run-scope envelopes stay unstamped.
     for e in events:
-        if e["type"] in (
-            "wrapper.run.start",
-            "wrapper.run.end",
-            "wrapper.iteration.start",
-            "wrapper.iteration.end",
-        ):
+        if e["type"] in ("wrapper.run.start", "wrapper.run.end"):
             assert "lane_issue" not in e
     run_start = next(e for e in events if e["type"] == "wrapper.run.start")
     assert run_start["schema_version"] == 1
@@ -689,32 +707,27 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "skill_consultation": True,
         "cost": True,
     }
-    iteration_end = next(
-        e for e in events if e["type"] == "wrapper.iteration.end"
-    )
-    assert iteration_end["outcome"] == "parallel"
-    assert {item["issue"] for item in iteration_end["issues"]} == {42, 43}
-    assert all(
-        item["status"] == "closed" for item in iteration_end["issues"]
-    )
-    run_payload = json.loads(
-        next((tmp_path / ".git-loopy" / "runs").glob("*.json")).read_text(
-            encoding="utf-8"
-        )
-    )
-    assert run_payload["iterations"][0]["issues"] == iteration_end["issues"]
+    # No "round" exists under Rolling dispatch, so a Lane contribution never
+    # emits `wrapper.iteration.start`/`.end` (see this test's docstring).
+    assert [
+        e for e in events if e["type"] in ("wrapper.iteration.start", "wrapper.iteration.end")
+    ] == []
 
 
-def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
+def test_parallel_single_eligible_issue_starts_lane_immediately(
     tmp_path, monkeypatch
 ) -> None:
-    """< 2 eligible parallel-safe issues: the round is one serial Iteration.
+    """One eligible ``parallel-safe`` issue starts a Lane immediately (#219 §1.4).
 
-    The pool has a single ``parallel-safe`` issue plus a plain
-    ``ready-for-agent`` issue. A Wave needs at least two eligible issues, so the
-    round falls back to a normal serial Iteration — no worktrees, one
-    unpinned session — and neither issue is stranded (eligibility is a human
-    assertion, never inferred).
+    #306 retires the Wave's ">= 2 eligible" threshold entirely: with a single
+    ``parallel-safe`` issue in the pool, that issue starts working in a Lane
+    right away — no waiting for a second parallel-safe issue to appear. The
+    pool also carries a plain ``ready-for-agent`` issue (no ``parallel-safe``
+    label); it is never Lane work (eligibility is a human assertion, never
+    inferred), so the scheduler's serial-latch protocol
+    (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`)
+    grants it exactly one serial Iteration, worked by the shared ``_Loop``.
+    Neither issue is stranded.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -731,6 +744,7 @@ def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
     fake_client = _ParallelFakeClient(
         fake_git=fake_git,
         scripted_events=[_usage_event("claude-opus-4.8-max")],
+        serial_closes=True,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
@@ -741,7 +755,7 @@ def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=3,
-        max_iterations=1,
+        max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -751,31 +765,391 @@ def test_parallel_run_falls_back_to_serial_when_under_two_eligible(
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # No Wave: fewer than two eligible parallel-safe issues.
-    assert fake_git.worktree_adds == [], "no worktrees when a Wave can't form"
-    assert fake_git.worktree_removes == []
+    # Exactly one Lane: the single eligible parallel-safe issue (42) started
+    # working immediately, in its own worktree + branch.
+    adds = fake_git.worktree_adds
+    assert len(adds) == 1, f"expected exactly one Lane worktree, got {adds}"
+    (lane_path, lane_branch, _base) = adds[0]
+    assert lane_branch.endswith("/issue-42")
 
-    # Exactly one serial session, NOT worktree-pinned (serial path).
-    assert len(fake_client.created) == 1
-    assert fake_client.create_calls[0]["working_directory"] is None
+    # Exactly one Lane session (pinned) and one serial session (unpinned) —
+    # the plain issue (43) was never a Lane, but still worked and drained.
+    working_dirs = [c["working_directory"] for c in fake_client.create_calls]
+    assert working_dirs.count(None) == 1, "exactly one serial (unpinned) session"
+    assert sum(wd is not None for wd in working_dirs) == 1, (
+        "exactly one Lane (worktree-pinned) session"
+    )
 
-    # The serial Iteration works the whole pool — both issues appear in the
-    # one prompt, so no eligible work is stranded by opting into Parallel mode.
-    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
-    assert "Issue #42" in prompt
-    assert "Issue #43" in prompt
+    # The serial session's prompt carries only the plain issue — the Lane
+    # issue is worked (and closed) through Integration, not the serial path.
+    serial_idx = working_dirs.index(None)
+    serial_prompt, _timeout = fake_client.created[serial_idx].send_and_wait_calls[0]
+    assert "Issue #43" in serial_prompt
+
+    # Neither issue is stranded: both closed, and the run drained the pool.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
+    for n in (42, 43):
+        assert fake_gh.issue_view(n).state == "CLOSED", f"#{n} was not closed"
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
 
 
-def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
+def test_parallel_lane_refills_without_waiting_for_sibling(
     tmp_path, monkeypatch
 ) -> None:
-    """Integration merges + closes green Lanes in ascending issue-number order.
+    """One Lane's worktree setup overlaps a sibling Lane's still-running session.
 
-    The pool is seeded in DESCENDING order (43 before 42) to prove Integration
-    imposes its own deterministic ascending-issue-number sequence rather than
-    inheriting pool / dispatch order: with an all-green gate both Lanes land on
-    base and their issues close in ``[42, 43]`` order, and both integrated
-    branches are deleted. Assertions are on observable effects, not call order.
+    Direct proof of #219 criteria #2/#3 (no barrier): issue 42's simulated agent
+    session is gated on an :class:`asyncio.Event` that this test controls, so it
+    cannot finish until told to. Both 42 and 43 are eligible ``parallel-safe``
+    issues, so both are reserved and their Lane lifecycles are launched as
+    concurrent tasks in the same turn. This test awaits, from OUTSIDE the run,
+    a second event that only fires once issue 43's worktree setup actually
+    runs -- proving the event loop reached Lane 43's setup while Lane 42's
+    session was still blocked, unfinished, mid-flight. Only then does the test
+    release Lane 42's session, letting the run complete normally. If the old
+    Wave barrier were still in effect, Lane 43's setup could never observably
+    run before Lane 42's session had already returned, since a barrier makes
+    "session in flight" and "sibling's setup running" mutually exclusive.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    hold_42 = asyncio.Event()
+
+    class _GatedClient(_ParallelFakeClient):
+        """Blocks issue 42's session on ``hold_42`` until the test releases it."""
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None and str(
+                working_directory
+            ).endswith("issue-42"):
+                real_send_and_wait = session.send_and_wait
+
+                async def gated_send_and_wait(
+                    prompt: str, *, timeout: float = 60.0, **extra: Any
+                ) -> SessionEvent | None:
+                    await hold_42.wait()
+                    return await real_send_and_wait(
+                        prompt, timeout=timeout, **extra
+                    )
+
+                session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _GatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    setup_43_started = asyncio.Event()
+    setup_calls: list[Path] = []
+
+    class _SignalingSetup:
+        def run(self, worktree: Path) -> SetupResult:
+            setup_calls.append(Path(worktree))
+            if str(worktree).endswith("issue-43"):
+                setup_43_started.set()
+            return SetupResult(command="echo prepared")
+
+    monkeypatch.setattr(
+        loop_module, "_make_worktree_setup", lambda: _SignalingSetup()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        # Lane 43's setup fires while Lane 42's session is still gated --
+        # i.e. genuinely mid-flight, not merely "not yet started".
+        await asyncio.wait_for(setup_43_started.wait(), timeout=5)
+        assert not run_task.done(), (
+            "the run must still be in flight (Lane 42's session gated) when "
+            "Lane 43's setup runs -- this is the overlap criteria #2/#3 proves"
+        )
+        hold_42.set()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert sorted(str(p) for p in setup_calls) == sorted(
+        str(p) for (p, _b, _base) in fake_git.worktree_adds
+    )
+    assert len(fake_client.created) == 2, "both Lane sessions still dispatched"
+
+
+def test_parallel_lane_cap_never_exceeded_under_bursty_refill(
+    tmp_path, monkeypatch
+) -> None:
+    """Concurrent Lane worktrees never exceed ``config.parallel``, even transiently.
+
+    Direct proof of #219 criterion #5: four ``parallel-safe`` issues are all
+    eligible at once (a "bursty" pool -- everything ready simultaneously) but
+    ``config.parallel=2`` caps Lane concurrency at 2. Each Lane's simulated
+    session is gated on its own :class:`asyncio.Event`, held until this test
+    explicitly releases it, so genuine overlap (not just fast sequential
+    completion) is forced and observable. This instruments
+    :meth:`~tests.fakes.FakeGitClient.add_worktree` /
+    :meth:`~tests.fakes.FakeGitClient.remove_worktree` (excluding auto-
+    resolution's separate ``integrate/`` worktrees, which are not Lane slots)
+    to record the live Lane-worktree count at every add/remove. The test
+    drives the run turn by turn: once 2 Lanes are held open, it asserts a 3rd
+    reservation has NOT happened yet (the cap -- enforced by
+    :attr:`~git_loopy.rolling_scheduler.RollingScheduler.refillable` /
+    ``effective_limit`` -- withholds refill while both slots are occupied);
+    only after releasing one does the 3rd Lane open, proving refill happens
+    promptly as slots free rather than waiting for every open Lane to drain.
+    The live-worktree high-water mark never exceeds 2, and all four issues
+    eventually get a Lane -- nothing is stranded behind the cap.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
+            for n in (42, 43, 44, 45)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    holds = {n: asyncio.Event() for n in (42, 43, 44, 45)}
+    opened: list[int] = []
+
+    class _GatedClient(_ParallelFakeClient):
+        """Blocks every Lane's session on its own per-issue hold event."""
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None:
+                ref = int(Path(str(working_directory)).name.removeprefix("issue-"))
+                opened.append(ref)
+                real_send_and_wait = session.send_and_wait
+
+                async def gated_send_and_wait(
+                    prompt: str,
+                    *,
+                    timeout: float = 60.0,
+                    _ref: int = ref,
+                    **extra: Any,
+                ) -> SessionEvent | None:
+                    await holds[_ref].wait()
+                    return await real_send_and_wait(
+                        prompt, timeout=timeout, **extra
+                    )
+
+                session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _GatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    real_add_worktree = fake_git.add_worktree
+    real_remove_worktree = fake_git.remove_worktree
+    live_lane_worktrees: set[Path] = set()
+    high_water_mark = 0
+
+    def tracked_add_worktree(
+        path: Path, *, branch: str, base: str
+    ) -> FakeGitClient:
+        child = real_add_worktree(path, branch=branch, base=base)
+        if "/integrate/" not in str(path):
+            live_lane_worktrees.add(Path(path))
+            nonlocal high_water_mark
+            high_water_mark = max(high_water_mark, len(live_lane_worktrees))
+        return child
+
+    def tracked_remove_worktree(path: Path, *, force: bool = False) -> None:
+        real_remove_worktree(path, force=force)
+        live_lane_worktrees.discard(Path(path))
+
+    monkeypatch.setattr(fake_git, "add_worktree", tracked_add_worktree)
+    monkeypatch.setattr(fake_git, "remove_worktree", tracked_remove_worktree)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unlimited: drive until the pool drains
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+
+        # Exactly 2 Lanes open (the cap), both held mid-session.
+        while len(opened) < 2:
+            await asyncio.sleep(0)
+        assert len(opened) == 2, f"expected exactly 2 Lanes open, got {opened}"
+        assert len(live_lane_worktrees) == 2
+
+        # Give the driver every chance to (wrongly) over-reserve a 3rd Lane
+        # while both slots are occupied -- it must not.
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert len(opened) == 2, (
+            f"a 3rd Lane opened while the cap (2) was still fully occupied: "
+            f"{opened}"
+        )
+
+        # Release one held Lane; its slot frees and refill promptly opens a
+        # 3rd Lane without waiting for the other held Lane to finish too.
+        first_ref = opened[0]
+        holds[first_ref].set()
+        while len(opened) < 3:
+            await asyncio.sleep(0)
+        assert len(opened) == 3
+
+        # Release everything else and let the run finish.
+        for ref in (43, 44, 45, 42):
+            holds[ref].set()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    # The cap was actually exercised (not trivially satisfied by underuse)...
+    assert high_water_mark == 2, (
+        f"expected the Lane cap (2) to actually bind at some point, "
+        f"saw high water mark {high_water_mark}"
+    )
+    # ...and never exceeded, even transiently during refill.
+    assert high_water_mark <= 2
+    # All four eligible issues got a Lane -- refill drained the whole pool,
+    # nothing stranded behind the cap.
+    adds = fake_git.worktree_adds
+    lane_issues = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
+    assert lane_issues == [42, 43, 44, 45]
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+
+
+def test_parallel_contribution_survives_lane_reuse(
+    tmp_path, monkeypatch
+) -> None:
+    """A contribution's accounting survives its Lane slot being reused (#219 §criterion #7).
+
+    Three ``parallel-safe`` issues, ``config.parallel=2``: issues 42 and 43
+    take the two Lane slots first; issue 44 can only start once one of them
+    frees up. Issue 42's Lane worktree is torn down (and its slot freed for
+    reuse) as soon as its own commit is checkpointed -- well before its
+    Contribution is finalized by Integration (merge + gate + close) -- so
+    issue 44's Lane can legitimately reuse that freed slot while issue 42's
+    Contribution is still being carried through Integration. This asserts
+    that despite the Lane slot moving on to issue 44, issue 42's own
+    Contribution still lands and closes correctly: all three issues land and
+    close, keyed by their own ``contribution_id`` / issue ref, not by which
+    physical Lane slot they happened to run in.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
+            for n in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unlimited: drive until the pool drains
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # Only two Lane worktrees ever live concurrently (the cap), but all three
+    # issues eventually got their own Lane -- 44's reused a slot freed by
+    # whichever of 42/43 checkpointed first.
+    adds = fake_git.worktree_adds
+    assert len(adds) == 3
+    laned = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
+    assert laned == [42, 43, 44]
+
+    # All three Contributions landed and closed -- the one whose Lane slot
+    # was reused by #44 is still tracked correctly through to Integration.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43, 44]
+    for n in (42, 43, 44):
+        assert fake_gh.issue_view(n).state == "CLOSED", f"#{n} was not closed"
+    events = _logged_events(tmp_path)
+    auto_closes = sorted(
+        e["issue"] for e in events if e["type"] == "wrapper.auto_close"
+    )
+    assert auto_closes == [42, 43, 44]
+    # No stranding, no strikes -- every Contribution made progress regardless
+    # of which physical Lane slot it ran in.
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+
+
+def test_parallel_integration_lands_and_closes_both_lanes(
+    tmp_path, monkeypatch
+) -> None:
+    """Integration merges + closes every green Lane, each as it finishes.
+
+    Rolling dispatch integrates each contribution the instant its own Lane
+    session finishes (#219 §4) rather than batching a Wave's Lanes together
+    and sorting them before Integration -- so, unlike the retired Wave
+    barrier, there is no scheduler-wide "ascending issue order" guarantee to
+    assert on; completion order follows each contribution's own finish time,
+    not issue number. With an all-green gate both Lanes still land on base and
+    both issues close, and both integrated branches are deleted -- assertions
+    are on the (order-independent) set of observable effects, not call order.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -803,7 +1177,7 @@ def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -813,21 +1187,21 @@ def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # Both Lanes dispatched, but Integration closes issues ASCENDING regardless
-    # of the descending pool / dispatch order.
+    # Both Lanes dispatched and both issues closed, order-independent.
     assert len(fake_client.created) == 2
-    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
     # Serial closure semantics: both issues actually flipped CLOSED in the store.
     assert fake_gh.issue_view(42).state == "CLOSED"
     assert fake_gh.issue_view(43).state == "CLOSED"
 
-    # One wrapper.auto_close event per landed Lane, ascending.
+    # One wrapper.auto_close event per landed Lane.
     events = _logged_events(tmp_path)
     auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
-    assert [e["issue"] for e in auto_closes] == [42, 43]
+    assert sorted(e["issue"] for e in auto_closes) == [42, 43]
 
-    # A successful Integration counts as Strike progress: the round landed two
-    # Lanes, so the shared Strike machine saw progress and recorded no strike.
+    # A successful Integration counts as Strike progress: both contributions
+    # landed, so the shared Strike machine saw progress on each and recorded
+    # no strike for either.
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
 
     # Both green Lanes landed on base (base advanced past the prior commit) and
@@ -838,13 +1212,28 @@ def test_parallel_integration_lands_and_closes_in_ascending_issue_order(
     assert deleted[0].endswith("/issue-42")
     assert deleted[1].endswith("/issue-43")
 
-    # Integration ran after the Wave barrier — no worktrees left live.
+    # No worktrees left live once Integration has processed every contribution.
     assert fake_git.active_worktrees == []
 
 
 def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions(
     tmp_path, monkeypatch
 ) -> None:
+    """Integration tells "published, close failed" apart from "no progress".
+
+    Two Lanes finalize with different dispositions: #42's merge genuinely
+    advances base but its ``gh issue close`` call errors (published, stays
+    open); #43's merge is a no-op (its branch is already fully merged), so
+    Integration never even attempts a close (no base advancement, no
+    progress). Under Rolling dispatch there is no single-slot
+    ``wrapper.iteration.end`` rollup for Lane contributions (see the module
+    docstring's documented gap), so this asserts the equivalent *observable*
+    distinction directly: exactly one close is attempted (for #42, and it
+    fails so #42 stays open), #43 is never attempted and also stays open, and
+    Strike sees exactly one no-progress tick (#42's advance resets Strike,
+    #43's no-op ticks it) — both consuming their ``max_iterations`` unit at
+    pickup, with no extra serial-fallback round sneaking past the cap.
+    """
     fake_git = _wire_repo(tmp_path)
     merge = fake_git.merge
 
@@ -885,7 +1274,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
                 model="claude-opus-4.8-max",
                 issue_source="github",
                 parallel=2,
-                max_iterations=1,
+                max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
                 render_reasoning=False,
@@ -894,14 +1283,21 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     )
 
     assert exit_code == 0
+    # #42 published (base advanced) but its close call failed -> stays open,
+    # never retried. #43's merge was a no-op -> never even attempted.
+    assert [n for (n, _msg) in fake_gh.issue_close_calls] == [42]
+    assert fake_gh.issue_view(42).state == "OPEN"
+    assert fake_gh.issue_view(43).state == "OPEN"
+
     events = _logged_events(tmp_path)
-    iteration_end = next(
-        event for event in events if event["type"] == "wrapper.iteration.end"
-    )
-    assert [issue["status"] for issue in iteration_end["issues"]] == [
-        "advanced",
-        "no-progress",
-    ]
+    strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    assert [s["strikes"] for s in strikes] == [1]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "iteration_cap"
+    # Exactly the two Lane sessions' units are spent -- no extra
+    # serial-fallback round sneaks past the `max_iterations=2` cap even
+    # though #43's disposition would otherwise latch one.
+    assert run_end["iterations_run"] == 2
 
 
 def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
@@ -914,9 +1310,14 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     cleanly, gates red, is **reverted** so base stays green, runs the bounded
     K=3 auto-resolution agent (all red), then falls back to a serial Iteration
     with **exactly one** breadcrumb comment — its Lane branch **kept** (only the
-    throwaway integration branch is deleted). Nothing lands, so the no-progress
-    Wave records exactly one warn strike (a Wave that integrates nothing is not
-    progress). Assertions are on observable effects only.
+    throwaway integration branch is deleted). Nothing lands, so each
+    no-progress contribution's ``finalize`` records its own warn strike
+    (#219 §7.9: the scheduler records the reaction per-contribution, not once
+    per round) — two Lanes, two strikes. Both Lanes already spent their
+    ``max_iterations`` unit at pickup, so — even though each fallback latches a
+    serial request — the cap is already exhausted and the run ends via
+    ``iteration_cap`` without a further serial Iteration ever running.
+    Assertions are on observable effects only.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -945,7 +1346,7 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -953,10 +1354,11 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
 
     exit_code = asyncio.run(loop_module.run(cfg))
 
-    # One warn strike (1 < 3) does not abort the run; the iteration cap ends it.
+    # Two warn strikes (2 < 3) do not abort the run; the iteration cap ends it.
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # Nothing landed: no issue closed and both remain OPEN for the serial round.
+    # Nothing landed: no issue closed and both remain OPEN for a later serial
+    # round (never run here since both Lanes already spent the iteration cap).
     assert fake_gh.issue_close_calls == []
     assert fake_gh.issue_view(42).state == "OPEN"
     assert fake_gh.issue_view(43).state == "OPEN"
@@ -973,22 +1375,21 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     # the comment resolves nothing (both issues stay OPEN, asserted above).
     assert sorted(n for n, _ in fake_gh.issue_comment_calls) == [42, 43]
 
-    # The no-progress Wave recorded exactly one warn strike, and Integration
-    # closed nothing.
+    # Each no-progress contribution finalizes its own warn strike -- two
+    # Lanes, two ticks -- and Integration closed nothing.
     events = _logged_events(tmp_path)
     strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert len(strikes) == 1
-    assert strikes[0]["outcome"] == "warn"
-    assert strikes[0]["strikes"] == 1
+    assert len(strikes) == 2
+    assert [s["outcome"] for s in strikes] == ["warn", "warn"]
+    assert [s["strikes"] for s in strikes] == [1, 2]
     assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
-    iteration_end = next(
-        event for event in events if event["type"] == "wrapper.iteration.end"
-    )
-    assert iteration_end["summary"]["commits"] == 2
-    assert [issue["status"] for issue in iteration_end["issues"]] == [
-        "no-progress",
-        "no-progress",
-    ]
+    # No serial Iteration ever ran: both Lane sessions already spent the
+    # `max_iterations=2` budget, so the run ends via `iteration_cap` before
+    # either fallback's latched serial request could be granted.
+    assert [e for e in events if e["type"] == "wrapper.iteration.end"] == []
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "iteration_cap"
+    assert run_end["iterations_run"] == 2
 
 
 def test_parallel_integration_auto_resolves_red_lane_then_lands(
@@ -1035,7 +1436,7 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -1112,7 +1513,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -1156,7 +1557,7 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
 
     Issue 42's gate is red on its initial landing AND on all K=3 auto-resolution
     attempts (four reds), so it terminally fails Integration; issue 43 is green.
-    With ``max_iterations=0`` and ``serial_closes`` the run then drains: the Wave
+    With ``max_iterations=0`` and ``serial_closes`` the run then drains: the Lane
     lands 43, 42 falls back to a serial Iteration, and a later serial round works
     42 to closure. Asserts base stayed green (reverted), the auto-resolution
     agent ran exactly K=3 times, exactly ONE breadcrumb comment was posted on 42,
@@ -1246,30 +1647,32 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     assert run_end["outcome"] == "empty_pool"
 
 
-def test_parallel_run_drains_waves_then_serial_in_one_run(
+def test_parallel_run_drains_lanes_then_serial_in_one_run(
     tmp_path, monkeypatch
 ) -> None:
-    """Drain-everything (#67, ADR-0008): Waves for parallel-safe, serial for the rest.
+    """Drain-everything (#67, ADR-0008): Lanes for parallel-safe, serial for the rest.
 
-    A Parallel run must never strand eligible work: it interleaves a **Wave**
-    for the ``parallel-safe`` issues with normal serial **Iterations** for every
-    other ``ready-for-agent`` issue, in one run, until the pool is drained. The
-    pool mixes two ``parallel-safe`` issues (42, 43) with one plain
-    ``ready-for-agent`` issue (44). Driven through ``run(config)`` with
-    ``max_iterations=0`` (run until the pool empties) and an all-green gate, this
-    asserts (observable effects only):
+    A Parallel run must never strand eligible work: it interleaves Rolling-
+    dispatched **Lanes** for the ``parallel-safe`` issues with normal serial
+    **Iterations** for every other ``ready-for-agent`` issue, in one run, until
+    the pool is drained. The pool mixes two ``parallel-safe`` issues (42, 43)
+    with one plain ``ready-for-agent`` issue (44). Driven through
+    ``run(config)`` with ``max_iterations=0`` (run until the pool empties) and
+    an all-green gate, this asserts (observable effects only):
 
-    * **Round 1 is a Wave** — only 42 and 43 (the human-asserted ``parallel-safe``
-      issues) become Lanes with their own worktree + branch; 44 never does.
-    * **A later round is serial** — exactly one unpinned session, whose prompt
-      carries the plain issue 44 and no longer carries the already-closed 42/43
-      (eligibility is a human assertion, so 44 is worked serially, not dropped).
+    * **Only the parallel-safe issues become Lanes** — 42 and 43 (the
+      human-asserted ``parallel-safe`` issues) each get their own worktree +
+      branch; 44 never does.
+    * **The plain issue is worked serially** — exactly one unpinned session,
+      whose prompt carries the plain issue 44 and no longer carries the
+      already-closed 42/43 (eligibility is a human assertion, so 44 is worked
+      serially, not dropped).
     * **No stranding** — all three issues close (42/43 via Integration, 44 via the
       serial closure path) and the run terminates by draining the pool
       (``empty_pool``), not by hitting the iteration cap or a strike abort.
-    * **Correct round-level Strike accounting across both kinds of round** — the
-      Wave landed two Lanes (progress) and the serial Iteration committed + closed
-      (progress), so no round records a strike.
+    * **Correct per-contribution Strike accounting** — both landed Lane
+      contributions and the serial Iteration each made progress, so nothing
+      records a strike.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1313,15 +1716,15 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
 
     assert exit_code == 0, f"expected a clean drain (exit 0), got {exit_code}"
 
-    # --- Round 1 was a Wave: only the two parallel-safe issues became Lanes,
-    #     each with its own worktree + branch. The plain issue 44 never did —
-    #     eligibility is a human assertion, never inferred.
+    # --- Only the two parallel-safe issues became Lanes, each with its own
+    #     worktree + branch. The plain issue 44 never did — eligibility is a
+    #     human assertion, never inferred.
     adds = fake_git.worktree_adds
     assert len(adds) == 2, f"expected exactly two Lane worktrees (42,43), got {adds}"
-    waved = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
-    assert waved == [42, 43], "only the parallel-safe issues become Lanes"
+    laned = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
+    assert laned == [42, 43], "only the parallel-safe issues become Lanes"
 
-    # --- A later round was serial: exactly one unpinned session; the two Lane
+    # --- A later turn was serial: exactly one unpinned session; the two Lane
     #     sessions were worktree-pinned. Three sessions total across the run.
     working_dirs = [c["working_directory"] for c in fake_client.create_calls]
     assert working_dirs.count(None) == 1, "exactly one serial (unpinned) session"
@@ -1329,7 +1732,7 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
         "both Lane sessions were worktree-pinned"
     )
 
-    # --- The serial round worked the plain issue AFTER the Wave closed 42/43:
+    # --- The serial turn worked the plain issue AFTER the Lanes closed 42/43:
     #     its prompt carries #44 and no longer carries the closed parallel-safe
     #     issues, so opting into Parallel mode strands nothing.
     serial_idx = working_dirs.index(None)
@@ -1347,9 +1750,9 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
 
     events = _logged_events(tmp_path)
 
-    # --- Correct round-level Strike accounting across BOTH kinds of round: the
-    #     Wave (two landed Lanes) and the serial Iteration (a commit + a closure)
-    #     each made progress, so no round recorded a strike.
+    # --- Correct per-contribution Strike accounting across BOTH kinds of work:
+    #     the two landed Lanes and the serial Iteration (a commit + a closure)
+    #     each made progress, so nothing recorded a strike.
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
 
     # --- The run terminated by draining the pool, not by the iteration cap or a
@@ -1357,8 +1760,9 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
 
-    # --- One auto_close per issue: the parallel-safe pair first (Wave /
-    #     Integration, ascending), then the plain issue (serial round).
+    # --- One auto_close per issue: the parallel-safe pair first (Lanes /
+    #     Integration, in this deterministic fake's completion order), then the
+    #     plain issue (serial turn).
     auto_closes = [
         e["issue"] for e in events if e["type"] == "wrapper.auto_close"
     ]
@@ -1371,15 +1775,18 @@ def test_parallel_run_drains_waves_then_serial_in_one_run(
 
 
 class _SpyWorktreeSetup:
-    """A scripted :class:`~git_loopy.worktree.WorktreeSetup` for the Wave e2e.
+    """A scripted :class:`~git_loopy.worktree.WorktreeSetup` for the Lane e2e.
 
     Records each ``run(worktree)`` call together with how many sessions the fake
-    client had created *at that moment* — the observable proof that setup runs
-    **before** any Lane session starts: sessions are created in the concurrent
-    phase (``_run_lane_session``), so a ``0`` snapshot at every setup call means
-    every worktree was prepared before the barrier. Returns a scripted
-    :class:`~git_loopy.worktree.SetupResult` so a test can drive the green path
-    or a surfaced-failure path without touching a real subprocess.
+    client had created *at that moment* — used to prove a given Lane's own setup
+    ran before that same Lane's own session started (matched by working
+    directory). Under Rolling dispatch there is no global ordering across
+    Lanes: one Lane's setup may overlap a sibling Lane's already-running
+    session (#219 criteria #2/#3), so the snapshot is only meaningful when
+    compared against the matching Lane's own session index, not in aggregate.
+    Returns a scripted :class:`~git_loopy.worktree.SetupResult` so a test can
+    drive the green path or a surfaced-failure path without touching a real
+    subprocess.
     """
 
     def __init__(
@@ -1400,10 +1807,10 @@ def _diag_log(tmp_path: Path) -> str:
     return next(logs_dir.glob("*.log")).read_text(encoding="utf-8")
 
 
-def _wire_two_lane_wave(
+def _wire_two_lane_rolling(
     tmp_path: Path, monkeypatch
 ) -> tuple[FakeGitClient, FakeGitHubClient, _ParallelFakeClient, RunConfig]:
-    """Wire a green two-Lane Wave (issues 42/43, ``parallel-safe``) via ``run``.
+    """Wire a green two-Lane Run (issues 42/43, ``parallel-safe``) via ``run``.
 
     Returns the fakes so a test can assert on them and inject its own
     ``_make_worktree_setup`` seam (else the real factory's auto-detect no-op runs
@@ -1434,7 +1841,7 @@ def _wire_two_lane_wave(
         model="claude-opus-4.8-max",
         issue_source="github",
         parallel=2,
-        max_iterations=1,
+        max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
         render_reasoning=False,
@@ -1442,18 +1849,22 @@ def _wire_two_lane_wave(
     return fake_git, fake_gh, fake_client, cfg
 
 
-def test_parallel_wave_runs_worktree_setup_per_lane_before_session(
+def test_parallel_lane_runs_worktree_setup_before_own_session(
     tmp_path, monkeypatch
 ) -> None:
-    """Each Lane worktree is prepared once, before that Lane's session starts.
+    """Each Lane's worktree is prepared once, strictly before ITS OWN session.
 
-    Acceptance (#65): ``GIT_LOOPY_WORKTREE_SETUP`` runs in each newly created Lane
-    worktree before its agent session. The spy records the session count at each
-    ``run`` call; a ``0`` snapshot every time proves setup precedes the concurrent
-    session barrier, and the recorded worktrees equal exactly the created Lane
-    worktrees (one setup per Lane creation) — observable effects, not call order.
+    Acceptance (#65, and #219 §criterion #2/#3): ``GIT_LOOPY_WORKTREE_SETUP`` runs
+    in each newly created Lane worktree before that same Lane's agent session.
+    Under Rolling dispatch there is no barrier forcing every Lane's setup to
+    precede every other Lane's session — one Lane's setup may legitimately
+    overlap a sibling Lane's already-running session (the retired Wave-barrier
+    guarantee this test used to assert no longer holds and is not a bug) — so
+    this asserts the narrower, still-true invariant: matched by working
+    directory, a Lane's own setup call always sees strictly fewer sessions
+    created than the index of that same Lane's own session.
     """
-    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_wave(
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
     spy = _SpyWorktreeSetup(fake_client)
@@ -1467,24 +1878,30 @@ def test_parallel_wave_runs_worktree_setup_per_lane_before_session(
     assert len(add_paths) == 2
     setup_paths = [wt for (wt, _n) in spy.calls]
     assert sorted(setup_paths) == sorted(add_paths)
-
-    # ...and every setup ran BEFORE any Lane session was created (0 sessions
-    # existed at each setup call; sessions are created in the concurrent phase).
-    assert [n for (_wt, n) in spy.calls] == [0, 0]
     assert len(fake_client.created) == 2, "both Lane sessions still dispatched"
 
+    # ...and, matched by working directory, each Lane's OWN setup call ran
+    # before that SAME Lane's OWN session was created (no barrier across
+    # Lanes is asserted or required).
+    create_dirs = [
+        call["working_directory"] for call in fake_client.create_calls
+    ]
+    for worktree, sessions_at_setup in spy.calls:
+        own_session_index = create_dirs.index(str(worktree))
+        assert own_session_index >= sessions_at_setup
 
-def test_parallel_wave_surfaces_worktree_setup_failure_and_continues(
+
+def test_parallel_lane_surfaces_worktree_setup_failure_and_continues(
     tmp_path, monkeypatch
 ) -> None:
-    """A failed setup is surfaced (not swallowed) and never aborts the Wave.
+    """A failed setup is surfaced (not swallowed) and never aborts the Run.
 
     Acceptance (#65): a setup failure is surfaced rather than silently ignored.
     The spy returns a red :class:`SetupResult`; the failure is written to the
     run's diagnostics log for each Lane, yet both Lanes are still dispatched (a
-    broken environment does not take down the barrier).
+    broken environment does not stop other Lanes' concurrent refill).
     """
-    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_wave(tmp_path, monkeypatch)
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
     failing = _SpyWorktreeSetup(
         fake_client,
         result=SetupResult(command="./setup.sh", returncode=3, output_tail="boom"),
@@ -1500,10 +1917,11 @@ def test_parallel_wave_surfaces_worktree_setup_failure_and_continues(
     assert "worktree setup for issue #43 FAILED" in diag
     assert "./setup.sh" in diag and "boom" in diag
 
-    # ...but the Wave still ran both Lanes (setup failure is non-fatal).
+    # ...but the Run still dispatched both Lanes (setup failure is non-fatal).
     assert len(failing.calls) == 2
     assert len(fake_client.created) == 2
     assert len(fake_git.worktree_adds) == 2
+
 
 
 def test_make_worktree_setup_binds_env_command(tmp_path, monkeypatch) -> None:
