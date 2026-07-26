@@ -10,6 +10,9 @@ $FixturePath = Join-Path (Split-Path -Parent $PortDir) "conformance/event-schema
 $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
+$DashboardFixturePath = Join-Path (
+    Split-Path -Parent $PortDir
+) "conformance/dashboard-insights.json"
 $ModulePath = Join-Path $PortDir "GitLoopy.Events.psm1"
 $OrchestratorModulePath = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
 
@@ -111,6 +114,99 @@ function Add-RollupEnvelope {
         $Event[$Key] = $Rollup[$Key]
     }
     return $Event
+}
+
+function New-RollupFromInput {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$InputFacts
+    )
+
+    # One fixture `input` object driven through the real rollup seam.
+    $FirstStartedAt = $InputFacts["active_started_at"]
+    if ($InputFacts.Contains("first_started_at")) {
+        $FirstStartedAt = $InputFacts["first_started_at"]
+    }
+    $FirstStartedMonotonic = $InputFacts["active_started_monotonic"]
+    if ($InputFacts.Contains("first_started_monotonic")) {
+        $FirstStartedMonotonic = $InputFacts["first_started_monotonic"]
+    }
+    $RollupArguments = @{
+        IterationStartedMonotonic = $InputFacts["iteration_started_monotonic"]
+        FinishedMonotonic = $InputFacts["finished_monotonic"]
+        ActiveIssue = $InputFacts["active_issue"]
+        ActiveStartedAt = (
+            Get-GitLoopyIsoTimestamp -Timestamp $InputFacts["active_started_at"]
+        )
+        ActiveStartedMonotonic = $InputFacts["active_started_monotonic"]
+        FirstStartedAt = (
+            Get-GitLoopyIsoTimestamp -Timestamp $FirstStartedAt
+        )
+        FirstStartedMonotonic = $FirstStartedMonotonic
+        PreviousCumulativeActiveSeconds = (
+            $InputFacts["previous_cumulative_active_seconds"]
+        )
+        Commits = $InputFacts["commits"]
+        AutoClosures = $InputFacts["auto_closures"]
+        PrAdvances = $InputFacts["pr_advances"]
+        Strikes = $InputFacts["strikes"]
+    }
+    if ($InputFacts.Contains("active_closed_at")) {
+        $RollupArguments["ActiveClosedAt"] = Get-GitLoopyIsoTimestamp `
+            -Timestamp $InputFacts["active_closed_at"]
+        $RollupArguments["ActiveClosedMonotonic"] = (
+            $InputFacts["active_closed_monotonic"]
+        )
+    }
+    if ($InputFacts.Contains("terminal_outcome")) {
+        $RollupArguments["TerminalOutcome"] = $InputFacts["terminal_outcome"]
+    }
+    return Get-GitLoopyIterationRollup @RollupArguments
+}
+
+function ConvertTo-CanonicalJson {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    # Key-order-independent, integer/double-independent structural rendering.
+    # Rollup key order is already pinned by `normalized_rollup_cases`; the
+    # Dashboard seam pins semantic content, and the shared fixture arrives
+    # through `ConvertFrom-Json` whose key order is not a contract.
+    if ($null -eq $Value) { return "null" }
+    if ($Value -is [bool]) {
+        if ($Value) { return "true" }
+        return "false"
+    }
+    if ($Value -is [string]) {
+        return ConvertTo-Json -InputObject $Value -Compress
+    }
+    if ($Value -is [DateTime] -or $Value -is [DateTimeOffset]) {
+        # `ConvertFrom-Json` decodes the fixture's RFC3339 literals into date
+        # values. Normalize only the decoded side: an actual timestamp that the
+        # producer emitted as a culture-dependent string stays a string here and
+        # still fails the comparison.
+        return ConvertTo-Json -InputObject (
+            Get-GitLoopyIsoTimestamp -Timestamp $Value
+        ) -Compress
+    }
+    if ($Value -is [Collections.IDictionary]) {
+        $Parts = @(
+            foreach ($Key in @($Value.Keys | Sort-Object -CaseSensitive)) {
+                (ConvertTo-Json -InputObject ([string]$Key) -Compress) +
+                    ":" + (ConvertTo-CanonicalJson -Value $Value[$Key])
+            }
+        )
+        return "{" + [string]::Join(",", $Parts) + "}"
+    }
+    if ($Value -is [Collections.IEnumerable]) {
+        $Parts = @(
+            foreach ($Item in $Value) { ConvertTo-CanonicalJson -Value $Item }
+        )
+        return "[" + [string]::Join(",", $Parts) + "]"
+    }
+    return [string]([double]$Value)
 }
 
 $script:NumericTypes = @(
@@ -345,37 +441,7 @@ foreach (
         }
         continue
     }
-    $RollupArguments = @{
-        IterationStartedMonotonic = $InputFacts["iteration_started_monotonic"]
-        FinishedMonotonic = $InputFacts["finished_monotonic"]
-        ActiveIssue = $InputFacts["active_issue"]
-        ActiveStartedAt = (
-            Get-GitLoopyIsoTimestamp -Timestamp $InputFacts["active_started_at"]
-        )
-        ActiveStartedMonotonic = $InputFacts["active_started_monotonic"]
-        FirstStartedAt = (
-            Get-GitLoopyIsoTimestamp -Timestamp $InputFacts["first_started_at"]
-        )
-        FirstStartedMonotonic = $InputFacts["first_started_monotonic"]
-        PreviousCumulativeActiveSeconds = (
-            $InputFacts["previous_cumulative_active_seconds"]
-        )
-        Commits = $InputFacts["commits"]
-        AutoClosures = $InputFacts["auto_closures"]
-        PrAdvances = $InputFacts["pr_advances"]
-        Strikes = $InputFacts["strikes"]
-    }
-    if ($InputFacts.Contains("active_closed_at")) {
-        $RollupArguments["ActiveClosedAt"] = Get-GitLoopyIsoTimestamp `
-            -Timestamp $InputFacts["active_closed_at"]
-        $RollupArguments["ActiveClosedMonotonic"] = (
-            $InputFacts["active_closed_monotonic"]
-        )
-    }
-    if ($InputFacts.Contains("terminal_outcome")) {
-        $RollupArguments["TerminalOutcome"] = $InputFacts["terminal_outcome"]
-    }
-    $Actual = Get-GitLoopyIterationRollup @RollupArguments
+    $Actual = New-RollupFromInput -InputFacts $InputFacts
     Assert-Equal (
         ConvertTo-GitLoopyJsonLine -Event (
             Add-RollupEnvelope -Rollup $Case["expected"]
@@ -386,6 +452,40 @@ foreach (
     Assert-CapabilityDerivedTelemetry -Rollup $Actual -CaseId $Case["id"]
     Assert-ObservedFact -Rollup $Actual -CaseId $Case["id"]
 }
+
+# The renderer-neutral Dashboard seam is only anti-drift if the native trace it
+# pins is one this port can actually emit. Every native Dashboard case declares
+# the producer input behind each `wrapper.iteration.end`, and the real rollup
+# seam must reproduce that Event's rollup payload exactly.
+$DashboardFixture = Get-Content -LiteralPath $DashboardFixturePath -Raw |
+    ConvertFrom-Json -AsHashtable
+$DashboardRollups = 0
+foreach ($Case in $DashboardFixture["cases"]) {
+    if (-not $Case.Contains("producer_rollups")) { continue }
+    foreach ($Rollup in $Case["producer_rollups"]) {
+        if (-not (@($Rollup["distributions"]) -ccontains "powershell")) {
+            continue
+        }
+        $EventIndex = $Rollup["event_index"]
+        $FixtureEvent = $Case["events"][$EventIndex]
+        $Expected = [ordered]@{}
+        foreach ($Key in @("outcome", "duration_seconds", "summary", "issues")) {
+            $Expected[$Key] = $FixtureEvent[$Key]
+        }
+        $Actual = New-RollupFromInput -InputFacts $Rollup["input"]
+        # The complete rollup, not a projection of it: an extra field the
+        # producer grew would otherwise be filtered away before comparison.
+        Assert-Equal (
+            ConvertTo-CanonicalJson -Value $Expected
+        ) (
+            ConvertTo-CanonicalJson -Value $Actual
+        ) "dashboard producer rollup: $($Case["id"]) event $EventIndex"
+        $DashboardRollups++
+    }
+}
+Assert-True (
+    $DashboardRollups -gt 0
+) "no native Dashboard case declares a PowerShell producer rollup"
 
 $GeneratedRunId = New-GitLoopyRunId
 Assert-True (

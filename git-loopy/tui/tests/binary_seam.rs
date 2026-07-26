@@ -60,6 +60,9 @@ fn the_binary_projects_the_same_view_as_the_embedded_library() {
         let render_at = snapshot["render_at_utc"]
             .as_str()
             .expect("an instant is a string");
+        let render_at_monotonic = snapshot["render_at_monotonic"]
+            .as_f64()
+            .map(|reading| reading.to_string());
         let mut arguments = vec![
             "--utc-offset-minutes",
             &offset,
@@ -68,6 +71,9 @@ fn the_binary_projects_the_same_view_as_the_embedded_library() {
             "--render-at",
             render_at,
         ];
+        if let Some(reading) = render_at_monotonic.as_deref() {
+            arguments.extend(["--render-at-monotonic", reading]);
+        }
         if let Some(model) = inputs["model"].as_str() {
             arguments.extend(["--model", model]);
         }

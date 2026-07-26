@@ -36,6 +36,7 @@ fn project(state: &DashboardState, context: ViewContext) -> Value {
 fn at(now: &str, zone: Zone, capabilities: TerminalCapabilities) -> ViewContext {
     ViewContext {
         now: Timestamp::parse_rfc3339(now).expect("an RFC 3339 instant"),
+        now_monotonic: None,
         zone,
         capabilities,
     }

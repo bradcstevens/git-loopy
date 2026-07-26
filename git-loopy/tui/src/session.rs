@@ -95,8 +95,12 @@ pub struct DashboardSession {
     capabilities: TerminalCapabilities,
     /// The instant the projection is pinned to, when the caller pins one.
     pinned_instant: Option<Timestamp>,
+    /// The monotonic reading of that pinned instant, when the caller pins one.
+    pinned_monotonic: Option<f64>,
     /// The instant of the last readable Event or clock tick, otherwise.
     last_instant: Option<Timestamp>,
+    /// The monotonic reading of that instant, when the Run declares one.
+    last_monotonic: Option<f64>,
     diagnostics: Diagnostics,
 }
 
@@ -109,7 +113,9 @@ impl DashboardSession {
             cursor: Cursor::new(drill_in),
             capabilities: TerminalCapabilities::default(),
             pinned_instant: None,
+            pinned_monotonic: None,
             last_instant: None,
+            last_monotonic: None,
             diagnostics: Diagnostics::default(),
         }
     }
@@ -125,6 +131,11 @@ impl DashboardSession {
         self.pinned_instant = Some(instant);
     }
 
+    /// Pin the monotonic reading of the pinned render instant.
+    pub fn render_at_monotonic(&mut self, monotonic: f64) {
+        self.pinned_monotonic = Some(monotonic);
+    }
+
     /// Fold one JSONL line into the Run.
     ///
     /// An unreadable line is skipped rather than fatal: unusable telemetry must
@@ -138,6 +149,7 @@ impl DashboardSession {
             return;
         };
         self.last_instant = event.ts.or(self.last_instant);
+        self.last_monotonic = event.observed_monotonic.or(self.last_monotonic);
         self.state.apply(&event);
     }
 
@@ -155,6 +167,11 @@ impl DashboardSession {
             .last_instant
             .is_some_and(|last| last.seconds_since(instant) > 0.0);
         if !stale {
+            // A quiet stretch still advances the monotonic axis, so the two
+            // clocks stay in step through it.
+            if let (Some(last), Some(monotonic)) = (self.last_instant, self.last_monotonic) {
+                self.last_monotonic = Some(monotonic + instant.seconds_since(last).max(0.0));
+            }
             self.last_instant = Some(instant);
         }
     }
@@ -171,6 +188,11 @@ impl DashboardSession {
                 .pinned_instant
                 .or(self.last_instant)
                 .unwrap_or_else(Timestamp::epoch),
+            now_monotonic: if self.pinned_instant.is_some() {
+                self.pinned_monotonic
+            } else {
+                self.last_monotonic
+            },
             zone: self.zone,
             capabilities: self.capabilities,
         };

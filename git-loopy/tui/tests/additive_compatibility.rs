@@ -41,6 +41,7 @@ fn reduce(events: &[Value], case: &Value) -> Value {
                 .expect("an instant is a string"),
         )
         .expect("a fixture instant is RFC 3339"),
+        now_monotonic: snapshot["render_at_monotonic"].as_f64(),
         zone: Zone::from_offset_minutes(
             inputs["local_utc_offset_minutes"]
                 .as_i64()

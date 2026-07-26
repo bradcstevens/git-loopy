@@ -10,6 +10,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/event-schema.json"
+dashboard_fixture="$port_dir/../conformance/dashboard-insights.json"
 release_fixture="$port_dir/../conformance/release-version.json"
 
 # shellcheck disable=SC1091
@@ -62,38 +63,56 @@ while IFS= read -r case_json; do
   assert_equal "$expected" "$actual" "serialization fixture: $case_id"
 done < <(jq -c '.serialization_cases[]' "$fixture")
 
-while IFS= read -r case_json; do
-  case_id="$(jq -r '.id' <<<"$case_json")"
-  TEST_MONOTONIC_NOW="$(jq -r '.input.finished_monotonic' <<<"$case_json")"
+apply_rollup_input() {
+  # Drive the production rollup builder from one fixture `input` object.
+  local case_json="$1"
+  local prefix="$2"
+  TEST_MONOTONIC_NOW="$(jq -r "${prefix}.finished_monotonic" <<<"$case_json")"
   git_loopy_monotonic_seconds() {
     printf '%s\n' "$TEST_MONOTONIC_NOW"
   }
   _GIT_LOOPY_ITERATION_STARTED_MONOTONIC="$(
-    jq -r '.input.iteration_started_monotonic' <<<"$case_json"
+    jq -r "${prefix}.iteration_started_monotonic" <<<"$case_json"
   )"
-  _GIT_LOOPY_ACTIVE_REF="$(jq -r '.input.active_issue' <<<"$case_json")"
+  _GIT_LOOPY_ACTIVE_REF="$(jq -r "${prefix}.active_issue" <<<"$case_json")"
   _GIT_LOOPY_ACTIVE_STARTED_AT="$(
-    jq -r '.input.active_started_at' <<<"$case_json"
+    jq -r "${prefix}.active_started_at" <<<"$case_json"
   )"
   _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$(
-    jq -r '.input.active_started_monotonic' <<<"$case_json"
+    jq -r "${prefix}.active_started_monotonic" <<<"$case_json"
   )"
-  _GIT_LOOPY_ACTIVE_CLOSED_AT=""
-  _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
+  _GIT_LOOPY_ACTIVE_CLOSED_AT="$(
+    jq -r "${prefix}.active_closed_at // \"\"" <<<"$case_json"
+  )"
+  _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC="$(
+    jq -r "${prefix}.active_closed_monotonic // 0" <<<"$case_json"
+  )"
   _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
   _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
   _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
-  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT["$_GIT_LOOPY_ACTIVE_REF"]="$_GIT_LOOPY_ACTIVE_STARTED_AT"
-  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC["$_GIT_LOOPY_ACTIVE_REF"]="$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC"
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT["$_GIT_LOOPY_ACTIVE_REF"]="$(
+    jq -r "${prefix}.first_started_at // ${prefix}.active_started_at" \
+      <<<"$case_json"
+  )"
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC["$_GIT_LOOPY_ACTIVE_REF"]="$(
+    jq -r \
+      "${prefix}.first_started_monotonic // ${prefix}.active_started_monotonic" \
+      <<<"$case_json"
+  )"
   _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE["$_GIT_LOOPY_ACTIVE_REF"]="$(
-    jq -r '.input.previous_cumulative_active_seconds' <<<"$case_json"
+    jq -r "${prefix}.previous_cumulative_active_seconds" <<<"$case_json"
   )"
   git_loopy_build_iteration_rollup \
-    "$(jq -r '.input.commits' <<<"$case_json")" \
-    "$(jq -r '.input.auto_closures' <<<"$case_json")" \
-    "$(jq -r '.input.pr_advances' <<<"$case_json")" \
-    "$(jq -r '.input.strikes' <<<"$case_json")" \
-    "$(jq -r '.input.terminal_outcome // ""' <<<"$case_json")"
+    "$(jq -r "${prefix}.commits // 0" <<<"$case_json")" \
+    "$(jq -r "${prefix}.auto_closures // 0" <<<"$case_json")" \
+    "$(jq -r "${prefix}.pr_advances // 0" <<<"$case_json")" \
+    "$(jq -r "${prefix}.strikes // 0" <<<"$case_json")" \
+    "$(jq -r "${prefix}.terminal_outcome // \"\"" <<<"$case_json")"
+}
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  apply_rollup_input "$case_json" ".input"
   jq -e --argjson actual "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
     '.expected == $actual' <<<"$case_json" >/dev/null ||
     fail "normalized rollup fixture: $case_id"
@@ -179,6 +198,39 @@ while IFS= read -r case_json; do
 done < <(
   jq -c '.normalized_rollup_cases[] | select(.orchestrator == "shell")' "$fixture"
 )
+
+# The renderer-neutral Dashboard seam is only anti-drift if the native trace it
+# pins is one this port can actually emit. Every native Dashboard case therefore
+# declares the producer input behind each `wrapper.iteration.end`, and the real
+# rollup builder must reproduce that Event's rollup payload exactly.
+dashboard_rollups=0
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.case_id' <<<"$case_json")"
+  event_index="$(jq -r '.event_index' <<<"$case_json")"
+  apply_rollup_input "$case_json" ".input"
+  jq -e --argjson actual "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
+    '.expected == $actual' <<<"$case_json" >/dev/null ||
+    fail "dashboard producer rollup: $case_id event $event_index"
+  dashboard_rollups=$((dashboard_rollups + 1))
+done < <(
+  jq -c '
+    .cases[]
+    | . as $case
+    | ($case.producer_rollups // [])[]
+    | select(.distributions | index("shell"))
+    | {
+        case_id: $case.id,
+        event_index: .event_index,
+        input: .input,
+        expected: (
+          $case.events[.event_index]
+          | {outcome, duration_seconds, summary, issues}
+        )
+      }
+  ' "$dashboard_fixture"
+)
+((dashboard_rollups > 0)) ||
+  fail "no native Dashboard case declares a shell producer rollup"
 
 set +e
 invalid_output="$(git_loopy_to_jsonl_line '{}' 2>/dev/null)"

@@ -65,6 +65,7 @@ fn fixture_view_at(case_id: &str, snapshot_index: usize) -> RunView {
                 .expect("an instant is a string"),
         )
         .expect("the fixture's instant parses"),
+        now_monotonic: snapshot["render_at_monotonic"].as_f64(),
         zone: Zone::from_offset_minutes(
             inputs["local_utc_offset_minutes"]
                 .as_i64()

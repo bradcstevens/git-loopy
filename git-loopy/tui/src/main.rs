@@ -44,6 +44,8 @@ options:
       --render                  draw the Dashboard on the controlling terminal
       --render-at INSTANT       project as of this RFC 3339 instant
                                 (default: the last readable Event's instant)
+      --render-at-monotonic S   the monotonic reading of --render-at, so
+                                durations survive a wall-clock adjustment
       --utc-offset-minutes N    render instants at this offset from UTC
       --issue REF               drill in on this issue number or path
       --model NAME              the configured model for this Run
@@ -58,6 +60,7 @@ const EXIT_USAGE: u8 = 2;
 
 struct Options {
     render_at: Option<Timestamp>,
+    render_at_monotonic: Option<f64>,
     zone: Zone,
     drill_in: IssueRef,
     inputs: RunInputs,
@@ -99,6 +102,7 @@ fn main() -> ExitCode {
 
 fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> {
     let mut render_at = None;
+    let mut render_at_monotonic = None;
     let mut offset_minutes = 0i32;
     let mut drill_in = None;
     let mut model = None;
@@ -132,6 +136,12 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
                         .ok_or_else(|| format!("--render-at is not an RFC 3339 instant: {raw}"))?,
                 );
             }
+            "--render-at-monotonic" => {
+                let raw = value()?;
+                render_at_monotonic = Some(raw.parse::<f64>().map_err(|_| {
+                    format!("--render-at-monotonic is not a number of seconds: {raw}")
+                })?);
+            }
             "--utc-offset-minutes" => {
                 let raw = value()?;
                 offset_minutes = raw
@@ -148,6 +158,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
 
     Ok(Invocation::Project(Box::new(Options {
         render_at,
+        render_at_monotonic,
         zone: Zone::from_offset_minutes(offset_minutes),
         drill_in: drill_in.unwrap_or_else(|| IssueRef::parse("")),
         inputs: RunInputs {
@@ -184,6 +195,7 @@ fn schema_probe() -> String {
 fn project(options: &Options) {
     let mut state = DashboardState::new(options.inputs.clone());
     let mut last_instant = None;
+    let mut last_monotonic = None;
 
     for line in io::stdin().lock().lines() {
         // Unusable telemetry never blocks a render: an unreadable line is
@@ -193,6 +205,7 @@ fn project(options: &Options) {
             continue;
         };
         last_instant = event.ts.or(last_instant);
+        last_monotonic = event.observed_monotonic.or(last_monotonic);
         state.apply(&event);
     }
 
@@ -201,6 +214,7 @@ fn project(options: &Options) {
             .render_at
             .or(last_instant)
             .unwrap_or_else(Timestamp::epoch),
+        now_monotonic: options.render_at_monotonic.or(last_monotonic),
         zone: options.zone,
         capabilities: TerminalCapabilities::default(),
     };
@@ -245,6 +259,9 @@ fn render(options: &Options) -> Result<(), String> {
         options.drill_in.clone(),
     )
     .with_capabilities(surface.capabilities);
+    if let Some(monotonic) = options.render_at_monotonic {
+        session.render_at_monotonic(monotonic);
+    }
     if let Some(instant) = options.render_at {
         session.render_at(instant);
     }

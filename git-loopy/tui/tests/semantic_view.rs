@@ -13,6 +13,7 @@ fn at(rfc3339: &str) -> Timestamp {
 fn context(now: &str, offset_minutes: i32) -> ViewContext {
     ViewContext {
         now: at(now),
+        now_monotonic: None,
         zone: Zone::from_offset_minutes(offset_minutes),
         capabilities: TerminalCapabilities::default(),
     }

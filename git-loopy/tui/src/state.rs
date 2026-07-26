@@ -6,11 +6,11 @@
 //! reducer serve the standalone helper, the future in-process Rust
 //! Orchestrator, and a replay of a JSONL Log.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{
-    ContextWindowSample, Event, EventPayload, InsightCapabilities, IssueRef, IterationEnd,
-    IterationIssue, IterationSummary,
+    CommitRecorded, ContextWindowSample, Event, EventPayload, InsightCapabilities, IssueRef,
+    IterationEnd, IterationIssue, IterationSummary,
 };
 use crate::timestamp::Timestamp;
 
@@ -19,10 +19,18 @@ pub(crate) const STATUS_QUEUED: &str = "queued";
 pub(crate) const STATUS_ACTIVE: &str = "active";
 pub(crate) const STATUS_GONE: &str = "gone";
 pub(crate) const STATUS_NO_PROGRESS: &str = "no-progress";
+pub(crate) const STATUS_CLOSED: &str = "closed";
+pub(crate) const STATUS_ADVANCED: &str = "advanced";
 
 /// Run statuses shown in the header band.
 pub(crate) const RUN_STARTING: &str = "starting";
 pub(crate) const RUN_RUNNING: &str = "running";
+
+/// The Log-line kind for a key structured Event (a commit, a tool call).
+const LOG_EVENT: &str = "event";
+
+/// The short-SHA width the Log line prints, matching the Python core.
+const SHORT_SHA_LENGTH: usize = 10;
 
 /// Bounded per-issue Log tail. The complete record stays in the JSONL replay
 /// Log on disk (ADR-0003), so a long Run cannot grow memory without limit.
@@ -78,7 +86,8 @@ pub(crate) struct IssueContribution {
 pub(crate) struct IssueLedgerEntry {
     pub(crate) status: String,
     pub(crate) started_at: Option<Timestamp>,
-    pub(crate) active_since: Option<Timestamp>,
+    /// The open Active stint's start on the monotonic axis.
+    pub(crate) active_since: Option<f64>,
     pub(crate) active_duration: f64,
     pub(crate) closed_at: Option<Timestamp>,
     pub(crate) issue_elapsed_seconds: Option<f64>,
@@ -109,10 +118,10 @@ impl IssueLedgerEntry {
     }
 
     /// Total agent-work seconds, still ticking while the issue is Active.
-    pub(crate) fn active_seconds(&self, now: Timestamp) -> f64 {
+    pub(crate) fn active_seconds(&self, now_monotonic: Option<f64>) -> f64 {
         let mut total = self.active_duration;
-        if let Some(since) = self.active_since {
-            total += now.seconds_since(since).max(0.0);
+        if let (Some(since), Some(now)) = (self.active_since, now_monotonic) {
+            total += (now - since).max(0.0);
         }
         total
     }
@@ -137,6 +146,16 @@ pub struct DashboardState {
     pub(crate) max_strikes: i64,
     pub(crate) started_at: Option<Timestamp>,
     pub(crate) ended_at: Option<Timestamp>,
+    /// The Run's start on the monotonic axis, paired with [`Self::started_at`].
+    started_monotonic: Option<f64>,
+    /// The Run's end on the monotonic axis, paired with [`Self::ended_at`].
+    ended_monotonic: Option<f64>,
+    /// The first Event's wall instant: the origin the monotonic axis is
+    /// derived from when an Orchestrator declares no reading of its own.
+    first_ts: Option<Timestamp>,
+    /// The open Iteration's start on the monotonic axis, which a retroactive
+    /// binding rewinds its Active timer to.
+    iteration_started_monotonic: Option<f64>,
     pub(crate) iteration: i64,
     pub(crate) capabilities: InsightCapabilities,
     pub(crate) context_window: Option<ContextWindowSample>,
@@ -149,6 +168,12 @@ pub struct DashboardState {
     iteration_pool: Vec<IssueRef>,
     /// Output produced before this Iteration named its Active issue.
     pending_log: Vec<LogLine>,
+    /// Consumption observed before this Iteration named its Active issue.
+    pending_usage: (i64, i64),
+    /// Whether any pre-marker Consumption was truthfully observed.
+    pending_usage_observed: bool,
+    /// The issues this Iteration worked as Lanes (issue #66, ADR-0008).
+    iteration_lane_refs: BTreeSet<IssueRef>,
     /// Whether the open Iteration has an authoritative activation binding.
     authoritative_binding: bool,
     /// Whether an Iteration is currently open (a Summary row needs one).
@@ -166,6 +191,10 @@ impl DashboardState {
             max_strikes: 0,
             started_at: None,
             ended_at: None,
+            started_monotonic: None,
+            ended_monotonic: None,
+            first_ts: None,
+            iteration_started_monotonic: None,
             iteration: 0,
             capabilities: InsightCapabilities::default(),
             context_window: None,
@@ -175,6 +204,9 @@ impl DashboardState {
             completed_iterations: Vec::new(),
             iteration_pool: Vec::new(),
             pending_log: Vec::new(),
+            pending_usage: (0, 0),
+            pending_usage_observed: false,
+            iteration_lane_refs: BTreeSet::new(),
             authoritative_binding: false,
             iteration_open: false,
         }
@@ -201,9 +233,32 @@ impl DashboardState {
             }
         }
         let now = event.ts;
+        if self.first_ts.is_none() {
+            self.first_ts = now;
+        }
+        let now_monotonic = self.monotonic_at_option(now, event.observed_monotonic);
+        // Multi-active dispatch (issue #66, ADR-0008): a runner-stamped
+        // `lane_issue` routes this Lane's output to its own timer / Log /
+        // Consumption, bypassing the serial single-Active inference. Without
+        // the stamp the serial path below runs unchanged.
+        if let Some(lane) = event.lane_issue.clone() {
+            if let EventPayload::IssueActivated(activated) = &event.payload {
+                self.authoritative_binding = true;
+                self.lane_touch(
+                    &activated.issue,
+                    now_monotonic,
+                    activated.activated_at.or(now),
+                );
+                return;
+            }
+            if is_lane_event(&event.kind) {
+                self.render_lane_event(&lane, event, now, now_monotonic);
+                return;
+            }
+        }
         match &event.payload {
             EventPayload::RunStart(start) => {
-                self.mark_started(now);
+                self.mark_started(now, now_monotonic);
                 self.status = RUN_RUNNING.to_string();
                 if let Some(capabilities) = start.insight_capabilities {
                     self.capabilities = capabilities;
@@ -213,19 +268,27 @@ impl DashboardState {
                 }
             }
             EventPayload::IterationStart => {
-                self.mark_started(now);
+                self.mark_started(now, now_monotonic);
                 self.status = RUN_RUNNING.to_string();
                 if let Some(iteration) = event.iter {
                     self.iteration = iteration;
                 }
-                self.begin_iteration(now);
+                self.begin_iteration(now_monotonic);
             }
             EventPayload::AfkReadyCollected(pool) => self.record_pool(&pool.issues),
             EventPayload::IssueActivated(activated) => {
                 self.authoritative_binding = true;
                 if self.active_ref.is_none() {
-                    let since = activated.activated_at.or(now);
-                    self.activate(&activated.issue, since);
+                    // A retroactive binding (a late closure, a commit, or a
+                    // single-member Pool) names an issue the Iteration was
+                    // already working, so its Active timer starts at the
+                    // Iteration, not at the moment the binding was learned.
+                    let since = if is_retroactive_binding(activated.binding_source.as_deref()) {
+                        self.iteration_started_monotonic.or(now_monotonic)
+                    } else {
+                        now_monotonic
+                    };
+                    self.activate(&activated.issue, since, activated.activated_at.or(now));
                 }
             }
             EventPayload::AgentOutput(output) => {
@@ -237,31 +300,128 @@ impl DashboardState {
                     self.context_window = Some(*sample);
                 }
             }
+            EventPayload::UsageTokens(usage) => {
+                self.record_usage(usage.input.unwrap_or(0), usage.output.unwrap_or(0))
+            }
+            EventPayload::CommitRecorded(commit) => {
+                self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::Strike(strike) => {
+                if let Some(strikes) = strike.strikes {
+                    self.strikes = strikes;
+                }
+                if let Some(limit) = strike.max_strikes {
+                    self.max_strikes = limit;
+                }
+            }
             EventPayload::IterationEnd(rollup) => {
-                self.finalize_iteration(now);
+                self.finalize_iteration(now_monotonic);
                 self.record_iteration_row(event.iter, rollup);
                 self.record_normalized_contributions(event.iter, rollup);
             }
             EventPayload::RunEnd(end) => {
                 self.status = end.outcome.clone().unwrap_or_else(|| "ended".to_string());
                 self.ended_at = now.or(self.ended_at);
+                self.ended_monotonic = now_monotonic.or(self.ended_monotonic);
             }
             EventPayload::Other => {}
         }
     }
 
-    fn mark_started(&mut self, now: Option<Timestamp>) {
-        if self.started_at.is_none() {
-            self.started_at = now;
+    /// Resolve an instant onto the monotonic axis.
+    ///
+    /// An Orchestrator that declares its own reading is authoritative; without
+    /// one the axis is derived from the first Event's wall instant, so the two
+    /// advance together and a Run with no monotonic telemetry behaves exactly
+    /// as it did before the axis existed.
+    pub(crate) fn monotonic_at(&self, wall: Timestamp, declared: Option<f64>) -> Option<f64> {
+        declared.or_else(|| self.first_ts.map(|base| wall.seconds_since(base)))
+    }
+
+    fn monotonic_at_option(&self, wall: Option<Timestamp>, declared: Option<f64>) -> Option<f64> {
+        declared.or_else(|| match (self.first_ts, wall) {
+            (Some(base), Some(wall)) => Some(wall.seconds_since(base)),
+            _ => None,
+        })
+    }
+
+    /// Fold one runner-stamped Lane Event into that Lane's own view (#66).
+    fn render_lane_event(
+        &mut self,
+        lane: &IssueRef,
+        event: &Event,
+        now: Option<Timestamp>,
+        now_monotonic: Option<f64>,
+    ) {
+        self.lane_touch(lane, now_monotonic, now);
+        match &event.payload {
+            EventPayload::AgentOutput(output) => {
+                self.append_lane_log(lane, &output.kind, &output.text, now)
+            }
+            EventPayload::CommitRecorded(commit) => {
+                self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::UsageTokens(usage) => {
+                if let Some(entry) = self.ledger.get_mut(lane) {
+                    entry.tokens_in += usage.input.unwrap_or(0).max(0);
+                    entry.tokens_out += usage.output.unwrap_or(0).max(0);
+                    entry.usage_observed = true;
+                }
+            }
+            _ => {}
         }
     }
 
-    fn begin_iteration(&mut self, now: Option<Timestamp>) {
-        if let Some(active) = self.active_ref.clone() {
-            self.deactivate(&active, now, None);
+    /// Activate a Lane's ledger entry **without** disturbing sibling Lanes.
+    ///
+    /// Unlike [`Self::activate`] this never moves `active_ref`, so the serial
+    /// single-Active header signal stays `None` under a pure Wave. A Lane
+    /// already at a terminal status is left untouched: a late delta never
+    /// resurrects a closed Lane.
+    fn lane_touch(
+        &mut self,
+        lane: &IssueRef,
+        now_monotonic: Option<f64>,
+        started_wall: Option<Timestamp>,
+    ) {
+        self.iteration_lane_refs.insert(lane.clone());
+        self.insert_entry(lane.clone());
+        let entry = self
+            .ledger
+            .get_mut(lane)
+            .expect("entry inserted immediately above");
+        if matches!(
+            entry.status.as_str(),
+            STATUS_CLOSED | STATUS_ADVANCED | STATUS_NO_PROGRESS | STATUS_GONE
+        ) {
+            return;
         }
+        if entry.started_at.is_none() {
+            entry.started_at = started_wall;
+        }
+        if entry.active_since.is_none() {
+            entry.active_since = now_monotonic;
+        }
+        entry.status = STATUS_ACTIVE.to_string();
+    }
+
+    fn mark_started(&mut self, now: Option<Timestamp>, now_monotonic: Option<f64>) {
+        if self.started_at.is_none() {
+            self.started_at = now;
+            self.started_monotonic = now_monotonic;
+        }
+    }
+
+    fn begin_iteration(&mut self, now_monotonic: Option<f64>) {
+        if let Some(active) = self.active_ref.clone() {
+            self.deactivate(&active, now_monotonic, None);
+        }
+        self.iteration_started_monotonic = now_monotonic;
         self.iteration_pool.clear();
         self.pending_log.clear();
+        self.pending_usage = (0, 0);
+        self.pending_usage_observed = false;
+        self.iteration_lane_refs.clear();
         self.authoritative_binding = false;
         self.context_window = None;
         self.iteration_open = true;
@@ -294,15 +454,17 @@ impl DashboardState {
         }
     }
 
-    fn activate(&mut self, issue: &IssueRef, since: Option<Timestamp>) {
+    fn activate(&mut self, issue: &IssueRef, since: Option<f64>, started_wall: Option<Timestamp>) {
         self.insert_entry(issue.clone());
         let pending = std::mem::take(&mut self.pending_log);
+        let (pending_in, pending_out) = std::mem::take(&mut self.pending_usage);
+        let pending_observed = std::mem::take(&mut self.pending_usage_observed);
         let entry = self
             .ledger
             .get_mut(issue)
             .expect("entry inserted immediately above");
         if entry.started_at.is_none() {
-            entry.started_at = since;
+            entry.started_at = started_wall;
         }
         if entry.active_since.is_none() {
             entry.active_since = since;
@@ -311,13 +473,18 @@ impl DashboardState {
         for line in pending {
             push_bounded(&mut entry.log, line);
         }
+        // The Consumption analogue of the pending pre-marker Log buffer: the
+        // whole Iteration's tokens follow the issue the marker finally names.
+        entry.tokens_in += pending_in;
+        entry.tokens_out += pending_out;
+        entry.usage_observed = entry.usage_observed || pending_observed;
         self.active_ref = Some(issue.clone());
     }
 
-    fn deactivate(&mut self, issue: &IssueRef, at: Option<Timestamp>, status: Option<&str>) {
+    fn deactivate(&mut self, issue: &IssueRef, at: Option<f64>, status: Option<&str>) {
         if let Some(entry) = self.ledger.get_mut(issue) {
             if let (Some(since), Some(at)) = (entry.active_since, at) {
-                entry.active_duration += at.seconds_since(since).max(0.0);
+                entry.active_duration += (at - since).max(0.0);
             }
             entry.active_since = None;
             if let Some(status) = status {
@@ -329,7 +496,29 @@ impl DashboardState {
         }
     }
 
-    fn finalize_iteration(&mut self, now: Option<Timestamp>) {
+    /// Attribute one `usage.tokens` sample to the Active issue's tally.
+    ///
+    /// Before the Iteration's working marker is known the tokens accrue to the
+    /// pending bucket and are flushed on [`Self::activate`], so a late
+    /// `Closes #N` or single-member-Pool backstop attributes the whole
+    /// Iteration's Consumption too.
+    fn record_usage(&mut self, tokens_in: i64, tokens_out: i64) {
+        let tokens_in = tokens_in.max(0);
+        let tokens_out = tokens_out.max(0);
+        if let Some(active) = self.active_ref.clone() {
+            if let Some(entry) = self.ledger.get_mut(&active) {
+                entry.tokens_in += tokens_in;
+                entry.tokens_out += tokens_out;
+                entry.usage_observed = true;
+            }
+            return;
+        }
+        self.pending_usage.0 += tokens_in;
+        self.pending_usage.1 += tokens_out;
+        self.pending_usage_observed = true;
+    }
+
+    fn finalize_iteration(&mut self, now_monotonic: Option<f64>) {
         self.context_window = None;
         if let Some(active) = self.active_ref.clone() {
             if self
@@ -345,7 +534,21 @@ impl DashboardState {
                     .expect("entry checked immediately above")
                     .status = STATUS_NO_PROGRESS.to_string();
             }
-            self.deactivate(&active, now, None);
+            self.deactivate(&active, now_monotonic, None);
+        }
+        // Each Lane the Wave worked is reconciled by the rollup below; fold its
+        // live timer so no stint runs past the Wave, and apply the same
+        // no-progress fallback the serial path uses when no rollup row names it.
+        for lane in self.iteration_lane_refs.clone() {
+            let unreconciled = self
+                .ledger
+                .get(&lane)
+                .is_some_and(|entry| entry.status == STATUS_ACTIVE);
+            self.deactivate(
+                &lane,
+                now_monotonic,
+                unreconciled.then_some(STATUS_NO_PROGRESS),
+            );
         }
         self.iteration_pool.clear();
     }
@@ -358,9 +561,6 @@ impl DashboardState {
         let Some(summary) = rollup.summary.clone() else {
             return;
         };
-        if let Some(strikes) = summary.strikes {
-            self.strikes = strikes;
-        }
         self.completed_iterations.push(IterationRow {
             iteration,
             outcome: rollup.outcome.clone(),
@@ -372,7 +572,8 @@ impl DashboardState {
     fn record_normalized_contributions(&mut self, iteration: Option<i64>, rollup: &IterationEnd) {
         for row in &rollup.issues {
             self.insert_entry(row.issue.clone());
-            let contribution = contribution_from(iteration, rollup, row);
+            let is_lane = self.iteration_lane_refs.contains(&row.issue);
+            let contribution = contribution_from(iteration, rollup, row, is_lane);
             let entry = self
                 .ledger
                 .get_mut(&row.issue)
@@ -424,18 +625,26 @@ impl DashboardState {
         }
     }
 
+    /// Append a Lane's own output to that Lane's Log, bypassing `active_ref`.
+    fn append_lane_log(&mut self, lane: &IssueRef, kind: &str, text: &str, at: Option<Timestamp>) {
+        if text.is_empty() {
+            return;
+        }
+        self.insert_entry(lane.clone());
+        let entry = self
+            .ledger
+            .get_mut(lane)
+            .expect("entry inserted immediately above");
+        for line in split_log_block(kind, text, at) {
+            push_bounded(&mut entry.log, line);
+        }
+    }
+
     fn append_log_block(&mut self, kind: &str, text: &str, at: Option<Timestamp>) {
         if text.is_empty() {
             return;
         }
-        let lines: Vec<LogLine> = text
-            .split('\n')
-            .map(|line| LogLine {
-                at,
-                kind: kind.to_string(),
-                text: line.to_string(),
-            })
-            .collect();
+        let lines = split_log_block(kind, text, at);
         match self.active_ref.clone() {
             Some(active) => {
                 let entry = self
@@ -479,18 +688,68 @@ impl DashboardState {
     }
 
     /// Seconds since the Run started, frozen once it has ended.
-    pub(crate) fn elapsed_seconds(&self, now: Timestamp) -> f64 {
-        let Some(started) = self.started_at else {
+    pub(crate) fn elapsed_seconds(&self, now_monotonic: Option<f64>) -> f64 {
+        let Some(started) = self.started_monotonic else {
             return 0.0;
         };
-        self.ended_at.unwrap_or(now).seconds_since(started).max(0.0)
+        let Some(now) = self.ended_monotonic.or(now_monotonic) else {
+            return 0.0;
+        };
+        (now - started).max(0.0)
     }
+}
+
+/// The Event types a runner may stamp with a `lane_issue` (issue #66).
+///
+/// Run- and Iteration-boundary Events are deliberately excluded: they are
+/// Run-scoped, not the work of any one Lane.
+fn is_lane_event(kind: &str) -> bool {
+    matches!(
+        kind,
+        "tool.call"
+            | "wrapper.commit.recorded"
+            | "wrapper.checkpoint.recorded"
+            | "wrapper.auto_close"
+            | "wrapper.pr.advanced"
+            | "assistant.reasoning"
+            | "assistant.message"
+            | "agent.output"
+            | "usage.tokens"
+    )
+}
+
+/// Whether a binding source names work the Iteration had already begun.
+fn is_retroactive_binding(source: Option<&str>) -> bool {
+    matches!(source, Some("closure" | "commit" | "single_member_pool"))
+}
+
+/// A recorded commit as a Log `event` line.
+fn commit_log_text(commit: &CommitRecorded) -> String {
+    let sha = commit.sha.as_deref().unwrap_or_default();
+    let short: String = sha.chars().take(SHORT_SHA_LENGTH).collect();
+    let mut text = format!("✓ commit {short}");
+    if let Some(subject) = commit.subject.as_deref().filter(|s| !s.is_empty()) {
+        text.push_str("  ");
+        text.push_str(subject.split('\n').next().unwrap_or(subject));
+    }
+    text
+}
+
+fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {
+    text.split('\n')
+        .map(|line| LogLine {
+            at,
+            kind: kind.to_string(),
+            text: line.to_string(),
+        })
+        .collect()
 }
 
 fn contribution_from(
     iteration: Option<i64>,
     rollup: &IterationEnd,
     row: &IterationIssue,
+    is_lane: bool,
 ) -> IssueContribution {
     // An Orchestrator without token telemetry sends a `consumption` record
     // whose counters are null. The Wrapper contract forbids re-reporting that
@@ -499,9 +758,11 @@ fn contribution_from(
     let consumption = row.consumption.clone().unwrap_or_default();
     let usage_observed = consumption.tokens_in.is_some() || consumption.tokens_out.is_some();
     IssueContribution {
-        kind: "iteration",
-        iteration,
-        lane: None,
+        // A Lane's work is named by the Lane it ran in, not by the serial
+        // Iteration number it happened to share with its siblings.
+        kind: if is_lane { "lane" } else { "iteration" },
+        iteration: if is_lane { None } else { iteration },
+        lane: is_lane.then(|| row.issue.clone()),
         outcome: rollup.outcome.clone(),
         duration_seconds: rollup.duration_seconds.map(|value| value.max(0.0)),
         status: row

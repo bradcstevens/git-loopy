@@ -37,6 +37,7 @@ let view = project_run_view(
     &state,
     &ViewContext {
         now: Timestamp::parse_rfc3339("2026-05-16T00:00:05Z").unwrap(),
+        now_monotonic: None,
         zone: Zone::from_offset_minutes(-360),
         capabilities: TerminalCapabilities::default(),
     },
@@ -49,6 +50,11 @@ pure projection. Everything ambient is a parameter:
 
 - **the instant** — `ViewContext::now`, never the host clock, so a fixture
   snapshot stays reproducible forever;
+- **the monotonic reading of that instant** — `ViewContext::now_monotonic`,
+  paired with the Events' own `observed_monotonic`, so every *duration* is
+  measured on an axis a wall-clock adjustment mid-Run cannot move. Left `None`
+  the axis is derived from the trace's first instant, which is what a Run
+  without monotonic telemetry has always done;
 - **the zone** — a fixed offset, never the host's `TZ`, so it only ever moves
   how instants are *rendered*, not what was measured;
 - **terminal capabilities** — injected for a renderer to consult and
@@ -138,8 +144,9 @@ panic hook, so raw mode never follows the operator out.
 ## What the binary does
 
 ```
-git-loopy-tui [--render] [--render-at INSTANT] [--utc-offset-minutes N] \
-              [--issue REF] [--model NAME] [--reasoning-effort LEVEL] \
+git-loopy-tui [--render] [--render-at INSTANT] [--render-at-monotonic S] \
+              [--utc-offset-minutes N] [--issue REF] [--model NAME] \
+              [--reasoning-effort LEVEL] \
               < events.jsonl
 git-loopy-tui --schema-version
 ```

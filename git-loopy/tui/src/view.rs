@@ -66,6 +66,12 @@ impl Default for TerminalCapabilities {
 pub struct ViewContext {
     /// The instant the Dashboard is being rendered at.
     pub now: Timestamp,
+    /// The renderer's monotonic reading for that instant, when it has one.
+    ///
+    /// Durations are measured on this axis, so a wall-clock adjustment between
+    /// the Run's start and this render cannot move them. Left `None` the axis
+    /// is derived from [`Self::now`], preserving the wall-clock behaviour.
+    pub now_monotonic: Option<f64>,
     /// The zone every rendered instant is projected into.
     pub zone: Zone,
     /// The renderer's terminal capabilities.
@@ -270,7 +276,8 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         model: state.model().map(str::to_string),
         reasoning_effort: state.reasoning_effort().map(str::to_string),
         started_at: state.started_at.map(|at| at.to_zoned_iso(context.zone)),
-        elapsed_seconds: state.elapsed_seconds(context.now),
+        elapsed_seconds: state
+            .elapsed_seconds(state.monotonic_at(context.now, context.now_monotonic)),
         status: state.status.clone(),
         strikes: Strikes {
             current: state.strikes,
@@ -280,7 +287,9 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
             state
                 .ledger
                 .get(issue)
-                .map(|entry| entry.active_seconds(context.now))
+                .map(|entry| {
+                    entry.active_seconds(state.monotonic_at(context.now, context.now_monotonic))
+                })
                 .unwrap_or(0.0)
         }),
         active_issue: active,
@@ -329,7 +338,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     issue: issue.clone(),
                     status: entry.status.clone(),
                     started_at: entry.started_at.map(|at| at.to_zoned_iso(context.zone)),
-                    active_seconds: entry.active_seconds(context.now),
+                    active_seconds: entry
+                        .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),
                     closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
                     iteration_count: entry.contributions.len(),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
@@ -424,7 +434,9 @@ fn drill_in_view(state: &DashboardState, context: &ViewContext, issue: &IssueRef
                 .map(|at| at.to_zoned_iso(context.zone)),
             issue_elapsed_seconds: entry.and_then(|entry| entry.issue_elapsed_seconds),
             active_seconds: entry
-                .map(|entry| entry.active_seconds(context.now))
+                .map(|entry| {
+                    entry.active_seconds(state.monotonic_at(context.now, context.now_monotonic))
+                })
                 .unwrap_or(0.0),
             iteration_count: entry.map(contribution_count).unwrap_or(0),
         },

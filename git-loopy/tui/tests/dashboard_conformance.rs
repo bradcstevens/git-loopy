@@ -85,6 +85,7 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
 
             let context = ViewContext {
                 now: instant(&snapshot["render_at_utc"]),
+                now_monotonic: snapshot["render_at_monotonic"].as_f64(),
                 zone,
                 capabilities: TerminalCapabilities::default(),
             };

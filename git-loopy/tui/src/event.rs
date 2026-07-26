@@ -71,10 +71,19 @@ impl<'de> Deserialize<'de> for IssueRef {
 pub struct Event {
     /// When the Orchestrator emitted the Event.
     pub ts: Option<Timestamp>,
+    /// The Orchestrator's monotonic reading for this Event, when it declares
+    /// one. Durations are measured on this axis so a wall-clock adjustment
+    /// mid-Run cannot move them.
+    pub observed_monotonic: Option<f64>,
     /// The Run this Event belongs to.
     pub run_id: Option<String>,
     /// The serial Iteration number, or `None` for Run-scoped Events.
     pub iter: Option<i64>,
+    /// The runner-stamped Lane this Event belongs to (issue #66, ADR-0008).
+    ///
+    /// A stamped Event is attributed explicitly to its Lane instead of through
+    /// the serial single-Active inference.
+    pub lane_issue: Option<IssueRef>,
     /// The exact Event type literal.
     pub kind: String,
     /// The typed payload for the Event types the Dashboard reduces.
@@ -96,6 +105,12 @@ pub enum EventPayload {
     AgentOutput(AgentOutput),
     /// `usage.context_window`
     UsageContextWindow(ContextWindowSample),
+    /// `usage.tokens`
+    UsageTokens(UsageTokens),
+    /// `wrapper.commit.recorded`
+    CommitRecorded(CommitRecorded),
+    /// `wrapper.strike`
+    Strike(Strike),
     /// `wrapper.iteration.end`
     IterationEnd(Box<IterationEnd>),
     /// `wrapper.run.end`
@@ -303,6 +318,42 @@ pub struct Consumption {
     pub tokens_out: Option<i64>,
 }
 
+/// One truthful Consumption sample for the Active issue (or Lane).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct UsageTokens {
+    /// The model the sample billed against.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Input tokens.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub input: Option<i64>,
+    /// Output tokens.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub output: Option<i64>,
+}
+
+/// One recorded commit.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CommitRecorded {
+    /// The full commit SHA.
+    #[serde(default)]
+    pub sha: Option<String>,
+    /// The commit subject.
+    #[serde(default)]
+    pub subject: Option<String>,
+}
+
+/// One consecutive-no-measurable-progress Strike.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Strike {
+    /// Strikes accrued so far.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub strikes: Option<i64>,
+    /// The configured Strike limit.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub max_strikes: Option<i64>,
+}
+
 /// The Run-end payload.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RunEnd {
@@ -326,11 +377,13 @@ impl Event {
                 .get("ts")
                 .and_then(Value::as_str)
                 .and_then(Timestamp::parse_rfc3339),
+            observed_monotonic: object.get("observed_monotonic").and_then(Value::as_f64),
             run_id: object
                 .get("run_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             iter: object.get("iter").and_then(Value::as_i64),
+            lane_issue: object.get("lane_issue").and_then(IssueRef::from_value),
             kind,
             payload,
         })
@@ -356,6 +409,9 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),
         "usage.context_window" => EventPayload::UsageContextWindow(decode_or_default(value)),
+        "usage.tokens" => EventPayload::UsageTokens(decode_or_default(value)),
+        "wrapper.commit.recorded" => EventPayload::CommitRecorded(decode_or_default(value)),
+        "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         _ => EventPayload::Other,
@@ -380,6 +436,17 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// Parse a numeric field leniently, treating a malformed value as unobserved.
+///
+/// Mirrors the Python core's `_coerce_int` tolerance: a counter that arrives as
+/// a float (or as anything unusable) must not discard the rest of the payload.
+fn lenient_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value
+        .as_ref()
+        .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|n| n as i64))))
 }
 
 /// Parse a timestamp field, treating a malformed instant as unobserved.

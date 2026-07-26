@@ -69,6 +69,7 @@ fn iteration_end(second: u32, issue: u64) -> Event {
 fn context() -> ViewContext {
     ViewContext {
         now: Timestamp::parse_rfc3339(&at(3600)).expect("a well-formed instant"),
+        now_monotonic: None,
         zone: Zone::utc(),
         capabilities: TerminalCapabilities::default(),
     }
