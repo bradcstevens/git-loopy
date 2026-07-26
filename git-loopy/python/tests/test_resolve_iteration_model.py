@@ -201,8 +201,8 @@ def test_resolver_is_pure_and_performs_no_io() -> None:
         pytest.param(("gpt-5-mini", "xhigh"), ("gpt-5-mini", None), id="known-dropped"),
         # reasoning-incapable model (empty effort set) -> effort forced to None
         pytest.param(
-            ("claude-sonnet-4.5", "high"),
-            ("claude-sonnet-4.5", None),
+            ("claude-haiku-4.5", "high"),
+            ("claude-haiku-4.5", None),
             id="incapable-model",
         ),
         # off-roster model -> passed through the gate unchanged (the CLI is the
