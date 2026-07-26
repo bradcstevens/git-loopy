@@ -397,9 +397,10 @@ def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
     assert rc == 0
     routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
     assert routing["custom"] == {"model": "gpt-5.4", "effort": "high"}
-    assert routing["planning"] == {"model": "gpt-5.6-sol", "effort": "xhigh"}
-    assert routing["docs"] == {"model": "gpt-5.6-terra", "effort": "low"}
-    assert len(routing) == 7
+    assert routing["planning"] == {"model": "claude-opus-5", "effort": "max"}
+    assert routing["docs"] == {"model": "claude-sonnet-5", "effort": "low"}
+    # The seven recommended keys, plus the pre-existing custom route.
+    assert len(routing) == 8
 
 
 def test_routing_guided_accept_all_commits_recommended_core(tmp_path: Path) -> None:
