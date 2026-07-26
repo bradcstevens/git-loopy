@@ -1200,7 +1200,224 @@ function Test-NoGuidanceDispositions {
         -ExpectedStdout $null
 }
 
+# The capability-coverage gate (Wrapper contract §8). Every scenario scoped to fewer
+# than the whole family is a question the rest are never asked, so each narrowing must
+# be registered and derived from what each distribution actually advertises. This runs
+# in every family: an operator who installs only this distribution must still be able
+# to prove it does not advertise an operation its own fixtures never exercise.
+function Get-CoverageRecords {
+    $Records = [ordered]@{}
+    foreach ($Record in @($Fixture["scenarios"]) + @($Fixture["workflows"])) {
+        $Records[[string]$Record["id"]] = $Record
+    }
+    return $Records
+}
+
+function Get-PinnedErrorCode {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Record)
+
+    $Expected = $Record["expected"]
+    $Body = $null
+    $Exact = [string]($Expected["stdout_exact"] ?? "")
+    if (-not [string]::IsNullOrEmpty($Exact)) {
+        $Body = $Exact | ConvertFrom-Json -AsHashtable
+    }
+    elseif ($Expected["stdout"] -is [Collections.IDictionary]) {
+        $Body = $Expected["stdout"]
+    }
+    if (
+        $Body -is [Collections.IDictionary] -and
+        $Body["error"] -is [Collections.IDictionary]
+    ) {
+        return [string]$Body["error"]["code"]
+    }
+    return "none"
+}
+
+function Test-CapabilityCoverageGate {
+    $Coverage = $Fixture["capability_coverage"]
+    $Indexed = Get-CoverageRecords
+    $Distributions = @($Coverage["distributions"]) | Sort-Object -CaseSensitive
+    $ScopedRecords = $Coverage["scoped_records"]
+
+    $Manifests = [ordered]@{}
+    foreach ($Entry in $Coverage["manifest_scenarios"].GetEnumerator()) {
+        $Manifests[[string]$Entry.Key] =
+            $Indexed[[string]$Entry.Value]["expected"]["stdout"]["capabilities"]
+    }
+
+    $Narrowed = @(
+        $Indexed.GetEnumerator() |
+            Where-Object {
+                $_.Value.Contains("distributions") -and
+                (
+                    (
+                        @($_.Value["distributions"]) |
+                            Sort-Object -CaseSensitive
+                    ) -join ","
+                ) -cne ($Distributions -join ",")
+            } |
+            ForEach-Object { [string]$_.Key } |
+            Sort-Object -CaseSensitive
+    )
+    $Registered = @($ScopedRecords.Keys | Sort-Object -CaseSensitive)
+    Assert-True (($Narrowed -join ",") -ceq ($Registered -join ",")) (
+        "capability coverage registers exactly the narrowed scopes " +
+        "(narrowed: $($Narrowed -join ', '); registered: $($Registered -join ', '))"
+    )
+
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        Assert-True (
+            [string]$Entry.Value["reason"] -cin @($Coverage["scope_reasons"])
+        ) "$($Entry.Key) declares a registered scope reason"
+    }
+
+    Assert-True (
+        (
+            @($Coverage["manifest_scenarios"].Keys | Sort-Object -CaseSensitive) -join ","
+        ) -ceq ($Distributions -join ",")
+    ) "manifest_scenarios names every distribution"
+
+    foreach ($Entry in $Coverage["manifest_scenarios"].GetEnumerator()) {
+        $ScenarioId = [string]$Entry.Value
+        Assert-True (
+            (@($Indexed[$ScenarioId]["distributions"]) -join ",") -ceq [string]$Entry.Key
+        ) "$ScenarioId is scoped to $($Entry.Key) alone"
+        Assert-True (
+            [string]$ScopedRecords[$ScenarioId]["reason"] -ceq "manifest-identity"
+        ) "$ScenarioId is registered as manifest-identity"
+    }
+    $Identities = @(
+        $ScopedRecords.GetEnumerator() |
+            Where-Object { [string]$_.Value["reason"] -ceq "manifest-identity" } |
+            ForEach-Object { [string]$_.Key } |
+            Sort-Object -CaseSensitive
+    )
+    Assert-True (
+        ($Identities -join ",") -ceq (
+            (
+                @($Coverage["manifest_scenarios"].Values) |
+                    ForEach-Object { [string]$_ } |
+                    Sort-Object -CaseSensitive
+            ) -join ","
+        )
+    ) "manifest-identity is claimed only by the manifest scenarios"
+
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        if ([string]$Entry.Value["reason"] -cne "capability-absent") {
+            continue
+        }
+        $Capability = [string]$Entry.Value["capability"]
+        $Advertises = [bool]$Entry.Value["advertises"]
+        $Expected = [Collections.Generic.List[string]]::new()
+        foreach ($Manifest in $Manifests.GetEnumerator()) {
+            $Optional = $Manifest.Value["optional_capabilities"]
+            Assert-True ($Optional.Contains($Capability)) (
+                "$($Entry.Key) names capability $Capability that " +
+                "$($Manifest.Key) advertises"
+            )
+            if ([bool]$Optional[$Capability] -eq $Advertises) {
+                $Expected.Add([string]$Manifest.Key)
+            }
+        }
+        $ExpectedSorted = @($Expected | Sort-Object -CaseSensitive)
+        $Actual = @(
+            @($Indexed[[string]$Entry.Key]["distributions"]) |
+                ForEach-Object { [string]$_ } |
+                Sort-Object -CaseSensitive
+        )
+        Assert-True (($Actual -join ",") -ceq ($ExpectedSorted -join ",")) (
+            "$($Entry.Key) is scoped to the distributions advertising " +
+            "$Capability=$Advertises (expected: $($ExpectedSorted -join ', '); " +
+            "actual: $($Actual -join ', '))"
+        )
+    }
+
+    $Groups = [ordered]@{}
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        if ([string]$Entry.Value["reason"] -cne "family-local-detail") {
+            continue
+        }
+        $Group = [string]$Entry.Value["variant_group"]
+        if (-not $Groups.Contains($Group)) {
+            $Groups[$Group] = [Collections.Generic.List[string]]::new()
+        }
+        $Groups[$Group].Add([string]$Entry.Key)
+    }
+    Assert-True ($Groups.Count -gt 0) "the fixture declares family-local variant groups"
+
+    foreach ($Group in $Groups.GetEnumerator()) {
+        $MemberIds = @($Group.Value)
+        $Operations = @(
+            $MemberIds |
+                ForEach-Object { [string]$ScopedRecords[$_]["operation"] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Operations.Count -eq 1) (
+            "variant group $($Group.Key) names exactly one operation"
+        )
+        $Operation = $Operations[0]
+        $Advertising = [Collections.Generic.List[string]]::new()
+        foreach ($Manifest in $Manifests.GetEnumerator()) {
+            Assert-True ($Manifest.Value["operations"].Contains($Operation)) (
+                "variant group $($Group.Key) names operation $Operation that " +
+                "$($Manifest.Key) knows"
+            )
+            if ([bool]$Manifest.Value["operations"][$Operation]) {
+                $Advertising.Add([string]$Manifest.Key)
+            }
+        }
+        $Covered = [Collections.Generic.List[string]]::new()
+        foreach ($MemberId in $MemberIds) {
+            foreach ($Distribution in @($Indexed[$MemberId]["distributions"])) {
+                $Covered.Add([string]$Distribution)
+            }
+        }
+        $Unique = @($Covered | Sort-Object -CaseSensitive -Unique)
+        Assert-True ($Unique.Count -eq $Covered.Count) (
+            "variant group $($Group.Key) scopes each distribution to one member"
+        )
+        Assert-True (
+            ($Unique -join ",") -ceq (
+                (@($Advertising | Sort-Object -CaseSensitive)) -join ","
+            )
+        ) (
+            "variant group $($Group.Key) covers every distribution advertising " +
+            "$Operation (expected: $($Advertising -join ', '); " +
+            "actual: $($Unique -join ', '))"
+        )
+        $Arguments = @(
+            $MemberIds |
+                ForEach-Object {
+                    @($Indexed[$_]["arguments"]) -join " "
+                } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Arguments.Count -eq 1) (
+            "variant group $($Group.Key) members drive one argument vector"
+        )
+        $ExitCodes = @(
+            $MemberIds |
+                ForEach-Object { [int]$Indexed[$_]["expected"]["exit_code"] } |
+                Sort-Object -Unique
+        )
+        Assert-True ($ExitCodes.Count -eq 1) (
+            "variant group $($Group.Key) members agree on the exit code"
+        )
+        $Codes = @(
+            $MemberIds |
+                ForEach-Object { Get-PinnedErrorCode -Record $Indexed[$_] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Codes.Count -eq 1) (
+            "variant group $($Group.Key) members agree on the error code " +
+            "(found: $($Codes -join ', '))"
+        )
+    }
+}
+
 try {
+    Test-CapabilityCoverageGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(
         $Fixture["scenarios"] |

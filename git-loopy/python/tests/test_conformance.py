@@ -584,7 +584,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.5"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.6"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -620,6 +620,142 @@ def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:
     registered = _CONTINUATION_SCENARIOS["revision_protocol"]["diagnostic_codes"]
     assert set(registered) == continuation_module.RECONCILE_DIAGNOSTIC_CODES
     assert registered == sorted(registered)
+
+
+def _coverage_records() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    coverage = _CONTINUATION_SCENARIOS["capability_coverage"]
+    indexed = {
+        record["id"]: record
+        for record in _CONTINUATION_SCENARIOS["scenarios"]
+        + _CONTINUATION_SCENARIOS["workflows"]
+    }
+    return coverage, indexed
+
+
+def _advertised_manifests() -> dict[str, dict[str, Any]]:
+    coverage, indexed = _coverage_records()
+    return {
+        distribution: indexed[scenario_id]["expected"]["stdout"]["capabilities"]
+        for distribution, scenario_id in coverage["manifest_scenarios"].items()
+    }
+
+
+def _pinned_error_code(record: dict[str, Any]) -> str | None:
+    expected = record["expected"]
+    body: Any = None
+    if expected.get("stdout_exact"):
+        body = json.loads(expected["stdout_exact"])
+    elif isinstance(expected.get("stdout"), dict):
+        body = expected["stdout"]
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return body["error"].get("code")
+    return None
+
+
+def test_continuation_capability_coverage_registers_every_narrowed_scope() -> None:
+    """A scope narrower than the family is a question two distributions never face.
+
+    The registry is the only place that difference is allowed to exist, so it must
+    name exactly the narrowed records: an unregistered narrowing is a silent gap and
+    a stale registration is a justification for coverage nobody has.
+    """
+    coverage, indexed = _coverage_records()
+    distributions = set(coverage["distributions"])
+    assert distributions == {"python", "shell", "powershell"}
+
+    narrowed = {
+        record_id
+        for record_id, record in indexed.items()
+        if "distributions" in record and set(record["distributions"]) != distributions
+    }
+    assert set(coverage["scoped_records"]) == narrowed
+    for record_id, scope in coverage["scoped_records"].items():
+        assert scope["reason"] in coverage["scope_reasons"], record_id
+
+
+def test_continuation_capability_coverage_binds_each_manifest_to_its_distribution() -> (
+    None
+):
+    coverage, indexed = _coverage_records()
+    assert set(coverage["manifest_scenarios"]) == set(coverage["distributions"])
+    for distribution, scenario_id in coverage["manifest_scenarios"].items():
+        assert indexed[scenario_id]["distributions"] == [distribution]
+        assert coverage["scoped_records"][scenario_id] == {"reason": "manifest-identity"}
+    identities = {
+        record_id
+        for record_id, scope in coverage["scoped_records"].items()
+        if scope["reason"] == "manifest-identity"
+    }
+    assert identities == set(coverage["manifest_scenarios"].values())
+
+
+def test_continuation_capability_absent_scopes_are_derived_from_the_manifests() -> None:
+    """A capability-gated scope is computed from what each distribution advertises.
+
+    This is the gate itself: a distribution that starts advertising a capability and
+    does not widen the scenarios gated on it fails here rather than shipping an
+    operation nothing asked it about.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "capability-absent":
+            continue
+        capability = scope["capability"]
+        advertises = scope["advertises"]
+        expected = set()
+        for distribution, manifest in manifests.items():
+            optional = manifest["optional_capabilities"]
+            assert capability in optional, (record_id, distribution, capability)
+            if optional[capability] == advertises:
+                expected.add(distribution)
+        assert expected, record_id
+        assert set(indexed[record_id]["distributions"]) == expected, record_id
+
+
+def test_continuation_family_local_variants_cover_every_advertising_distribution() -> (
+    None
+):
+    """Family-local prose may differ; the contract the prose carries may not.
+
+    A variant group is one input asked of every distribution that advertises the
+    operation. Each member records its own decoder's wording, and the group pins the
+    exit code and error code they must nevertheless agree on — so scoping a case to
+    one family can never again mean the other two are never asked.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    groups: dict[str, list[str]] = {}
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "family-local-detail":
+            continue
+        groups.setdefault(scope["variant_group"], []).append(record_id)
+
+    assert groups
+    for group, member_ids in groups.items():
+        operations = {
+            coverage["scoped_records"][member_id]["operation"] for member_id in member_ids
+        }
+        assert len(operations) == 1, group
+        operation = operations.pop()
+        advertising = set()
+        for distribution, manifest in manifests.items():
+            assert operation in manifest["operations"], (group, distribution)
+            if manifest["operations"][operation]:
+                advertising.add(distribution)
+
+        covered: set[str] = set()
+        for member_id in member_ids:
+            member = set(indexed[member_id]["distributions"])
+            assert not (member & covered), (group, member_id)
+            covered |= member
+        assert covered == advertising, group
+
+        members = [indexed[member_id] for member_id in member_ids]
+        assert len({json.dumps(m["arguments"]) for m in members}) == 1, group
+        assert len({m["expected"]["exit_code"] for m in members}) == 1, group
+        codes = [_pinned_error_code(member) for member in members]
+        assert len(set(codes)) == 1, (group, codes)
 
 
 def test_continuation_fixture_pins_automation_vocabularies() -> None:

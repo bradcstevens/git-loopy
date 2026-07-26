@@ -172,10 +172,11 @@ _COVERAGE_UNCERTAINTY_CODES = frozenset(
 )
 # The complete `reconcile` diagnostic vocabulary for the whole Runner family.
 # Registered here and pinned by the shared Conformance fixture so a new code
-# lands as one deliberate contract change rather than a silent addition. It is
-# a superset of what any one distribution emits: `unsupported_reconciliation_
-# semantics` is reported only by a distribution whose `reconcile` covers a
-# narrower slice of the Action vocabulary than this one.
+# lands as one deliberate contract change rather than a silent addition. Every
+# code here is emitted by at least one distribution: a code nobody reports is a
+# vocabulary entry a reader must still handle, and the family-wide gate treats
+# widening the shared contract for nobody's benefit as the same kind of drift as
+# narrowing it.
 RECONCILE_DIAGNOSTIC_CODES = frozenset(
     {
         "action_conflict",
@@ -194,7 +195,6 @@ RECONCILE_DIAGNOSTIC_CODES = frozenset(
         "retired_occurrence_resurrected",
         "retirements_require_revision_protocol",
         "revision_fork",
-        "unsupported_reconciliation_semantics",
         "untrusted_marker_ignored",
         "unverified_completion",
         "unverified_prerequisite",

@@ -27,6 +27,242 @@ mkdir -p "$tmp/bin"
 cp "$scripted_github" "$tmp/bin/gh"
 chmod +x "$tmp/bin/gh"
 
+# The capability-coverage gate (Wrapper contract §8). Every scenario scoped to fewer
+# than the whole family is a question the rest are never asked, so each narrowing must
+# be registered and derived from what each distribution actually advertises. This runs
+# in every family: an operator who installs only this distribution must still be able
+# to prove it does not advertise an operation its own fixtures never exercise.
+run_capability_coverage_gate() {
+  local violations
+  violations="$(
+    jq -r '
+      def records: (.scenarios + .workflows);
+      def pinned_code:
+        .expected as $e
+        | (
+            if ($e.stdout_exact // "") != "" then ($e.stdout_exact | fromjson)
+            elif ($e.stdout | type) == "object" then $e.stdout
+            else null
+            end
+          )
+        | if type == "object" and ((.error | type) == "object")
+          then (.error.code // null)
+          else null
+          end;
+
+      .capability_coverage as $coverage
+      | (records | map({key: .id, value: .}) | from_entries) as $indexed
+      | ($coverage.distributions | sort) as $dists
+      | (
+          $coverage.manifest_scenarios
+          | to_entries
+          | map({
+              key: .key,
+              value: $indexed[.value].expected.stdout.capabilities
+            })
+          | from_entries
+        ) as $manifests
+      | [
+          (
+            (
+              records
+              | map(select(has("distributions")
+                    and ((.distributions | sort) != $dists)))
+              | map(.id)
+              | sort
+            ) as $narrowed
+            | ($coverage.scoped_records | keys | sort) as $registered
+            | (
+                ($narrowed - $registered) as $missing
+                | if ($missing | length) > 0
+                  then "unregistered narrowed scope: \($missing | join(", "))"
+                  else empty
+                  end
+              ),
+              (
+                ($registered - $narrowed) as $stale
+                | if ($stale | length) > 0
+                  then "stale capability_coverage registration: \($stale | join(", "))"
+                  else empty
+                  end
+              )
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries[]
+            | select(([.value.reason] - $coverage.scope_reasons) != [])
+            | "\(.key) declares unregistered scope reason \(.value.reason)"
+          ),
+          (
+            if (($coverage.manifest_scenarios | keys | sort) != $dists)
+            then "manifest_scenarios does not name every distribution"
+            else empty
+            end
+          ),
+          (
+            $coverage.manifest_scenarios
+            | to_entries[]
+            | . as $entry
+            | (
+                if ($indexed[$entry.value].distributions != [$entry.key])
+                then "\($entry.value) is not scoped to \($entry.key) alone"
+                else empty
+                end
+              ),
+              (
+                if ($coverage.scoped_records[$entry.value].reason
+                    != "manifest-identity")
+                then "\($entry.value) is not registered as manifest-identity"
+                else empty
+                end
+              )
+          ),
+          (
+            (
+              $coverage.scoped_records
+              | to_entries
+              | map(select(.value.reason == "manifest-identity") | .key)
+              | sort
+            ) as $identities
+            | (
+                $coverage.manifest_scenarios | to_entries | map(.value) | sort
+              ) as $expected
+            | if $identities != $expected
+              then "manifest-identity is claimed by a record that is not a manifest"
+              else empty
+              end
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries[]
+            | select(.value.reason == "capability-absent")
+            | . as $record
+            | (
+                $manifests
+                | to_entries
+                | map(
+                    select(
+                      (.value.optional_capabilities
+                       | has($record.value.capability)) | not
+                    )
+                    | .key
+                  )
+              ) as $unknown
+            | if ($unknown | length) > 0
+              then
+                "\($record.key) names capability \($record.value.capability) that "
+                + "\($unknown | join(", ")) does not advertise at all"
+              else
+                (
+                  $manifests
+                  | to_entries
+                  | map(
+                      select(
+                        .value.optional_capabilities[$record.value.capability]
+                        == $record.value.advertises
+                      )
+                      | .key
+                    )
+                  | sort
+                ) as $expected
+                | if ($indexed[$record.key].distributions | sort) != $expected
+                  then
+                    "\($record.key) is scoped to "
+                    + "\($indexed[$record.key].distributions | sort | join(", "))"
+                    + " but \($record.value.capability)="
+                    + "\($record.value.advertises) is advertised by "
+                    + "\($expected | join(", "))"
+                  else empty
+                  end
+              end
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries
+            | map(select(.value.reason == "family-local-detail"))
+            | group_by(.value.variant_group)[]
+            | . as $members
+            | ($members | map(.value.variant_group) | first) as $group
+            | ($members | map(.value.operation) | unique) as $operations
+            | if ($operations | length) != 1
+              then "variant group \($group) names more than one operation"
+              else
+                ($operations | first) as $operation
+                | (
+                    $manifests
+                    | to_entries
+                    | map(select((.value.operations | has($operation)) | not) | .key)
+                  ) as $unknown
+                | if ($unknown | length) > 0
+                  then
+                    "variant group \($group) names operation \($operation) unknown "
+                    + "to \($unknown | join(", "))"
+                  else
+                    (
+                      $manifests
+                      | to_entries
+                      | map(select(.value.operations[$operation]) | .key)
+                      | sort
+                    ) as $advertising
+                    | ($members | map($indexed[.key].distributions[])) as $covered
+                    | (
+                        if ($covered | sort) != ($covered | unique)
+                        then
+                          "variant group \($group) scopes one distribution to more "
+                          + "than one member"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($covered | unique) != $advertising
+                        then
+                          "variant group \($group) covers "
+                          + "\($covered | unique | join(", ")) but \($operation) is "
+                          + "advertised by \($advertising | join(", "))"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($members | map($indexed[.key].arguments)
+                            | unique | length) != 1
+                        then
+                          "variant group \($group) members drive different arguments"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($members | map($indexed[.key].expected.exit_code)
+                            | unique | length) != 1
+                        then
+                          "variant group \($group) members disagree on the exit code"
+                        else empty
+                        end
+                      ),
+                      (
+                        (
+                          $members | map($indexed[.key] | pinned_code) | unique
+                        ) as $codes
+                        | if ($codes | length) != 1
+                          then
+                            "variant group \($group) members disagree on the error "
+                            + "code: \($codes | map(. // "none") | join(", "))"
+                          else empty
+                          end
+                      )
+                  end
+              end
+          )
+        ]
+      | .[]
+    ' "$fixture"
+  )"
+  if [[ -n "$violations" ]]; then
+    fail "capability coverage gate"$'\n'"$violations"
+  fi
+}
+
+run_capability_coverage_gate
+
 run_transport_probe() {
   local probe_script="$tmp/probe-github-script.json"
   local probe_state="$tmp/probe-github-state"
