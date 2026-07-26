@@ -584,7 +584,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.6"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.7"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -821,6 +821,43 @@ def test_continuation_end_to_end_coverage_names_every_locked_scenario() -> None:
 
     assert covering == set(workflows), set(workflows) - covering
     assert _NATIVE_CONTINUATION_OPERATIONS <= exercised
+
+
+def test_continuation_reconciliation_never_writes() -> None:
+    """A refresh that writes is not a refresh, and the transport is the proof.
+
+    The claim is about the calls the command actually made, not about the words in
+    the projection, so it is asserted against an allowlist of read shapes: a call
+    the allowlist has never heard of fails rather than passes unnoticed. It is
+    asserted over every pinned `reconcile`, because read-only is a property of the
+    operation rather than of the handful of fixtures that happen to exercise it --
+    including the end-to-end workflows whose every command is a refresh, where one
+    write anywhere in the run is the whole failure the locked story is about.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    prefixes = tuple(coverage["read_only_call_prefixes"])
+
+    seen = 0
+    for scenario in _CONTINUATION_SCENARIOS["scenarios"]:
+        if scenario["arguments"][1] != "reconcile":
+            continue
+        for call in scenario["expected"].get("github_calls", []):
+            seen += 1
+            assert call.startswith(prefixes), (scenario["id"], call)
+            assert "--method" not in call, (scenario["id"], call)
+
+    refreshes = 0
+    for workflow in _CONTINUATION_SCENARIOS["workflows"]:
+        operations = {command["arguments"][1] for command in workflow["commands"]}
+        if operations != {"reconcile"}:
+            continue
+        refreshes += 1
+        for call in workflow["expected_github_calls"]:
+            seen += 1
+            assert call.startswith(prefixes), (workflow["id"], call)
+            assert "--method" not in call, (workflow["id"], call)
+    assert refreshes, "no end-to-end refresh is pinned, so this gate proves less"
+    assert seen, "no reconcile call is pinned, so this gate proves nothing"
 
 
 def test_continuation_fixture_pins_automation_vocabularies() -> None:

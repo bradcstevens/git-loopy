@@ -286,6 +286,23 @@ $Script:DispatchEvidenceClasses = @(
     "safety-case-violation", "uncertain-effect-state"
 )
 $Script:DispatchMarker = "<!-- git-loopy-continuation-dispatch:1 -->"
+
+# Is this comment claiming to be a Continuation record or dispatch evidence?
+# Authentication is scoped to *marked* comments: an ordinary human comment on a
+# carrier issue is not a record, was never going to become one, and must not cost
+# a Producer permission read or answer the mutation question. Testing for the
+# marker is a discriminator, not semantic parsing, so the contract's
+# authenticate-before-parse ordering holds -- an unmarked comment is never parsed.
+function Test-GitLoopyMarkedComment {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Comment)
+
+    $Body = [string]$Comment["body"]
+    return (
+        $Body.Contains($Script:RecordMarker, [StringComparison]::Ordinal) -or
+        $Body.Contains($Script:DispatchMarker, [StringComparison]::Ordinal)
+    )
+}
+
 # The locked Automation stop precedence, strongest first. Exactly one stop is
 # returned and the first matching reason wins, so a Run that is both blocked on
 # a human boundary and waiting on a Prerequisite reports the human boundary --
@@ -2553,7 +2570,7 @@ function Get-GitLoopyTaintedLineageHeads {
         }
     }
     foreach ($RevisionId in @($Records.Keys)) {
-        foreach ($Parent in @($Records[$RevisionId]["parents"])) {
+        foreach ($Parent in (Get-GitLoopyRecordParents $Records[$RevisionId])) {
             if (-not $Records.Contains([string]$Parent)) {
                 [void]$Tainted.Add([string]$RevisionId)
                 break
@@ -2567,7 +2584,7 @@ function Get-GitLoopyTaintedLineageHeads {
             if ($Tainted.Contains([string]$RevisionId)) {
                 continue
             }
-            foreach ($Parent in @($Records[$RevisionId]["parents"])) {
+            foreach ($Parent in (Get-GitLoopyRecordParents $Records[$RevisionId])) {
                 if ($Tainted.Contains([string]$Parent)) {
                     [void]$Tainted.Add([string]$RevisionId)
                     $Changed = $true
@@ -2583,7 +2600,7 @@ function Get-GitLoopyTaintedLineageHeads {
         if (-not $Tainted.Contains([string]$RevisionId)) {
             continue
         }
-        foreach ($Parent in @($Records[$RevisionId]["parents"])) {
+        foreach ($Parent in (Get-GitLoopyRecordParents $Records[$RevisionId])) {
             if ($Tainted.Contains([string]$Parent)) {
                 [void]$ReferencedTainted.Add([string]$Parent)
             }
@@ -2884,7 +2901,7 @@ function Invoke-GitLoopyContinuationPublish {
             [StringComparer]::Ordinal
         )
         foreach ($Entry in $LineageEntries) {
-            foreach ($Parent in @($Entry["record"]["parents"])) {
+            foreach ($Parent in (Get-GitLoopyRecordParents $Entry["record"])) {
                 [void]$Referenced.Add([string]$Parent)
             }
         }
@@ -6013,6 +6030,9 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
             [void]$Indexed.Add([long]$Carrier["number"])
         }
         foreach ($Comment in $Carrier["comments"]) {
+            if (-not (Test-GitLoopyMarkedComment -Comment $Comment)) {
+                continue
+            }
             $Authorized = $false
             $Rejection = "untrusted_marker_ignored"
             if ($Comment["author_type"] -cin @("Bot", "App")) {
@@ -6261,7 +6281,7 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
                 if ($Tainted.Contains($RevisionId)) {
                     continue
                 }
-                foreach ($Parent in @($Entry["record"]["parents"])) {
+                foreach ($Parent in (Get-GitLoopyRecordParents $Entry["record"])) {
                     if ($Tainted.Contains($Parent)) {
                         [void]$Tainted.Add($RevisionId)
                         $Changed = $true
@@ -6277,7 +6297,7 @@ function Invoke-GitLoopyContinuationReconcileRevisionProtocol {
         foreach ($Entry in $LineageEntries) {
             if (-not $Tainted.Contains($Entry["record"]["revision_id"])) {
                 $Usable.Add($Entry)
-                foreach ($Parent in @($Entry["record"]["parents"])) {
+                foreach ($Parent in (Get-GitLoopyRecordParents $Entry["record"])) {
                     [void]$Referenced.Add($Parent)
                 }
             }
@@ -6675,6 +6695,16 @@ function Invoke-GitLoopyContinuationRepairIndex {
         $HasRecord = $false
         $HasTrustedMarker = $false
         foreach ($Comment in $Carrier["comments"]) {
+            # Repair only ever asks whether a carrier holds a trusted *record*,
+            # so only the record marker earns a permission read here.
+            if (
+                -not ([string]$Comment["body"]).Contains(
+                    $Script:RecordMarker,
+                    [StringComparison]::Ordinal
+                )
+            ) {
+                continue
+            }
             $Authorized = $false
             if ($Comment["author_type"] -cin @("Bot", "App")) {
                 $Authorized = @($TrustedApps) -ccontains $Comment["author"]

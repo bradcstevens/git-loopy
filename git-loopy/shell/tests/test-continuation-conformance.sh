@@ -32,6 +32,128 @@ chmod +x "$tmp/bin/gh"
 # be registered and derived from what each distribution actually advertises. This runs
 # in every family: an operator who installs only this distribution must still be able
 # to prove it does not advertise an operation its own fixtures never exercise.
+# The end-to-end coverage gate. The foundation gate is a claim about ten locked
+# stories driven through the real native commands, not about a count of fixtures, so
+# the ten are written out here rather than read from the fixture: a locked story that
+# quietly leaves the registry would otherwise take its own gate with it. This runs in
+# every family for the same reason the capability gate does.
+LOCKED_END_TO_END_SCENARIOS=(
+  planning-publication-and-aggregation
+  read-only-human-refresh
+  concurrent-equivalent-and-conflicting-publication
+  blocked-to-ready-and-ready-to-blocked
+  completion-and-retirement-receipts
+  positive-afk-classification-and-dispatch
+  explicit-human-and-attention-stops
+  terminal-completion
+  optional-handoff-context
+  durable-transition-then-publication-failure
+)
+
+run_end_to_end_coverage_gate() {
+  local expected_locked
+  expected_locked="$(printf '%s\n' "${LOCKED_END_TO_END_SCENARIOS[@]}" |
+    jq -Rsc 'split("\n") | map(select(length > 0))')"
+  local violations
+  violations="$(
+    jq -r --argjson locked "$expected_locked" '
+      .end_to_end_coverage as $coverage
+      | (.workflows | map({key: .id, value: .}) | from_entries) as $indexed
+      | (.capability_coverage.distributions | sort) as $dists
+      | .capability_coverage.scoped_records as $scoped
+      | [
+          (
+            if ($coverage.locked_scenarios | keys_unsorted) != $locked
+            then "locked_scenarios does not name the ten locked end-to-end scenarios"
+            else empty
+            end
+          ),
+          (
+            $coverage.locked_scenarios
+            | to_entries[]
+            | . as $entry
+            | (
+                (
+                  if ($entry.value | length) == 0
+                  then "\($entry.key) names no workflow"
+                  else empty
+                  end
+                ),
+                (
+                  $entry.value[]
+                  | select($indexed[.] == null)
+                  | "\($entry.key) names unknown workflow \(.)"
+                ),
+                (
+                  $entry.value[]
+                  | select($indexed[.] != null)
+                  | select(($indexed[.].distributions | sort) != $dists)
+                  | select($scoped[.].reason != "capability-absent")
+                  | "\(.) is narrowed without a capability-absent record"
+                ),
+                (
+                  ($entry.value
+                    | map($indexed[.].distributions // [])
+                    | add // []
+                    | unique) as $covered
+                  | if ($dists - $covered) != []
+                    then "\($entry.key) leaves \(($dists - $covered) | join(", ")) unasked"
+                    else empty
+                    end
+                )
+              )
+          ),
+          (
+            (
+              [$coverage.locked_scenarios[][]]
+              | unique
+              | map($indexed[.].commands // [])
+              | add // []
+              | map(.arguments[1])
+              | unique
+            ) as $exercised
+            | (["publish", "reconcile", "record-dispatch-result"] - $exercised) as $unexercised
+            | if $unexercised != []
+              then "no locked scenario exercises \($unexercised | join(", "))"
+              else empty
+              end
+          ),
+          (
+            ([$coverage.locked_scenarios[][]] | unique) as $claimed
+            | (.workflows | map(.id) | unique) as $present
+            | ($present - $claimed)[]
+            | "workflow \(.) is claimed by no locked scenario"
+          ),
+          (
+            $coverage.read_only_call_prefixes as $prefixes
+            | .workflows[]
+            | select(([.commands[].arguments[1]] | unique) == ["reconcile"])
+            | . as $workflow
+            | $workflow.expected_github_calls[]
+            | . as $call
+            | select(
+                ([$prefixes[] | select($call | startswith(.))] | length) == 0
+                or ($call | contains("--method"))
+              )
+            | "read-only workflow \($workflow.id) made write call \($call)"
+          ),
+          (
+            if ([.workflows[]
+                 | select(([.commands[].arguments[1]] | unique) == ["reconcile"])]
+                | length) == 0
+            then "no end-to-end refresh is pinned, so the read-only gate proves less"
+            else empty
+            end
+          )
+        ]
+      | map(select(. != null))
+      | .[]
+    ' "$fixture"
+  )"
+  [[ -z "$violations" ]] ||
+    fail "end-to-end coverage gate:"$'\n'"$violations"
+}
+
 run_capability_coverage_gate() {
   local violations
   violations="$(
@@ -262,6 +384,7 @@ run_capability_coverage_gate() {
 }
 
 run_capability_coverage_gate
+run_end_to_end_coverage_gate
 
 run_transport_probe() {
   local probe_script="$tmp/probe-github-script.json"
@@ -1385,12 +1508,18 @@ while IFS= read -r workflow; do
         '. == $expected' "$stdout_path" >/dev/null ||
         fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
     fi
-    stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$command")"
-    if [[ -z "$stderr_needle" ]]; then
-      [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+    if jq -e '.expected | has("stderr_exact")' <<<"$command" >/dev/null; then
+      expected_stderr="$(jq -r '.expected.stderr_exact' <<<"$command")"
+      [[ "$(<"$stderr_path")" == "$expected_stderr" ]] ||
+        fail "$id exact stderr mismatch"
     else
-      grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
-        fail "$id stderr does not contain: $stderr_needle"
+      stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$command")"
+      if [[ -z "$stderr_needle" ]]; then
+        [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+      else
+        grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
+          fail "$id stderr does not contain: $stderr_needle"
+      fi
     fi
   done < <(jq -c '.commands[]' <<<"$workflow")
 

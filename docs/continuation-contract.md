@@ -114,7 +114,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.6,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.7,
 Continuation contract 1.2, record format 1, Wrapper contract 1.4, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -166,6 +166,16 @@ against are the fixture's own per-family capability scenarios, each proven by ex
 native entrypoint, so the chain runs from real CLI through advertised manifest to scenario scoping
 with no hand-asserted link. Every family adapter enforces the gate, because a distribution must be
 able to prove itself without a Python runtime present.
+
+Fixture schema 1.7 completes the foundation gate's registry of ten end-to-end scenarios and puts the
+check in every family. `end_to_end_coverage.locked_scenarios` maps each locked scenario to the
+workflows driving it through the real native commands; every family adapter pins the ten names
+itself, requires each scenario to name an existing workflow, requires a scenario's workflows to
+cover every distribution between them — a member lacking an optional capability answers by failing
+closed, in a workflow narrowed for a `capability_coverage` reason — and requires `publish`,
+`reconcile`, and `record-dispatch-result` all to be exercised. `read_only_call_prefixes` pins the
+read-only shape of Reconciliation against the observed transport for every pinned `reconcile`, so a
+refresh that writes fails on the call it made rather than on the words it printed.
 
 The same revision retires `unsupported_reconciliation_semantics` from
 `revision_protocol.diagnostic_codes`. The vocabulary is the union across every distribution, and no

@@ -2244,6 +2244,19 @@ def _tainted_lineage_heads(
     return tainted - referenced_tainted
 
 
+def _is_marked(comment: ContinuationComment) -> bool:
+    """Is this comment claiming to be a Continuation record or dispatch evidence?
+
+    Authentication is scoped to *marked* comments: an ordinary human comment on a
+    carrier issue is not a record, was never going to become one, and must not
+    cost a permission read or answer the mutation question. Testing for the marker
+    is a discriminator, not semantic parsing, so the contract's
+    authenticate-before-parse ordering is preserved — an unmarked comment is
+    simply never parsed at all.
+    """
+    return _RECORD_MARKER in comment.body or _DISPATCH_MARKER in comment.body
+
+
 def _authorized_comment(
     comment: ContinuationComment,
     *,
@@ -3626,6 +3639,8 @@ def _reconcile_revision_protocol(
 
     for carrier in carriers:
         for comment in carrier.comments:
+            if not _is_marked(comment):
+                continue
             authorized, rejection = _authorized_comment(
                 comment,
                 repository=repository,
@@ -4240,6 +4255,10 @@ def _repair_index(
         has_record = False
         has_trusted_marker = False
         for comment in carrier.comments:
+            # Repair only ever asks whether a carrier holds a trusted *record*,
+            # so only the record marker earns a permission read here.
+            if _RECORD_MARKER not in comment.body:
+                continue
             authorized, _rejection = _authorized_comment(
                 comment,
                 repository=repository,

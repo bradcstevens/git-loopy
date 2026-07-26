@@ -4633,6 +4633,10 @@ _git_loopy_continuation_repair_index() {
       has_trusted_marker=0
       while IFS= read -r comment; do
         local author author_type authorized comment_permission
+        # Authentication is scoped to marked comments: an ordinary human comment
+        # on a carrier is not a record and must not cost a permission read.
+        [[ "$(jq -r '.body' <<<"$comment")" == \
+          *"$GIT_LOOPY_CONTINUATION_RECORD_MARKER"* ]] || continue
         author="$(jq -r '.author' <<<"$comment")"
         author_type="$(jq -r '.author_type' <<<"$comment")"
         authorized=0

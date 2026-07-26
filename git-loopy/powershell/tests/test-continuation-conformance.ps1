@@ -1234,6 +1234,117 @@ function Get-PinnedErrorCode {
     return "none"
 }
 
+# The end-to-end coverage gate. The foundation gate is a claim about ten locked
+# stories driven through the real native commands, not about a count of fixtures, so
+# the ten are written out here rather than read from the fixture: a locked story that
+# quietly leaves the registry would otherwise take its own gate with it. This runs in
+# every family for the same reason the capability gate does.
+$LockedEndToEndScenarios = @(
+    "planning-publication-and-aggregation"
+    "read-only-human-refresh"
+    "concurrent-equivalent-and-conflicting-publication"
+    "blocked-to-ready-and-ready-to-blocked"
+    "completion-and-retirement-receipts"
+    "positive-afk-classification-and-dispatch"
+    "explicit-human-and-attention-stops"
+    "terminal-completion"
+    "optional-handoff-context"
+    "durable-transition-then-publication-failure"
+)
+
+function Test-EndToEndCoverageGate {
+    $Coverage = $Fixture["end_to_end_coverage"]
+    $Locked = $Coverage["locked_scenarios"]
+    $Distributions =
+        @($Fixture["capability_coverage"]["distributions"]) | Sort-Object -CaseSensitive
+    $ScopedRecords = $Fixture["capability_coverage"]["scoped_records"]
+
+    $Workflows = [ordered]@{}
+    foreach ($Workflow in @($Fixture["workflows"])) {
+        $Workflows[[string]$Workflow["id"]] = $Workflow
+    }
+
+    Assert-True (
+        (@($Locked.Keys | ForEach-Object { [string]$_ }) -join ",") -ceq
+            ($LockedEndToEndScenarios -join ",")
+    ) "locked_scenarios names the ten locked end-to-end scenarios in order"
+
+    $Exercised = [Collections.Generic.HashSet[string]]::new()
+    foreach ($Entry in $Locked.GetEnumerator()) {
+        $Scenario = [string]$Entry.Key
+        $Ids = @($Entry.Value | ForEach-Object { [string]$_ })
+        Assert-True ($Ids.Count -gt 0) "$Scenario names at least one workflow"
+
+        $Covered = [Collections.Generic.HashSet[string]]::new()
+        foreach ($Id in $Ids) {
+            Assert-True ($Workflows.Contains($Id)) "$Scenario names known workflow $Id"
+            $Workflow = $Workflows[$Id]
+            $Narrowed = @($Workflow["distributions"] | ForEach-Object { [string]$_ })
+            if (($Narrowed | Sort-Object -CaseSensitive) -join "," -cne ($Distributions -join ",")) {
+                Assert-True (
+                    [string]$ScopedRecords[$Id]["reason"] -ceq "capability-absent"
+                ) "$Id is narrowed for a registered capability reason"
+            }
+            foreach ($Distribution in $Narrowed) {
+                [void]$Covered.Add($Distribution)
+            }
+            foreach ($Command in @($Workflow["commands"])) {
+                [void]$Exercised.Add([string]@($Command["arguments"])[1])
+            }
+        }
+        Assert-True (
+            (@($Covered) | Sort-Object -CaseSensitive) -join "," -ceq ($Distributions -join ",")
+        ) "$Scenario is asked of every distribution"
+    }
+
+    foreach ($Operation in @("publish", "reconcile", "record-dispatch-result")) {
+        Assert-True (
+            $Exercised.Contains($Operation)
+        ) "a locked end-to-end scenario exercises $Operation"
+    }
+
+    $Claimed = [Collections.Generic.HashSet[string]]::new(
+        [string[]]@($Locked.GetEnumerator() | ForEach-Object {
+            $_.Value | ForEach-Object { [string]$_ }
+        }),
+        [StringComparer]::Ordinal
+    )
+    foreach ($Id in @($Workflows.Keys)) {
+        Assert-True (
+            $Claimed.Contains([string]$Id)
+        ) "workflow $Id is claimed by a locked scenario"
+    }
+
+    $Prefixes = @($Coverage["read_only_call_prefixes"] | ForEach-Object { [string]$_ })
+    $Refreshes = 0
+    foreach ($Id in @($Workflows.Keys)) {
+        $Workflow = $Workflows[$Id]
+        $Operations = @(
+            @($Workflow["commands"]) |
+                ForEach-Object { [string]@($_["arguments"])[1] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        if ($Operations.Count -ne 1 -or $Operations[0] -cne "reconcile") {
+            continue
+        }
+        $Refreshes++
+        foreach ($Call in @($Workflow["expected_github_calls"])) {
+            $Text = [string]$Call
+            $Allowed = @(
+                $Prefixes | Where-Object {
+                    $Text.StartsWith($_, [StringComparison]::Ordinal)
+                }
+            ).Count -gt 0
+            Assert-True (
+                $Allowed -and -not $Text.Contains("--method", [StringComparison]::Ordinal)
+            ) "read-only workflow $Id made only read calls"
+        }
+    }
+    Assert-True (
+        $Refreshes -gt 0
+    ) "an end-to-end refresh is pinned, so the read-only gate proves something"
+}
+
 function Test-CapabilityCoverageGate {
     $Coverage = $Fixture["capability_coverage"]
     $Indexed = Get-CoverageRecords
@@ -1418,6 +1529,7 @@ function Test-CapabilityCoverageGate {
 
 try {
     Test-CapabilityCoverageGate
+    Test-EndToEndCoverageGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(
         $Fixture["scenarios"] |

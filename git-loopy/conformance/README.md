@@ -372,6 +372,36 @@ suite, and a gate living in Python alone would let shell advertise a capability 
 never exercise. Duplication across three implementations kept honest by shared data is the pattern
 this directory already is.
 
+## Fixture schema 1.7 — the end-to-end coverage gate
+
+`capability_coverage` proves a *narrowing* is honest. It cannot prove the fixture asks the questions
+that matter, because a question nobody wrote down is not narrowed — it is absent, and absence has no
+record to check. The foundation gate is a claim about ten specific end-to-end stories driven through
+the real `publish`, `reconcile`, and `record-dispatch-result` commands over one ordered scripted
+transport. Schema 1.6 opened `end_to_end_coverage.locked_scenarios` but filled three of the ten from
+four workflows, and only the Python adapter pinned the full roster of names — so seven stories were
+a roster entry with nothing behind it, and shell and PowerShell could not ask the question at all.
+
+Schema 1.7 fills the registry: all ten locked scenarios are named and mapped to the thirteen
+workflows that drive them. The names themselves are written into all three adapters rather than read
+from the fixture, because the fixture is the thing under test: a locked story that quietly left the
+registry would otherwise take its own gate with it. Beyond the names, each story must
+
+- name at least one workflow, and every named workflow must exist;
+- be asked of **every** distribution between its workflows, so a story a distribution cannot tell is
+  still a story it has to answer — by failing closed, in a workflow narrowed for a reason
+  `capability_coverage` already derives from the advertised manifests; and
+- collectively exercise all three native operations.
+
+`read_only_call_prefixes` is the second half. "Reconciliation is read-only" is a claim about the
+calls the command actually made, not about the words in its projection, so it is asserted against an
+allowlist of read shapes over every pinned `reconcile` — a call the allowlist has never heard of
+fails rather than passes unnoticed, and a `--method` anywhere in a reconcile transcript is a
+mutation by construction.
+
+Like the capability gate, this one runs in **all three adapters**, for the same reason: a
+distribution must be able to prove it tells all ten stories without a Python runtime present.
+
 `unsupported_reconciliation_semantics` is retired from `revision_protocol.diagnostic_codes` in the
 same revision. No distribution has emitted it since the private PowerShell derivation was deleted,
 and a registered code no family produces is vocabulary a port can implement against and never be
