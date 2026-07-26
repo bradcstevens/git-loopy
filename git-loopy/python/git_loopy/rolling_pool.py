@@ -184,7 +184,7 @@ class RollingPool:
                 demand, and no demand means no refresh — that single number is
                 how #219 §2.6-2.7 are enforced.
         """
-        unmet = refillable > self._available_count()
+        unmet = refillable > self.available
         if not unmet:
             # Demand met (or absent). Forget the wait: if demand reappears it is
             # new evidence, not a continuation of the old unanswered question.
@@ -201,8 +201,15 @@ class RollingPool:
             return
         self._refresh()
 
-    def _available_count(self) -> int:
-        """How many cached candidates could currently be handed to a **Lane**."""
+    @property
+    def available(self) -> int:
+        """How many cached candidates could currently be handed to a **Lane**.
+
+        The cache's own view of remaining eligible demand: quarantined and
+        already-claimed candidates do not count, so a zero means the next
+        refill decision has nothing to hand out even though the cache is not
+        empty.
+        """
         return sum(
             1
             for entry in self._entries
@@ -281,7 +288,7 @@ class RollingPool:
                 ),
             )
             return False
-        return self._available_count() == 0
+        return self.available == 0
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""
