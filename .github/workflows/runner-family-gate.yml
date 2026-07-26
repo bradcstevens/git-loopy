@@ -75,15 +75,15 @@ jobs:
             BASH_BIN="$(command -v bash)"
           fi
           "$BASH_BIN" --version
-          "$BASH_BIN" -n \
+          # `bash -n a.sh b.sh` parses only `a.sh` -- every later path becomes a
+          # positional argument to it, so the rest go unchecked. One file per call.
+          for f in \
             git-loopy/shell/git-loopy.sh \
             git-loopy/shell/install.sh \
-            git-loopy/shell/lib/continuation.sh \
-            git-loopy/shell/lib/events.sh \
-            git-loopy/shell/lib/orchestrator.sh \
-            git-loopy/shell/lib/release-version.sh \
-            git-loopy/shell/lib/tui-install.sh \
-            git-loopy/shell/tests/*.sh
+            git-loopy/shell/lib/*.sh \
+            git-loopy/shell/tests/*.sh; do
+            "$BASH_BIN" -n "$f"
+          done
           "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
           "$BASH_BIN" git-loopy/shell/tests/test-continuation-conformance.sh
