@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 
+_git_loopy_continuation_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The manifest carries this clone's Release version, so a Consumer that sources
+# this module alone — setup verification, which is not an Orchestrator Run —
+# resolves it exactly the way the Orchestrator does. The Orchestrator sets both
+# before it sources this file, so neither assignment takes effect there.
+: "${_GIT_LOOPY_RELEASE_VERSION_PATH:="$_git_loopy_continuation_dir/../../../VERSION"}"
+if ! declare -F git_loopy_read_release_version >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  source "$_git_loopy_continuation_dir/release-version.sh"
+fi
+
 GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.2"
 GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1","1.2"]'
 GIT_LOOPY_CONTINUATION_RECORD_FORMAT=1
@@ -179,6 +191,132 @@ git_loopy_continuation_capabilities() {
   printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":false,"concurrent_dispatch":false,"prospective_projection":false,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
+}
+
+# --- Setup verification (#257) ----------------------------------------------
+#
+# Verification is a *Consumer* of the capability manifest, not a Continuation
+# operation: contract §1 scopes the contract to Continuation records and their
+# derivation, and §4 says the manifest "describes capability only". So the profile
+# and its evaluator live beside the manifest they judge, and the native command
+# namespace is unchanged.
+#
+# The distribution running this code is the distribution being verified. Nothing
+# resolves an entrypoint and nothing names a family member, which is how setup
+# records the operator's selection without committing a host-specific executable
+# path or a family-member choice.
+
+# The one named requirement set this distribution is judged against. `report` and
+# `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
+# profile nobody implements would let a pass be read as readiness for a mode no
+# distribution supports.
+_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
+  "requirements": [
+    "contract-version",
+    "record-format",
+    "tracker-adapter",
+    "native-operations",
+    "mode-default-off"
+  ],
+  "continuation_contract_version": "1.2",
+  "record_format": 1,
+  "tracker_adapter": "github",
+  "tracker_operations": [
+    "publish", "reconcile", "record-dispatch-result", "repair-index"
+  ],
+  "native_operations": [
+    "capabilities", "publish", "reconcile", "record-dispatch-result",
+    "repair-index"
+  ],
+  "mode_default": "off"
+}'
+
+git_loopy_continuation_profile() {
+  local name="${1:-foundation}"
+  if [[ "$name" != "foundation" ]]; then
+    printf 'git-loopy: unknown Continuation capability profile %s\n' "$name" >&2
+    return 1
+  fi
+  jq -c . <<<"$_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE"
+}
+
+# Judge one advertised manifest (stdin) against one named profile. The
+# unsatisfied requirements come out in the profile's own declaration order, and the
+# unsupported optional capabilities are sorted, so the answer never depends on the
+# order a family member happens to declare its manifest in.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+git_loopy_evaluate_continuation_capabilities() {
+  local profile
+  profile="$(git_loopy_continuation_profile "${1:-foundation}")" || return 1
+  jq -c --argjson profile "$profile" --arg name "${1:-foundation}" '
+    . as $manifest
+    | def unsatisfied($id):
+        if $id == "contract-version" then
+          (($manifest.continuation_contract_versions // [])
+            | index($profile.continuation_contract_version)) == null
+        elif $id == "record-format" then
+          (($manifest.record_formats // [])
+            | index($profile.record_format)) == null
+        elif $id == "tracker-adapter" then
+          (
+            ((($manifest.tracker_adapters // {})[$profile.tracker_adapter] // {})
+              .operations // [])
+          ) as $advertised
+          | ($profile.tracker_operations - $advertised) != []
+        elif $id == "native-operations" then
+          ($manifest.operations // {}) as $advertised
+          | [$profile.native_operations[] | select($advertised[.] != true)] != []
+        elif $id == "mode-default-off" then
+          ($manifest.continuation_modes // {}) as $modes
+          | ($modes.default != $profile.mode_default)
+            or ($modes[$profile.mode_default] != true)
+        else true
+        end;
+      [$profile.requirements[] | select(unsatisfied(.))] as $unsatisfied
+    | {
+        profile: $name,
+        release_version: ($manifest.release_version // ""),
+        satisfied: ($unsatisfied == []),
+        unsatisfied_requirements: $unsatisfied,
+        unsupported_optional_capabilities: (
+          [($manifest.optional_capabilities // {})
+            | to_entries[] | select(.value != true) | .key]
+          | sort
+        )
+      }
+  '
+}
+
+# Verify the running distribution and render one operator-facing line. Returns
+# non-zero when the profile is unsatisfied, so a setup surface can fail closed
+# before it writes or installs anything.
+git_loopy_verify_this_distribution() {
+  local name="${1:-foundation}"
+  local verdict
+  verdict="$(
+    git_loopy_continuation_capabilities |
+      jq -c '.capabilities' |
+      git_loopy_evaluate_continuation_capabilities "$name"
+  )" || return 1
+
+  if [[ "$(jq -r '.satisfied' <<<"$verdict")" != "true" ]]; then
+    printf 'git-loopy: this distribution does not satisfy the %s Continuation capability profile (%s).\n' \
+      "$name" "$(jq -r '.unsatisfied_requirements | join(", ")' <<<"$verdict")" >&2
+    return 1
+  fi
+
+  local unsupported line
+  unsupported="$(jq -r '.unsupported_optional_capabilities | join(", ")' <<<"$verdict")"
+  line="$(
+    printf "Verified this distribution's Continuation capabilities (%s profile, contract %s, release %s)" \
+      "$name" \
+      "$GIT_LOOPY_CONTINUATION_CONTRACT_VERSION" \
+      "$(jq -r '.release_version | if . == "" then "unknown" else . end' <<<"$verdict")"
+  )"
+  if [[ -n "$unsupported" ]]; then
+    line+="; unsupported optional capabilities: $unsupported"
+  fi
+  printf '%s.\n' "$line"
 }
 
 _git_loopy_continuation_error() {

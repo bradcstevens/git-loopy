@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.7",
+  "fixture_schema_version": "1.8",
   "continuation_contract_version": "1.2",
   "record_format": 1,
   "wrapper_contract_version": "1.4",
@@ -2964,6 +2964,115 @@
         "variant_group": "terminal-selection-is-reconcile-only"
       }
     }
+  },
+  "capability_verification": {
+    "note": "Setup verifies the running distribution against one named capability profile before it writes or installs anything. Verification is a Consumer of the capability manifest, not a Continuation operation, so it adds no command to the contract's namespace. The distribution running setup is the distribution being verified, which is how the selection is made without committing a host-specific executable path or a family-member choice.",
+    "profiles": {
+      "foundation": {
+        "requirements": [
+          "contract-version",
+          "record-format",
+          "tracker-adapter",
+          "native-operations",
+          "mode-default-off"
+        ],
+        "continuation_contract_version": "1.2",
+        "record_format": 1,
+        "tracker_adapter": "github",
+        "tracker_operations": [
+          "publish",
+          "reconcile",
+          "record-dispatch-result",
+          "repair-index"
+        ],
+        "native_operations": [
+          "capabilities",
+          "publish",
+          "reconcile",
+          "record-dispatch-result",
+          "repair-index"
+        ],
+        "mode_default": "off"
+      }
+    },
+    "verdicts": {
+      "python": {
+        "profile": "foundation",
+        "satisfied": true,
+        "unsatisfied_requirements": [],
+        "unsupported_optional_capabilities": [
+          "concurrent_dispatch"
+        ]
+      },
+      "shell": {
+        "profile": "foundation",
+        "satisfied": true,
+        "unsatisfied_requirements": [],
+        "unsupported_optional_capabilities": [
+          "concurrent_dispatch",
+          "prospective_projection",
+          "terminal_rendering"
+        ]
+      },
+      "powershell": {
+        "profile": "foundation",
+        "satisfied": true,
+        "unsatisfied_requirements": [],
+        "unsupported_optional_capabilities": [
+          "concurrent_dispatch"
+        ]
+      }
+    },
+    "refusals": [
+      {
+        "id": "a-manifest-that-does-not-accept-the-contract-version",
+        "remove": [
+          "continuation_contract_versions"
+        ],
+        "unsatisfied_requirements": [
+          "contract-version"
+        ]
+      },
+      {
+        "id": "a-manifest-that-does-not-accept-the-record-format",
+        "remove": [
+          "record_formats"
+        ],
+        "unsatisfied_requirements": [
+          "record-format"
+        ]
+      },
+      {
+        "id": "a-manifest-without-the-github-adapter",
+        "remove": [
+          "tracker_adapters",
+          "github"
+        ],
+        "unsatisfied_requirements": [
+          "tracker-adapter"
+        ]
+      },
+      {
+        "id": "a-manifest-missing-one-native-operation",
+        "remove": [
+          "operations",
+          "repair-index"
+        ],
+        "unsatisfied_requirements": [
+          "native-operations"
+        ]
+      },
+      {
+        "id": "a-manifest-with-no-default-mode",
+        "remove": [
+          "continuation_modes",
+          "default"
+        ],
+        "unsatisfied_requirements": [
+          "mode-default-off"
+        ]
+      }
+    ]
   },
   "scenarios": [
     {

@@ -1,6 +1,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# The manifest carries this clone's Release version, so a Consumer that imports
+# this module alone — setup verification, which is not an Orchestrator Run —
+# resolves it through the same single authority the Orchestrator uses.
+if (-not (Get-Command Get-GitLoopyReleaseVersion -ErrorAction SilentlyContinue)) {
+    Import-Module (Join-Path $PSScriptRoot "GitLoopy.Release.psm1")
+}
+
 class GitLoopyContinuationRejection : System.Exception {
     GitLoopyContinuationRejection([string]$Message) : base($Message) {}
 }
@@ -368,6 +375,232 @@ $Script:CapabilityManifest = [ordered]@{
         report = $false
         "execute-frontier" = $false
     }
+}
+
+# --- Setup verification (#257) ----------------------------------------------
+#
+# Verification is a *Consumer* of the capability manifest, not a Continuation
+# operation: contract §1 scopes the contract to Continuation records and their
+# derivation, and §4 says the manifest "describes capability only". So the profile
+# and its evaluator live beside the manifest they judge, and the native command
+# namespace is unchanged.
+#
+# The distribution running this code is the distribution being verified. Nothing
+# resolves an entrypoint and nothing names a family member, which is how setup
+# records the operator's selection without committing a host-specific executable
+# path or a family-member choice.
+
+# The one named requirement set this distribution is judged against. `report` and
+# `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
+# profile nobody implements would let a pass be read as readiness for a mode no
+# distribution supports.
+$Script:ContinuationProfiles = [ordered]@{
+    foundation = [ordered]@{
+        requirements = @(
+            "contract-version"
+            "record-format"
+            "tracker-adapter"
+            "native-operations"
+            "mode-default-off"
+        )
+        continuation_contract_version = $Script:ContinuationContractVersion
+        record_format = $Script:RecordFormat
+        tracker_adapter = "github"
+        tracker_operations = @(
+            "publish", "reconcile", "record-dispatch-result", "repair-index"
+        )
+        native_operations = @(
+            "capabilities", "publish", "reconcile", "record-dispatch-result",
+            "repair-index"
+        )
+        mode_default = "off"
+    }
+}
+
+function Get-GitLoopyCapabilityManifest {
+    <#
+    .SYNOPSIS
+        The manifest this distribution advertises, including its Release version.
+    .DESCRIPTION
+        One seam for both readers: the `capabilities` operation and setup
+        verification. A second construction site is a second manifest, and the
+        whole point of verifying is that the answer is about what this
+        distribution really advertises.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $Manifest = [ordered]@{
+        release_version = Get-GitLoopyReleaseVersion
+    }
+    foreach ($Name in $Script:CapabilityManifest.Keys) {
+        $Manifest[$Name] = $Script:CapabilityManifest[$Name]
+    }
+    return $Manifest
+}
+
+function Get-GitLoopyContinuationProfile {
+    <#
+    .SYNOPSIS
+        One named Continuation capability requirement set.
+    #>
+    [CmdletBinding()]
+    param([string]$Name = "foundation")
+
+    if (-not $Script:ContinuationProfiles.Contains($Name)) {
+        throw "unknown Continuation capability profile $Name"
+    }
+    return $Script:ContinuationProfiles[$Name]
+}
+
+function Get-GitLoopyContinuationVerification {
+    <#
+    .SYNOPSIS
+        Judge one advertised capability manifest against one named profile.
+    .DESCRIPTION
+        Unsatisfied requirements come out in the profile's own declaration order,
+        and unsupported optional capabilities are sorted: the three family
+        manifests declare `optional_capabilities` in three different orders, so an
+        unsorted answer would differ between members advertising exactly the same
+        capabilities.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Manifest,
+        [string]$Name = "foundation"
+    )
+
+    $ProfileSpec = Get-GitLoopyContinuationProfile -Name $Name
+    $Unsatisfied = [Collections.Generic.List[string]]::new()
+    foreach ($Requirement in @($ProfileSpec["requirements"])) {
+        if (-not (Test-GitLoopyCapabilityRequirement `
+                    -Manifest $Manifest -ProfileSpec $ProfileSpec -Requirement $Requirement)) {
+            $Unsatisfied.Add([string]$Requirement)
+        }
+    }
+
+    $Unsupported = [Collections.Generic.List[string]]::new()
+    if ($Manifest.Contains("optional_capabilities") -and
+        $Manifest["optional_capabilities"] -is [Collections.IDictionary]) {
+        foreach ($Entry in $Manifest["optional_capabilities"].GetEnumerator()) {
+            if ($Entry.Value -ne $true) {
+                $Unsupported.Add([string]$Entry.Key)
+            }
+        }
+    }
+
+    $ReleaseVersion = ""
+    if ($Manifest.Contains("release_version") -and
+        $Manifest["release_version"] -is [string]) {
+        $ReleaseVersion = [string]$Manifest["release_version"]
+    }
+
+    return [ordered]@{
+        profile = $Name
+        release_version = $ReleaseVersion
+        satisfied = ($Unsatisfied.Count -eq 0)
+        unsatisfied_requirements = @($Unsatisfied)
+        unsupported_optional_capabilities = @(
+            $Unsupported | Sort-Object -CaseSensitive
+        )
+    }
+}
+
+function Test-GitLoopyCapabilityRequirement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Manifest,
+        [Parameter(Mandatory)][Collections.IDictionary]$ProfileSpec,
+        [Parameter(Mandatory)][string]$Requirement
+    )
+
+    switch ($Requirement) {
+        "contract-version" {
+            return @(Get-GitLoopyManifestValue $Manifest "continuation_contract_versions") -contains
+                $ProfileSpec["continuation_contract_version"]
+        }
+        "record-format" {
+            return @(Get-GitLoopyManifestValue $Manifest "record_formats") -contains
+                $ProfileSpec["record_format"]
+        }
+        "tracker-adapter" {
+            $Adapters = Get-GitLoopyManifestValue $Manifest "tracker_adapters"
+            if ($Adapters -isnot [Collections.IDictionary]) { return $false }
+            $Adapter = Get-GitLoopyManifestValue $Adapters ([string]$ProfileSpec["tracker_adapter"])
+            if ($Adapter -isnot [Collections.IDictionary]) { return $false }
+            $Advertised = @(Get-GitLoopyManifestValue $Adapter "operations")
+            foreach ($Operation in @($ProfileSpec["tracker_operations"])) {
+                if ($Advertised -notcontains $Operation) { return $false }
+            }
+            return $true
+        }
+        "native-operations" {
+            $Operations = Get-GitLoopyManifestValue $Manifest "operations"
+            if ($Operations -isnot [Collections.IDictionary]) { return $false }
+            foreach ($Operation in @($ProfileSpec["native_operations"])) {
+                if ((Get-GitLoopyManifestValue $Operations ([string]$Operation)) -ne $true) {
+                    return $false
+                }
+            }
+            return $true
+        }
+        "mode-default-off" {
+            $Modes = Get-GitLoopyManifestValue $Manifest "continuation_modes"
+            if ($Modes -isnot [Collections.IDictionary]) { return $false }
+            $Default = [string]$ProfileSpec["mode_default"]
+            return ((Get-GitLoopyManifestValue $Modes "default") -ceq $Default) -and
+                ((Get-GitLoopyManifestValue $Modes $Default) -eq $true)
+        }
+        default { return $false }
+    }
+}
+
+function Get-GitLoopyManifestValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)][Collections.IDictionary]$Container,
+        [Parameter(Mandatory, Position = 1)][string]$Key
+    )
+
+    if (-not $Container.Contains($Key)) { return $null }
+    return $Container[$Key]
+}
+
+function Test-GitLoopyDistributionCapabilities {
+    <#
+    .SYNOPSIS
+        Verify the running distribution and render one operator-facing line.
+    .DESCRIPTION
+        Returns `$false` when the profile is unsatisfied, so a setup surface can
+        fail closed before it writes or installs anything.
+    #>
+    [CmdletBinding()]
+    param([string]$Name = "foundation")
+
+    $Verdict = Get-GitLoopyContinuationVerification `
+        -Manifest (Get-GitLoopyCapabilityManifest) -Name $Name
+
+    if (-not $Verdict["satisfied"]) {
+        [Console]::Error.WriteLine(
+            "git-loopy: this distribution does not satisfy the $Name " +
+            "Continuation capability profile " +
+            "($(@($Verdict['unsatisfied_requirements']) -join ', ')).")
+        return $false
+    }
+
+    $ReleaseVersion = [string]$Verdict["release_version"]
+    if ([string]::IsNullOrEmpty($ReleaseVersion)) {
+        $ReleaseVersion = "unknown"
+    }
+    $Line = "Verified this distribution's Continuation capabilities " +
+        "($Name profile, contract $Script:ContinuationContractVersion, " +
+        "release $ReleaseVersion)"
+    $Unsupported = @($Verdict["unsupported_optional_capabilities"])
+    if ($Unsupported.Count -gt 0) {
+        $Line += "; unsupported optional capabilities: $($Unsupported -join ', ')"
+    }
+    [Console]::Out.WriteLine("$Line.")
+    return $true
 }
 
 function Get-GitLoopyContinuationUsage {
@@ -6837,12 +7070,7 @@ function Invoke-GitLoopyContinuationMain {
             [Console]::Error.WriteLine((Get-GitLoopyContinuationUsage))
             return 2
         }
-        $Capabilities = [ordered]@{
-            release_version = Get-GitLoopyReleaseVersion
-        }
-        foreach ($Name in $Script:CapabilityManifest.Keys) {
-            $Capabilities[$Name] = $Script:CapabilityManifest[$Name]
-        }
+        $Capabilities = Get-GitLoopyCapabilityManifest
         Write-GitLoopyContinuationJson ([ordered]@{
             ok = $true
             capabilities = $Capabilities
@@ -6956,5 +7184,9 @@ function Invoke-GitLoopyContinuationMain {
 
 Export-ModuleMember -Function @(
     "Get-GitLoopyContinuationUsage",
-    "Invoke-GitLoopyContinuationMain"
+    "Invoke-GitLoopyContinuationMain",
+    "Get-GitLoopyCapabilityManifest",
+    "Get-GitLoopyContinuationProfile",
+    "Get-GitLoopyContinuationVerification",
+    "Test-GitLoopyDistributionCapabilities"
 )

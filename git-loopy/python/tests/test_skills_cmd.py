@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -70,6 +71,79 @@ def test_plain_picker_searches_without_losing_selection_and_locks_invalid_rows()
     rendered = "\n".join(output)
     assert "Required" in rendered
     assert "not git-tracked" in rendered
+
+
+def _refusal_model(enabled: tuple[str, ...]) -> SkillSelectionModel:
+    return SkillSelectionModel(
+        rows=(
+            SkillSelectionRow(name="alpha", source="packaged", required=True),
+            SkillSelectionRow(
+                name="project-local",
+                source="project",
+                blocked_reason="not git-tracked",
+            ),
+        ),
+        enabled=enabled,
+    )
+
+
+@pytest.mark.parametrize(
+    ("enabled", "answers", "expected"),
+    (
+        (("alpha", "project-local"), ("done", "q"), "Cannot save"),
+        (("alpha",), ("2", "q"), "Cannot toggle"),
+        (("alpha",), ("99", "q"), "Please enter a number between 1 and 2"),
+        (("alpha",), ("done", "n", "q"), "Not saved"),
+    ),
+)
+def test_plain_picker_keeps_its_refusal_next_to_the_prompt(
+    enabled: tuple[str, ...], answers: tuple[str, ...], expected: str
+) -> None:
+    """A refused round must still be readable after the repaint it triggers.
+
+    The plain picker redraws the whole catalog every round, so a reason printed
+    *before* that redraw scrolls off the moment the catalog is longer than the
+    terminal — the operator sees a fresh list, reads it as "nothing happened",
+    and has no way to learn which Skill is holding the save. Carrying the reason
+    into the next round draws it below the rows, in the only position a plain
+    terminal can dock: nearest the prompt. That is the counterpart of the
+    full-screen picker's status bar, and the only way ``docs/skills-setup.md``'s
+    "refused in place, with the reason shown" is true of both renderings.
+
+    The final case is the same failure worn differently: declining the save
+    confirmation repaints too, so "no" must also explain itself.
+    """
+    pending = iter(answers)
+    transcript: list[tuple[str, str]] = []
+
+    def _input(prompt: str) -> str:
+        transcript.append(("prompt", prompt))
+        return next(pending)
+
+    result = run_plain_skill_picker(
+        _refusal_model(enabled),
+        input_fn=_input,
+        output_fn=lambda line: transcript.append(("output", line)),
+    )
+
+    assert result is None
+    prompts = [index for index, (kind, _) in enumerate(transcript) if kind == "prompt"]
+    final_round = [
+        line
+        for kind, line in transcript[prompts[-2] + 1 : prompts[-1]]
+        if kind == "output"
+    ]
+    last_row = max(
+        index
+        for index, line in enumerate(final_round)
+        if re.match(r"^ +\d+\) ", line) is not None
+    )
+    below_the_rows = final_round[last_row + 1 :]
+    assert any(expected in line for line in below_the_rows), (
+        f"refusal not drawn below the repainted rows: {below_the_rows!r}"
+    )
+    reasons = [line for kind, line in transcript if kind == "output" and expected in line]
+    assert len(reasons) == 1, "a refusal is shown for its own round only"
 
 
 def test_picker_selection_takes_textual_only_with_the_extra_and_a_terminal() -> None:

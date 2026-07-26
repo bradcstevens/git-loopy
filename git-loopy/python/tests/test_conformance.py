@@ -15,6 +15,7 @@ from rich.console import Console
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
+from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
@@ -584,7 +585,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.7"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.8"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -613,6 +614,112 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
         for key, value in expected_capabilities.items()
         if key != "release_version"
     } == continuation_module.CAPABILITY_MANIFEST
+
+
+def test_continuation_capability_verification_pins_the_foundation_profile() -> None:
+    """Setup's requirement set is one shared declaration, not three private opinions.
+
+    Every family member verifies *itself* at setup, so nothing at runtime would ever
+    notice if the three drifted into judging different requirements under the same
+    profile name. The fixture is the one place the three can be compared, so the
+    profile lands there as data and each family pins its own declaration against it.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert tuple(verification["profiles"]) == tuple(
+        verification_module.CONTINUATION_PROFILES
+    )
+
+    fixture_profile = verification["profiles"][verification_module.FOUNDATION_PROFILE]
+    declared = verification_module.CONTINUATION_PROFILES[
+        verification_module.FOUNDATION_PROFILE
+    ]
+    assert tuple(fixture_profile["requirements"]) == declared.requirements
+    assert (
+        fixture_profile["continuation_contract_version"]
+        == declared.continuation_contract_version
+        == continuation_module.CONTINUATION_CONTRACT_VERSION
+    )
+    assert (
+        fixture_profile["record_format"]
+        == declared.record_format
+        == continuation_module.RECORD_FORMAT
+    )
+    assert fixture_profile["tracker_adapter"] == declared.tracker_adapter
+    assert tuple(fixture_profile["tracker_operations"]) == declared.tracker_operations
+    assert tuple(fixture_profile["native_operations"]) == declared.native_operations
+    assert fixture_profile["mode_default"] == declared.mode_default
+
+
+def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
+    """Copy ``manifest`` with the one key at ``path`` removed.
+
+    A refusal removes exactly one advertised key, so the requirement it defeats is
+    identified rather than merely implicated. The path is at most two deep, which is
+    all any family needs to express in jq or PowerShell.
+    """
+    reduced = json.loads(json.dumps(manifest))
+    target = reduced
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+    return reduced
+
+
+def test_continuation_capability_verification_pins_this_distribution_verdict() -> None:
+    """Setup's answer about this distribution is pinned against what it advertises.
+
+    The manifest comes from the scenario that executes the real native entrypoint, so
+    the chain runs real CLI ⟷ advertised manifest ⟷ setup verdict with no
+    hand-asserted link. A distribution that stops advertising an optional capability
+    changes its own verdict here rather than changing what setup silently tells an
+    operator.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert set(verification["verdicts"]) == set(
+        _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+    )
+
+    expected = verification["verdicts"]["python"]
+    verdict = verification_module.evaluate_continuation_capabilities(
+        _advertised_manifests()["python"], profile=expected["profile"]
+    )
+    assert verdict.profile == expected["profile"]
+    assert verdict.satisfied is expected["satisfied"]
+    assert list(verdict.unsatisfied_requirements) == expected["unsatisfied_requirements"]
+    assert (
+        list(verdict.unsupported_optional_capabilities)
+        == expected["unsupported_optional_capabilities"]
+    )
+
+
+def test_continuation_capability_verification_refuses_each_broken_manifest() -> None:
+    """Every requirement has a manifest that defeats exactly it, and only it.
+
+    A verifier that answered "satisfied" unconditionally would pass the verdict pin
+    above, so the profile is only a gate if each of its requirements can be shown to
+    fail on its own. The refusals are shared data for the same reason the profile is:
+    all three families run the same five broken manifests through their own verifier.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    manifest = _advertised_manifests()["python"]
+    refusals = verification["refusals"]
+
+    assert {
+        requirement
+        for refusal in refusals
+        for requirement in refusal["unsatisfied_requirements"]
+    } == set(verification_module.FOUNDATION_REQUIREMENT_IDS)
+
+    for refusal in refusals:
+        verdict = verification_module.evaluate_continuation_capabilities(
+            _manifest_without(manifest, refusal["remove"]),
+            profile=verification_module.FOUNDATION_PROFILE,
+        )
+        assert verdict.satisfied is False, refusal["id"]
+        assert (
+            list(verdict.unsatisfied_requirements)
+            == refusal["unsatisfied_requirements"]
+        ), refusal["id"]
 
 
 def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:

@@ -7,6 +7,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+Import-Module (Join-Path $PortDir "GitLoopy.Continuation.psm1") -Force
 $ScriptedGitHubPath = Join-Path $PSScriptRoot "ScriptedGitHub.ps1"
 $FixturePath = Join-Path (
     Split-Path -Parent $PortDir
@@ -1527,8 +1528,110 @@ function Test-CapabilityCoverageGate {
     }
 }
 
+function Test-CapabilityVerificationGate {
+    # Setup verification (#257). The distribution running setup is the distribution
+    # being verified, so the profile it judges against is the only part any other
+    # family can see. It lands in the fixture as data and is pinned here against this
+    # distribution's own declaration: three members that quietly judged different
+    # requirements under one profile name would otherwise never disagree anywhere.
+    $Verification = $Fixture["capability_verification"]
+    $FixtureProfile = $Verification["profiles"]["foundation"]
+    $Declared = Get-GitLoopyContinuationProfile -Name "foundation"
+
+    Assert-True (
+        (@($FixtureProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["requirements"]) -join ",")
+    ) "the PowerShell foundation profile requires exactly what the fixture pins"
+    Assert-True (
+        [string]$FixtureProfile["continuation_contract_version"] -ceq
+            [string]$Declared["continuation_contract_version"]
+    ) "the PowerShell foundation profile pins the fixture's contract version"
+    Assert-True (
+        [int]$FixtureProfile["record_format"] -eq [int]$Declared["record_format"]
+    ) "the PowerShell foundation profile pins the fixture's record format"
+    Assert-True (
+        [string]$FixtureProfile["tracker_adapter"] -ceq
+            [string]$Declared["tracker_adapter"]
+    ) "the PowerShell foundation profile pins the fixture's tracker Adapter"
+    Assert-True (
+        (@($FixtureProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["tracker_operations"]) -join ",")
+    ) "the PowerShell foundation profile pins the fixture's tracker operations"
+    Assert-True (
+        (@($FixtureProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["native_operations"]) -join ",")
+    ) "the PowerShell foundation profile pins the fixture's native operations"
+    Assert-True (
+        [string]$FixtureProfile["mode_default"] -ceq [string]$Declared["mode_default"]
+    ) "the PowerShell foundation profile pins the fixture's default mode"
+
+    # The verdict is taken on the manifest this distribution really advertises, so
+    # the chain runs real manifest -> setup verdict with no hand-asserted link.
+    $Manifest = Get-GitLoopyCapabilityManifest
+    $Expected = $Verification["verdicts"]["powershell"]
+    $Verdict = Get-GitLoopyContinuationVerification `
+        -Manifest $Manifest -Name "foundation"
+
+    Assert-True (
+        [string]$Verdict["profile"] -ceq [string]$Expected["profile"]
+    ) "the PowerShell verdict names the profile the fixture pins"
+    Assert-True (
+        [bool]$Verdict["satisfied"] -eq [bool]$Expected["satisfied"]
+    ) "the PowerShell verdict on its own manifest matches the fixture"
+    Assert-True (
+        (@($Verdict["unsatisfied_requirements"]) -join ",") -ceq
+            (@($Expected["unsatisfied_requirements"] | ForEach-Object { [string]$_ }) -join ",")
+    ) "the PowerShell verdict leaves nothing unsatisfied the fixture does not pin"
+    Assert-True (
+        (@($Verdict["unsupported_optional_capabilities"]) -join ",") -ceq
+            (@($Expected["unsupported_optional_capabilities"] |
+                ForEach-Object { [string]$_ }) -join ",")
+    ) "the PowerShell verdict names the optional capabilities the fixture pins"
+
+    # A verifier that answered "satisfied" unconditionally would pass both checks
+    # above, so every requirement is shown to fail on its own broken manifest.
+    $Refusals = @($Verification["refusals"])
+    Assert-True ($Refusals.Count -gt 0) (
+        "the fixture registers at least one capability-verification refusal"
+    )
+    foreach ($Refusal in $Refusals) {
+        $Id = [string]$Refusal["id"]
+        $Broken = Copy-GitLoopyDeepValue $Manifest
+        $Path = @($Refusal["remove"] | ForEach-Object { [string]$_ })
+        if ($Path.Count -eq 1) {
+            $Broken.Remove($Path[0])
+        }
+        else {
+            $Broken[$Path[0]].Remove($Path[1])
+        }
+
+        $Refused = Get-GitLoopyContinuationVerification `
+            -Manifest $Broken -Name "foundation"
+        Assert-True (-not [bool]$Refused["satisfied"]) "refusal $Id is refused"
+        Assert-True (
+            (@($Refused["unsatisfied_requirements"]) -join ",") -ceq
+                (@($Refusal["unsatisfied_requirements"] |
+                    ForEach-Object { [string]$_ }) -join ",")
+        ) "refusal $Id names exactly the requirement the fixture pins"
+    }
+
+    # An unknown profile is refused rather than silently widened: `report` and
+    # `execute-frontier` are #263/#264 vocabulary, and answering them would let a
+    # pass be read as readiness for a mode no distribution supports.
+    $Widened = $false
+    try {
+        Get-GitLoopyContinuationProfile -Name "report" | Out-Null
+        $Widened = $true
+    }
+    catch {
+        $Widened = $false
+    }
+    Assert-True (-not $Widened) "an unknown capability profile is refused"
+}
+
 try {
     Test-CapabilityCoverageGate
+    Test-CapabilityVerificationGate
     Test-EndToEndCoverageGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(

@@ -264,7 +264,9 @@ Two rules are enforced *in the picker*, not at save time:
   off, with the reason, so you can see exactly what needs committing.
 
 A save that would not validate is **refused and names the offending Skill**
-rather than being silently corrected.
+rather than being silently corrected, and the refusal is drawn next to the
+prompt — a status bar in the full-screen picker, the line above the prompt in
+the plain one — so a catalog longer than the terminal cannot scroll it away.
 
 ### `git-loopy skills sync` — re-import the Skill baseline
 
