@@ -52,6 +52,20 @@ $Discriminator = Get-Content `
 foreach ($Case in $Discriminator["cases"]) {
     $Actual = Test-GitLoopyAfkReady -Body $Case["body"]
     Assert-Equal $Case["eligible"] $Actual "discriminator fixture: $($Case["id"])"
+    # Wrapper contract §3.1 — the reason is drawn through the same production
+    # seam as membership, so the two cannot drift.
+    $ActualReason = Get-GitLoopyAfkReadyExclusion -Body $Case["body"]
+    Assert-Equal `
+        $Case["exclusion_reason"] `
+        $ActualReason `
+        "discriminator exclusion reason: $($Case["id"])"
+}
+foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
+    if (@($Discriminator["cases"] | Where-Object {
+            $_["exclusion_reason"] -ceq $Reason
+        }).Count -eq 0) {
+        throw "FAIL: no discriminator case covers exclusion reason $Reason"
+    }
 }
 
 $ExitCodes = Get-Content `

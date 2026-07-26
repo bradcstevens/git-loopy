@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.4 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.5 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -65,6 +65,38 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
 skipped. In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
+
+### 3.1 Pool exclusions (contract 1.5, MUST)
+
+A skipped candidate MUST be reported, not dropped silently. `ready-for-agent` is a *human*
+assertion — somebody deliberately triaged that issue — so an Orchestrator that declines it owes
+the operator the reason. An Orchestrator MUST, for every `ready-for-agent` candidate the
+discriminator rejects, report the candidate's reference and one **exclusion reason** from this
+closed vocabulary:
+
+| Reason | Meaning |
+| --- | --- |
+| `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
+| `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
+| `missing_both_sections` | Neither required heading present |
+
+The reason MUST be derived from the same discriminator pass that decides membership, so the
+reported reason and the membership decision cannot disagree. `discriminator.json` pins the
+vocabulary and the reason for every case.
+
+A candidate the source could **not read** (a failed per-issue view, an unreadable file) is NOT an
+exclusion — it was never discriminated against, and reporting it as one would send the operator to
+fix headings that are probably fine. The existing warn-and-skip path continues to cover it.
+
+Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
+`wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
+than only a debug log. An **empty eligible Pool caused entirely by exclusions** MUST read
+distinctly from a Pool that simply held no `ready-for-agent` work: the two demand opposite
+operator responses. It does **not** change the exit code — both remain the clean-exit-on-empty
+condition (§10).
+
+Reporting an exclusion MUST NOT change Pool membership, and MUST NOT cost an extra source
+round-trip: the cheap list read already carries the body the decision is made on.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -201,7 +233,14 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.run.end`, `wrapper.iteration.start`, `wrapper.iteration.end`,
 `wrapper.afk_ready.collected`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
 `wrapper.push.recorded`, `wrapper.auto_close`, `wrapper.strike`, `wrapper.pr.advanced`,
-`wrapper.ask_user.attempted`. Continuation-schema 1.1 additions:
+`wrapper.ask_user.attempted`. Contract-1.5 addition within compatibility schema 1:
+`wrapper.pool.excluded` — one per `ready-for-agent` candidate the discriminator rejected (§3.1),
+carrying `issue`, `title`, and one `reason` from the closed exclusion vocabulary, emitted in source
+order *before* the `wrapper.afk_ready.collected` it explains. That collection Event additionally
+carries `excluded`, the count of exclusions, so a replay can tell an empty tracker apart from a
+tracker whose every candidate was rejected. `wrapper.pool.excluded` is Run-scoped, never
+contribution-scoped: it names work that never became a **Lane contribution**, so it carries the
+collecting Iteration's `iter` and no contribution identity. Continuation-schema 1.1 additions:
 `wrapper.continuation.reconciled`, `wrapper.continuation_dispatch.started`,
 `wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
 observations only and never carry authoritative fragments, secrets, or runnable Instructions.

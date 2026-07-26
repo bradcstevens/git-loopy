@@ -147,6 +147,7 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
+    PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
 )
@@ -563,6 +564,25 @@ class _Loop:
         """
         return self._emitter.emit(event_type, iter_num=iter_num, **payload)
 
+    def _report_pool_exclusions(
+        self, collection: PoolCollection, *, iter_num: int
+    ) -> None:
+        """Emit one Event per ``ready-for-agent`` candidate the Pool dropped.
+
+        Issue #303. The AFK-ready discriminator has always made this decision;
+        it just never said so, and a human who had deliberately triaged an
+        issue had no way to learn the runner was ignoring it. The Event is the
+        carrier rather than a log line so the Dashboard and replay see it too.
+        """
+        for exclusion in collection.exclusions:
+            self._emit(
+                events_module.WRAPPER_POOL_EXCLUDED,
+                iter_num=iter_num,
+                issue=exclusion.ref,
+                title=exclusion.title,
+                reason=exclusion.reason,
+            )
+
     def _emit_skill_policy_resolved(self) -> None:
         if self._skill_preflight.migration_warning:
             print(
@@ -685,7 +705,8 @@ class _Loop:
 
             # 2) Collect AFK-ready pool via the source.
             with telemetry.span("git_loopy.collect_issues"):
-                pool = self._source.collect_afk_ready()
+                collection = self._source.collect_pool()
+            pool = list(collection.items)
             pool_refs: list[int | str] = [item.ref for item in pool]
             # Late-bind the iteration span's `issue` / `issues` attributes
             # now that we know the pool. `set_attribute` is no-op-safe so
@@ -693,10 +714,15 @@ class _Loop:
             if pool_refs:
                 iteration_span.set_attribute("issue", pool_refs[0])
                 iteration_span.set_attribute("issues", pool_refs)
+            # Report what the discriminator dropped BEFORE the collection it
+            # explains (#303), so a replay reads the exclusions and then the
+            # Pool they were taken out of.
+            self._report_pool_exclusions(collection, iter_num=iter_num)
             self._emit(
                 events_module.WRAPPER_AFK_READY_COLLECTED,
                 iter_num=iter_num,
                 issues=pool_refs,
+                excluded=len(collection.exclusions),
             )
             if not pool:
                 # Close the iteration cleanly so the snapshot lifecycle is
@@ -1609,9 +1635,14 @@ class _ParallelLoop:
         A source failure degrades to an empty pool (a genuine serial
         Iteration re-collects the pool itself and owns the real error path),
         so a transient collection error never crashes the driver loop.
+
+        Deliberately silent about **Pool** exclusions (#303): this is a peek,
+        and the serial Iteration this peek may provoke re-collects and reports
+        them itself. Reporting here would emit the same exclusion twice for one
+        candidate.
         """
         try:
-            return list(self._source.collect_afk_ready())
+            return list(self._source.collect_pool().items)
         except Exception as exc:
             self._diag.warning(
                 "parallel pool peek failed: %s: %s; treating as empty",

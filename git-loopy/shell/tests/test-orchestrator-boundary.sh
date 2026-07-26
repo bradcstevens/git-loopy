@@ -642,6 +642,24 @@ if grep -q '^issue view 42 ' "$FAKE_GH_LOG"; then
   fail "ineligible issue was enriched after the cheap discriminator pass"
 fi
 
+# Wrapper contract §3.1 — the bare planning issue a human triaged to
+# ready-for-agent leaves the Pool *named*, with the reason it failed, once per
+# Iteration and before the collection it explains. It is still never enriched.
+jq -se '
+  ([.[] | select(.type == "wrapper.pool.excluded")] | length == 2)
+  and ([.[] | select(.type == "wrapper.pool.excluded")]
+    | all(.issue == 42
+      and .title == "Bare planning issue"
+      and .reason == "missing_both_sections"))
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .excluded]
+    | all(. == 1))
+  and ([.[] | .type]
+    | (index("wrapper.pool.excluded")) < (index("wrapper.afk_ready.collected")))
+' "$temp_dir/github-cap.stdout" >/dev/null ||
+  fail "excluded ready-for-agent candidate was not reported with its reason"
+grep -q 'excluded 42 — missing both sections' "$temp_dir/github-cap.stderr" ||
+  fail "Pool exclusion did not reach the operator's own output"
+
 # The Iteration assembled the Python-reference minimum context: last-5 commits,
 # the filtered Pool block (with recent comments), and the resolved prompt body.
 cap_prompt="$(<"$FAKE_COPILOT_PROMPT")"
@@ -756,6 +774,7 @@ expected_commit_seq="$(
   jq -cn '[
     "wrapper.run.start",
     "wrapper.iteration.start",
+    "wrapper.pool.excluded",
     "wrapper.afk_ready.collected",
     "agent.output",
     "wrapper.commit.recorded",

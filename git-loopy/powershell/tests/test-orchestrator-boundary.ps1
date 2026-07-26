@@ -1210,6 +1210,41 @@ exit 97
         )
     ) "ineligible issue was enriched after the cheap discriminator pass"
 
+    # Wrapper contract §3.1 — the bare planning issue a human triaged to
+    # ready-for-agent leaves the Pool *named*, with the reason it failed, once
+    # per Iteration and before the collection it explains.
+    $CapExclusions = @(
+        $CapEvents | Where-Object { $_["type"] -ceq "wrapper.pool.excluded" }
+    )
+    Assert-Equal 2 $CapExclusions.Count "one exclusion reported per Iteration"
+    foreach ($Excluded in $CapExclusions) {
+        Assert-Equal 42 $Excluded["issue"] "exclusion names the dropped issue"
+        Assert-Equal "Bare planning issue" $Excluded["title"] "exclusion title"
+        Assert-Equal (
+            "missing_both_sections"
+        ) $Excluded["reason"] "exclusion carries the discriminator's reason"
+    }
+    foreach ($Collected in @(
+            $CapEvents |
+                Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" }
+        )) {
+        Assert-Equal 1 $Collected["excluded"] "collection counts its exclusions"
+    }
+    Assert-True (
+        [Array]::IndexOf(
+            @($CapEvents | ForEach-Object { $_["type"] }),
+            "wrapper.pool.excluded"
+        ) -lt [Array]::IndexOf(
+            @($CapEvents | ForEach-Object { $_["type"] }),
+            "wrapper.afk_ready.collected"
+        )
+    ) "the exclusion precedes the collection it explains"
+    Assert-Contains (
+        [IO.File]::ReadAllText($CapStderr)
+    ) "git-loopy: excluded 42 — missing both sections" (
+        "Pool exclusion reached the operator's own output"
+    )
+
     # The Iteration assembled the Python-reference minimum context: last-5
     # commits, the filtered Pool block (with recent comments), and the prompt.
     $CapPrompt = [IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)
@@ -1385,7 +1420,7 @@ exit 97
     Assert-Equal 0 $Status "agent-commit turn Run exit"
     $CommitsEvents = Read-Events -Path $CommitsStdout
     Assert-Equal (
-        "wrapper.run.start,wrapper.iteration.start," +
+        "wrapper.run.start,wrapper.iteration.start,wrapper.pool.excluded," +
         "wrapper.afk_ready.collected,agent.output,wrapper.commit.recorded," +
         "wrapper.commit.recorded,wrapper.issue.activated," +
         "wrapper.iteration.end,wrapper.run.end"

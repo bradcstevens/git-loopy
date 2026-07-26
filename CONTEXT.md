@@ -445,6 +445,14 @@ never authority to start a **Lane contribution**. An incomplete or failed read l
 Pool's emptiness unknown rather than empty.
 _Avoid_: batch, backlog.
 
+**Pool exclusion**:
+A `ready-for-agent` candidate the AFK-ready discriminator rejected because its body
+lacks `## What to build`, `## Acceptance criteria`, or both. A human deliberately
+triaged the issue; only a human can fix it, so every exclusion is named to the operator
+and carried as a `wrapper.pool.excluded` **Event** with its reason. A candidate the
+source could not *read* is not an exclusion — it was never discriminated against.
+_Avoid_: skipped, filtered, invalid issue.
+
 **Strike**:
 A recorded no-progress result: a serial **Iteration** made no meaningful progress, or
 a parallel **Lane contribution** terminated unpublished. A fixed number of consecutive
