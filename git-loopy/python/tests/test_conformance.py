@@ -1109,17 +1109,11 @@ _MODEL_ROSTER = _load_fixture("model-roster.json")
 def test_model_roster_fixture_matches_python_constant() -> None:
     """The canonical roster fixture is the source of truth; the Python copy can't drift.
 
-    The fixture is generated from the pinned harness and stamped with its CLI
-    version (ADR-0019, #281), so this is the direction of authority: the fixture
-    says what the harness accepts, and the in-language constant mirrors it.
-    Entries carry ``{efforts, tiers}``; only the effort half has a Python
-    consumer today (the gate), so only that half is mirrored. Effort arrays are
-    order-insensitive accepted-value sets, so they compare as frozensets (§14
-    phase-3 pin). The fixture's keys are the supported-model set.
+    Arrays are order-insensitive sets of accepted efforts, so compare as frozensets
+    (§14 phase-3 pin). The fixture's keys are the supported-model set.
     """
     roster = {
-        model: frozenset(entry["efforts"])
-        for model, entry in _MODEL_ROSTER["roster"].items()
+        model: frozenset(efforts) for model, efforts in _MODEL_ROSTER["roster"].items()
     }
     assert roster == MODEL_REASONING_EFFORTS
 

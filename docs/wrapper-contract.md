@@ -421,26 +421,13 @@ Serial per-issue routing is out of scope.
 This decision is pinned by three language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md):
 [`model-roster.json`](../git-loopy/conformance/model-roster.json) (the canonical
-`model → {accepted efforts, context tiers}` capability table — its keys are the
-supported-model set),
+`model → accepted efforts` sets — its keys are the supported-model set),
 [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (labels + config →
 resolved `(model, effort)` and whether it warns), and
 [`effort-gate.json`](../git-loopy/conformance/effort-gate.json) (model + requested effort → gated
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
 constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
-
-The roster is **generated, not transcribed** (ADR-0019). Reasoning-effort capability never reaches
-the kit from the catalogue: `models.list` discards the advertised array and reads a table hardcoded
-in the Copilot CLI bundle, so the roster is a function of the **CLI version the SDK spawns**. The
-fixture therefore records the `cli_version` it was generated against, and
-`scripts/sync_model_roster.py` regenerates it from that pinned harness. Bumping the SDK pin and
-regenerating the roster are **one change**. There is deliberately no live drift check in CI — no
-workflow here holds Copilot credentials, and a check that did would fail unrelated pull requests on
-the vendor's release schedule; the offline guard asserts the stamp matches the pinned SDK and that
-the committed bytes are generator output. Entries carry a derived `tiers` list alongside `efforts`;
-tier capability has no catalogue surface, so it is derived from the presence of a long-context price
-block — a proxy whose failure mode is to under-report. The effort half is what the gate reads today.
 
 ## 15. Native Continuation boundary (Continuation rollout, MUST)
 

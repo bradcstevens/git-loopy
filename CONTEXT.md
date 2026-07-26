@@ -681,17 +681,6 @@ does not accept is dropped so the backend chooses. Resolved once at **Pickup** a
 switched mid-session; the same pair carries the unit's follow-on work.
 _Avoid_: model override, effective model.
 
-**Model roster**:
-The per-model capability table the effort gate reads: which reasoning efforts a model
-accepts, and which context tiers it offers. It describes exactly one **harness** — the
-Copilot CLI the pinned SDK spawns, not the CLI on the operator's `PATH` — because
-reasoning-effort capability is read from a table inside that CLI's own bundle rather than
-from the vendor catalogue. It is therefore generated from that harness and stamped with
-its CLI version, never transcribed; a roster that names no version cannot be told apart
-from a wrong one (ADR-0019). A model listed with no efforts is effort-**incapable**, which
-the harness enforces by refusing to create the session at all.
-_Avoid_: model list, supported models (that is the roster's key set), catalog.
-
 ### The runner family
 
 **Runner family**:

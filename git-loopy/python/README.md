@@ -228,7 +228,7 @@ Copilot, network access, or the TUI.
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `GIT_LOOPY_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
-| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-haiku-4.5`, `gemini-3.6-flash`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0008): work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch (a **Wave** of **Lanes**), falling back to a serial Iteration when fewer than two eligible issues exist. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
@@ -401,7 +401,9 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `auto`                        | _(none - effort forced unset)_           |
 | `claude-sonnet-5`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-sonnet-4.6`           | `low` `medium` `high` `max`              |
+| `claude-sonnet-4.5`           | _(none - effort forced unset)_           |
 | `claude-haiku-4.5`            | _(none - effort forced unset)_           |
+| `claude-opus-5`               | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.8` (default)   | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
@@ -411,30 +413,17 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.4-mini`                | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5-mini`                  | `low` `medium` `high`                    |
 | `gemini-3.1-pro-preview`      | `low` `medium` `high`                    |
-| `gemini-3.5-flash`            | `low` `medium` `high`                    |
-| `claude-opus-5`               | `low` `medium` `high` `xhigh` `max`      |
-| `gemini-3.6-flash`            | _(none - effort forced unset)_           |
+| `gemini-3.6-flash`            | `minimal` `low` `medium` `high`          |
+| `gemini-3.5-flash`            | `minimal` `low` `medium` `high`          |
 | `gpt-5.6-luna`                | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This table mirrors `conformance/model-roster.json`, which is **generated** from
-the model catalog the pinned Copilot CLI reports and stamped with that CLI's
-version (`1.0.67`, the binary `github-copilot-sdk` spawns — not the one on your
-`PATH`). Reasoning-effort capability is read from a table hardcoded in the CLI
-bundle, so it is a function of CLI version: bumping the SDK pin and regenerating
-the roster are one change (ADR-0019). Regenerate with:
-
-```bash
-uv run --project git-loopy/python python \
-    git-loopy/python/scripts/sync_model_roster.py
-```
-
-The retired `claude-sonnet-4.5` and `claude-opus-4.5` ids and the renamed
-`mai-code-1-flash-internal` id are not official choices; persisted legacy ids
-still use the unknown-model warn-and-pass-through path so the Copilot CLI
-remains the final authority.
+This snapshot follows the current Copilot catalog. The retired
+`claude-opus-4.5` id and the renamed `mai-code-1-flash-internal` id are not
+official choices; persisted legacy ids still use the unknown-model
+warn-and-pass-through path so the Copilot CLI remains the final authority.
 
 A subset of these carry list prices in the packaged `pricing.toml`
 (`claude-opus-4.8`, `claude-opus-4.7`, `claude-sonnet-4.6`, `gpt-5.4`,

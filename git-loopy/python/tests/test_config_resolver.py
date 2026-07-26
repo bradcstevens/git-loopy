@@ -428,12 +428,12 @@ def test_config_model_overridden_by_env() -> None:
 
 
 def test_capability_gate_forces_none_for_incapable_model(capsys) -> None:
-    # claude-haiku-4.5 supports no reasoning effort; an explicitly requested
+    # claude-sonnet-4.5 supports no reasoning effort; an explicitly requested
     # effort is gated to None (the CLI hard-rejects it otherwise).
     run = _resolve(
-        project={"model": "claude-haiku-4.5", "reasoning_effort": "high"}
+        project={"model": "claude-sonnet-4.5", "reasoning_effort": "high"}
     ).run
-    assert run.model == "claude-haiku-4.5"
+    assert run.model == "claude-sonnet-4.5"
     assert run.reasoning_effort is None
 
 
@@ -512,10 +512,10 @@ def test_reasoning_effort_flag_overrides_env_and_config() -> None:
 def test_injected_warn_receives_capability_gate_message() -> None:
     messages: list[str] = []
     _resolve(
-        project={"model": "claude-haiku-4.5", "reasoning_effort": "high"},
+        project={"model": "claude-sonnet-4.5", "reasoning_effort": "high"},
         warn=messages.append,
     )
-    assert any("claude-haiku-4.5" in m for m in messages)
+    assert any("claude-sonnet-4.5" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
@@ -694,19 +694,9 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     green while the roster drifts. Both ids shipped in the Copilot catalog
     *after* the roster was last synced, so a config naming them warned on every
     startup even though the run itself worked.
-
-    ``gemini-3.6-flash`` is effort-**incapable** on the pinned harness (#281), so
-    it also covers the other half: being on the roster is about the model id,
-    not about having an effort to route with. The assertion is therefore on the
-    off-roster advisory itself rather than on any mention of the model — the
-    capability gate legitimately names an incapable model when an effort is
-    routed to it.
     """
     assert model in SUPPORTED_MODELS
-    effort = next(
-        (e for e in REASONING_EFFORT_ORDER if e in MODEL_REASONING_EFFORTS[model]),
-        "high",
-    )
+    effort = next(e for e in REASONING_EFFORT_ORDER if e in MODEL_REASONING_EFFORTS[model])
     warnings: list[str] = []
     _resolve(
         global_={
@@ -715,5 +705,5 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
         },
         warn=warnings.append,
     )
-    assert not any("not in the kit's supported set" in w for w in warnings)
+    assert not any(model in w for w in warnings)
 

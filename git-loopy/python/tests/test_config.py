@@ -172,36 +172,42 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
     assert cfg.routing["planning"] == ("claude-opus-4.8", "max")
 
 
-def test_supported_models_matrix_matches_the_generated_roster() -> None:
-    """The static fallback mirrors the **stamped** roster, read not restated (#281).
-
-    This assertion used to restate the matrix by hand, which is precisely the
-    bug class ADR-0019 names: every roster mirror in the suite was
-    hand-maintained, so they drifted together and stayed green. It now reads
-    ``conformance/model-roster.json`` — generated from the pinned harness and
-    stamped with its CLI version — so a regeneration that nobody mirrored into
-    :data:`~git_loopy.config.MODEL_REASONING_EFFORTS` fails here.
-
-    Order is asserted because it is user-visible: ``git-loopy init``'s offline
-    fallback lists these rows in dict order, and the roster's order is the
-    catalog's own, so the offline list reads like the live one.
-    """
-    import json
-    from pathlib import Path
-
+def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
+    """The static fallback exactly mirrors the current Copilot catalog."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
         SUPPORTED_MODELS,
     )
 
-    roster = json.loads(
-        (Path(__file__).parents[2] / "conformance" / "model-roster.json").read_text(
-            encoding="utf-8"
-        )
-    )["roster"]
     expected = {
-        model: frozenset(entry["efforts"]) for model, entry in roster.items()
+        "auto": frozenset(),
+        "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
+        "claude-sonnet-4.5": frozenset(),
+        "claude-haiku-4.5": frozenset(),
+        "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+        "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
+        "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
+        "gpt-5-mini": frozenset({"low", "medium", "high"}),
+        "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
+        "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
+        "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
+        "gpt-5.6-luna": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "gpt-5.6-sol": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "gpt-5.6-terra": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }
 
     assert tuple(MODEL_REASONING_EFFORTS) == tuple(expected)
