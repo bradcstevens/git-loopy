@@ -708,7 +708,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     routing_recommended = routing_sub.add_parser(
         "use-recommended",
-        help="Seed the recommended six-type routing core into a scope.",
+        help="Seed the recommended task-type routing core into a scope.",
     )
     _add_scope_flags(routing_recommended, suppress_default=True)
     return parser
