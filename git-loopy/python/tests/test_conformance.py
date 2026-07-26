@@ -758,6 +758,71 @@ def test_continuation_family_local_variants_cover_every_advertising_distribution
         assert len(set(codes)) == 1, (group, codes)
 
 
+# The ten end-to-end scenarios PRD #237 locks for the foundation gate. They are
+# written out here, rather than read from the fixture, because the fixture is the
+# thing under test: a locked scenario that quietly leaves the registry would
+# otherwise take its own gate with it.
+_LOCKED_END_TO_END_SCENARIOS = (
+    "planning-publication-and-aggregation",
+    "read-only-human-refresh",
+    "concurrent-equivalent-and-conflicting-publication",
+    "blocked-to-ready-and-ready-to-blocked",
+    "completion-and-retirement-receipts",
+    "positive-afk-classification-and-dispatch",
+    "explicit-human-and-attention-stops",
+    "terminal-completion",
+    "optional-handoff-context",
+    "durable-transition-then-publication-failure",
+)
+
+_NATIVE_CONTINUATION_OPERATIONS = frozenset(
+    {"publish", "reconcile", "record-dispatch-result"}
+)
+
+
+def test_continuation_end_to_end_coverage_names_every_locked_scenario() -> None:
+    """A locked scenario nobody drives is the gap this gate exists to catch.
+
+    The foundation gate is a claim about ten end-to-end stories, not about a count
+    of fixtures. Naming them makes an uncovered story a failure here rather than an
+    absence a reader has to notice, and requiring each story's workflows to cover
+    the whole family between them keeps a capability-gated story honest: a
+    distribution that cannot render the human projection still has to answer the
+    same question, by failing closed.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    workflows = {
+        workflow["id"]: workflow for workflow in _CONTINUATION_SCENARIOS["workflows"]
+    }
+    scoped = _CONTINUATION_SCENARIOS["capability_coverage"]["scoped_records"]
+    distributions = set(_CONTINUATION_SCENARIOS["capability_coverage"]["distributions"])
+
+    assert tuple(coverage["locked_scenarios"]) == _LOCKED_END_TO_END_SCENARIOS
+
+    covering: set[str] = set()
+    exercised: set[str] = set()
+    for scenario, workflow_ids in coverage["locked_scenarios"].items():
+        assert workflow_ids, scenario
+        covered: set[str] = set()
+        for workflow_id in workflow_ids:
+            assert workflow_id in workflows, (scenario, workflow_id)
+            workflow = workflows[workflow_id]
+            narrowed = set(workflow["distributions"])
+            # A narrowed workflow is only allowed to be narrow for a capability
+            # reason the coverage registry already derives from the manifests.
+            if narrowed != distributions:
+                assert scoped[workflow_id]["reason"] == "capability-absent", workflow_id
+            covered |= narrowed
+            covering.add(workflow_id)
+            exercised.update(
+                command["arguments"][1] for command in workflow["commands"]
+            )
+        assert covered == distributions, (scenario, distributions - covered)
+
+    assert covering == set(workflows), set(workflows) - covering
+    assert _NATIVE_CONTINUATION_OPERATIONS <= exercised
+
+
 def test_continuation_fixture_pins_automation_vocabularies() -> None:
     automation = _CONTINUATION_SCENARIOS["automation"]
     assert (
