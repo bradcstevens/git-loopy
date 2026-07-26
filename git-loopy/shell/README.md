@@ -114,6 +114,19 @@ The installer prints a `PATH` hint if the target directory isn't already on it.
 To uninstall, delete the shim (e.g. `rm ~/.local/bin/git-loopy`) and the staged
 helper (`rm -rf .git-loopy/bin`). Move the clone? Re-run `install.sh`.
 
+**Before it writes anything, `install.sh` verifies this clone's Continuation
+capability manifest against the `foundation` Continuation capability profile** and
+reports what it verified:
+
+```
+Verified this distribution's Continuation capabilities (foundation profile, contract 1.2, release 0.2.0-dev.0); unsupported optional capabilities: concurrent_dispatch, prospective_projection, terminal_rendering.
+```
+
+The distribution being verified is the clone whose installer you ran, so nothing
+resolves an entrypoint and nothing names a family member — no host-specific
+executable path and no family-member choice is written down. A clone that misses a
+required capability names the requirement it fails and installs nothing at all.
+
 **The helper is the only thing `install.sh` downloads, and a Run never downloads
 anything at all.** It needs `curl` and either `sha256sum` or `shasum`; `jq` is
 already a prerequisite. An air-gapped host installs from files it already has,

@@ -117,6 +117,19 @@ isn't already on `PATH`. To uninstall, delete the shim (`git-loopy.cmd` or
 `git-loopy`) and the staged helper (`.git-loopy/bin`). Move the clone? Re-run
 `install.ps1`.
 
+**Before it writes anything, `install.ps1` verifies this clone's Continuation
+capability manifest against the `foundation` Continuation capability profile** and
+reports what it verified:
+
+```
+Verified this distribution's Continuation capabilities (foundation profile, contract 1.2, release 0.2.0-dev.0); unsupported optional capabilities: concurrent_dispatch.
+```
+
+The distribution being verified is the clone whose installer you ran, so nothing
+resolves an entrypoint and nothing names a family member — no host-specific
+executable path and no family-member choice is written down. A clone that misses a
+required capability names the requirement it fails and installs nothing at all.
+
 **The helper is the only thing `install.ps1` downloads, and a Run never downloads
 anything at all.** An air-gapped host installs from files it already has, and the
 published checksum manifest is required either way:
