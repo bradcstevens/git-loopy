@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 from rich.console import Console
 
 from git_loopy import events as events_module
+from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
+from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
     RunConfig,
+    SkillPolicyInput,
+    SkillPolicyInputs,
     gate_reasoning_effort,
     resolve_iteration_model,
 )
@@ -24,6 +29,23 @@ from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunStat
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy.pricing import Pricing
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.skill_exposure import SkillExposure
+from git_loopy.skill_policy import (
+    MissingEnabledSkills,
+    MissingRequiredSkills,
+    SKILL_SOURCE_KINDS,
+    SkillCatalog,
+    SkillCatalogWinner,
+    SkillInventoryUnavailable,
+    SkillPolicyFallback,
+    SkillPolicyResolutionError,
+    SkillPolicyScope,
+    SkillPolicyStartupState,
+    UntrackedProjectSkills,
+    classify_skill_policy_startup,
+    resolve_skill_policy,
+)
+from git_loopy.skill_run_preflight import RunSkillPreflight
 from git_loopy.sources import is_afk_ready
 from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
@@ -231,7 +253,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.3"
+    assert _EVENT_SCHEMA["contract_version"] == "1.4"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -246,7 +268,14 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         == events_module.PYTHON_INSIGHT_CAPABILITIES
     )
 
-    assert _EVENT_SCHEMA["payload_contracts"] == {
+    insight_contracts = {
+        name: contract
+        for name, contract in _EVENT_SCHEMA["payload_contracts"].items()
+        if name not in _EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]
+        and name
+        not in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    }
+    assert insight_contracts == {
         "wrapper.run.start": {
             "required": [
                 "release_version",
@@ -305,6 +334,29 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
         },
+        "wrapper.skill_policy.resolved": {
+            "required_when_present": [
+                "base_scope",
+                "enabled",
+                "fallback",
+                "legacy_denied",
+                "migration_warning",
+                "required",
+                "source_kinds",
+            ],
+            "base_scope_values": ["project", "global", "minimal"],
+            "fallback_values": ["minimal", "migration", None],
+            "sorted_projections": [
+                "enabled",
+                "legacy_denied",
+                "required",
+                "source_kinds",
+            ],
+            "redacted": (
+                "Skill identity is the canonical name: no absolute path, home "
+                "directory, exposure directory, or Skill content may appear."
+            ),
+        },
     }
     assert _EVENT_SCHEMA["value_semantics"] == {
         "unknown": None,
@@ -313,6 +365,45 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         "duration_source": "monotonic clock",
         "duration_unit": "seconds",
     }
+
+
+def test_event_fixture_pins_rolling_contribution_contract() -> None:
+    """Rolling dispatch's identity rules are pinned as *relationships* the
+    fixture cannot self-check: the shared constructor, the fixture, and the
+    written contract must name the same triple, the same lifecycle set, and
+    the same terminal dispositions."""
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    assert tuple(identity["keys"]) == events_module.CONTRIBUTION_IDENTITY_KEYS
+    assert identity["iter"] is None
+    assert set(identity["lifecycle_types"]) == (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
+
+    literals = set(_EVENT_SCHEMA["event_types"].values())
+    grouped = (
+        identity["lifecycle_types"]
+        + identity["stamped_types"]
+        + identity["scheduler_scoped_types"]
+        + identity["forbidden_types"]
+    )
+    assert len(grouped) == len(set(grouped)), "an event type is in two scopes"
+    assert set(grouped) <= literals
+
+    # Every contribution-scoped lifecycle type requires the whole triple, and
+    # no scheduler-scoped rolling event pretends to carry one.
+    contracts = _EVENT_SCHEMA["payload_contracts"]
+    for type_name in identity["lifecycle_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert required[: len(identity["keys"])] == identity["keys"], type_name
+    for type_name in identity["scheduler_scoped_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert "contribution_id" not in required, type_name
+        assert "lane_id" not in required, type_name
+
+    end = contracts["wrapper.contribution.end"]
+    assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
+    assert end["strike_reaction_values"] == ["reset", "+1"]
+    assert "strike_reaction" in end["summary_required"]
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
@@ -767,7 +858,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.4"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.8"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -796,6 +887,397 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
         for key, value in expected_capabilities.items()
         if key != "release_version"
     } == continuation_module.CAPABILITY_MANIFEST
+
+
+def test_continuation_capability_verification_pins_the_foundation_profile() -> None:
+    """Setup's requirement set is one shared declaration, not three private opinions.
+
+    Every family member verifies *itself* at setup, so nothing at runtime would ever
+    notice if the three drifted into judging different requirements under the same
+    profile name. The fixture is the one place the three can be compared, so the
+    profile lands there as data and each family pins its own declaration against it.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert tuple(verification["profiles"]) == tuple(
+        verification_module.CONTINUATION_PROFILES
+    )
+
+    fixture_profile = verification["profiles"][verification_module.FOUNDATION_PROFILE]
+    declared = verification_module.CONTINUATION_PROFILES[
+        verification_module.FOUNDATION_PROFILE
+    ]
+    assert tuple(fixture_profile["requirements"]) == declared.requirements
+    assert (
+        fixture_profile["continuation_contract_version"]
+        == declared.continuation_contract_version
+        == continuation_module.CONTINUATION_CONTRACT_VERSION
+    )
+    assert (
+        fixture_profile["record_format"]
+        == declared.record_format
+        == continuation_module.RECORD_FORMAT
+    )
+    assert fixture_profile["tracker_adapter"] == declared.tracker_adapter
+    assert tuple(fixture_profile["tracker_operations"]) == declared.tracker_operations
+    assert tuple(fixture_profile["native_operations"]) == declared.native_operations
+    assert fixture_profile["mode_default"] == declared.mode_default
+
+
+def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
+    """Copy ``manifest`` with the one key at ``path`` removed.
+
+    A refusal removes exactly one advertised key, so the requirement it defeats is
+    identified rather than merely implicated. The path is at most two deep, which is
+    all any family needs to express in jq or PowerShell.
+    """
+    reduced = json.loads(json.dumps(manifest))
+    target = reduced
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+    return reduced
+
+
+def test_continuation_capability_verification_pins_this_distribution_verdict() -> None:
+    """Setup's answer about this distribution is pinned against what it advertises.
+
+    The manifest comes from the scenario that executes the real native entrypoint, so
+    the chain runs real CLI ⟷ advertised manifest ⟷ setup verdict with no
+    hand-asserted link. A distribution that stops advertising an optional capability
+    changes its own verdict here rather than changing what setup silently tells an
+    operator.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert set(verification["verdicts"]) == set(
+        _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+    )
+
+    expected = verification["verdicts"]["python"]
+    verdict = verification_module.evaluate_continuation_capabilities(
+        _advertised_manifests()["python"], profile=expected["profile"]
+    )
+    assert verdict.profile == expected["profile"]
+    assert verdict.satisfied is expected["satisfied"]
+    assert list(verdict.unsatisfied_requirements) == expected["unsatisfied_requirements"]
+    assert (
+        list(verdict.unsupported_optional_capabilities)
+        == expected["unsupported_optional_capabilities"]
+    )
+
+
+def test_continuation_capability_verification_refuses_each_broken_manifest() -> None:
+    """Every requirement has a manifest that defeats exactly it, and only it.
+
+    A verifier that answered "satisfied" unconditionally would pass the verdict pin
+    above, so the profile is only a gate if each of its requirements can be shown to
+    fail on its own. The refusals are shared data for the same reason the profile is:
+    all three families run the same five broken manifests through their own verifier.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    manifest = _advertised_manifests()["python"]
+    refusals = verification["refusals"]
+
+    assert {
+        requirement
+        for refusal in refusals
+        for requirement in refusal["unsatisfied_requirements"]
+    } == set(verification_module.FOUNDATION_REQUIREMENT_IDS)
+
+    for refusal in refusals:
+        verdict = verification_module.evaluate_continuation_capabilities(
+            _manifest_without(manifest, refusal["remove"]),
+            profile=verification_module.FOUNDATION_PROFILE,
+        )
+        assert verdict.satisfied is False, refusal["id"]
+        assert (
+            list(verdict.unsatisfied_requirements)
+            == refusal["unsatisfied_requirements"]
+        ), refusal["id"]
+
+
+def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:
+    """The fixture pins every diagnostic code reconcile is allowed to emit."""
+    registered = _CONTINUATION_SCENARIOS["revision_protocol"]["diagnostic_codes"]
+    assert set(registered) == continuation_module.RECONCILE_DIAGNOSTIC_CODES
+    assert registered == sorted(registered)
+
+
+def _coverage_records() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    coverage = _CONTINUATION_SCENARIOS["capability_coverage"]
+    indexed = {
+        record["id"]: record
+        for record in _CONTINUATION_SCENARIOS["scenarios"]
+        + _CONTINUATION_SCENARIOS["workflows"]
+    }
+    return coverage, indexed
+
+
+def _advertised_manifests() -> dict[str, dict[str, Any]]:
+    coverage, indexed = _coverage_records()
+    return {
+        distribution: indexed[scenario_id]["expected"]["stdout"]["capabilities"]
+        for distribution, scenario_id in coverage["manifest_scenarios"].items()
+    }
+
+
+def _pinned_error_code(record: dict[str, Any]) -> str | None:
+    expected = record["expected"]
+    body: Any = None
+    if expected.get("stdout_exact"):
+        body = json.loads(expected["stdout_exact"])
+    elif isinstance(expected.get("stdout"), dict):
+        body = expected["stdout"]
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return body["error"].get("code")
+    return None
+
+
+def test_continuation_capability_coverage_registers_every_narrowed_scope() -> None:
+    """A scope narrower than the family is a question two distributions never face.
+
+    The registry is the only place that difference is allowed to exist, so it must
+    name exactly the narrowed records: an unregistered narrowing is a silent gap and
+    a stale registration is a justification for coverage nobody has.
+    """
+    coverage, indexed = _coverage_records()
+    distributions = set(coverage["distributions"])
+    assert distributions == {"python", "shell", "powershell"}
+
+    narrowed = {
+        record_id
+        for record_id, record in indexed.items()
+        if "distributions" in record and set(record["distributions"]) != distributions
+    }
+    assert set(coverage["scoped_records"]) == narrowed
+    for record_id, scope in coverage["scoped_records"].items():
+        assert scope["reason"] in coverage["scope_reasons"], record_id
+
+
+def test_continuation_capability_coverage_binds_each_manifest_to_its_distribution() -> (
+    None
+):
+    coverage, indexed = _coverage_records()
+    assert set(coverage["manifest_scenarios"]) == set(coverage["distributions"])
+    for distribution, scenario_id in coverage["manifest_scenarios"].items():
+        assert indexed[scenario_id]["distributions"] == [distribution]
+        assert coverage["scoped_records"][scenario_id] == {"reason": "manifest-identity"}
+    identities = {
+        record_id
+        for record_id, scope in coverage["scoped_records"].items()
+        if scope["reason"] == "manifest-identity"
+    }
+    assert identities == set(coverage["manifest_scenarios"].values())
+
+
+def test_continuation_capability_absent_scopes_are_derived_from_the_manifests() -> None:
+    """A capability-gated scope is computed from what each distribution advertises.
+
+    This is the gate itself: a distribution that starts advertising a capability and
+    does not widen the scenarios gated on it fails here rather than shipping an
+    operation nothing asked it about.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "capability-absent":
+            continue
+        capability = scope["capability"]
+        advertises = scope["advertises"]
+        expected = set()
+        for distribution, manifest in manifests.items():
+            optional = manifest["optional_capabilities"]
+            assert capability in optional, (record_id, distribution, capability)
+            if optional[capability] == advertises:
+                expected.add(distribution)
+        assert expected, record_id
+        assert set(indexed[record_id]["distributions"]) == expected, record_id
+
+
+def test_continuation_family_local_variants_cover_every_advertising_distribution() -> (
+    None
+):
+    """Family-local prose may differ; the contract the prose carries may not.
+
+    A variant group is one input asked of every distribution that advertises the
+    operation. Each member records its own decoder's wording, and the group pins the
+    exit code and error code they must nevertheless agree on — so scoping a case to
+    one family can never again mean the other two are never asked.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    groups: dict[str, list[str]] = {}
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "family-local-detail":
+            continue
+        groups.setdefault(scope["variant_group"], []).append(record_id)
+
+    assert groups
+    for group, member_ids in groups.items():
+        operations = {
+            coverage["scoped_records"][member_id]["operation"] for member_id in member_ids
+        }
+        assert len(operations) == 1, group
+        operation = operations.pop()
+        advertising = set()
+        for distribution, manifest in manifests.items():
+            assert operation in manifest["operations"], (group, distribution)
+            if manifest["operations"][operation]:
+                advertising.add(distribution)
+
+        covered: set[str] = set()
+        for member_id in member_ids:
+            member = set(indexed[member_id]["distributions"])
+            assert not (member & covered), (group, member_id)
+            covered |= member
+        assert covered == advertising, group
+
+        members = [indexed[member_id] for member_id in member_ids]
+        assert len({json.dumps(m["arguments"]) for m in members}) == 1, group
+        assert len({m["expected"]["exit_code"] for m in members}) == 1, group
+        codes = [_pinned_error_code(member) for member in members]
+        assert len(set(codes)) == 1, (group, codes)
+
+
+# The ten end-to-end scenarios PRD #237 locks for the foundation gate. They are
+# written out here, rather than read from the fixture, because the fixture is the
+# thing under test: a locked scenario that quietly leaves the registry would
+# otherwise take its own gate with it.
+_LOCKED_END_TO_END_SCENARIOS = (
+    "planning-publication-and-aggregation",
+    "read-only-human-refresh",
+    "concurrent-equivalent-and-conflicting-publication",
+    "blocked-to-ready-and-ready-to-blocked",
+    "completion-and-retirement-receipts",
+    "positive-afk-classification-and-dispatch",
+    "explicit-human-and-attention-stops",
+    "terminal-completion",
+    "optional-handoff-context",
+    "durable-transition-then-publication-failure",
+)
+
+_NATIVE_CONTINUATION_OPERATIONS = frozenset(
+    {"publish", "reconcile", "record-dispatch-result"}
+)
+
+
+def test_continuation_end_to_end_coverage_names_every_locked_scenario() -> None:
+    """A locked scenario nobody drives is the gap this gate exists to catch.
+
+    The foundation gate is a claim about ten end-to-end stories, not about a count
+    of fixtures. Naming them makes an uncovered story a failure here rather than an
+    absence a reader has to notice, and requiring each story's workflows to cover
+    the whole family between them keeps a capability-gated story honest: a
+    distribution that cannot render the human projection still has to answer the
+    same question, by failing closed.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    workflows = {
+        workflow["id"]: workflow for workflow in _CONTINUATION_SCENARIOS["workflows"]
+    }
+    scoped = _CONTINUATION_SCENARIOS["capability_coverage"]["scoped_records"]
+    distributions = set(_CONTINUATION_SCENARIOS["capability_coverage"]["distributions"])
+
+    assert tuple(coverage["locked_scenarios"]) == _LOCKED_END_TO_END_SCENARIOS
+
+    covering: set[str] = set()
+    exercised: set[str] = set()
+    for scenario, workflow_ids in coverage["locked_scenarios"].items():
+        assert workflow_ids, scenario
+        covered: set[str] = set()
+        for workflow_id in workflow_ids:
+            assert workflow_id in workflows, (scenario, workflow_id)
+            workflow = workflows[workflow_id]
+            narrowed = set(workflow["distributions"])
+            # A narrowed workflow is only allowed to be narrow for a capability
+            # reason the coverage registry already derives from the manifests.
+            if narrowed != distributions:
+                assert scoped[workflow_id]["reason"] == "capability-absent", workflow_id
+            covered |= narrowed
+            covering.add(workflow_id)
+            exercised.update(
+                command["arguments"][1] for command in workflow["commands"]
+            )
+        assert covered == distributions, (scenario, distributions - covered)
+
+    assert covering == set(workflows), set(workflows) - covering
+    assert _NATIVE_CONTINUATION_OPERATIONS <= exercised
+
+
+def test_continuation_reconciliation_never_writes() -> None:
+    """A refresh that writes is not a refresh, and the transport is the proof.
+
+    The claim is about the calls the command actually made, not about the words in
+    the projection, so it is asserted against an allowlist of read shapes: a call
+    the allowlist has never heard of fails rather than passes unnoticed. It is
+    asserted over every pinned `reconcile`, because read-only is a property of the
+    operation rather than of the handful of fixtures that happen to exercise it --
+    including the end-to-end workflows whose every command is a refresh, where one
+    write anywhere in the run is the whole failure the locked story is about.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    prefixes = tuple(coverage["read_only_call_prefixes"])
+
+    seen = 0
+    for scenario in _CONTINUATION_SCENARIOS["scenarios"]:
+        if scenario["arguments"][1] != "reconcile":
+            continue
+        for call in scenario["expected"].get("github_calls", []):
+            seen += 1
+            assert call.startswith(prefixes), (scenario["id"], call)
+            assert "--method" not in call, (scenario["id"], call)
+
+    refreshes = 0
+    for workflow in _CONTINUATION_SCENARIOS["workflows"]:
+        operations = {command["arguments"][1] for command in workflow["commands"]}
+        if operations != {"reconcile"}:
+            continue
+        refreshes += 1
+        for call in workflow["expected_github_calls"]:
+            seen += 1
+            assert call.startswith(prefixes), (workflow["id"], call)
+            assert "--method" not in call, (workflow["id"], call)
+    assert refreshes, "no end-to-end refresh is pinned, so this gate proves less"
+    assert seen, "no reconcile call is pinned, so this gate proves nothing"
+
+
+def test_continuation_fixture_pins_automation_vocabularies() -> None:
+    automation = _CONTINUATION_SCENARIOS["automation"]
+    assert (
+        automation["safety_case_contract_version"]
+        == continuation_module.SAFETY_CASE_CONTRACT_VERSION
+    )
+    assert set(automation["assumption_kinds"]) == continuation_module.ASSUMPTION_KINDS
+    assert set(automation["retry_kinds"]) == continuation_module.RETRY_KINDS
+    assert set(automation["instruction_modes"]) == continuation_module.INSTRUCTION_MODES
+    assert (
+        set(automation["ineligibility_reasons"])
+        == continuation_module.AUTOMATION_INELIGIBILITY_REASONS
+    )
+    assert (
+        set(automation["report_only_reasons"])
+        == continuation_module.AUTOMATION_REPORT_ONLY_REASONS
+    )
+    assert (
+        tuple(
+            (entry["reason"], entry["disposition"])
+            for entry in automation["stop_precedence"]
+        )
+        == continuation_module.AUTOMATION_STOP_PRECEDENCE
+    )
+    assert (
+        set(automation["dispatch_evidence_classes"])
+        == continuation_module.DISPATCH_EVIDENCE_CLASSES
+    )
+    assert (
+        automation["dispatch_evidence_marker"] == continuation_module._DISPATCH_MARKER
+    )
+    for group in (
+        "assumption_kinds",
+        "retry_kinds",
+        "instruction_modes",
+        "ineligibility_reasons",
+    ):
+        assert automation[group] == sorted(automation[group])
 
 
 def test_continuation_fixture_pins_completion_vocabularies() -> None:
@@ -1041,3 +1523,447 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
     baseline_summary = baseline["snapshots"][-1]["expected"]["dashboard"]["summary"]
     assert baseline_summary["rows"][0]["skills_consulted"] == []
     assert baseline_summary["rows"][0]["tool_count"] == 0
+
+
+_SKILL_POLICY = _load_fixture("skill-policy.json")
+
+_SKILL_POLICY_ERRORS: Mapping[str, type[SkillPolicyResolutionError]] = {
+    "inventory_unavailable": SkillInventoryUnavailable,
+    "missing_enabled_skills": MissingEnabledSkills,
+    "missing_required_skills": MissingRequiredSkills,
+    "untracked_project_skills": UntrackedProjectSkills,
+}
+
+
+def _skill_policy_catalog(case: Mapping[str, Any]) -> SkillCatalog:
+    fixture = case["catalog"]
+    return SkillCatalog(
+        winners={
+            winner["name"]: SkillCatalogWinner(
+                name=winner["name"],
+                source_kind=winner["source_kind"],
+            )
+            for winner in fixture["winners"]
+        },
+        inventory_available=fixture.get("inventory_available", True),
+    )
+
+
+def _skill_policy_inputs(case: Mapping[str, Any]) -> SkillPolicyInputs:
+    fixture = case["inputs"]
+
+    def scope(key: str) -> SkillPolicyInput:
+        entry = fixture.get(key)
+        if entry is None:
+            return SkillPolicyInput()
+        return SkillPolicyInput(present=True, names=tuple(entry))
+
+    return SkillPolicyInputs(
+        project=scope("project"),
+        global_=scope("global"),
+        environment=scope("environment"),
+        enable_skills=frozenset(fixture.get("enable_skills", ())),
+        disable_skills=frozenset(fixture.get("disable_skills", ())),
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["resolution_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_resolution_fixture(case: dict[str, Any]) -> None:
+    """Every policy case runs through the production resolver, not a restatement."""
+    kwargs: dict[str, Any] = {
+        "catalog": _skill_policy_catalog(case),
+        "required_skills": tuple(case["required_skills"]),
+        "legacy_denied": tuple(case.get("legacy_denied", ())),
+        "tracked_project_skills": tuple(
+            winner["name"]
+            for winner in case["catalog"]["winners"]
+            if winner.get("tracked", False)
+        ),
+    }
+    if "fallback" in case:
+        kwargs["fallback"] = SkillPolicyFallback(case["fallback"])
+
+    if "expected_error" in case:
+        expected = _SKILL_POLICY_ERRORS[case["expected_error"]]
+        with pytest.raises(expected) as raised:
+            resolve_skill_policy(_skill_policy_inputs(case), **kwargs)
+        assert list(raised.value.names) == case["expected_error_names"]
+        return
+
+    policy = resolve_skill_policy(_skill_policy_inputs(case), **kwargs)
+    expected = case["expected"]
+    assert policy.base_scope.value == expected["base_scope"]
+    assert list(policy.enabled) == expected["enabled"]
+    assert list(policy.required) == expected["required"]
+    assert list(policy.legacy_denied) == expected["legacy_denied"]
+    assert dict(policy.source_kinds) == expected["source_kinds"]
+    assert (
+        policy.fallback.value if policy.fallback is not None else None
+    ) == expected["fallback"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["startup_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_startup_fixture(case: dict[str, Any]) -> None:
+    """Absent Config and a Config that predates the key are different answers.
+
+    Both currently resolve to the Minimal Skill policy, so the resolver cannot
+    tell them apart; the classifier is where the family draws the line that
+    decides whether a Run offers a one-time migration.
+    """
+    state = classify_skill_policy_startup(
+        _skill_policy_inputs(case),
+        config_present=case["config_present"],
+    )
+    assert state.value == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _SKILL_POLICY["event_payload_cases"],
+    ids=lambda case: case["id"],
+)
+def test_skill_policy_event_payload_fixture(case: dict[str, Any], tmp_path: Path) -> None:
+    """The redacted audit projection is built from the frozen Run policy itself."""
+    resolution = next(
+        entry
+        for entry in _SKILL_POLICY["resolution_cases"]
+        if entry["id"] == case["resolution_case"]
+    )
+    catalog = _skill_policy_catalog(resolution)
+    policy = resolve_skill_policy(
+        _skill_policy_inputs(resolution),
+        catalog=catalog,
+        required_skills=tuple(resolution["required_skills"]),
+        fallback=SkillPolicyFallback(resolution.get("fallback", "minimal")),
+        legacy_denied=tuple(resolution.get("legacy_denied", ())),
+        tracked_project_skills=tuple(
+            winner["name"]
+            for winner in resolution["catalog"]["winners"]
+            if winner.get("tracked", False)
+        ),
+    )
+    preflight = RunSkillPreflight(
+        exposure=SkillExposure(policy=policy, catalog=catalog, directory=tmp_path),
+        migration_warning=case["migration_warning"],
+    )
+
+    payload = preflight.event_payload
+    assert payload == case["expected_payload"]
+    assert list(payload) == sorted(payload), "payload keys are emitted sorted"
+    # Dict equality above is order-blind, and `source_kinds` is the one nested
+    # object here: without this, a projection that emitted discovery order would
+    # still pass while producing a line no other Run could reproduce byte for byte.
+    assert list(payload["source_kinds"]) == sorted(payload["source_kinds"])
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_SKILL_POLICY_RESOLVED
+    ]
+    assert sorted(payload) == contract["required_when_present"]
+    for projection in contract["sorted_projections"]:
+        assert list(payload[projection]) == sorted(payload[projection]), projection
+        # The fixture is what the native ports copy, so an unsorted expectation
+        # would teach them the wrong lesson even while Python stayed correct.
+        expected_projection = case["expected_payload"][projection]
+        assert list(expected_projection) == sorted(expected_projection), projection
+
+
+def test_skill_policy_event_payload_carries_no_filesystem_location() -> None:
+    """A Skill is identified by canonical name, so no path can reach the replay log.
+
+    ``SkillCatalogWinner`` knows the absolute ``path`` a Skill was resolved from
+    and the exposure knows the Run-scoped directory it was copied into. Neither
+    is a policy identity, and both would leak an operator's home directory into
+    a shared replay log, so the projection must reduce to names and source kinds.
+    """
+    home = Path("/Users/operator/.copilot/skills/tdd")
+    catalog = SkillCatalog(
+        winners={
+            "tdd": SkillCatalogWinner(
+                name="tdd",
+                source_kind="personal",
+                description="Test-driven development",
+                path=home,
+            )
+        }
+    )
+    policy = resolve_skill_policy(
+        SkillPolicyInputs(global_=SkillPolicyInput(present=True, names=("tdd",))),
+        catalog=catalog,
+        required_skills=("tdd",),
+    )
+    payload = RunSkillPreflight(
+        exposure=SkillExposure(
+            policy=policy,
+            catalog=catalog,
+            directory=Path("/tmp/run-workspace/exposure"),
+        ),
+        migration_warning=False,
+    ).event_payload
+
+    rendered = json.dumps(payload)
+    assert str(home) not in rendered
+    assert "/Users/" not in rendered
+    assert "exposure" not in rendered
+
+
+def test_skill_policy_fixture_exercises_every_scope_fallback_and_failure() -> None:
+    """A new resolution outcome cannot land with no case pinning it.
+
+    The parametrized cases prove the outcomes the fixture *names*; this proves
+    the fixture names them all. Without it a fifth validation failure — or a
+    third fallback reason — could ship green, and the ports built against this
+    suite would inherit a hole rather than a contract.
+    """
+    cases = _SKILL_POLICY["resolution_cases"]
+    assert {case["expected"]["base_scope"] for case in cases if "expected" in case} == {
+        scope.value for scope in SkillPolicyScope
+    }
+    assert {case["expected"]["fallback"] for case in cases if "expected" in case} == {
+        None,
+        *(reason.value for reason in SkillPolicyFallback),
+    }
+    assert {
+        case["expected_error"] for case in cases if "expected_error" in case
+    } == set(_SKILL_POLICY_ERRORS)
+    assert set(_SKILL_POLICY_ERRORS.values()) == {
+        subclass
+        for subclass in SkillPolicyResolutionError.__subclasses__()
+    }
+    assert {case["expected"] for case in _SKILL_POLICY["startup_cases"]} == {
+        state.value for state in SkillPolicyStartupState
+    }
+    assert set(_SKILL_POLICY["source_kinds"]) >= {
+        winner["source_kind"]
+        for case in cases
+        for winner in case["catalog"]["winners"]
+    }
+
+
+def test_run_skill_policy_and_iteration_consultation_stay_separate_facts() -> None:
+    """Availability is Run-level; consultation is per-Iteration observed behaviour.
+
+    Deriving either from the other would be the cheap mistake: a Run that
+    *enabled* six Skills and consulted one is not a Run that consulted six, and
+    an Iteration that consulted a Skill proves nothing about the boundary the
+    next Iteration inherits. The two fixtures therefore share no seam, and this
+    pins that they disagree freely.
+    """
+    catalog = SkillCatalog(
+        winners={
+            name: SkillCatalogWinner(name=name, source_kind="packaged")
+            for name in ("code-review", "prototype", "tdd")
+        }
+    )
+    policy = resolve_skill_policy(
+        SkillPolicyInputs(
+            global_=SkillPolicyInput(
+                present=True, names=("code-review", "prototype", "tdd")
+            )
+        ),
+        catalog=catalog,
+        required_skills=("tdd",),
+    )
+    payload = RunSkillPreflight(
+        exposure=SkillExposure(
+            policy=policy, catalog=catalog, directory=Path("/tmp/exposure")
+        ),
+        migration_warning=False,
+    ).event_payload
+
+    summary = RunSummary(pricing=Pricing(models={}))
+    snap = summary.on_iteration_start(iter_num=1)
+    summary.record_tool_call(tool_name="skill", arguments={"skill": "tdd"})
+
+    # Available but never consulted; consulted is a strict subset here and need
+    # not be one at all — the policy payload is unchanged by either.
+    assert payload["enabled"] == ["code-review", "prototype", "tdd"]
+    assert sorted(snap.skills_consulted) == ["tdd"]
+    assert snap.skill_count == 1
+
+
+def test_skill_policy_fixture_declares_no_vocabulary_of_its_own() -> None:
+    """§17.1 says the vocabularies are *exact*, so the fixture cannot invent one.
+
+    ``source_kind`` is the one catalog fact the redacted audit projection
+    carries besides the name, and the native ports copy this fixture to learn
+    it. A fixture free to declare a kind — or a startup state, or a fallback
+    reason — Python never resolves would teach a port to expect a value the
+    reference Orchestrator cannot produce. The parametrized cases prove the
+    values the fixture *uses*; this proves the values it *declares*.
+    """
+    assert set(_SKILL_POLICY["source_kinds"]) == set(SKILL_SOURCE_KINDS)
+    assert set(_SKILL_POLICY["startup_states"]) == {
+        state.value for state in SkillPolicyStartupState
+    }
+    assert set(_SKILL_POLICY["fallback_reasons"]) == {
+        reason.value for reason in SkillPolicyFallback
+    }
+
+
+def _resolved_skill_policy_inputs(
+    argv: list[str] | None = None,
+    *,
+    env: dict[str, str] | None = None,
+    project: dict[str, Any] | None = None,
+) -> SkillPolicyInputs:
+    """Drive the production Config resolver the way ``main`` does."""
+    return cli_module.resolve_config(
+        cli_module.build_parser().parse_args(argv or []),
+        env or {},
+        project=project or {},
+        global_={},
+        warn=lambda _message: None,
+    ).run.skill_policy
+
+
+@pytest.mark.parametrize("surface", _SKILL_POLICY["native_transition"]["policy_surfaces"])
+def test_every_declared_policy_surface_is_one_python_actually_honours(
+    surface: str,
+) -> None:
+    """The fail-closed list is only safe if these are the real surface names.
+
+    #233/#234 make the shell and PowerShell Orchestrators abort when they detect
+    any of these, so a stale name here would be a port failing closed on a
+    surface that no longer exists while ignoring the one that replaced it. Each
+    is therefore supplied to the production Config resolver and must arrive.
+    """
+    supplied = {
+        "GIT_LOOPY_ENABLED_SKILLS": lambda: _resolved_skill_policy_inputs(
+            env={surface: "tdd"}
+        ),
+        "--enable-skill": lambda: _resolved_skill_policy_inputs([surface, "tdd"]),
+        "--disable-skill": lambda: _resolved_skill_policy_inputs([surface, "tdd"]),
+        "enabled_skills": lambda: _resolved_skill_policy_inputs(
+            project={surface: ["tdd"]}
+        ),
+    }[surface]()
+
+    observed = {
+        "GIT_LOOPY_ENABLED_SKILLS": supplied.environment.present,
+        "--enable-skill": "tdd" in supplied.enable_skills,
+        "--disable-skill": "tdd" in supplied.disable_skills,
+        "enabled_skills": supplied.project.present,
+    }
+    assert observed[surface], f"{surface} did not reach the resolved Skill policy"
+    # A surface that also lit up every *other* input would make the fail-closed
+    # detection meaningless, so the detection must be surface-specific.
+    assert [name for name, seen in observed.items() if seen] == [surface]
+
+
+def test_native_transition_partitions_the_declared_runner_family() -> None:
+    """Every family member is either resolving a policy or failing closed.
+
+    The Python-first transition (§17.6) is only safe while the set of ports that
+    *ignore* a configured policy is empty. Deriving both lists from the same
+    roster the Event-schema fixture declares means a fourth Orchestrator cannot
+    join the family and silently be neither — which is exactly the state that
+    would run an agent with a wider capability set than the operator configured.
+    """
+    transition = _SKILL_POLICY["native_transition"]
+    family = set(_EVENT_SCHEMA["insight_capabilities"]["orchestrators"])
+    implemented = set(transition["implemented"])
+    fail_closed = set(transition["fail_closed"])
+
+    assert implemented | fail_closed == family
+    assert implemented & fail_closed == set()
+    assert "python" in implemented, "the reference Orchestrator resolves the policy"
+
+
+def test_a_run_supplying_no_policy_surface_records_none_of_them() -> None:
+    """The fail-closed ports need a negative case, or aborting is unfalsifiable.
+
+    A port that aborted on *every* Run would satisfy "abort when you detect a
+    policy surface" while making the Orchestrator unusable, so the contract's
+    detection has to be able to say no.
+    """
+    inputs = _resolved_skill_policy_inputs()
+
+    assert not inputs.project.present
+    assert not inputs.global_.present
+    assert not inputs.environment.present
+    assert not inputs.enable_skills
+    assert not inputs.disable_skills
+
+
+_CONTRACT_VERSION_LINE = re.compile(
+    r"^\*\*Contract version:\*\*\s+(?P<version>\d+\.\d+)", re.MULTILINE
+)
+
+
+def _written_contract_version() -> str:
+    """The Wrapper contract version the written contract declares."""
+    for parent in Path(__file__).resolve().parents:
+        contract = parent / "docs" / "wrapper-contract.md"
+        if contract.is_file():
+            match = _CONTRACT_VERSION_LINE.search(contract.read_text(encoding="utf-8"))
+            assert match is not None, "the contract declares no Contract version"
+            return match["version"]
+    pytest.skip("written contract not found (installed-wheel run)")
+
+
+def _declared_fixture_contract_versions() -> dict[str, str]:
+    """Every fixture's declared Wrapper contract version, by file name."""
+    declared: dict[str, str] = {}
+    for path in sorted(CONFORMANCE_DIR.glob("*.json")):
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+        version = fixture.get("wrapper_contract_version") or fixture.get(
+            "contract_version"
+        )
+        if version is not None:
+            declared[path.name] = version
+    return declared
+
+
+def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> None:
+    """AC3's together-bump is mechanical, not a reviewer's memory.
+
+    A fixture declares the contract version its decision last changed at, so an
+    old fixture legitimately sits below the current one. What is never
+    legitimate is a fixture *ahead* of the written contract: that is a decision
+    pinned against a contract nobody can read, and the ports built from it would
+    be conforming to a version that does not exist.
+    """
+    written = _written_contract_version()
+    ceiling = tuple(int(part) for part in written.split("."))
+
+    ahead = {
+        name: version
+        for name, version in _declared_fixture_contract_versions().items()
+        if tuple(int(part) for part in version.split(".")) > ceiling
+    }
+    assert ahead == {}, f"fixtures ahead of written contract {written}: {ahead}"
+
+
+def test_bumping_the_contract_requires_bumping_an_affected_fixture() -> None:
+    """The other half: a version the written contract reached alone changed nothing.
+
+    Contract 1.4 exists because closed-world Skill policy became a family
+    requirement. If no fixture pins it, the bump is prose — every Orchestrator
+    stays green while implementing 1.3, which is the drift ADR-0013's fixture
+    backbone exists to prevent.
+    """
+    written = _written_contract_version()
+    declared = _declared_fixture_contract_versions()
+
+    assert written in declared.values(), (
+        f"no Conformance fixture pins contract {written}; "
+        f"declared versions are {sorted(set(declared.values()))}"
+    )
+
+
+def test_the_python_capability_manifest_declares_the_written_contract() -> None:
+    """A runtime capability answer is the contract a caller is actually offered.
+
+    Continuation's manifest is what a Skill negotiates against, so a stale
+    constant here would advertise a contract the Orchestrator no longer
+    implements — the one drift a fixture comparison cannot catch, because both
+    sides of that comparison are data.
+    """
+    assert continuation_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()

@@ -70,3 +70,15 @@ docs/feature-requests/
 
 # Throwaway debugging scratch space (fake `gh` stubs, captured stdout/stderr).
 .scratch/
+
+# Locally installed developer tooling (actionlint, cargo-dist). These are host
+# binaries and `cargo install` bookkeeping: 29 MB of macOS-arm64 executables is
+# useless to a Linux CI runner, which installs its own pinned copies. CI is the
+# authority for tool versions (`.github/workflows/workflow-lint.yml` pins
+# actionlint; `tui-release.yml` pins cargo-dist), so a checked-in binary could
+# only ever disagree with it.
+.tools/
+
+# Rust build output. Scoped to the crate so an unrelated `target/` stays visible;
+# `Cargo.lock` is tracked because git-loopy-tui ships as a binary.
+/git-loopy/tui/target/

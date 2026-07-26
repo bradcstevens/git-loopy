@@ -480,6 +480,86 @@ def test_issue_close_nonzero_close_subprocess_raises(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# issue_list_membership (Rolling dispatch shallow membership, #219 §2)         #
+# --------------------------------------------------------------------------- #
+
+
+def _membership_payload(numbers: list[int]) -> list[dict[str, Any]]:
+    """A ``gh issue list`` payload for ``numbers``, in the given source order."""
+    return [
+        {
+            "number": n,
+            "title": f"issue {n}",
+            "body": "## What to build\nthing\n\n## Acceptance criteria\n- done",
+            "labels": [{"name": "ready-for-agent"}],
+            "state": "OPEN",
+            "url": f"https://github.com/bradcstevens/git-loopy/issues/{n}",
+        }
+        for n in numbers
+    ]
+
+
+def test_issue_list_membership_short_page_is_complete(monkeypatch) -> None:
+    """A page shorter than the requested limit proves the snapshot is complete."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _completed(cmd, stdout=json.dumps(_membership_payload([13, 6])))
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = _client.issue_list_membership("ready-for-agent")
+
+    assert page.complete is True
+    assert [i.number for i in page.issues] == [13, 6]
+    # One request only — a short page needs no second round-trip.
+    assert len(calls) == 1
+
+
+def test_issue_list_membership_full_page_reasks_with_doubled_limit(
+    monkeypatch,
+) -> None:
+    """A page exactly at the limit is ambiguous, so the reader asks again wider."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        limit = int(cmd[cmd.index("--limit") + 1])
+        # 100 issues exist: the 100-limit read is ambiguous, the 200 one is short.
+        return _completed(
+            cmd, stdout=json.dumps(_membership_payload(list(range(1, 101))[:limit]))
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = _client.issue_list_membership("ready-for-agent")
+
+    assert page.complete is True
+    assert len(page.issues) == 100
+    limits = [c[c.index("--limit") + 1] for c in calls]
+    assert limits == ["100", "200"]
+
+
+def test_issue_list_membership_at_ceiling_is_incomplete(monkeypatch) -> None:
+    """A read still full at the ceiling is reported incomplete, not silently truncated.
+
+    Per #219 §2.13 an incomplete snapshot may not establish that the **Pool**
+    is empty, so the flag must survive alongside the issues it did read.
+    """
+
+    def fake_run(cmd, **kw):
+        limit = int(cmd[cmd.index("--limit") + 1])
+        return _completed(
+            cmd, stdout=json.dumps(_membership_payload(list(range(1, limit + 1))))
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = _client.issue_list_membership("ready-for-agent")
+
+    assert page.complete is False
+    assert len(page.issues) == 1600
+
+
+# --------------------------------------------------------------------------- #
 # issue_comment (breadcrumb: comment without closing, #63)                     #
 # --------------------------------------------------------------------------- #
 

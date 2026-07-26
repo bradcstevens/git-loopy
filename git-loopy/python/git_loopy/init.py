@@ -13,17 +13,27 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   and its live-model ``fetch_choices`` seam, so no test touches the real TTY,
   ``~/.config``, ``~/.copilot``, or a live backend (prior art:
   ``tests/test_cli_interactive.py``).
-* **Collect-then-commit.** Every decision (scope, model, effort, whether to
-  scaffold assets, and — on a re-run — whether to refresh pre-existing catalog
-  skills) is gathered *first*; the target skills dir is resolved during collect
-  so existing catalog skills are detected before anything is written. Nothing is
-  written until all prompts succeed, so **cancelling writes nothing, runs
-  nothing, and exits non-zero** (``q`` / ``quit`` / EOF / Ctrl-C at any prompt).
-* **SDK-free until it fetches.** The model list is the only thing that touches
-  the SDK, and only on the interactive path; ``git-loopy init --yes`` uses the
-  built-in default model / effort and never imports the SDK. The model rows reuse
+* **Collect-then-commit.** Every decision (scope, model, effort, the closed-world
+  **Skill policy**, whether to scaffold assets, and — on a re-run — whether to
+  refresh pre-existing catalog skills) is gathered *first*; the target skills dir
+  is resolved during collect so existing catalog skills are detected before
+  anything is written. Nothing is written until all prompts succeed, so
+  **cancelling writes nothing, runs nothing, and exits non-zero** (``q`` /
+  ``quit`` / EOF / Ctrl-C at any prompt). The write itself merges into any
+  existing Config at that scope, so keys the wizard does not own survive.
+* **SDK-free until it fetches.** The model list and the Skill catalog are the only
+  things that touch the SDK, and only on the interactive path; ``git-loopy init
+  --yes`` uses the built-in default model / effort and persists the **Minimal
+  Skill policy** (exactly the **Required Skills**) without contacting the
+  machine's Copilot Skill inventory. The model rows reuse
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
   Textual), rendered as a **plain-text numbered list** — no ``[tui]`` extra.
+
+The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
+the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
+baseline seeding rule, one picker, and one set of Required-Skill and
+project-tracking validations (ADR-0015). A policy that cannot be resolved fails
+setup outright — it is never downgraded to an open world.
 
 Precedence note: what the wizard writes is ordinary persisted Config, so a later
 CLI flag / env var still overrides it (ADR-0006's chain is unchanged).
@@ -35,7 +45,7 @@ import shutil
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -43,6 +53,11 @@ from git_loopy.config import (
     RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
     gate_reasoning_effort,
+)
+from git_loopy.prompt import PromptMetadataError, resolve_required_skills
+from git_loopy.verification import (
+    ContinuationVerification,
+    verify_this_distribution,
 )
 from git_loopy.interactive.models import (
     ModelChoice,
@@ -487,6 +502,115 @@ def _collect_skill_overwrite(
     )
 
 
+class _SkillPolicyUnavailable(Exception):
+    """Raised when a Skill policy cannot be resolved; setup writes nothing."""
+
+
+def _post_setup_required_skills(
+    *,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    prompt_path: Path,
+    prompt_source: Path,
+    scaffold: bool,
+    required_skills: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """The Required Skills of the instructions this setup will leave behind.
+
+    A Skill policy is only valid against the **Run instructions** that resolve
+    once setup finishes. Reading the *current* prompt would let a wizard that
+    also scaffolds a ``PROMPT.md`` persist a policy its own scaffold immediately
+    invalidates, so this mirrors :func:`git_loopy.prompt.load_prompt` precedence
+    with the about-to-be-scaffolded prompt substituted at its own scope.
+    """
+    if required_skills is not None:
+        return tuple(required_skills)
+
+    def _is_target(candidate: Path) -> bool:
+        """Whether ``candidate`` is the prompt this setup is about to write.
+
+        Path equality is not enough: on a case-insensitive filesystem the
+        lower-precedence ``prompt.md`` candidate and the ``PROMPT.md`` target are
+        the same file, and reading it would resolve the *stale* requirements.
+        """
+        if candidate == prompt_path:
+            return True
+        try:
+            return (
+                candidate.exists()
+                and prompt_path.exists()
+                and candidate.samefile(prompt_path)
+            )
+        except OSError:
+            return False
+
+    candidates: list[Path] = []
+    if repo_root is not None:
+        candidates.append(repo_root / "git-loopy" / "prompt.md")
+        candidates.append(repo_root / "git-loopy" / settings.PROMPT_FILENAME)
+    candidates.append(settings.global_prompt_path(env))
+    try:
+        text = prompt_source.read_text(encoding="utf-8")
+        for candidate in candidates:
+            if scaffold and _is_target(candidate):
+                break
+            if candidate.exists():
+                text = candidate.read_text(encoding="utf-8")
+                break
+        return resolve_required_skills(text).required_skills
+    except (OSError, PromptMetadataError) as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot resolve Required Skills: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _collect_skill_policy(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    client_factory: Callable[[], Any] | None,
+    discoverer: Any,
+    picker_runner: Any,
+    git: Any,
+    required_skills: Sequence[str] | None,
+    packaged_skills_dir: Path,
+) -> tuple[str, ...]:
+    """Collect one Skill policy through the shared ``skills edit`` seam.
+
+    Cancelling the picker is an ordinary wizard cancellation, so it joins the
+    collect phase's single :class:`InitCancelled` path and writes nothing.
+    """
+    from git_loopy import skillscmd
+
+    options: dict[str, Any] = {}
+    if discoverer is not None:
+        options["discoverer"] = discoverer
+    if picker_runner is not None:
+        options["picker_runner"] = picker_runner
+    try:
+        return skillscmd.collect_skill_policy(
+            scope=scope,
+            repo_root=repo_root,
+            env=env,
+            input_fn=input_fn,
+            output_fn=output_fn,
+            client_factory=client_factory,
+            git=git,
+            required_skills=required_skills,
+            packaged_skills_dir=packaged_skills_dir,
+            **options,
+        )
+    except skillscmd.SkillPolicyCancelled as exc:
+        raise InitCancelled from exc
+    except skillscmd.SKILL_POLICY_FAILURES as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _resolve_scope(
     scope: str | None,
     *,
@@ -542,11 +666,19 @@ def run_init(
     default_model: str | None = None,
     default_effort: object = _UNSET,
     warn: Callable[[str], None] | None = None,
+    client_factory: Callable[[], Any] | None = None,
+    discoverer: Any = None,
+    picker_runner: Any = None,
+    git: Any = None,
+    required_skills: Sequence[str] | None = None,
+    verify_continuation: Callable[[], ContinuationVerification] | None = None,
+    writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
-    Returns ``0`` on a completed write, non-zero when the operator cancels or the
-    requested scope is unavailable. Never starts the loop.
+    Returns ``0`` on a completed write, non-zero when the operator cancels, when the
+    requested scope is unavailable, or when this distribution does not satisfy the
+    Continuation capability profile. Never starts the loop.
     """
     from git_loopy.cli import _DEFAULT_MODEL, _DEFAULT_REASONING_EFFORT, _warn
 
@@ -556,6 +688,19 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
+    if verify_continuation is None:
+        verify_continuation = verify_this_distribution
+
+    # First, and before the scope is even resolved: setup verifies the one native
+    # distribution it is setting up, which is the distribution running this code.
+    # Nothing about the choice is written down — no entrypoint is resolved and no
+    # family member is named — so the Config this wizard leaves behind stays portable
+    # across the family (#257).
+    verification = verify_continuation()
+    if not verification.satisfied:
+        warn(f"{verification.render()}; nothing was written.")
+        return 1
+    output_fn(verification.render())
 
     try:
         resolved_scope = _resolve_scope(
@@ -576,6 +721,7 @@ def run_init(
     # detect pre-existing catalog skills BEFORE anything is written (collect-then-commit).
     targets = _resolve_targets(resolved_scope, repo_root, env)
     skills_source = packaged_skills or _packaged_skills_path()
+    prompt_source = packaged_prompt or _packaged_prompt_path()
 
     try:
         if assume_yes:
@@ -584,6 +730,22 @@ def run_init(
             routing = None
             scaffold = True
             overwrite_skills = True
+            # The Minimal Skill policy: exactly the Required Skills, and never a
+            # machine-specific Copilot import (ADR-0015). No client is built.
+            enabled_skills = tuple(
+                sorted(
+                    set(
+                        _post_setup_required_skills(
+                            repo_root=repo_root,
+                            env=env,
+                            prompt_path=targets.prompt_path,
+                            prompt_source=prompt_source,
+                            scaffold=scaffold,
+                            required_skills=required_skills,
+                        )
+                    )
+                )
+            )
         else:
             model, effort = _collect_model_and_effort(
                 input_fn=input_fn,
@@ -624,24 +786,59 @@ def run_init(
                 skills_dir=targets.skills_dir,
                 skills_source=skills_source,
             )
+            # Last, because the policy must answer to the Run instructions this
+            # setup will leave behind — which the scaffold decision determines.
+            enabled_skills = _collect_skill_policy(
+                scope=resolved_scope,
+                repo_root=repo_root,
+                env=env,
+                input_fn=input_fn,
+                output_fn=output_fn,
+                client_factory=client_factory,
+                discoverer=discoverer,
+                picker_runner=picker_runner,
+                git=git,
+                required_skills=_post_setup_required_skills(
+                    repo_root=repo_root,
+                    env=env,
+                    prompt_path=targets.prompt_path,
+                    prompt_source=prompt_source,
+                    scaffold=scaffold,
+                    required_skills=required_skills,
+                ),
+                packaged_skills_dir=skills_source,
+            )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
+    except _SkillPolicyUnavailable as exc:
+        # A Skill policy that cannot be resolved is never silently downgraded to
+        # an open world: setup fails with the whole scope untouched.
+        warn(f"{exc}; nothing was written.")
+        return 1
 
     # Commit phase — every decision is in hand, so nothing above wrote anything.
-    values: dict[str, object] = {"model": model}
+    # The wizard owns only the keys it collected: everything else in an existing
+    # Config at this scope (including a routing table the operator declined to
+    # revisit) survives the write untouched.
+    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+    values["model"] = model
     if effort is not None:
         values["reasoning_effort"] = effort
+    else:
+        # The wizard owns this key: a model with no reasoning must not inherit
+        # the previous model's effort just because the merge preserved it.
+        values.pop("reasoning_effort", None)
     if routing is not None:
         values["routing"] = {
             key: {"model": route_model, "effort": route_effort}
             for key, (route_model, route_effort) in routing.items()
         }
-    settings.write_config(targets.config_path, values)
+    values["enabled_skills"] = list(enabled_skills)
+    writer(targets.config_path, values)
     output_fn(f"Wrote {targets.config_path}")
 
     if scaffold:
-        prompt_source = packaged_prompt or _packaged_prompt_path()
         _scaffold_prompt(targets.prompt_path, prompt_source)
         output_fn(f"Wrote {targets.prompt_path}")
         if skills_source.is_dir():

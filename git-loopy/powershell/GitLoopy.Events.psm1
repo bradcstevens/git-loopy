@@ -19,6 +19,20 @@ $script:EventTypes = [ordered]@{
     WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
     WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
     WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
+    WRAPPER_POOL_REFRESHED = "wrapper.pool.refreshed"
+    WRAPPER_CONTRIBUTION_START = "wrapper.contribution.start"
+    WRAPPER_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"
+    WRAPPER_INTEGRATION_PARKED = "wrapper.integration.parked"
+    WRAPPER_INTEGRATION_ADMITTED = "wrapper.integration.admitted"
+    WRAPPER_INTEGRATION_STARTED = "wrapper.integration.started"
+    WRAPPER_INTEGRATION_BRANCH_OBSERVED = "wrapper.integration.branch_observed"
+    WRAPPER_INTEGRATION_RECOVERY_STARTED = "wrapper.integration.recovery_started"
+    WRAPPER_INTEGRATION_PUBLISHED = "wrapper.integration.published"
+    WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
+    WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
+    WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
+    WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
+    WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
     AGENT_OUTPUT = "agent.output"
     SESSION_CREATED = "session.created"
     SESSION_IDLE = "session.idle"
@@ -322,8 +336,24 @@ function ConvertTo-GitLoopyJsonLine {
     return $Scrubbed + "`n"
 }
 
-function Write-GitLoopyEvent {
+# Where a serialized Event goes *live*. `$null` means stdout, which is the only
+# destination this port had before the shared TUI helper and remains the one it
+# falls back to. The replay log is written unconditionally and first, so it stays
+# the authoritative record no matter what the live destination does; this
+# indirection only decides who else sees the same bytes.
+$script:LiveSink = $null
+
+function Set-GitLoopyLiveSink {
     [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [scriptblock]$Sink
+    )
+
+    $script:LiveSink = $Sink
+}
+
+function Write-GitLoopyEvent {    [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [psobject]$Context,
@@ -344,7 +374,11 @@ function Write-GitLoopyEvent {
         $Line,
         [Text.UTF8Encoding]::new($false)
     )
-    [Console]::Out.Write($Line)
+    if ($null -eq $script:LiveSink) {
+        [Console]::Out.Write($Line)
+        return
+    }
+    & $script:LiveSink $Line
 }
 
 Export-ModuleMember -Function @(
@@ -357,5 +391,6 @@ Export-ModuleMember -Function @(
     "New-GitLoopyEvent",
     "Protect-GitLoopyJson",
     "ConvertTo-GitLoopyJsonLine",
+    "Set-GitLoopyLiveSink",
     "Write-GitLoopyEvent"
 )

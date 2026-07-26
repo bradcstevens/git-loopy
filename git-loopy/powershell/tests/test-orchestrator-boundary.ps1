@@ -8,7 +8,11 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
 $OrchestratorModule = Join-Path $PortDir "GitLoopy.Orchestrator.psm1"
+$TuiModule = Join-Path $PortDir "GitLoopy.Tui.psm1"
+$EventsModule = Join-Path $PortDir "GitLoopy.Events.psm1"
 Import-Module $OrchestratorModule -Force
+Import-Module $TuiModule -Force
+Import-Module $EventsModule
 $ReleaseFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/release-version.json"
@@ -213,6 +217,80 @@ switch -CaseSensitive ($Command) {
     }
 }
 '@
+}
+
+# A fake `git-loopy-tui` that records what it was asked to do. `FAKE_TUI_STARTED`
+# says which discovered helper ran; `FAKE_TUI_STDIN` is what the child actually
+# received, and must equal the replay log byte for byte because the contract's
+# "serialize once" rule makes the live destination and the replay log the same
+# bytes.
+#
+# Returns the path the Orchestrator's discovery is expected to report, which on
+# Windows is the `.cmd` launcher rather than the extensionless name.
+function New-FakeTuiHelper {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Directory,
+        [string]$Label = "helper"
+    )
+
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $Body = @"
+`$Label = "$Label"
+"@ + @'
+
+$ErrorActionPreference = "Stop"
+if ($args.Count -ge 1 -and $args[0] -ceq "--schema-version") {
+    if ($env:FAKE_TUI_PROBE) {
+        [Console]::Out.WriteLine($env:FAKE_TUI_PROBE)
+    }
+    else {
+        $Version = if ($env:FAKE_TUI_VERSION) { $env:FAKE_TUI_VERSION }
+            else { "0.0.0" }
+        $Minimum = if ($env:FAKE_TUI_MIN_SCHEMA) { $env:FAKE_TUI_MIN_SCHEMA }
+            else { "1" }
+        $Maximum = if ($env:FAKE_TUI_MAX_SCHEMA) { $env:FAKE_TUI_MAX_SCHEMA }
+            else { "1" }
+        [Console]::Out.WriteLine(
+            '{"name": "git-loopy-tui", "version": "' + $Version + '", ' +
+            '"min_event_schema_version": ' + $Minimum + ', ' +
+            '"max_event_schema_version": ' + $Maximum + ', ' +
+            '"wrapper_contract_version": "1.0"}'
+        )
+    }
+    exit $(if ($env:FAKE_TUI_PROBE_STATUS) {
+        [int]$env:FAKE_TUI_PROBE_STATUS
+    }
+    else { 0 })
+}
+[IO.File]::AppendAllText($env:FAKE_TUI_STARTED, $Label + [Environment]::NewLine)
+$Delivered = 0
+while ($null -ne ($Line = [Console]::In.ReadLine())) {
+    $Delivered++
+    [IO.File]::AppendAllText($env:FAKE_TUI_STDIN, $Line + "`n")
+    if (
+        $env:FAKE_TUI_EXIT_AFTER -and
+        $Delivered -ge [int]$env:FAKE_TUI_EXIT_AFTER
+    ) {
+        exit $(if ($env:FAKE_TUI_EXIT_CODE) { [int]$env:FAKE_TUI_EXIT_CODE }
+            else { 0 })
+    }
+}
+if ($env:FAKE_TUI_LINGER_SECONDS) {
+    Start-Sleep -Seconds ([double]$env:FAKE_TUI_LINGER_SECONDS)
+}
+# Written *after* the linger, so a helper the grace period reaped leaves no
+# marker and one that ended on its own terms does.
+[IO.File]::AppendAllText($env:FAKE_TUI_FINISHED, $Label + [Environment]::NewLine)
+exit $(if ($env:FAKE_TUI_EXIT_CODE) { [int]$env:FAKE_TUI_EXIT_CODE }
+    else { 0 })
+'@
+
+    Write-FakeCommand -BinDir $Directory -Name "git-loopy-tui" -Body $Body
+    if ($IsWindows) {
+        return Join-Path $Directory "git-loopy-tui.cmd"
+    }
+    return Join-Path $Directory "git-loopy-tui"
 }
 
 function New-TestRepo {
@@ -556,8 +634,79 @@ function Invoke-VersionEntrypoint {
     return $Process.ExitCode
 }
 
-function Read-Events {
+# Point one Run's fake helper at fresh recording files and reset every knob a
+# previous case may have set, so each scenario states its own conditions.
+function Set-FakeTuiEnv {
     param(
+        [Parameter(Mandatory)]
+        [string]$Prefix
+    )
+
+    foreach ($Suffix in @("stdin", "started", "finished")) {
+        $Path = Join-Path $TempDir "$Prefix-tui.$Suffix"
+        if ([IO.File]::Exists($Path)) {
+            [IO.File]::Delete($Path)
+        }
+    }
+    $env:FAKE_TUI_STDIN = Join-Path $TempDir "$Prefix-tui.stdin"
+    $env:FAKE_TUI_STARTED = Join-Path $TempDir "$Prefix-tui.started"
+    $env:FAKE_TUI_FINISHED = Join-Path $TempDir "$Prefix-tui.finished"
+    # A clone-local helper is an artefact of this distribution, so contract §16
+    # requires exact Release-version equality; the default fake is a
+    # well-installed one and a case that wants drift says so explicitly.
+    $env:FAKE_TUI_VERSION = $ExpectedReleaseVersion
+    $env:FAKE_TUI_MIN_SCHEMA = "1"
+    $env:FAKE_TUI_MAX_SCHEMA = "1"
+    foreach ($Name in @(
+        "FAKE_TUI_PROBE",
+        "FAKE_TUI_PROBE_STATUS",
+        "FAKE_TUI_EXIT_AFTER",
+        "FAKE_TUI_EXIT_CODE",
+        "FAKE_TUI_LINGER_SECONDS",
+        "GIT_LOOPY_TUI_GRACE_SECONDS",
+        "GIT_LOOPY_INTERACTIVE"
+    )) {
+        [Environment]::SetEnvironmentVariable($Name, $null)
+    }
+}
+
+# A GitHub Pool with nothing AFK-ready in it: the shortest Run that still emits
+# the whole Run-scoped Event sequence.
+function Set-EmptyPoolEnv {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Prefix
+    )
+
+    $ListJson = Join-Path $TempDir "$Prefix-list.json"
+    $ViewDir = Join-Path $TempDir "$Prefix-views"
+    [IO.File]::WriteAllText($ListJson, "[]`n")
+    [IO.Directory]::CreateDirectory($ViewDir) | Out-Null
+    $env:FAKE_GH_LOG = Join-Path $TempDir "$Prefix-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "$Prefix-list.count"
+    $env:FAKE_GH_LIST_JSON = $ListJson
+    $env:FAKE_GH_VIEW_DIR = $ViewDir
+}
+
+function Get-ReplayLog {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Repo
+    )
+
+    $Logs = @(
+        Get-ChildItem `
+            -LiteralPath (Join-Path $Repo ".git-loopy/logs") `
+            -Filter "*.jsonl" `
+            -File
+    )
+    if ($Logs.Count -ne 1) {
+        throw "FAIL: expected exactly one replay log under $Repo, found $($Logs.Count)"
+    }
+    return $Logs[0].FullName
+}
+
+function Read-Events {    param(
         [Parameter(Mandatory)]
         [string]$Path
     )
@@ -2558,6 +2707,839 @@ Start-Sleep -Seconds $Sleep
         )
     }
     Reset-GitLoopyIterationLifecycleState
+
+    # --- Closed-world Skill policy fails closed (contract §17.6) ---------------
+    # This port has no `config.toml` tier yet, so it cannot honour a configured
+    # policy — and running an Iteration on a *wider* capability set than the
+    # operator configured is the one outcome this prevents. The surfaces come
+    # from the shared fixture, so a surface added to the contract fails here
+    # rather than leaking through.
+    $SkillPolicyFixture = Get-Content `
+        -LiteralPath (
+            Join-Path (Split-Path -Parent $PortDir) "conformance/skill-policy.json"
+        ) `
+        -Raw |
+        ConvertFrom-Json -AsHashtable
+
+    function Write-FailClosedTools {
+        param(
+            [Parameter(Mandatory)]
+            [string]$BinDir
+        )
+
+        Write-FakeTools -BinDir $BinDir
+        # Unlike the discovery fake, this one *records* that it ran, so "Copilot
+        # was never invoked" is proven rather than inferred from an exit code.
+        Write-FakeCommand -BinDir $BinDir -Name "copilot" -DirectPowerShell -Body @'
+[IO.File]::AppendAllText($env:FAKE_COPILOT_LOG, ($args -join " ") + [Environment]::NewLine)
+'@
+    }
+
+    # `Invoke-Entrypoint` inherits this process's environment, and PowerShell
+    # deletes a variable assigned the empty string — so an *explicitly empty*
+    # replacement cannot be handed to a child that way. Building the child
+    # environment explicitly is what makes that case reachable at all.
+    function Invoke-FailClosedEntrypoint {
+        param(
+            [Parameter(Mandatory)]
+            [string]$Repo,
+            [Parameter(Mandatory)]
+            [string]$FakeBin,
+            [Parameter(Mandatory)]
+            [string]$Label,
+            [Collections.IDictionary]$ExtraEnvironment = @{},
+            [string[]]$Arguments = @()
+        )
+
+        $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+        $StartInfo.FileName = $Pwsh
+        $StartInfo.WorkingDirectory = $Repo
+        $StartInfo.UseShellExecute = $false
+        $StartInfo.RedirectStandardOutput = $true
+        $StartInfo.RedirectStandardError = $true
+        $StartInfo.Environment["PATH"] = (
+            $FakeBin + [IO.Path]::PathSeparator + $env:PATH
+        )
+        $StartInfo.Environment["HOME"] = "$Repo-home"
+        $StartInfo.Environment["XDG_CONFIG_HOME"] = Join-Path $Repo "xdg"
+        $StartInfo.Environment["FAKE_REPO_ROOT"] = $Repo
+        $StartInfo.Environment["FAKE_COPILOT_LOG"] = Join-Path `
+            $TempDir "$Label-copilot.log"
+        $StartInfo.Environment["FAKE_GH_LOG"] = Join-Path $TempDir "$Label-gh.log"
+        $StartInfo.Environment["FAKE_GH_LIST_COUNT"] = Join-Path `
+            $TempDir "$Label-list.count"
+        $StartInfo.Environment["FAKE_GH_LIST_JSON"] = Join-Path `
+            $TempDir "$Label-list.json"
+        $StartInfo.Environment["FAKE_GH_VIEW_DIR"] = Join-Path `
+            $TempDir "$Label-views"
+        foreach ($Name in @(
+            "GIT_LOOPY_ENABLED_SKILLS", "GIT_LOOPY_DENY_SKILLS"
+        )) {
+            $StartInfo.Environment.Remove($Name) | Out-Null
+        }
+        foreach ($Name in $ExtraEnvironment.Keys) {
+            $StartInfo.Environment[[string]$Name] = [string]$ExtraEnvironment[$Name]
+        }
+        [IO.File]::WriteAllText(
+            $StartInfo.Environment["FAKE_GH_LIST_JSON"],
+            "[]"
+        )
+        foreach ($Argument in @("-NoLogo", "-NoProfile", "-File", $Entrypoint)) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
+        foreach ($Argument in $Arguments) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
+
+        $Process = [Diagnostics.Process]::Start($StartInfo)
+        $Stdout = $Process.StandardOutput.ReadToEnd()
+        $Stderr = $Process.StandardError.ReadToEnd()
+        $Process.WaitForExit()
+        return [pscustomobject]@{
+            Code = $Process.ExitCode
+            Stdout = $Stdout
+            Stderr = $Stderr
+            CopilotLog = $StartInfo.Environment["FAKE_COPILOT_LOG"]
+            GhLog = $StartInfo.Environment["FAKE_GH_LOG"]
+        }
+    }
+
+    function Assert-FailedClosed {
+        param(
+            [Parameter(Mandatory)]
+            [psobject]$Result,
+            [Parameter(Mandatory)]
+            [string]$Surface,
+            [Parameter(Mandatory)]
+            [string]$Label
+        )
+
+        Assert-Equal 1 $Result.Code "fail-closed exit for $Label"
+        Assert-Contains `
+            $Result.Stderr $Surface "fail-closed diagnostic names the surface for $Label"
+        Assert-Contains `
+            $Result.Stderr "Python Orchestrator" `
+            "fail-closed diagnostic directs the operator for $Label"
+        Assert-Equal "" $Result.Stdout "fail-closed run emitted Run events for $Label"
+        Assert-True (
+            -not [IO.File]::Exists($Result.CopilotLog)
+        ) "fail-closed run invoked Copilot for $Label"
+        $Reached = [IO.File]::Exists($Result.GhLog) -and (
+            [IO.File]::ReadAllText($Result.GhLog).Contains(
+                "issue list", [StringComparison]::Ordinal
+            )
+        )
+        Assert-True (-not $Reached) "fail-closed run reached Pool collection for $Label"
+    }
+
+    # "Copilot was never invoked" is only an assertion if the fake records being
+    # invoked, so prove the recorder works before relying on its absence.
+    $ProbeBin = Join-Path $TempDir "fail-closed-probe-bin"
+    Write-FailClosedTools -BinDir $ProbeBin
+    $ProbeLog = Join-Path $TempDir "fail-closed-probe.log"
+    $OldCopilotLog = $env:FAKE_COPILOT_LOG
+    try {
+        $env:FAKE_COPILOT_LOG = $ProbeLog
+        # `Write-FakeCommand -DirectPowerShell` lands the fake as `copilot.ps1`
+        # on Windows and as an executable `copilot` elsewhere.
+        $ProbeName = if ($IsWindows) { "copilot.ps1" } else { "copilot" }
+        $ProbeCopilot = Join-Path $ProbeBin $ProbeName
+        & $ProbeCopilot "--probe"
+        Assert-True (
+            [IO.File]::Exists($ProbeLog)
+        ) "the fail-closed Copilot fake records that it ran"
+    }
+    finally {
+        $env:FAKE_COPILOT_LOG = $OldCopilotLog
+    }
+
+    foreach (
+        $Surface in @($SkillPolicyFixture["native_transition"]["policy_surfaces"])
+    ) {
+        $Label = "fail-closed-" + ($Surface -creplace "[^a-zA-Z_]", "-")
+        $Repo = Join-Path $TempDir $Label
+        $FakeBin = Join-Path $TempDir "$Label-bin"
+        New-TestRepo -Root $Repo
+        Write-FailClosedTools -BinDir $FakeBin
+
+        switch -CaseSensitive ($Surface) {
+            "GIT_LOOPY_ENABLED_SKILLS" {
+                # Explicitly empty: an exact empty replacement is a real policy,
+                # and the port must not read "empty" as "nothing configured".
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -ExtraEnvironment @{ GIT_LOOPY_ENABLED_SKILLS = "" }
+            }
+            "--enable-skill" {
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -Arguments @($Surface, "tdd")
+            }
+            "--disable-skill" {
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label `
+                    -Arguments @("$Surface=tdd")
+            }
+            "enabled_skills" {
+                # Spelled with a TOML escape `tomllib` resolves to the same key,
+                # so the abort is proven to survive the decode all the way
+                # through the real entrypoint. The global-scope case below
+                # carries the plain spelling.
+                [IO.File]::WriteAllText(
+                    (Join-Path $Repo "git-loopy/config.toml"),
+                    "`"enabled\u005fskills`" = [`"tdd`"]`n"
+                )
+                $Result = Invoke-FailClosedEntrypoint `
+                    -Repo $Repo -FakeBin $FakeBin -Label $Label
+            }
+            default {
+                throw "unhandled Skill-policy surface in the shared fixture: $Surface"
+            }
+        }
+        Assert-FailedClosed -Result $Result -Surface $Surface -Label $Label
+    }
+
+    # The global scope is a standard Config location too, so a global
+    # `enabled_skills` fails closed from a repository carrying no Config.
+    $GlobalLabel = "fail-closed-global"
+    $GlobalRepo = Join-Path $TempDir $GlobalLabel
+    $GlobalBin = Join-Path $TempDir "$GlobalLabel-bin"
+    New-TestRepo -Root $GlobalRepo
+    Write-FailClosedTools -BinDir $GlobalBin
+    [IO.Directory]::CreateDirectory(
+        (Join-Path $GlobalRepo "xdg/git-loopy")
+    ) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $GlobalRepo "xdg/git-loopy/config.toml"),
+        "enabled_skills = []`n"
+    )
+    Assert-FailedClosed `
+        -Result (
+            Invoke-FailClosedEntrypoint `
+                -Repo $GlobalRepo -FakeBin $GlobalBin -Label $GlobalLabel
+        ) `
+        -Surface "enabled_skills" `
+        -Label $GlobalLabel
+
+    # Positive control (contract §17.2): legacy deny-only inputs are deprecated
+    # final guards, not a closed-world surface, so a Run carrying them still
+    # reaches Pool collection.
+    $LegacyLabel = "legacy-deny-runs"
+    $LegacyRepo = Join-Path $TempDir $LegacyLabel
+    $LegacyBin = Join-Path $TempDir "$LegacyLabel-bin"
+    New-TestRepo -Root $LegacyRepo
+    Write-FailClosedTools -BinDir $LegacyBin
+    $Legacy = Invoke-FailClosedEntrypoint `
+        -Repo $LegacyRepo -FakeBin $LegacyBin -Label $LegacyLabel `
+        -ExtraEnvironment @{ GIT_LOOPY_DENY_SKILLS = "legacy-skill" } `
+        -Arguments @("--deny-skill", "flag-skill")
+    Assert-Equal 0 $Legacy.Code "a legacy deny-only Run still exits cleanly"
+    Assert-True (
+        [IO.File]::Exists($Legacy.GhLog) -and
+        [IO.File]::ReadAllText($Legacy.GhLog).Contains(
+            "issue list", [StringComparison]::Ordinal
+        )
+    ) "a legacy deny-only Run still reached Pool collection"
+
+    # The shared TUI helper (PRD #173). The resolution seam is exercised
+    # in-process because it is a pure decision with no observable side effect at
+    # the process boundary: a Run that declines the live interface and a Run that
+    # never had a helper look identical from outside.
+    foreach ($Case in @(
+        @{
+            Id = "an explicit flag beats a contradicting environment setting"
+            Flag = "off"
+            Environment = "1"
+            IsTty = $true
+            Intent = "off"
+            Source = "explicit"
+        },
+        @{
+            Id = "an explicit on-flag beats a non-terminal stdout"
+            Flag = "on"
+            Environment = ""
+            IsTty = $false
+            Intent = "on"
+            Source = "explicit"
+        },
+        @{
+            Id = "a truthy environment setting requests the live interface"
+            Flag = ""
+            Environment = " Yes "
+            IsTty = $false
+            Intent = "on"
+            Source = "explicit"
+        },
+        @{
+            Id = "an unrecognised environment value is a refusal, not a request"
+            Flag = ""
+            Environment = "maybe"
+            IsTty = $true
+            Intent = "off"
+            Source = "explicit"
+        },
+        @{
+            Id = "a blank environment setting falls through to detection"
+            Flag = ""
+            Environment = "   "
+            IsTty = $true
+            Intent = "on"
+            Source = "auto"
+        },
+        @{
+            Id = "a redirected stdout auto-detects plain output"
+            Flag = ""
+            Environment = ""
+            IsTty = $false
+            Intent = "off"
+            Source = "auto"
+        }
+    )) {
+        $Resolved = Resolve-GitLoopyTuiIntent `
+            -Flag $Case["Flag"] `
+            -EnvironmentValue $Case["Environment"] `
+            -IsTty $Case["IsTty"]
+        Assert-Equal $Case["Intent"] $Resolved.Intent (
+            "TUI intent: $($Case["Id"])"
+        )
+        Assert-Equal $Case["Source"] $Resolved.Source (
+            "TUI intent source: $($Case["Id"])"
+        )
+    }
+
+    # Discovery precedence. The clone-local helper is version-pinned by the
+    # repository, so it wins over whatever a package manager happens to have
+    # installed globally; both still have to pass the probe.
+    $DiscoveryRoot = Join-Path $TempDir "tui-discovery"
+    $DiscoveryPinnedDir = Join-Path $DiscoveryRoot ".git-loopy/bin"
+    $DiscoveryPathDir = Join-Path $TempDir "tui-discovery-path"
+    [IO.Directory]::CreateDirectory($DiscoveryPinnedDir) | Out-Null
+    [IO.Directory]::CreateDirectory($DiscoveryPathDir) | Out-Null
+    $PinnedHelper = New-FakeTuiHelper -Directory $DiscoveryPinnedDir
+    $PathHelper = New-FakeTuiHelper -Directory $DiscoveryPathDir
+
+    Assert-Equal $null (
+        Find-GitLoopyTuiHelper `
+            -RepoRoot (Join-Path $TempDir "tui-discovery-absent") `
+            -SearchPath ""
+    ) "no helper anywhere discovers nothing"
+
+    $PathOnly = Find-GitLoopyTuiHelper `
+        -RepoRoot (Join-Path $TempDir "tui-discovery-absent") `
+        -SearchPath $DiscoveryPathDir
+    Assert-Equal "path" $PathOnly.Source "a PATH helper is discovered"
+    Assert-Equal $PathHelper $PathOnly.Path "the discovered PATH helper's path"
+
+    $Pinned = Find-GitLoopyTuiHelper `
+        -RepoRoot $DiscoveryRoot `
+        -SearchPath $DiscoveryPathDir
+    Assert-Equal "clone-local" $Pinned.Source (
+        "the repository-pinned helper outranks one on PATH"
+    )
+    Assert-Equal $PinnedHelper $Pinned.Path "the pinned helper's path"
+
+    # The pre-fullscreen gate. `--schema-version` is the only helper invocation
+    # that is safe before a decision: it reads no stdin and touches no terminal,
+    # so a helper that turns out to be incompatible never gets to blank the
+    # screen first. The answer is a *range* because a later helper may decode
+    # more than one Event-schema version at once, so the test is containment,
+    # not equality.
+    $ProbeNames = @(
+        "FAKE_TUI_PROBE",
+        "FAKE_TUI_PROBE_STATUS",
+        "FAKE_TUI_VERSION",
+        "FAKE_TUI_MIN_SCHEMA",
+        "FAKE_TUI_MAX_SCHEMA"
+    )
+    foreach ($Case in @(
+        @{
+            Id = "a helper whose range contains this schema is compatible"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "1"
+                FAKE_TUI_MAX_SCHEMA = "4"
+                FAKE_TUI_VERSION = "9.9.9"
+            }
+            Expected = "9.9.9"
+        },
+        @{
+            Id = "a helper that decodes only later schemas is rejected"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "2"
+                FAKE_TUI_MAX_SCHEMA = "3"
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a helper that decodes only earlier schemas is rejected"
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "0"
+                FAKE_TUI_MAX_SCHEMA = "0"
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a probe that is not an object is rejected"
+            Environment = @{ FAKE_TUI_PROBE = "[]" }
+            Expected = $null
+        },
+        @{
+            Id = "a probe that is not JSON at all is rejected"
+            Environment = @{ FAKE_TUI_PROBE = "not json" }
+            Expected = $null
+        },
+        @{
+            Id = "a probe whose bounds are not numbers is rejected"
+            Environment = @{
+                FAKE_TUI_PROBE = (
+                    '{"min_event_schema_version": "1", ' +
+                    '"max_event_schema_version": "1"}'
+                )
+            }
+            Expected = $null
+        },
+        @{
+            Id = "a helper that fails its own probe is rejected"
+            Environment = @{ FAKE_TUI_PROBE_STATUS = "3" }
+            Expected = $null
+        },
+        @{
+            Id = "a compatible helper that reports no Release version is usable"
+            Environment = @{
+                FAKE_TUI_PROBE = (
+                    '{"min_event_schema_version": 1, ' +
+                    '"max_event_schema_version": 1}'
+                )
+            }
+            Expected = ""
+        }
+    )) {
+        foreach ($Name in $ProbeNames) {
+            [Environment]::SetEnvironmentVariable($Name, $null)
+        }
+        foreach ($Entry in $Case["Environment"].GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($Entry.Key, $Entry.Value)
+        }
+        Assert-Equal $Case["Expected"] (
+            Test-GitLoopyTuiSchemaSupport `
+                -Helper $PinnedHelper `
+                -SchemaVersion (Get-GitLoopyEventSchemaVersion)
+        ) "TUI probe: $($Case["Id"])"
+    }
+    foreach ($Name in $ProbeNames) {
+        [Environment]::SetEnvironmentVariable($Name, $null)
+    }
+
+    # Contract §16: Release equality is product identity, never a compatibility
+    # authority. A helper staged as part of *this* distribution must match
+    # exactly and fails closed on drift; an externally discovered one may still
+    # run on the strength of the schema probe, but the operator is told the
+    # Releases differ.
+    foreach ($Case in @(
+        @{
+            Id = "a pinned helper from this Release is trusted silently"
+            Source = "clone-local"
+            HelperVersion = "1.2.3"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        },
+        @{
+            Id = "a pinned helper from another Release fails closed"
+            Source = "clone-local"
+            HelperVersion = "1.2.2"
+            ReleaseVersion = "1.2.3"
+            Trusted = $false
+            Warns = $false
+        },
+        @{
+            Id = "a PATH helper from another Release runs, but says so"
+            Source = "path"
+            HelperVersion = "1.2.2"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $true
+        },
+        @{
+            Id = "a PATH helper from this Release is trusted silently"
+            Source = "path"
+            HelperVersion = "1.2.3"
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        },
+        @{
+            Id = "a helper that reports no Release version is not drift"
+            Source = "clone-local"
+            HelperVersion = ""
+            ReleaseVersion = "1.2.3"
+            Trusted = $true
+            Warns = $false
+        }
+    )) {
+        $Identity = Test-GitLoopyTuiReleaseIdentity `
+            -Source $Case["Source"] `
+            -HelperVersion $Case["HelperVersion"] `
+            -ReleaseVersion $Case["ReleaseVersion"]
+        Assert-Equal $Case["Trusted"] $Identity.Trusted (
+            "TUI Release identity: $($Case["Id"])"
+        )
+        Assert-Equal $Case["Warns"] ($null -ne $Identity.Warning) (
+            "TUI Release identity warning: $($Case["Id"])"
+        )
+    }
+
+    # The whole interactive path through the real entrypoint: the clone-local
+    # helper is discovered, probed, started, and fed. Because the live
+    # destination *is* the child, stdout carries no Event stream at all — and
+    # the replay log still holds every byte.
+    $TuiLabel = "tui-delivery"
+    $TuiRepo = Join-Path $TempDir $TuiLabel
+    $TuiBin = Join-Path $TempDir "$TuiLabel-bin"
+    New-TestRepo -Root $TuiRepo
+    Write-FakeTools -BinDir $TuiBin
+    New-FakeTuiHelper `
+        -Directory (Join-Path $TuiRepo ".git-loopy/bin") `
+        -Label "clone-local" | Out-Null
+    Set-FakeTuiEnv -Prefix $TuiLabel
+    Set-EmptyPoolEnv -Prefix $TuiLabel
+
+    $Status = Invoke-Entrypoint `
+        -Repo $TuiRepo `
+        -FakeBin $TuiBin `
+        -StdoutPath (Join-Path $TempDir "$TuiLabel.stdout") `
+        -StderrPath (Join-Path $TempDir "$TuiLabel.stderr") `
+        -Arguments @("--interactive")
+    Assert-Equal 0 $Status "interactive empty-pool Run exit"
+    Assert-Equal "clone-local" (
+        [IO.File]::ReadAllText($env:FAKE_TUI_STARTED).Trim()
+    ) "the repository-pinned helper is the one that ran"
+    Assert-Equal "" (
+        [IO.File]::ReadAllText((Join-Path $TempDir "$TuiLabel.stdout"))
+    ) "an interactive Run also wrote the Event stream to stdout"
+    $TuiReplay = [IO.File]::ReadAllText((Get-ReplayLog -Repo $TuiRepo))
+    Assert-Equal $TuiReplay (
+        [IO.File]::ReadAllText($env:FAKE_TUI_STDIN)
+    ) "helper stdin and replay log parity"
+    Assert-True (
+        $TuiReplay.Contains('"wrapper.run.end"', [StringComparison]::Ordinal)
+    ) "the helper never received the final Run event"
+
+    # Every other way a Run can meet — or fail to meet — the live interface,
+    # observed at the same boundary. Each case says only what makes it different
+    # from the delivery case above.
+    foreach ($Case in @(
+        @{
+            Id = "a PATH helper is discovered when nothing is pinned"
+            OnPath = $true
+            Started = "path"
+        },
+        @{
+            Id = "the repository-pinned helper outranks one on PATH"
+            Pinned = $true
+            OnPath = $true
+            Started = "clone-local"
+        },
+        @{
+            Id = "an explicitly requested incompatible helper is refused"
+            Pinned = $true
+            Environment = @{
+                FAKE_TUI_MIN_SCHEMA = "2"
+                FAKE_TUI_MAX_SCHEMA = "3"
+            }
+            Started = $null
+            Diagnostic = "does not support Event schema 1"
+        },
+        @{
+            Id = "a helper that fails its own probe is refused"
+            Pinned = $true
+            Environment = @{ FAKE_TUI_PROBE_STATUS = "4" }
+            Started = $null
+            Diagnostic = "does not support Event schema 1"
+        },
+        @{
+            Id = "an explicit request with no helper anywhere says where it looked"
+            Started = $null
+            Diagnostic = ".git-loopy/bin/git-loopy-tui or on PATH"
+        },
+        @{
+            Id = "a pinned helper from another Release fails closed"
+            Pinned = $true
+            Environment = @{ FAKE_TUI_VERSION = "0.0.1-not-this-release" }
+            Started = $null
+            Diagnostic = "reinstall it to match this clone"
+        },
+        @{
+            Id = "a PATH helper from another Release runs, but says so"
+            OnPath = $true
+            Environment = @{ FAKE_TUI_VERSION = "0.0.1-not-this-release" }
+            Started = "path"
+            Diagnostic = "its Event-schema support is compatible"
+        },
+        @{
+            Id = "GIT_LOOPY_INTERACTIVE alone earns the live interface"
+            Pinned = $true
+            Environment = @{ GIT_LOOPY_INTERACTIVE = "1" }
+            Arguments = @()
+            Started = "clone-local"
+        },
+        @{
+            # `--no-interactive` is given something to beat on purpose. Without
+            # the environment request this case would pass on a build that
+            # ignored the flag entirely, because the harness redirects stdout and
+            # auto-detection would have said `off` anyway.
+            Id = "--no-interactive overrules an environment request"
+            Pinned = $true
+            Environment = @{ GIT_LOOPY_INTERACTIVE = "1" }
+            Arguments = @("--no-interactive")
+            Started = $null
+            Silent = $true
+        }
+    )) {
+        $Label = "tui-" + (
+            $Case["Id"] -creplace "[^A-Za-z0-9]+", "-"
+        ).ToLowerInvariant().Trim("-")
+        $Repo = Join-Path $TempDir $Label
+        $Bin = Join-Path $TempDir "$Label-bin"
+        New-TestRepo -Root $Repo
+        Write-FakeTools -BinDir $Bin
+        if ($Case.Contains("Pinned")) {
+            New-FakeTuiHelper `
+                -Directory (Join-Path $Repo ".git-loopy/bin") `
+                -Label "clone-local" | Out-Null
+        }
+        if ($Case.Contains("OnPath")) {
+            New-FakeTuiHelper -Directory $Bin -Label "path" | Out-Null
+        }
+        Set-FakeTuiEnv -Prefix $Label
+        Set-EmptyPoolEnv -Prefix $Label
+        if ($Case.Contains("Environment")) {
+            foreach ($Entry in $Case["Environment"].GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable($Entry.Key, $Entry.Value)
+            }
+        }
+
+        $StdoutPath = Join-Path $TempDir "$Label.stdout"
+        $StderrPath = Join-Path $TempDir "$Label.stderr"
+        $CaseArguments = if ($Case.Contains("Arguments")) {
+            $Case["Arguments"]
+        }
+        else {
+            @("--interactive")
+        }
+        $CaseStatus = Invoke-Entrypoint `
+            -Repo $Repo `
+            -FakeBin $Bin `
+            -StdoutPath $StdoutPath `
+            -StderrPath $StderrPath `
+            -Arguments $CaseArguments
+        $Stderr = [IO.File]::ReadAllText($StderrPath)
+        $Stdout = [IO.File]::ReadAllText($StdoutPath)
+
+        Assert-Equal 0 $CaseStatus "$($Case["Id"]): a live interface never fails a Run"
+        if ($null -eq $Case["Started"]) {
+            Assert-True (
+                -not [IO.File]::Exists($env:FAKE_TUI_STARTED)
+            ) "$($Case["Id"]): a refused helper was started anyway"
+            Assert-True (
+                $Stdout.Contains(
+                    '"wrapper.run.end"', [StringComparison]::Ordinal
+                )
+            ) "$($Case["Id"]): the Event stream never reached stdout"
+        }
+        else {
+            Assert-Equal $Case["Started"] (
+                [IO.File]::ReadAllText($env:FAKE_TUI_STARTED).Trim()
+            ) "$($Case["Id"]): the wrong helper ran"
+            Assert-Equal "" $Stdout (
+                "$($Case["Id"]): the Event stream also reached stdout"
+            )
+            Assert-Equal (
+                [IO.File]::ReadAllText((Get-ReplayLog -Repo $Repo))
+            ) (
+                [IO.File]::ReadAllText($env:FAKE_TUI_STDIN)
+            ) "$($Case["Id"]): helper stdin and replay log parity"
+        }
+        if ($Case.Contains("Diagnostic")) {
+            Assert-Contains $Stderr $Case["Diagnostic"] (
+                "$($Case["Id"]): diagnostic"
+            )
+        }
+        if ($Case.Contains("Silent")) {
+            Assert-Equal "" $Stderr (
+                "$($Case["Id"]): a refusal the operator asked for said nothing"
+            )
+        }
+    }
+
+    # A helper that dies mid-Run. The Run must not die with it: one diagnostic,
+    # the stream permanently back on stdout, no respawn, and a replay log that is
+    # still complete. The exact line at which the switch happens is a race
+    # between the parent's write and the child's exit, so this pins the
+    # invariants that hold either way rather than a split that does not.
+    $DeathLabel = "tui-mid-run-death"
+    $DeathRepo = Join-Path $TempDir $DeathLabel
+    $DeathBin = Join-Path $TempDir "$DeathLabel-bin"
+    New-TestRepo -Root $DeathRepo
+    Write-FakeTools -BinDir $DeathBin
+    New-FakeTuiHelper `
+        -Directory (Join-Path $DeathRepo ".git-loopy/bin") `
+        -Label "clone-local" | Out-Null
+    Set-FakeTuiEnv -Prefix $DeathLabel
+    Set-EmptyPoolEnv -Prefix $DeathLabel
+    $env:FAKE_TUI_EXIT_AFTER = "1"
+    $env:FAKE_TUI_EXIT_CODE = "7"
+
+    $DeathStdout = Join-Path $TempDir "$DeathLabel.stdout"
+    $DeathStderr = Join-Path $TempDir "$DeathLabel.stderr"
+    $DeathStatus = Invoke-Entrypoint `
+        -Repo $DeathRepo `
+        -FakeBin $DeathBin `
+        -StdoutPath $DeathStdout `
+        -StderrPath $DeathStderr `
+        -Arguments @("--interactive")
+    Assert-Equal 0 $DeathStatus (
+        "a helper that died mid-Run changed the Run's exit code"
+    )
+
+    $DeathReplayLines = @(
+        [IO.File]::ReadAllLines((Get-ReplayLog -Repo $DeathRepo)) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    Assert-Equal (
+        "wrapper.run.start,wrapper.iteration.start," +
+        "wrapper.afk_ready.collected,wrapper.iteration.end,wrapper.run.end"
+    ) ([string]::Join(",", @(
+        $DeathReplayLines | ForEach-Object { ($_ | ConvertFrom-Json).type }
+    ))) "the replay log stayed the authoritative record"
+
+    $DeathStdoutLines = @(
+        [IO.File]::ReadAllLines($DeathStdout) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $DeathChildLines = @(
+        [IO.File]::ReadAllLines($env:FAKE_TUI_STDIN) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    Assert-True (
+        $DeathStdoutLines.Count -gt 0
+    ) "the Run never fell back to stdout after its helper died"
+    Assert-Equal (
+        [string]::Join(
+            "`n", $DeathReplayLines[($DeathReplayLines.Count -
+                $DeathStdoutLines.Count)..($DeathReplayLines.Count - 1)]
+        )
+    ) (
+        [string]::Join("`n", $DeathStdoutLines)
+    ) "stdout picked up exactly where the dead helper left off"
+    Assert-Equal (
+        [string]::Join("`n", $DeathReplayLines[0..($DeathChildLines.Count - 1)])
+    ) (
+        [string]::Join("`n", $DeathChildLines)
+    ) "the helper received a prefix of the replay log"
+    Assert-True (
+        $DeathChildLines.Count + $DeathStdoutLines.Count -le
+        $DeathReplayLines.Count
+    ) "an Event was serialized to two live destinations at once"
+
+    $DeathDiagnostics = [IO.File]::ReadAllText($DeathStderr)
+    Assert-Equal 1 (
+        [regex]::Matches(
+            $DeathDiagnostics, "continuing with raw JSONL output on stdout"
+        ).Count
+    ) "a dead helper produced more than one diagnostic"
+    Assert-Contains $DeathDiagnostics (
+        "the git-loopy-tui helper"
+    ) "the fallback diagnostic names the helper"
+    Assert-Equal 1 @(
+        [IO.File]::ReadAllLines($env:FAKE_TUI_STARTED) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    ).Count "the Run respawned the helper after it died"
+
+    # Teardown. Closing stdin is the only cue the helper gets that the Run is
+    # over, so a helper that saw every Event and ended on its own terms is the
+    # whole contract here -- and its exit code is its own business, never the
+    # Run's.
+    $EofLabel = "tui-teardown-eof"
+    $EofRepo = Join-Path $TempDir $EofLabel
+    $EofBin = Join-Path $TempDir "$EofLabel-bin"
+    New-TestRepo -Root $EofRepo
+    Write-FakeTools -BinDir $EofBin
+    New-FakeTuiHelper `
+        -Directory (Join-Path $EofRepo ".git-loopy/bin") `
+        -Label "clone-local" | Out-Null
+    Set-FakeTuiEnv -Prefix $EofLabel
+    Set-EmptyPoolEnv -Prefix $EofLabel
+    # A helper is free to exit non-zero. The Run reports on the Run.
+    $env:FAKE_TUI_EXIT_CODE = "7"
+
+    $EofStdout = Join-Path $TempDir "$EofLabel.stdout"
+    $EofStderr = Join-Path $TempDir "$EofLabel.stderr"
+    $EofStatus = Invoke-Entrypoint `
+        -Repo $EofRepo `
+        -FakeBin $EofBin `
+        -StdoutPath $EofStdout `
+        -StderrPath $EofStderr `
+        -Arguments @("--interactive")
+    Assert-Equal 0 $EofStatus (
+        "the helper's exit code became the Run's"
+    )
+    Assert-True (
+        [IO.File]::Exists($env:FAKE_TUI_FINISHED)
+    ) "closing stdin was not the helper's cue to finish"
+
+    $EofReplay = @(
+        [IO.File]::ReadAllLines((Get-ReplayLog -Repo $EofRepo)) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    Assert-Equal ([string]::Join("`n", $EofReplay)) ([string]::Join("`n", @(
+        [IO.File]::ReadAllLines($env:FAKE_TUI_STDIN) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    ))) "the helper was cut off before the Run's last Event"
+    Assert-Equal "" ([string]::Join("", @(
+        [IO.File]::ReadAllLines($EofStdout) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    ))) "a live helper still left raw JSONL on stdout"
+    Assert-Equal "" ([IO.File]::ReadAllText($EofStderr)) (
+        "a helper that behaved produced a diagnostic"
+    )
+
+    # A helper that will not take the cue. The grace period bounds the wait and
+    # the Run reaps it; without that, a Run's exit would be hostage to its
+    # terminal decoration.
+    $ReapLabel = "tui-teardown-reap"
+    $ReapRepo = Join-Path $TempDir $ReapLabel
+    $ReapBin = Join-Path $TempDir "$ReapLabel-bin"
+    New-TestRepo -Root $ReapRepo
+    Write-FakeTools -BinDir $ReapBin
+    New-FakeTuiHelper `
+        -Directory (Join-Path $ReapRepo ".git-loopy/bin") `
+        -Label "clone-local" | Out-Null
+    Set-FakeTuiEnv -Prefix $ReapLabel
+    Set-EmptyPoolEnv -Prefix $ReapLabel
+    $env:FAKE_TUI_LINGER_SECONDS = "45"
+    $env:GIT_LOOPY_TUI_GRACE_SECONDS = "1"
+
+    $ReapClock = [Diagnostics.Stopwatch]::StartNew()
+    $ReapStatus = Invoke-Entrypoint `
+        -Repo $ReapRepo `
+        -FakeBin $ReapBin `
+        -StdoutPath (Join-Path $TempDir "$ReapLabel.stdout") `
+        -StderrPath (Join-Path $TempDir "$ReapLabel.stderr") `
+        -Arguments @("--interactive")
+    $ReapClock.Stop()
+    Assert-Equal 0 $ReapStatus (
+        "reaping an overstaying helper changed the Run's exit code"
+    )
+    Assert-True (
+        $ReapClock.Elapsed.TotalSeconds -lt 30
+    ) "the Run waited on a helper that ignored the grace period"
+    Assert-True (
+        -not [IO.File]::Exists($env:FAKE_TUI_FINISHED)
+    ) "an overstaying helper outlived its grace period"
+    Assert-Equal 1 @(
+        [IO.File]::ReadAllLines($env:FAKE_TUI_STARTED) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    ).Count "the reaped helper was not the one this Run started"
 }
 finally {
     foreach ($Name in @(
@@ -2579,6 +3561,19 @@ finally {
         "FAKE_COPILOT_STDERR_FILE",
         "FAKE_COPILOT_PLAN_DIR",
         "FAKE_COPILOT_SLEEP",
+        "FAKE_TUI_STDIN",
+        "FAKE_TUI_STARTED",
+        "FAKE_TUI_FINISHED",
+        "FAKE_TUI_VERSION",
+        "FAKE_TUI_MIN_SCHEMA",
+        "FAKE_TUI_MAX_SCHEMA",
+        "FAKE_TUI_PROBE",
+        "FAKE_TUI_PROBE_STATUS",
+        "FAKE_TUI_EXIT_AFTER",
+        "FAKE_TUI_EXIT_CODE",
+        "FAKE_TUI_LINGER_SECONDS",
+        "GIT_LOOPY_TUI_GRACE_SECONDS",
+        "GIT_LOOPY_INTERACTIVE",
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_ISSUE_SOURCE",

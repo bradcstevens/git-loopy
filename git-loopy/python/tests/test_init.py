@@ -10,13 +10,18 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Mapping, Sequence, TypedDict
+from typing import Any, Mapping, Sequence
 
 import pytest
 
 from git_loopy import init as init_module
 from git_loopy import settings
+from git_loopy import verification as verification_module
 from git_loopy.interactive.models import ModelChoice
+from git_loopy.skill_catalog import SkillCatalogError
+from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
+from git_loopy.skillscmd import SkillSelectionModel, SkillSelectionResult
+from tests.fakes import FakeGitClient
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +88,51 @@ def _env(tmp_path: Path) -> dict[str, str]:
     }
 
 
-class _Packaged(TypedDict):
-    packaged_prompt: Path
-    packaged_skills: Path
+#: The wizard's complete injected environment: packaged scaffold sources plus
+#: the Skill-policy seams (catalog, client, picker, git tracking) every
+#: interactive setup now needs. Keyword arguments for ``run_init``.
+_Wizard = dict[str, Any]
 
 
-def _packaged(tmp_path: Path) -> _Packaged:
+class _FakeCopilotClient:
+    """A client double that only supports the async context-manager lifecycle."""
+
+    async def __aenter__(self) -> "_FakeCopilotClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _policy_seams(
+    tmp_path: Path,
+    *,
+    catalog: SkillCatalog | None = None,
+    required_skills: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Injected Skill-policy seams: catalog, client, picker, and git tracking.
+
+    The wizard now establishes a Skill policy, so every interactive test needs
+    these; none of them may reach a real Copilot runtime or a real git tree.
+    """
+    resolved = SkillCatalog() if catalog is None else catalog
+
+    async def discover(_client: object, **_kwargs: object) -> SkillCatalog:
+        return resolved
+
+    def pick(model: Any, **_kwargs: object) -> Any:
+        return SkillSelectionResult(model.enabled)
+
+    return {
+        "client_factory": _FakeCopilotClient,
+        "discoverer": discover,
+        "picker_runner": pick,
+        "git": FakeGitClient(tmp_path),
+        "required_skills": required_skills,
+    }
+
+
+def _packaged(tmp_path: Path) -> _Wizard:
     """A fake packaged prompt + skills tree to scaffold from (no wheel needed)."""
     prompt = tmp_path / "pkg" / "PROMPT.md"
     prompt.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +142,11 @@ def _packaged(tmp_path: Path) -> _Packaged:
     (skills / "setup-agent-skills" / "SKILL.md").write_text(
         "packaged skill\n", encoding="utf-8"
     )
-    return {"packaged_prompt": prompt, "packaged_skills": skills}
+    return {
+        "packaged_prompt": prompt,
+        "packaged_skills": skills,
+        **_policy_seams(tmp_path),
+    }
 
 
 def _skill_tree(root: Path, skills: Mapping[str, str]) -> Path:
@@ -413,11 +461,12 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
             "",  # planning: keep
             "3",  # review: skip
             "2",  # implementation: override
-            "",  # keep the pre-seeded gpt-5.6-terra model
-            "",  # keep its pre-seeded "high" effort, not model default "max"
+            "",  # keep the pre-seeded claude-sonnet-5 model
+            "",  # keep its pre-seeded "low" effort, not model default "max"
             "3",  # test: skip
             "",  # docs: keep
             "3",  # chore: skip
+            "3",  # bugfix: skip
         ),
         output_fn=_Output(),
         fetch_choices=_routing_choices,
@@ -425,9 +474,9 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
     )
 
     assert routing == {
-        "planning": ("gpt-5.6-sol", "xhigh"),
-        "implementation": ("gpt-5.6-terra", "high"),
-        "docs": ("gpt-5.6-terra", "low"),
+        "planning": ("claude-opus-5", "max"),
+        "implementation": ("claude-sonnet-5", "low"),
+        "docs": ("claude-sonnet-5", "low"),
     }
 
 
@@ -525,6 +574,9 @@ def test_run_init_declines_routing_without_writing_routing_table(
     assert config == {
         "model": "claude-opus-4.8",
         "reasoning_effort": "max",
+        # Every completed setup establishes a Skill policy; these injected seams
+        # carry no Required Skills, so the explicitly empty policy is the result.
+        "enabled_skills": [],
     }
     assert any("task-type routing" in prompt for prompt in inp.prompts)
 
@@ -552,12 +604,13 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
     assert rc == 0
     config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-5.6-sol", "effort": "xhigh"},
-        "review": {"model": "claude-opus-4.8", "effort": "high"},
-        "implementation": {"model": "gpt-5.6-terra", "effort": "high"},
+        "planning": {"model": "claude-opus-5", "effort": "max"},
+        "review": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "implementation": {"model": "claude-sonnet-5", "effort": "low"},
         "test": {"model": "claude-sonnet-5", "effort": "medium"},
-        "docs": {"model": "gpt-5.6-terra", "effort": "low"},
-        "chore": {"model": "gpt-5.6-luna", "effort": "low"},
+        "docs": {"model": "claude-sonnet-5", "effort": "low"},
+        "chore": {"model": "claude-haiku-4.5", "effort": "none"},
+        "bugfix": {"model": "claude-opus-5", "effort": "xhigh"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -584,6 +637,7 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
             "3",  # test: skip
             "",  # docs: keep
             "3",  # chore: skip
+            "3",  # bugfix: skip
             "n",  # scaffold
         ),
         output_fn=_Output(),
@@ -595,9 +649,9 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
     config_path = settings.global_config_path(_env(tmp_path))
     config = tomllib.loads(config_path.read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "planning": {"model": "claude-opus-5", "effort": "max"},
         "implementation": {"model": "claude-sonnet-5", "effort": "high"},
-        "docs": {"model": "gpt-5.6-terra", "effort": "low"},
+        "docs": {"model": "claude-sonnet-5", "effort": "low"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -645,6 +699,7 @@ def test_run_init_project_writes_config_and_declines_assets(tmp_path: Path) -> N
     assert tomllib.loads(cfg.read_text()) == {
         "model": "gpt-5.4",
         "reasoning_effort": "low",
+        "enabled_skills": [],
     }
     # Declined => no prompt/skills scaffolded.
     assert not (cfg.parent / "PROMPT.md").exists()
@@ -805,6 +860,7 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
     assert tomllib.loads(cfg.read_text()) == {
         "model": "claude-opus-4.8",
         "reasoning_effort": "max",
+        "enabled_skills": [],
     }
     # --yes scaffolds by default.
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
@@ -829,7 +885,10 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
     assert rc == 0
     cfg = settings.project_config_path(tmp_path)
     # The effort is gated out — a reasoning-incapable model writes model only.
-    assert tomllib.loads(cfg.read_text()) == {"model": "claude-sonnet-4.5"}
+    assert tomllib.loads(cfg.read_text()) == {
+        "model": "claude-sonnet-4.5",
+        "enabled_skills": [],
+    }
 
 
 def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
@@ -846,6 +905,76 @@ def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
     )
     assert rc != 0
     assert any("git repository" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Setup-time Continuation capability verification (issue #257)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_reports_the_verified_continuation_capabilities(
+    tmp_path: Path,
+) -> None:
+    """Setup says which distribution it verified and what that distribution lacks.
+
+    An operator who is never told learns a capability is missing when a Run needs
+    it. The distribution being verified is the one running setup, so the line names
+    the profile and the release rather than an executable path: nothing host-specific
+    is stated, and nothing about the choice is persisted.
+    """
+    output = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=output,
+        fetch_choices=lambda: [],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    verified = [line for line in output.lines if "Continuation capabilities" in line]
+    assert len(verified) == 1
+    assert "foundation profile" in verified[0]
+    assert "concurrent_dispatch" in verified[0]
+
+
+def test_run_init_fails_closed_when_this_distribution_misses_a_capability(
+    tmp_path: Path,
+) -> None:
+    """An unsatisfied profile stops setup before the collect phase writes anything.
+
+    Verification runs first for the same reason preflight does: a Config written
+    against a distribution that cannot do the foundation work is a Run that fails
+    later, further from the cause.
+    """
+    warnings: list[str] = []
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [],
+        warn=warnings.append,
+        verify_continuation=lambda: verification_module.ContinuationVerification(
+            profile=verification_module.FOUNDATION_PROFILE,
+            release_version="0.1.0",
+            satisfied=False,
+            unsatisfied_requirements=("tracker-adapter",),
+            unsupported_optional_capabilities=(),
+        ),
+        **_packaged(tmp_path),
+    )
+
+    assert rc != 0
+    assert any("tracker-adapter" in warning for warning in warnings)
+    assert not settings.project_config_path(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -916,13 +1045,17 @@ def test_existing_catalog_skills_empty_when_target_absent(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _pkg_with_skills(tmp_path: Path, skills: Mapping[str, str]) -> _Packaged:
+def _pkg_with_skills(tmp_path: Path, skills: Mapping[str, str]) -> _Wizard:
     """A fake packaged prompt + a catalog of the given skills to scaffold from."""
     source = _skill_tree(tmp_path / "pkg" / "skills", skills)
     prompt = tmp_path / "pkg" / "PROMPT.md"
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text("PACKAGED PROMPT\n", encoding="utf-8")
-    return {"packaged_prompt": prompt, "packaged_skills": source}
+    return {
+        "packaged_prompt": prompt,
+        "packaged_skills": source,
+        **_policy_seams(tmp_path),
+    }
 
 
 def _project_skills_dir(tmp_path: Path) -> Path:
@@ -1152,3 +1285,332 @@ def test_run_init_summary_reports_a_count_not_a_skill_roster(tmp_path: Path) -> 
     # The three excluded integrations are never named in init's runtime output.
     for excluded in ("microsoft-docs", "microsoft-foundry", "playwright-cli"):
         assert excluded not in out.text
+
+
+# ---------------------------------------------------------------------------
+# Skill policy (issue #229, ADR-0015)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_yes_persists_the_minimal_skill_policy(tmp_path: Path) -> None:
+    """``--yes`` writes only the Required Skills and never consults inventory."""
+
+    def _must_not_discover() -> object:
+        raise AssertionError("--yes must not contact the Copilot Skill inventory")
+
+    packaged = _packaged(tmp_path)
+    packaged["client_factory"] = _must_not_discover
+    packaged["required_skills"] = ("tdd", "code-review")
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),  # never prompted
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert written["enabled_skills"] == ["code-review", "tdd"]
+
+
+def _baseline_catalog() -> SkillCatalog:
+    """A Skill catalog spanning every seeding disposition ADR-0015 distinguishes."""
+    return SkillCatalog(
+        winners={
+            # Packaged names Copilot has never heard of start enabled on a first
+            # setup, matching Copilot's behaviour for a newly added Skill.
+            "packaged-extra": SkillCatalogWinner("packaged-extra", "packaged"),
+            "tdd": SkillCatalogWinner("tdd", "packaged"),
+            "personal-off": SkillCatalogWinner(
+                "personal-off", "personal", copilot_enabled=False
+            ),
+            "builtin-on": SkillCatalogWinner(
+                "builtin-on", "builtin", copilot_enabled=True
+            ),
+        }
+    )
+
+
+def test_run_init_interactive_seeds_the_shared_picker_from_a_copilot_baseline(
+    tmp_path: Path,
+) -> None:
+    """Interactive setup reuses the picker and the policy-editing seed rules."""
+    seen: list[SkillSelectionModel] = []
+
+    def pick(model: SkillSelectionModel, **_kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
+
+    packaged = _packaged(tmp_path)
+    packaged.update(
+        _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
+    )
+    packaged["picker_runner"] = pick
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    # A fresh Skill baseline: Copilot-enabled winners plus packaged names Copilot
+    # has never heard of; a Copilot-disabled winner stays unselected.
+    assert seen[0].enabled == ("builtin-on", "packaged-extra", "tdd")
+    written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert written["enabled_skills"] == ["builtin-on", "packaged-extra", "tdd"]
+
+
+def test_run_init_blocks_the_save_when_a_required_skill_is_disabled(
+    tmp_path: Path,
+) -> None:
+    """A confirmed selection missing a Required Skill writes nothing, actionably."""
+    packaged = _packaged(tmp_path)
+    packaged.update(
+        _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
+    )
+    packaged["picker_runner"] = lambda _model, **_k: SkillSelectionResult(("builtin-on",))
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        warn=warnings.append,
+        **packaged,
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
+    assert any("tdd" in message for message in warnings)
+
+
+def test_run_init_blocks_the_save_on_an_enabled_untracked_project_skill(
+    tmp_path: Path,
+) -> None:
+    """An enabled project winner that is not git-tracked blocks the whole setup."""
+    catalog = SkillCatalog(
+        winners={
+            "local-only": SkillCatalogWinner(
+                "local-only",
+                "project",
+                copilot_enabled=True,
+                path=tmp_path / ".copilot" / "skills" / "local-only" / "SKILL.md",
+            ),
+        }
+    )
+    packaged = _packaged(tmp_path)
+    packaged.update(_policy_seams(tmp_path, catalog=catalog))
+    packaged["picker_runner"] = lambda _model, **_k: SkillSelectionResult(("local-only",))
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        warn=warnings.append,
+        **packaged,
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("local-only" in message for message in warnings)
+
+
+def test_run_init_interactive_inventory_failure_writes_nothing(tmp_path: Path) -> None:
+    """Unresolvable inventory fails setup rather than falling back to an open world."""
+
+    async def explode(_client: object, **_kwargs: object) -> SkillCatalog:
+        raise SkillCatalogError("Copilot inventory is unavailable")
+
+    packaged = _packaged(tmp_path)
+    packaged["discoverer"] = explode
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        warn=warnings.append,
+        **packaged,
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert not (tmp_path / ".copilot" / "skills").exists()
+    assert any("Skill policy" in message for message in warnings)
+
+
+def test_run_init_cancelling_the_picker_writes_nothing(tmp_path: Path) -> None:
+    """Cancelling the Skill picker cancels the whole wizard."""
+    packaged = _packaged(tmp_path)
+    packaged["picker_runner"] = lambda _model, **_k: None
+    out = _Output()
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=out,
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert "cancelled" in out.text
+
+
+def test_run_init_preserves_unrelated_existing_config_keys(tmp_path: Path) -> None:
+    """Re-running setup rewrites its own keys and leaves every other one alone."""
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        config_path,
+        {"model": "gpt-5.4", "max_iterations": 7, "label": "ready-for-agent"},
+    )
+    packaged = _packaged(tmp_path)
+    packaged.update(
+        _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
+    )
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "4", "n", "n"),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    written = tomllib.loads(config_path.read_text())
+    assert written["max_iterations"] == 7
+    assert written["label"] == "ready-for-agent"
+    assert written["model"] == "claude-opus-4.8"
+    assert written["enabled_skills"] == ["builtin-on", "packaged-extra", "tdd"]
+
+
+def test_run_init_collects_the_policy_last_but_before_every_write(
+    tmp_path: Path,
+) -> None:
+    """The picker runs after the scaffold decision and before any target changes."""
+    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
+    _skill_tree(_project_skills_dir(tmp_path), {"setup-agent-skills": "LOCAL\n"})
+    observed: list[tuple[list[str], bool, bool]] = []
+
+    def pick(model: SkillSelectionModel, **_kwargs: object) -> SkillSelectionResult:
+        observed.append(
+            (
+                list(inp.prompts),
+                settings.project_config_path(tmp_path).exists(),
+                (tmp_path / "git-loopy" / "PROMPT.md").exists(),
+            )
+        )
+        return SkillSelectionResult(model.enabled)
+
+    packaged = _packaged(tmp_path)
+    packaged["picker_runner"] = pick
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=inp,
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    asked, config_written, prompt_written = observed[0]
+    # Every earlier decision is already in hand — including the scaffold and
+    # refresh answers the policy's Required Skills depend on.
+    joined = "\n".join(asked).lower()
+    assert "routing" in joined
+    assert "scaffold" in joined
+    assert "refresh" in joined
+    # ...and nothing has been written yet (collect-then-commit).
+    assert not config_written
+    assert not prompt_written
+
+
+def test_run_init_drops_a_stale_effort_when_the_new_model_has_none(
+    tmp_path: Path,
+) -> None:
+    """Merging must not strand an effort the newly chosen model cannot use."""
+    config_path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        config_path, {"model": "claude-opus-4.8", "reasoning_effort": "max"}
+    )
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input("1", "n", "n"),  # no effort prompt: the model has none
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-sonnet-4.5", efforts=())],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    assert "reasoning_effort" not in tomllib.loads(config_path.read_text())
+
+
+def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(
+    tmp_path: Path,
+) -> None:
+    """The policy answers to the instructions setup leaves behind, not the old ones."""
+    stale = tmp_path / "git-loopy" / "PROMPT.md"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("---\nrequired-skills: []\n---\n# stale\n", encoding="utf-8")
+    packaged = _packaged(tmp_path)
+    Path(packaged["packaged_prompt"]).write_text(
+        "---\nrequired-skills:\n  - tdd\n---\n# packaged\n", encoding="utf-8"
+    )
+    # Resolve Required Skills from the prompt rather than an injected list.
+    packaged.pop("required_skills")
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **packaged,
+    )
+
+    assert rc == 0
+    written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert written["enabled_skills"] == ["tdd"]

@@ -159,6 +159,13 @@ for arg in "$@"; do
   printf '%s\n' "$arg" >>"$FAKE_COPILOT_FLAGS"
 done
 printf '%s' "$prompt" >"$FAKE_COPILOT_PROMPT"
+# An opt-in record of the signal dispositions this process inherited. The live
+# interface has to ignore SIGPIPE across its own writes; if it ever left that
+# ignored for the whole Run, `exec` would carry SIG_IGN into the agent process
+# and every tool it starts.
+if [[ -n "${FAKE_COPILOT_SIGNALS:-}" ]]; then
+  trap -p PIPE >"$FAKE_COPILOT_SIGNALS"
+fi
 calls=0
 [[ -f "$FAKE_COPILOT_CALLS" ]] && calls="$(<"$FAKE_COPILOT_CALLS")"
 printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
@@ -1054,6 +1061,178 @@ assert_contains \
   "linked prds root is not allowed" \
   "linked local-PRD root warning"
 
+# Closed-world Skill policy (contract §17.6): the shell port has no native
+# `enabled_skills` support, so every policy surface the family fixture names must
+# abort *before* the Pool is collected and before Copilot is invoked. Silently
+# running a wider capability set than the operator configured is the one outcome
+# this fails closed to prevent. The surfaces come from the shared fixture, so a
+# surface added to the contract fails here rather than leaking through.
+write_fail_closed_tools() {
+  local bin_dir="$1"
+  write_fake_tools "$bin_dir"
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_COPILOT_LOG"
+exit 0
+EOF
+  chmod +x "$bin_dir/copilot"
+}
+
+skill_policy_fixture="$port_dir/../conformance/skill-policy.json"
+
+assert_fail_closed() {
+  local label="$1"
+  local surface="$2"
+  local repo="$3"
+  local fake_bin="$4"
+  shift 4
+
+  set +e
+  run_entrypoint \
+    "$repo" "$fake_bin" \
+    "$temp_dir/$label.stdout" "$temp_dir/$label.stderr" "$@"
+  local status=$?
+  set -e
+
+  assert_equal "1" "$status" "fail-closed exit for $label"
+  assert_contains \
+    "$(<"$temp_dir/$label.stderr")" "$surface" \
+    "fail-closed diagnostic names the surface for $label"
+  assert_contains \
+    "$(<"$temp_dir/$label.stderr")" "Python Orchestrator" \
+    "fail-closed diagnostic directs the operator for $label"
+  [[ ! -s "$temp_dir/$label.stdout" ]] ||
+    fail "fail-closed run emitted Run events for $label"
+  [[ ! -e "$FAKE_COPILOT_LOG" ]] ||
+    fail "fail-closed run invoked Copilot for $label"
+  if [[ -e "$FAKE_GH_LOG" ]] && grep -q '^issue list ' "$FAKE_GH_LOG"; then
+    fail "fail-closed run reached Pool collection for $label"
+  fi
+}
+
+while IFS= read -r surface; do
+  label="fail-closed-${surface//[^a-zA-Z_]/-}"
+  repo="$temp_dir/$label"
+  fake_bin="$temp_dir/$label-bin"
+  make_repo "$repo"
+  write_fail_closed_tools "$fake_bin"
+  export FAKE_COPILOT_LOG="$temp_dir/$label-copilot.log"
+  export FAKE_GH_LOG="$temp_dir/$label-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/$label-list.count"
+  export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+  export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+
+  case "$surface" in
+    GIT_LOOPY_ENABLED_SKILLS)
+      # Explicitly empty: an exact empty replacement is a real policy, and the
+      # port must not read "empty" as "nothing configured".
+      export GIT_LOOPY_ENABLED_SKILLS=""
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin"
+      unset GIT_LOOPY_ENABLED_SKILLS
+      ;;
+    --enable-skill | --disable-skill)
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin" "$surface" tdd
+      ;;
+    enabled_skills)
+      printf 'enabled_skills = ["tdd"]\n' >"$repo/git-loopy/config.toml"
+      assert_fail_closed "$label" "$surface" "$repo" "$fake_bin"
+      ;;
+    *)
+      fail "unhandled Skill-policy surface in the shared fixture: $surface"
+      ;;
+  esac
+  unset FAKE_COPILOT_LOG
+done < <(jq -r '.native_transition.policy_surfaces[]' "$skill_policy_fixture")
+
+# The global scope is a standard Config location too, so a global `enabled_skills`
+# fails closed from a repository that carries no Config of its own.
+repo="$temp_dir/fail-closed-global"
+fake_bin="$temp_dir/fail-closed-global-bin"
+make_repo "$repo"
+write_fail_closed_tools "$fake_bin"
+mkdir -p "$repo/xdg/git-loopy"
+printf 'enabled_skills = []\n' >"$repo/xdg/git-loopy/config.toml"
+export FAKE_COPILOT_LOG="$temp_dir/fail-closed-global-copilot.log"
+export FAKE_GH_LOG="$temp_dir/fail-closed-global-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/fail-closed-global-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+assert_fail_closed \
+  "fail-closed-global" "enabled_skills" "$repo" "$fake_bin"
+unset FAKE_COPILOT_LOG
+
+# Positive control (contract §17.2): legacy deny-only inputs are deprecated final
+# guards, not a closed-world surface, so they still resolve and reach the Pool.
+repo="$temp_dir/legacy-deny-runs"
+fake_bin="$temp_dir/legacy-deny-runs-bin"
+make_repo "$repo"
+write_fake_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/legacy-deny-runs-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/legacy-deny-runs-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+set +e
+export GIT_LOOPY_DENY_SKILLS="legacy-skill"
+run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/legacy-deny-runs.stdout" "$temp_dir/legacy-deny-runs.stderr" \
+  --deny-skill flag-skill
+status=$?
+unset GIT_LOOPY_DENY_SKILLS
+set -e
+assert_equal "0" "$status" "legacy deny-only invocation still runs"
+assert_contains \
+  "$(<"$FAKE_GH_LOG")" "issue list" \
+  "legacy deny-only invocation reached Pool collection"
+
+# The strongest form of "Copilot is never invoked on failure": drive the real
+# turn machinery — a real git repository and a Pool that would otherwise start an
+# Iteration — and prove the abort still lands before the agent process exists.
+repo="$temp_dir/fail-closed-turn"
+fake_bin="$temp_dir/fail-closed-turn-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+printf 'enabled_skills = ["tdd"]\n' >"$repo/git-loopy/config.toml"
+export FAKE_GH_LOG="$temp_dir/fail-closed-turn-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/fail-closed-turn-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "fail-closed-turn"
+export FAKE_COPILOT_COMMITS=0
+
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/fail-closed-turn.stdout" "$temp_dir/fail-closed-turn.stderr" 1
+status=$?
+set -e
+assert_equal "1" "$status" "a configured policy aborts a Run that had real work"
+assert_contains \
+  "$(<"$temp_dir/fail-closed-turn.stderr")" \
+  "enabled_skills" \
+  "the turn-level abort names the surface"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "fail-closed Run invoked the fake Copilot process"
+[[ ! -e "$FAKE_GH_LOG" ]] ||
+  fail "fail-closed Run reached the GitHub dependency checks"
+[[ ! -s "$temp_dir/fail-closed-turn.stdout" ]] ||
+  fail "fail-closed Run emitted Run events"
+
+# Control: the same repository, tools, and Pool without the Config key does start
+# the agent — so the assertions above can actually fail.
+rm -f "$repo/git-loopy/config.toml"
+setup_copilot_env "fail-closed-turn-control"
+export FAKE_COPILOT_COMMITS=0
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/fail-closed-control.stdout" "$temp_dir/fail-closed-control.stderr" 1; then
+  fail "control Run did not exit 0: $(<"$temp_dir/fail-closed-control.stderr")"
+fi
+[[ -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "control Run never invoked the fake Copilot process"
+unset FAKE_COPILOT_COMMITS
+
 repo="$temp_dir/missing-tracker"
 fake_bin="$temp_dir/missing-tracker-bin"
 mkdir -p "$repo/git-loopy"
@@ -1638,5 +1817,459 @@ jq -se '
     and .issues[0].closed_at == "2026-05-16T00:00:01.000Z"
   ' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON" >/dev/null
 ) || fail "wall-clock adjustment changed monotonic shell lifecycle durations"
+
+# The shared TUI helper (PRD #173). Every case below drives the real entrypoint
+# against a fake `git-loopy-tui` that records what it was asked to do, so
+# discovery, the compatibility probe, transport, mid-Run failure, and teardown
+# are observed at the process boundary rather than asserted about in-process.
+#
+# `FAKE_TUI_STDIN` is what the child actually received; the replay log is what
+# the Run recorded. The two must agree, because the contract's "serialize once"
+# rule means the live destination and the replay log are the same bytes.
+write_fake_tui() {
+  local path="$1"
+  local label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat >"$path" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+label="$label"
+EOF
+  cat >>"$path" <<'EOF'
+if [[ "${1:-}" == "--schema-version" ]]; then
+  version="${FAKE_TUI_VERSION:-0.0.0}"
+  minimum="${FAKE_TUI_MIN_SCHEMA:-1}"
+  maximum="${FAKE_TUI_MAX_SCHEMA:-1}"
+  if [[ -n "${FAKE_TUI_PROBE:-}" ]]; then
+    printf '%s\n' "$FAKE_TUI_PROBE"
+  else
+    printf '{"name": "git-loopy-tui", "version": "%s", ' "$version"
+    printf '"min_event_schema_version": %s, ' "$minimum"
+    printf '"max_event_schema_version": %s, ' "$maximum"
+    printf '"wrapper_contract_version": "1.0"}\n'
+  fi
+  exit "${FAKE_TUI_PROBE_STATUS:-0}"
+fi
+printf '%s\n' "$label" >>"$FAKE_TUI_STARTED"
+delivered=0
+while IFS= read -r line; do
+  delivered=$((delivered + 1))
+  printf '%s\n' "$line" >>"$FAKE_TUI_STDIN"
+  if [[ -n "${FAKE_TUI_EXIT_AFTER:-}" ]] && ((delivered >= FAKE_TUI_EXIT_AFTER)); then
+    exit "${FAKE_TUI_EXIT_CODE:-0}"
+  fi
+done
+if [[ -n "${FAKE_TUI_LINGER_SECONDS:-}" ]]; then
+  sleep "$FAKE_TUI_LINGER_SECONDS"
+fi
+exit 0
+EOF
+  chmod +x "$path"
+}
+
+setup_tui_env() {
+  local prefix="$1"
+  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started"
+  export FAKE_TUI_STDIN="$temp_dir/$prefix-tui.stdin"
+  export FAKE_TUI_STARTED="$temp_dir/$prefix-tui.started"
+  # A clone-local helper is an artifact of this distribution, so contract §16
+  # requires exact Release-version equality; the default fake is a well-installed
+  # one and a case that wants drift says so explicitly.
+  export FAKE_TUI_VERSION="$expected_release_version"
+  unset FAKE_TUI_PROBE FAKE_TUI_PROBE_STATUS FAKE_TUI_EXIT_AFTER \
+    FAKE_TUI_EXIT_CODE FAKE_TUI_LINGER_SECONDS
+  export FAKE_TUI_MIN_SCHEMA=1
+  export FAKE_TUI_MAX_SCHEMA=1
+}
+
+replay_log_for() {
+  local repo="$1"
+  local log
+  log="$(find "$repo/.git-loopy/logs" -name '*.jsonl' -print -quit 2>/dev/null)"
+  [[ -n "$log" ]] || fail "no replay log under $repo"
+  printf '%s\n' "$log"
+}
+
+# The whole interactive path in one case: the clone-local helper is discovered,
+# probed, started, and fed. Because the live destination *is* the child, stdout
+# carries no Event stream at all — and the replay log still holds every byte.
+tui_repo="$temp_dir/tui-delivery"
+tui_bin="$temp_dir/tui-delivery-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "delivery"
+export FAKE_GH_LOG="$temp_dir/tui-delivery-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-delivery-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-delivery.stdout" "$temp_dir/tui-delivery.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "interactive empty-pool Run exit"
+[[ -s "$FAKE_TUI_STARTED" ]] || fail "interactive Run never started the helper"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" "helper discovery precedence"
+[[ ! -s "$temp_dir/tui-delivery.stdout" ]] ||
+  fail "interactive Run also wrote the Event stream to stdout"
+assert_equal \
+  "$(<"$(replay_log_for "$tui_repo")")" \
+  "$(<"$FAKE_TUI_STDIN")" \
+  "helper stdin and replay log parity"
+grep -q '"type": "wrapper.run.end"' "$FAKE_TUI_STDIN" ||
+  fail "helper never received the final Run event"
+
+# Discovery falls through to PATH only when the clone has no pinned helper. The
+# two fakes label themselves, so "which one ran" is observed rather than assumed.
+tui_repo="$temp_dir/tui-path"
+tui_bin="$temp_dir/tui-path-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_bin/git-loopy-tui" "path"
+setup_tui_env "path"
+export FAKE_GH_LOG="$temp_dir/tui-path-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-path-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-path.stdout" "$temp_dir/tui-path.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "PATH-helper Run exit"
+assert_equal "path" "$(<"$FAKE_TUI_STARTED")" "PATH helper discovery"
+
+# Both present: the repository's pinned helper wins, because a clone that pins a
+# version means to coordinate exactly with it.
+tui_repo="$temp_dir/tui-precedence"
+tui_bin="$temp_dir/tui-precedence-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_bin/git-loopy-tui" "path"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "precedence"
+export FAKE_GH_LOG="$temp_dir/tui-precedence-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-precedence-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-precedence.stdout" "$temp_dir/tui-precedence.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "discovery-precedence Run exit"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
+  "clone-local helper outranks a helper on PATH"
+
+# The probe is a *gate*, not a formality: a helper that cannot decode this Run's
+# Event schema is refused before it is ever handed a byte, so it never gets to
+# blank the terminal and then fail.
+tui_repo="$temp_dir/tui-incompatible"
+tui_bin="$temp_dir/tui-incompatible-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "incompatible"
+export FAKE_TUI_MIN_SCHEMA=2
+export FAKE_TUI_MAX_SCHEMA=3
+export FAKE_GH_LOG="$temp_dir/tui-incompatible-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-incompatible-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-incompatible.stdout" "$temp_dir/tui-incompatible.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "incompatible-helper Run exit"
+[[ ! -e "$FAKE_TUI_STARTED" ]] ||
+  fail "an incompatible helper was started anyway"
+assert_contains \
+  "$(<"$temp_dir/tui-incompatible.stderr")" \
+  "does not support Event schema 1" \
+  "incompatible-helper diagnostic"
+jq -se '.[-1].type == "wrapper.run.end"' \
+  "$temp_dir/tui-incompatible.stdout" >/dev/null ||
+  fail "incompatible helper did not fall back to raw JSONL on stdout"
+
+# An explicit request that cannot be met explains itself; the Run continues.
+tui_repo="$temp_dir/tui-missing"
+tui_bin="$temp_dir/tui-missing-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+setup_tui_env "missing"
+export FAKE_GH_LOG="$temp_dir/tui-missing-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-missing-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-missing.stdout" "$temp_dir/tui-missing.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "missing-helper Run exit"
+assert_contains \
+  "$(<"$temp_dir/tui-missing.stderr")" \
+  "interactive mode was requested" \
+  "explicit missing-helper diagnostic"
+jq -se '.[-1].type == "wrapper.run.end"' \
+  "$temp_dir/tui-missing.stdout" >/dev/null ||
+  fail "missing helper did not fall back to raw JSONL on stdout"
+
+# Auto-detection never waits for, or speaks about, a terminal it does not have.
+# The suite redirects stdout to a file, so this is a genuine non-TTY Run with a
+# perfectly good helper sitting right there.
+tui_repo="$temp_dir/tui-auto"
+tui_bin="$temp_dir/tui-auto-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "auto"
+export FAKE_GH_LOG="$temp_dir/tui-auto-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-auto-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-auto.stdout" "$temp_dir/tui-auto.stderr"
+status=$?
+set -e
+assert_equal "0" "$status" "non-TTY auto-detected Run exit"
+[[ ! -e "$FAKE_TUI_STARTED" ]] ||
+  fail "a non-TTY Run started the helper"
+[[ ! -s "$temp_dir/tui-auto.stderr" ]] ||
+  fail "a non-TTY Run warned about an interface nobody asked for"
+jq -se '.[-1].type == "wrapper.run.end"' "$temp_dir/tui-auto.stdout" >/dev/null ||
+  fail "non-TTY Run did not emit raw JSONL on stdout"
+
+# `GIT_LOOPY_INTERACTIVE` is the middle tier: it outranks TTY auto-detection and
+# is outranked by an explicit flag.
+tui_repo="$temp_dir/tui-env"
+tui_bin="$temp_dir/tui-env-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "env"
+export FAKE_GH_LOG="$temp_dir/tui-env-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-env-list.count"
+export GIT_LOOPY_INTERACTIVE=1
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-env.stdout" "$temp_dir/tui-env.stderr"
+status=$?
+set -e
+assert_equal "0" "$status" "environment-selected interactive Run exit"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
+  "GIT_LOOPY_INTERACTIVE=1 selects the live interface without a TTY"
+
+setup_tui_env "env-flag-wins"
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-env-flag.stdout" "$temp_dir/tui-env-flag.stderr" \
+  --no-interactive
+status=$?
+set -e
+assert_equal "0" "$status" "--no-interactive over GIT_LOOPY_INTERACTIVE=1 exit"
+[[ ! -e "$FAKE_TUI_STARTED" ]] ||
+  fail "--no-interactive did not outrank GIT_LOOPY_INTERACTIVE=1"
+jq -se '.[-1].type == "wrapper.run.end"' \
+  "$temp_dir/tui-env-flag.stdout" >/dev/null ||
+  fail "--no-interactive did not keep raw JSONL on stdout"
+
+export GIT_LOOPY_INTERACTIVE=0
+setup_tui_env "env-off"
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-env-off.stdout" "$temp_dir/tui-env-off.stderr"
+status=$?
+set -e
+unset GIT_LOOPY_INTERACTIVE
+assert_equal "0" "$status" "GIT_LOOPY_INTERACTIVE=0 Run exit"
+[[ ! -e "$FAKE_TUI_STARTED" ]] ||
+  fail "GIT_LOOPY_INTERACTIVE=0 still started the helper"
+
+# Contract §16: a pinned helper is an artifact of this distribution, so a
+# Release mismatch there is drift and fails closed. The same mismatch in a helper
+# discovered on PATH is a package-manager fact, not drift: the schema probe is
+# the compatibility authority, so that Run continues with a warning.
+tui_repo="$temp_dir/tui-pinned-drift"
+tui_bin="$temp_dir/tui-pinned-drift-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "pinned-drift"
+export FAKE_TUI_VERSION="0.0.1-not-this-release"
+export FAKE_GH_LOG="$temp_dir/tui-pinned-drift-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-pinned-drift-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-pinned-drift.stdout" "$temp_dir/tui-pinned-drift.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "pinned Release-drift Run exit"
+[[ ! -e "$FAKE_TUI_STARTED" ]] ||
+  fail "a pinned helper from another Release was started"
+assert_contains \
+  "$(<"$temp_dir/tui-pinned-drift.stderr")" \
+  "reinstall it to match this clone" \
+  "pinned Release-drift diagnostic"
+
+tui_repo="$temp_dir/tui-external-drift"
+tui_bin="$temp_dir/tui-external-drift-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_bin/git-loopy-tui" "path"
+setup_tui_env "external-drift"
+export FAKE_TUI_VERSION="0.0.1-another-release"
+export FAKE_GH_LOG="$temp_dir/tui-external-drift-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-external-drift-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-external-drift.stdout" "$temp_dir/tui-external-drift.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "external Release-drift Run exit"
+assert_equal "path" "$(<"$FAKE_TUI_STARTED")" \
+  "an externally discovered helper from another Release still runs"
+assert_contains \
+  "$(<"$temp_dir/tui-external-drift.stderr")" \
+  "0.0.1-another-release" \
+  "external Release-drift warning"
+
+# Mid-Run death. The child accepts two Events and quits; from there the Run must
+# say so exactly once, put every later Event on stdout as raw JSONL, keep the
+# replay log whole, and never start a second child.
+tui_repo="$temp_dir/tui-crash"
+tui_bin="$temp_dir/tui-crash-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "crash"
+export FAKE_TUI_EXIT_AFTER=2
+export FAKE_TUI_EXIT_CODE=7
+export FAKE_GH_LOG="$temp_dir/tui-crash-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-crash-list.count"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-crash.stdout" "$temp_dir/tui-crash.stderr" \
+  --interactive
+status=$?
+set -e
+unset FAKE_TUI_EXIT_AFTER FAKE_TUI_EXIT_CODE
+assert_equal "0" "$status" "a helper that died mid-Run did not change the Run exit"
+assert_equal "1" "$(wc -l <"$FAKE_TUI_STARTED" | tr -d ' ')" \
+  "the helper was respawned after it died"
+assert_equal \
+  "1" \
+  "$(grep -c 'continuing with raw JSONL output' "$temp_dir/tui-crash.stderr")" \
+  "mid-Run helper failure diagnostic count"
+jq -se '.[-1].type == "wrapper.run.end"' "$temp_dir/tui-crash.stdout" >/dev/null ||
+  fail "the Run did not fall back to raw JSONL on stdout after the helper died"
+crash_replay="$(replay_log_for "$tui_repo")"
+jq -se '
+  ([.[] | .type] | index("wrapper.run.start")) == 0
+  and .[-1].type == "wrapper.run.end"
+' "$crash_replay" >/dev/null ||
+  fail "the replay log lost Events when the helper died"
+assert_equal "2" "$(wc -l <"$FAKE_TUI_STDIN" | tr -d ' ')" \
+  "Events delivered before the helper died"
+# Delivery happened once: an Event the child accepted is not replayed onto
+# stdout by the fallback, and an Event the child never saw is.
+crash_first_delivered="$(head -n 1 "$FAKE_TUI_STDIN")"
+if grep -qF "$crash_first_delivered" "$temp_dir/tui-crash.stdout"; then
+  fail "an Event delivered to the helper was repeated on stdout"
+fi
+if grep -qF "$crash_first_delivered" "$crash_replay"; then
+  :
+else
+  fail "an Event delivered to the helper is missing from the replay log"
+fi
+
+# Teardown is bounded. A child that ignores EOF is reaped rather than waited on
+# forever, and the Run's own exit code survives.
+tui_repo="$temp_dir/tui-linger"
+tui_bin="$temp_dir/tui-linger-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "linger"
+export FAKE_TUI_LINGER_SECONDS=30
+export GIT_LOOPY_TUI_GRACE_SECONDS=1
+export FAKE_GH_LOG="$temp_dir/tui-linger-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-linger-list.count"
+
+linger_started="$(date +%s)"
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-linger.stdout" "$temp_dir/tui-linger.stderr" \
+  --interactive
+status=$?
+set -e
+linger_elapsed=$(($(date +%s) - linger_started))
+unset FAKE_TUI_LINGER_SECONDS GIT_LOOPY_TUI_GRACE_SECONDS
+assert_equal "0" "$status" "lingering-helper Run exit"
+((linger_elapsed < 20)) ||
+  fail "the Run waited on an overstaying helper for ${linger_elapsed}s"
+
+# The strongest exit-code guard: a Run that ends *stuck* under a live interface
+# still exits 1. A teardown that swallowed the Run's status would pass every
+# case above and fail only here.
+repo="$temp_dir/tui-stuck"
+fake_bin="$temp_dir/tui-stuck-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+write_fake_tui "$repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "stuck"
+cp "$temp_dir/github-list.json" "$temp_dir/tui-stuck-list.json"
+export FAKE_GH_LOG="$temp_dir/tui-stuck-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-stuck-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/tui-stuck-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "tui-stuck"
+export FAKE_COPILOT_COMMITS=0
+export FAKE_COPILOT_SIGNALS="$temp_dir/tui-stuck-copilot.signals"
+rm -f "$FAKE_COPILOT_SIGNALS"
+
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/tui-stuck.stdout" "$temp_dir/tui-stuck.stderr" \
+  --interactive 0
+status=$?
+set -e
+unset FAKE_COPILOT_COMMITS
+assert_equal "1" "$status" "a stuck interactive Run still exits 1"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
+  "the stuck Run ran under the live interface"
+[[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
+  fail "the interactive stuck Run never reached the agent process"
+[[ ! -s "$FAKE_COPILOT_SIGNALS" ]] ||
+  fail "the live interface left SIGPIPE ignored for the agent process: $(<"$FAKE_COPILOT_SIGNALS")"
+unset FAKE_COPILOT_SIGNALS
+jq -se '
+  .[-1].type == "wrapper.run.end" and .[-1].outcome == "stuck"
+' "$FAKE_TUI_STDIN" >/dev/null ||
+  fail "the helper did not receive the stuck Run's final Event"
 
 printf 'shell Orchestrator boundary: ok\n'

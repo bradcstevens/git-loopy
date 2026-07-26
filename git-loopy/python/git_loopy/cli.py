@@ -98,6 +98,10 @@ from git_loopy.config import (
     gate_reasoning_effort,
 )
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.skill_policy import (
+    SkillPolicyStartupState,
+    classify_skill_policy_startup,
+)
 
 __all__ = [
     "main",
@@ -222,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
             "policy.\n"
+            "  skills sync                    Re-copy Copilot's Skill baseline "
+            "after confirmation.\n"
             "                                 See `git-loopy skills -h`.\n"
             "  continuation                   Native Continuation contract commands.\n"
             "                                 See `git-loopy continuation -h`.\n"
@@ -498,10 +504,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "Interactive first-run setup wizard. Chooses a scope (global or "
             "project), seeds model / reasoning effort from the live model list, "
-            "writes config.toml, and — default yes — scaffolds an editable "
-            "PROMPT.md override and git-loopy's agent skills. Writes config and "
-            "exits; it never starts the loop. Cancelling writes nothing and "
-            "exits non-zero."
+            "establishes the closed-world Skill policy through the same "
+            "searchable picker as `git-loopy skills edit`, writes config.toml, "
+            "and — default yes — scaffolds an editable PROMPT.md override and "
+            "git-loopy's agent skills. Writes config and exits; it never starts "
+            "the loop. Cancelling writes nothing and exits non-zero."
         ),
     )
     _add_scope_flags(init)
@@ -513,7 +520,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Assume defaults and never prompt (CI-friendly). Uses the project "
             "scope unless --global is given, the built-in default model / "
-            "effort, and scaffolds the prompt + skills."
+            "effort, and scaffolds the prompt + skills. Persists the Minimal "
+            "Skill policy (only the Required Skills) without contacting the "
+            "machine's Copilot Skill inventory."
         ),
     )
 
@@ -528,7 +537,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     skills_sub = skills.add_subparsers(
         dest="skills_command",
         required=True,
-        metavar="{list,edit}",
+        metavar="{list,edit,sync}",
     )
     skills_sub.add_parser(
         "list",
@@ -548,6 +557,17 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_scope_flags(skills_edit)
+    skills_sync = skills_sub.add_parser(
+        "sync",
+        help="Re-copy Copilot's Skill baseline into a saved Skill policy.",
+        description=(
+            "Show the exact additions and removals one explicit Copilot import "
+            "would make to a project or global Skill policy, then save it after "
+            "confirmation. Skills Copilot does not report keep their current "
+            "state, and Copilot's own settings are never changed."
+        ),
+    )
+    _add_scope_flags(skills_sync)
 
     continuation = sub.add_parser(
         "continuation",
@@ -688,7 +708,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     routing_recommended = routing_sub.add_parser(
         "use-recommended",
-        help="Seed the recommended six-type routing core into a scope.",
+        help="Seed the recommended task-type routing core into a scope.",
     )
     _add_scope_flags(routing_recommended, suppress_default=True)
     return parser
@@ -779,19 +799,31 @@ def _run_config(args: argparse.Namespace) -> int:
 
 
 def _run_skills(args: argparse.Namespace) -> int:
-    """Dispatch ``git-loopy skills`` without constructing the Run loop."""
+    """Dispatch ``git-loopy skills`` without constructing the Run loop.
+
+    Scope resolution belongs to the handler, which applies the shared
+    ``_add_scope_flags`` rule (ADR-0006): project inside a repository, else
+    global. The global Skill policy is machine-scoped, so — exactly like
+    ``config`` — running outside a repository is not an error here; only an
+    explicit ``--project`` without one is.
+    """
     from git_loopy import skillscmd
 
     try:
-        repo_root = resolve_repo_root()
-    except RuntimeError as exc:
-        print(f"git-loopy: {exc}", file=sys.stderr)
-        return 1
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
     if args.skills_command == "list":
         return skillscmd.run_skills_list(repo_root=repo_root, env=os.environ)
     if args.skills_command == "edit":
         return skillscmd.run_skills_edit(
-            scope=args.scope or "project",
+            scope=getattr(args, "scope", None),
+            repo_root=repo_root,
+            env=os.environ,
+        )
+    if args.skills_command == "sync":
+        return skillscmd.run_skills_sync(
+            scope=getattr(args, "scope", None),
             repo_root=repo_root,
             env=os.environ,
         )
@@ -1483,6 +1515,37 @@ def _should_auto_init(
     return stdin_isatty
 
 
+def _should_migrate_skill_policy(
+    state: SkillPolicyStartupState,
+    interactive: bool | None,
+    stdin_isatty: bool,
+) -> bool:
+    """Decide whether this invocation opens the one-time migration picker (#230).
+
+    The same shape as :func:`_should_auto_init`, and for the same reason: the
+    picker prompts on stdin, so a non-TTY (CI, a pipe) or an explicit
+    ``GIT_LOOPY_INTERACTIVE=0`` / ``--no-interactive`` must never reach it. An
+    unattended Run stays deterministic and non-blocking by falling back to the
+    **Minimal Skill policy** instead — deliberately *without* persisting it, so
+    the operator's first interactive Run is still offered the real choice.
+    """
+    if state is not SkillPolicyStartupState.LEGACY:
+        return False
+    if interactive is False:
+        return False
+    return stdin_isatty
+
+
+#: What an unattended Run says when it finds Config that predates the policy.
+_LEGACY_SKILL_POLICY_WARNING = (
+    "this Config predates the closed-world Skill policy and no terminal is "
+    "available to convert it, so this Run uses the Minimal Skill policy "
+    "(Required Skills only) and persists nothing. Run `git-loopy skills edit` "
+    "or `git-loopy init` on a terminal to choose the Skills this installation "
+    "may load."
+)
+
+
 def _should_select_model(args: argparse.Namespace) -> bool:
     """Resolve whether this invocation opens the startup model picker.
 
@@ -1610,6 +1673,44 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     config = resolved.run
+
+    # One-time Skill-policy migration (#230, ADR-0015): Config that predates
+    # `enabled_skills` is not the same as no Config at all — the wizard above
+    # never ran for it, so it would otherwise resolve the Minimal Skill policy
+    # silently and forever. On a terminal, convert it before anything else
+    # happens; the loop owns source collection, `wrapper.run.start`, every
+    # Iteration and Lane, and the SDK session, so migrating ahead of `loop.run`
+    # is what guarantees none of them run against an unanswered policy.
+    # Cancelling writes nothing and starts nothing. Unattended, warn and carry
+    # the Run on the Minimal Skill policy without persisting it.
+    startup_state = classify_skill_policy_startup(
+        config.skill_policy,
+        config_present=bool(tables.project or tables.global_),
+    )
+    if _should_migrate_skill_policy(
+        startup_state, resolved.interactive, sys.stdin.isatty()
+    ):
+        from git_loopy import skillscmd as _skillscmd
+
+        migration_rc = _skillscmd.run_skill_policy_migration(
+            repo_root=repo_root,
+            env=os.environ,
+            legacy_denied=config.deny_skills,
+        )
+        if migration_rc != 0:
+            return migration_rc
+        # Re-read + re-resolve so the Run consumes the policy just persisted.
+        try:
+            tables = settings.load_configs(repo_root, os.environ)
+            resolved = resolve_config(
+                args, os.environ, project=tables.project, global_=tables.global_
+            )
+        except settings.SettingsError as exc:
+            print(f"git-loopy: error: {exc}", file=sys.stderr)
+            return 1
+        config = resolved.run
+    elif startup_state is SkillPolicyStartupState.LEGACY:
+        _warn(_LEGACY_SKILL_POLICY_WARNING)
 
     # Import here so the SDK / Rich / pricing only load if we're
     # actually going to run. Keeps `git-loopy --help` snappy.

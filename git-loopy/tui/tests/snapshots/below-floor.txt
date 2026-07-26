@@ -1,0 +1,9 @@
+git-loopy
+terminal 34x9, needs 40x12
+resize, or drop --render for the
+JSON projection
+
+
+
+
+

@@ -140,32 +140,53 @@ REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 #:
 #: Keyed by the bare task-type key (the part *after* :data:`TASK_TYPE_LABEL_PREFIX`,
 #: matching :attr:`RunConfig.routing` and the ``[routing]`` config table), in the
-#: fixed **presentation order** the guided walk surfaces. A 6-type core:
+#: fixed **presentation order** the guided walk surfaces. A 7-type core:
 #:
-#: ==================  =================  ========
-#: task-type key       Model              Effort
-#: ==================  =================  ========
-#: ``planning``        ``gpt-5.6-sol``      ``xhigh``
-#: ``review``          ``claude-opus-4.8``  ``high``
-#: ``implementation``  ``gpt-5.6-terra``    ``high``
-#: ``test``            ``claude-sonnet-5``  ``medium``
-#: ``docs``            ``gpt-5.6-terra``    ``low``
-#: ``chore``           ``gpt-5.6-luna``     ``low``
-#: ==================  =================  ========
+#: ==================  ====================  ========
+#: task-type key       Model                 Effort
+#: ==================  ====================  ========
+#: ``planning``        ``claude-opus-5``     ``max``
+#: ``review``          ``gpt-5.6-sol``       ``xhigh``
+#: ``implementation``  ``claude-sonnet-5``   ``low``
+#: ``test``            ``claude-sonnet-5``   ``medium``
+#: ``docs``            ``claude-sonnet-5``   ``low``
+#: ``chore``           ``claude-haiku-4.5``  ``none``
+#: ``bugfix``          ``claude-opus-5``     ``xhigh``
+#: ==================  ====================  ========
+#:
+#: **Provenance.** Adopted from the model-routing run of **2026-07-24** (the v3
+#: table posted on issue #280, sourced from the live ``GET /models`` response for
+#: Copilot CLI ``1.0.75``), reconciled with the decisions taken on that map:
+#: ``bugfix`` is issue #294's addition at ``xhigh`` — ``high`` would make
+#: labelling a bug *cheaper* than not labelling it, and ``max`` is reserved as
+#: the escalation rung (#291). Record two things a future reader will otherwise
+#: "correct" back toward some other source:
+#:
+#: * ``chore`` routes to a **reasoning-incapable** model. ``claude-haiku-4.5``
+#:   exposes no effort dial, so :func:`gate_reasoning_effort` drops the ``none``
+#:   to ``None`` and signals :attr:`EffortGateWarning.INCAPABLE_MODEL`. The
+#:   ``none`` is therefore *declarative* — it records the intent "do not reason"
+#:   for a model that has no switch to honour it, and Haiku's internal thinking
+#:   budget remains uncapped. This is the **one** row that does not gate clean,
+#:   and ``tests/test_config.py`` pins it by name so a second such route cannot
+#:   be added silently.
+#: * ``planning`` and ``bugfix`` share a model with the global default's
+#:   successor but not its effort; the relation is rationale, not mechanism.
 #:
 #: The **global default stays** ``claude-opus-4.8 @ max`` (today's built-in), so
 #: an unlabelled issue is unaffected: it routes through the global default, not
-#: the ``planning`` route, which now deliberately diverges from the default. Every
-#: pair is valid against :data:`MODEL_REASONING_EFFORTS` (it survives
-#: :func:`gate_reasoning_effort` unchanged) — pinned by ``tests/test_config.py``.
+#: the ``planning`` route, which deliberately diverges from the default. Every
+#: pair is valid against :data:`MODEL_REASONING_EFFORTS` — clean, or the single
+#: documented ``chore`` exception above — pinned by ``tests/test_config.py``.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("gpt-5.6-sol", "xhigh"),
-        "review": ("claude-opus-4.8", "high"),
-        "implementation": ("gpt-5.6-terra", "high"),
+        "planning": ("claude-opus-5", "max"),
+        "review": ("gpt-5.6-sol", "xhigh"),
+        "implementation": ("claude-sonnet-5", "low"),
         "test": ("claude-sonnet-5", "medium"),
-        "docs": ("gpt-5.6-terra", "low"),
-        "chore": ("gpt-5.6-luna", "low"),
+        "docs": ("claude-sonnet-5", "low"),
+        "chore": ("claude-haiku-4.5", "none"),
+        "bugfix": ("claude-opus-5", "xhigh"),
     }
 )
 

@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "channel": "homebrew",
+  "channel_job": "homebrew",
+  "tap_repository": "bradcstevens/homebrew-git-loopy",
+  "formula_path": "Formula/git-loopy-tui.rb",
+  "formula_name": "git-loopy-tui",
+  "formula_class": "GitLoopyTui",
+  "description": "Live Dashboard helper for the git-loopy autonomous runner family",
+  "homepage": "https://github.com/bradcstevens/git-loopy",
+  "license": "MIT",
+  "published_channel": "stable",
+  "trusted_artifact_url_prefix": "https://github.com/bradcstevens/git-loopy/releases/download/",
+  "platforms": [
+    {
+      "id": "macos-arm64",
+      "os": "macos",
+      "arch": "arm64",
+      "libc": null,
+      "target": "aarch64-apple-darwin",
+      "condition": [
+        "on_macos",
+        "on_arm"
+      ]
+    },
+    {
+      "id": "macos-x64",
+      "os": "macos",
+      "arch": "x64",
+      "libc": null,
+      "target": "x86_64-apple-darwin",
+      "condition": [
+        "on_macos",
+        "on_intel"
+      ]
+    },
+    {
+      "id": "linux-arm64",
+      "os": "linux",
+      "arch": "arm64",
+      "libc": "gnu",
+      "target": "aarch64-unknown-linux-gnu",
+      "condition": [
+        "on_linux",
+        "on_arm"
+      ]
+    },
+    {
+      "id": "linux-x64",
+      "os": "linux",
+      "arch": "x64",
+      "libc": "gnu",
+      "target": "x86_64-unknown-linux-gnu",
+      "condition": [
+        "on_linux",
+        "on_intel"
+      ]
+    }
+  ],
+  "excluded_targets": [
+    {
+      "triple": "x86_64-pc-windows-msvc",
+      "reason": "Homebrew does not run on Windows; winget and Scoop carry that platform"
+    },
+    {
+      "triple": "aarch64-unknown-linux-musl",
+      "reason": "Homebrew on Linux runs against the host glibc, so the tap installs the gnu build"
+    },
+    {
+      "triple": "x86_64-unknown-linux-musl",
+      "reason": "Homebrew on Linux runs against the host glibc, so the tap installs the gnu build"
+    }
+  ],
+  "publication_cases": [
+    {
+      "id": "a-stable-release-updates-the-tap",
+      "version": "1.2.3",
+      "marked_prerelease": false,
+      "published": true,
+      "error": null
+    },
+    {
+      "id": "a-release-candidate-never-reaches-the-tap",
+      "version": "1.2.3-rc.1",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    },
+    {
+      "id": "a-development-release-never-reaches-the-tap",
+      "version": "1.2.3-dev.0",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    },
+    {
+      "id": "a-stable-version-on-a-release-the-operator-sees-as-prerelease",
+      "version": "1.2.3",
+      "marked_prerelease": true,
+      "published": false,
+      "error": "the completed Release is marked prerelease"
+    },
+    {
+      "id": "a-prerelease-version-on-a-release-marked-stable",
+      "version": "1.2.3-rc.1",
+      "marked_prerelease": false,
+      "published": false,
+      "error": "is a prerelease and is published through the GitHub Release alone"
+    }
+  ],
+  "drift_cases": [
+    {
+      "id": "a-formula-declaring-another-releases-version",
+      "field": "version",
+      "platform": null,
+      "value": "9.9.9",
+      "error": "declares version '9.9.9'"
+    },
+    {
+      "id": "an-artifact-url-from-another-release",
+      "field": "url",
+      "platform": "macos-arm64",
+      "value": "https://github.com/bradcstevens/git-loopy/releases/download/v9.9.9/git-loopy-tui-aarch64-apple-darwin.tar.xz",
+      "error": "is not this Release's artifact for that platform"
+    },
+    {
+      "id": "an-artifact-url-for-a-different-platform",
+      "field": "url",
+      "platform": "macos-x64",
+      "value": "https://github.com/bradcstevens/git-loopy/releases/download/v1.2.3/git-loopy-tui-x86_64-unknown-linux-gnu.tar.xz",
+      "error": "is not this Release's artifact for that platform"
+    },
+    {
+      "id": "an-artifact-served-from-an-untrusted-host",
+      "field": "url",
+      "platform": "linux-x64",
+      "value": "https://mirror.invalid/v1.2.3/git-loopy-tui-x86_64-unknown-linux-gnu.tar.xz",
+      "error": "untrusted artifact host"
+    },
+    {
+      "id": "a-digest-that-is-not-the-published-one",
+      "field": "sha256",
+      "platform": "linux-arm64",
+      "value": "0000000000000000000000000000000000000000000000000000000000000000",
+      "error": "digest for linux-arm64 is not the one the Release published"
+    },
+    {
+      "id": "a-platform-quietly-dropped-from-the-formula",
+      "field": "drop",
+      "platform": "macos-x64",
+      "value": null,
+      "error": "installs nothing for macos-x64"
+    },
+    {
+      "id": "a-formula-that-stopped-proving-the-installed-version",
+      "field": "version_probe",
+      "platform": null,
+      "value": null,
+      "error": "never proves the installed helper reports"
+    }
+  ]
+}

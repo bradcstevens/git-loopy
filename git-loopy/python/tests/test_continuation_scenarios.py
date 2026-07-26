@@ -535,6 +535,24 @@ class _RecordingGitHub:
         self.comments.append(comment)
         return comment
 
+    def append_comment(
+        self, number: int, body: str, *, author: str = "planner"
+    ) -> ContinuationComment:
+        """Seed one arbitrary carrier comment without going through publish."""
+        comment = ContinuationComment(
+            id=self.next_comment_id,
+            url=(
+                f"https://github.com/octo/example/issues/{number}"
+                f"#issuecomment-{self.next_comment_id}"
+            ),
+            body=body,
+            author=author,
+            author_type="User",
+        )
+        self.next_comment_id += 1
+        self.comments.append(comment)
+        return comment
+
     def _carrier(self) -> ContinuationCarrier:
         comments = tuple(self.comments)
         if not comments and self.body:
@@ -2003,6 +2021,192 @@ def test_python_reconcile_derives_ready_and_blocked_from_unsatisfied_prerequisit
     assert stderr == ""
 
 
+def test_python_reconcile_orders_ready_before_blocked_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verified guidance is a deterministic prospective frontier.
+
+    Reconciliation orders every Ready Action ahead of every Blocked one and
+    breaks ties by canonical Workstream Anchor then Action identity, so the
+    same durable facts always yield the same human-facing order rather than
+    the incidental identity-hash order.
+    """
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+
+    def _variant(
+        key: str, summary: str, target: int, prerequisite: int | None
+    ) -> dict[str, Any]:
+        variant = copy.deepcopy(actions[0])
+        variant["key"] = key
+        variant["summary"] = summary
+        variant["target"] = _issue(target)
+        variant["completion_condition"] = {
+            "kind": "issue-closed",
+            "target": _issue(target),
+        }
+        variant["prerequisites"] = (
+            []
+            if prerequisite is None
+            else [{"kind": "issue-open", "target": _issue(prerequisite)}]
+        )
+        return variant
+
+    # actions[0] stays Ready (target 239, no prerequisites). Add one more Ready
+    # plus two Blocked Actions whose issue-open prerequisites read CLOSED.
+    actions.append(_variant("ready_second", "Ready second action", 240, None))
+    actions.append(_variant("blocked_first", "Blocked first action", 241, 501))
+    actions.append(_variant("blocked_second", "Blocked second action", 242, 502))
+
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    github.issues[502] = "CLOSED"
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    reconciled = result["result"]["actions"]
+    assert [action["readiness"] for action in reconciled] == [
+        "Ready",
+        "Ready",
+        "Blocked",
+        "Blocked",
+    ]
+    # Every Action shares one Workstream Anchor here, so the final tie within
+    # each readiness band is the canonical Action identity, ascending.
+    ready_ids = [action["identity"] for action in reconciled[:2]]
+    blocked_ids = [action["identity"] for action in reconciled[2:]]
+    assert ready_ids == sorted(ready_ids)
+    assert blocked_ids == sorted(blocked_ids)
+    assert stderr == ""
+
+    # Re-reconciling the same durable facts reproduces the identical order.
+    _repeat_exit, repeat, _repeat_stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert [action["identity"] for action in repeat["result"]["actions"]] == [
+        action["identity"] for action in reconciled
+    ]
+
+
+def test_python_reconcile_orders_local_topological_layer_before_array_position(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A deterministic local topological layer outranks raw array position.
+
+    ``beta`` names ``alpha`` as a local ``action-completed`` prerequisite, so
+    ``beta`` sits one layer deeper than ``alpha`` even though ``beta`` is
+    listed first in the record's own ``actions`` array and both Actions are
+    Blocked by unrelated external facts.
+    """
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    alpha = copy.deepcopy(actions[0])
+    alpha["key"] = "alpha"
+    alpha["target"] = _issue(701)
+    alpha["completion_condition"] = {"kind": "issue-closed", "target": _issue(701)}
+    alpha["prerequisites"] = [
+        {"kind": "issue-open", "target": _issue(801)},
+    ]
+    beta = copy.deepcopy(actions[0])
+    beta["key"] = "beta"
+    beta["target"] = _issue(702)
+    beta["completion_condition"] = {"kind": "issue-closed", "target": _issue(702)}
+    beta["prerequisites"] = [
+        {"kind": "action-completed", "action_key": "alpha"},
+    ]
+    # beta is listed first, alpha second: array position alone would put
+    # beta ahead of alpha, but beta's local topological layer is deeper.
+    request["completion"]["actions"] = [beta, alpha]
+
+    github = _RecordingGitHub()
+    github.issues[801] = "CLOSED"
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    reconciled = result["result"]["actions"]
+    assert [action["readiness"] for action in reconciled] == ["Blocked", "Blocked"]
+    assert [action["target"]["number"] for action in reconciled] == [701, 702]
+    assert stderr == ""
+
+
+def test_python_reconcile_orders_ties_by_local_array_position_not_identity_hash(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Local Workflow-semantic precedence, not the incidental identity hash, breaks ties.
+
+    ``gamma``'s canonical Action identity sorts lexicographically ahead of
+    ``delta``'s, yet ``delta`` is listed first in the record's own actions
+    array. With no topological dependency between them (both layer 0) and
+    the same Workstream Anchor, the Producer's own local array position must
+    still decide the tie -- not the identity hash.
+    """
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    gamma = copy.deepcopy(actions[0])
+    gamma["key"] = "gamma"
+    gamma["target"] = _issue(611)
+    gamma["completion_condition"] = {"kind": "issue-closed", "target": _issue(611)}
+    gamma["prerequisites"] = []
+    delta = copy.deepcopy(actions[0])
+    delta["key"] = "delta"
+    delta["target"] = _issue(612)
+    delta["completion_condition"] = {"kind": "issue-closed", "target": _issue(612)}
+    delta["prerequisites"] = []
+    assert (
+        continuation._action_identity(request["completion"], gamma)
+        < continuation._action_identity(request["completion"], delta)
+    )
+    # delta is listed first even though gamma's identity sorts first.
+    request["completion"]["actions"] = [delta, gamma]
+
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    reconciled = result["result"]["actions"]
+    assert [action["readiness"] for action in reconciled] == ["Ready", "Ready"]
+    assert [action["target"]["number"] for action in reconciled] == [612, 611]
+    assert stderr == ""
+
+
 def test_python_reconcile_dedups_matching_claims_and_unions_provenance(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2223,7 +2427,7 @@ def test_python_reconcile_reports_unverified_prerequisite_and_keeps_other_guidan
     assert stderr == ""
 
 
-def test_python_reconcile_revision_protocol_discovers_every_carrier(
+def test_python_reconcile_revision_protocol_discovers_every_carrier_in_anchor_order(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2309,6 +2513,16 @@ def test_python_reconcile_revision_protocol_discovers_every_carrier(
                 }
             ],
         }
+        if carrier_number == 300:
+            second = copy.deepcopy(completion["actions"][0])
+            second["key"] = "second"
+            second["summary"] = "Second local action"
+            second["target"] = _issue(302)
+            second["completion_condition"] = {
+                "kind": "issue-closed",
+                "target": _issue(302),
+            }
+            completion["actions"].append(second)
         _revision_id, _fingerprints, body = continuation._record_body(completion)
         return body
 
@@ -2354,9 +2568,1621 @@ def test_python_reconcile_revision_protocol_discovers_every_carrier(
     )
     assert exit_code == 0
     assert result["result"]["status"] == "guidance"
-    targets = sorted(action["target"]["number"] for action in result["result"]["actions"])
-    assert targets == [301, 401]
+    assert [
+        action["target"]["number"] for action in result["result"]["actions"]
+    ] == [301, 302, 401]
     assert result["result"]["diagnostics"] == []
+    assert stderr == ""
+
+
+def _terminal_completion_body(
+    *,
+    carrier_number: int,
+    outcome_kind: str,
+    destination_satisfied: bool,
+    successor: dict[str, Any] | None = None,
+) -> str:
+    outcome: dict[str, Any] = {
+        "kind": outcome_kind,
+        "destination_satisfied": destination_satisfied,
+        "effective_at": "2026-07-22T18:00:00Z",
+        "evidence": [
+            {"kind": "issue", "repository": "octo/example", "number": carrier_number}
+        ],
+        "summary": f"Workstream {carrier_number} reached a terminal outcome.",
+    }
+    if successor is not None:
+        outcome["successor"] = successor
+    completion = {
+        "continuation_contract_version": "1.0",
+        "record_format": 1,
+        "publication": "shared",
+        "disposition": "terminal",
+        "workstream": {
+            "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": carrier_number,
+            },
+            "destination": {
+                "kind": "issue-closed",
+                "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": carrier_number,
+                },
+            },
+        },
+        "transition": {
+            "owner": "wayfinder",
+            "evidence": [
+                {
+                    "kind": "issue-comment",
+                    "repository": "octo/example",
+                    "issue": carrier_number,
+                    "comment_id": 7001,
+                }
+            ],
+        },
+        "producer": {"login": "planner", "role": "planning"},
+        "carrier": {
+            "kind": "issue",
+            "repository": "octo/example",
+            "number": carrier_number,
+        },
+        "outcome": outcome,
+    }
+    _revision_id, _fingerprints, body = continuation._record_body(completion)
+    return body
+
+
+def _terminal_carrier(
+    number: int,
+    comment_id: int,
+    *,
+    outcome_kind: str,
+    destination_satisfied: bool,
+    successor: dict[str, Any] | None = None,
+    labeled: bool = True,
+) -> ContinuationCarrier:
+    return ContinuationCarrier(
+        number=number,
+        state="OPEN",
+        url=f"https://github.com/octo/example/issues/{number}",
+        comments=(
+            ContinuationComment(
+                id=comment_id,
+                url=(
+                    f"https://github.com/octo/example/issues/{number}"
+                    f"#issuecomment-{comment_id}"
+                ),
+                body=_terminal_completion_body(
+                    carrier_number=number,
+                    outcome_kind=outcome_kind,
+                    destination_satisfied=destination_satisfied,
+                    successor=successor,
+                ),
+                author="planner",
+                author_type="User",
+                created_at="2024-01-01T00:00:00Z",
+                updated_at="2024-01-01T00:00:00Z",
+            ),
+        ),
+        labels=("git-loopy-continuation",) if labeled else (),
+    )
+
+
+def test_python_reconcile_revision_protocol_surfaces_terminal_outcome_as_complete(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A closed-coverage read over one destination-satisfied outcome is Complete."""
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["status"] == "complete"
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["kind"] == "complete"
+    assert outcome["destination_satisfied"] is True
+    assert outcome["workstream_anchor"] == {
+        "kind": "issue",
+        "repository": "octo/example",
+        "number": 300,
+    }
+    assert result["result"]["diagnostics"] == []
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_never_claims_complete_with_unresolved_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A forked Workstream keeps closed coverage nonterminal."""
+    first = copy.deepcopy(_valid_publish_request("shared-continue")["completion"])
+    first["workstream"]["anchor"] = _issue(400)
+    first["workstream"]["destination"] = {
+        "kind": "issue-closed",
+        "target": _issue(400),
+    }
+    first["carrier"] = _issue(400)
+    first["transition"]["evidence"] = [
+        {
+            "kind": "issue-comment",
+            "repository": "octo/example",
+            "issue": 400,
+            "comment_id": 7001,
+        }
+    ]
+    second = copy.deepcopy(first)
+    second["actions"][0]["instruction"]["value"] = "/to-spec 400 --replacement"
+    _first_revision, _first_fingerprints, first_body = continuation._record_body(first)
+    _second_revision, _second_fingerprints, second_body = continuation._record_body(
+        second
+    )
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+        ContinuationCarrier(
+            number=400,
+            state="OPEN",
+            url="https://github.com/octo/example/issues/400",
+            comments=(
+                ContinuationComment(
+                    id=9201,
+                    url="https://github.com/octo/example/issues/400#issuecomment-9201",
+                    body=first_body,
+                    author="planner",
+                    author_type="User",
+                ),
+                ContinuationComment(
+                    id=9202,
+                    url="https://github.com/octo/example/issues/400#issuecomment-9202",
+                    body=second_body,
+                    author="planner",
+                    author_type="User",
+                ),
+            ),
+            labels=("git-loopy-continuation",),
+        ),
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["status"] == "waiting"
+    assert any(
+        diagnostic["code"] == "revision_fork"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_keeps_waiting_without_destination_satisfaction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-complete terminal outcome never claims project-wide Complete."""
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="abandoned", destination_satisfied=False
+        ),
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["status"] == "waiting"
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["kind"] == "abandoned"
+    assert outcome["destination_satisfied"] is False
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_reports_guidance_alongside_complete_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Outstanding guidance in one Workstream coexists with another's Complete outcome."""
+    github = _RecordingGitHub()
+    active = _valid_publish_request("shared-continue")
+    _revision_id, _fingerprints, active_body = continuation._record_body(
+        active["completion"]
+    )
+    github.carriers_override = [
+        ContinuationCarrier(
+            number=237,
+            state="OPEN",
+            url="https://github.com/octo/example/issues/237",
+            comments=(
+                ContinuationComment(
+                    id=9010,
+                    url="https://github.com/octo/example/issues/237#issuecomment-9010",
+                    body=active_body,
+                    author="planner",
+                    author_type="User",
+                    created_at="2024-01-01T00:00:00Z",
+                    updated_at="2024-01-01T00:00:00Z",
+                ),
+            ),
+            labels=("git-loopy-continuation",),
+        ),
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    assert len(result["result"]["actions"]) == 1
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["workstream_anchor"]["number"] == 300
+    assert stderr == ""
+
+
+def test_python_reconcile_label_based_never_claims_complete_without_closed_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The label-indexed reconcile path lacks closed coverage, so it never claims Complete."""
+    github = _RecordingGitHub()
+    github.body = _terminal_completion_body(
+        carrier_number=237, outcome_kind="complete", destination_satisfied=True
+    )
+    github.labels.add("git-loopy-continuation")
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["status"] == "waiting"
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["kind"] == "complete"
+    assert stderr == ""
+
+
+def _publish_root_and_observe(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reconcile_request: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Publish the standard shared-continue root and return (observed reconcile, revision_id)."""
+    _exit, empty, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    root_request = _valid_publish_request("shared-continue")
+    root_request.update(
+        {
+            "trusted_apps": [],
+            "observation": empty["result"]["observation"],
+            "parents": [],
+        }
+    )
+    publish_exit, _publish, _stderr = _publish_result(
+        root_request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+    _exit, observed, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    [root_head] = observed["result"]["observation"]["heads"]
+    return observed, root_head["revision_id"]
+
+
+def test_python_reconcile_revision_protocol_reports_retirement_receipt_for_named_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A successor's typed receipt is proven against the durable predecessor it names."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    del successor["completion"]["actions"]
+    successor["completion"]["disposition"] = "terminal"
+    successor["completion"]["outcome"] = {
+        "kind": "complete",
+        "destination_satisfied": True,
+        "effective_at": "2026-07-22T18:00:00Z",
+        "evidence": [
+            {"kind": "issue", "repository": "octo/example", "number": 237}
+        ],
+        "summary": "Workstream complete.",
+    }
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+            ],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert result["result"]["status"] == "complete"
+    [retirement] = result["result"]["retirements"]
+    assert retirement["reason"] == "completed"
+    assert retirement["predecessor_revision_id"] == root_revision_id
+    assert retirement["action_identity"]
+    assert retirement["workstream_anchor"] == {
+        "kind": "issue",
+        "repository": "octo/example",
+        "number": 237,
+    }
+    assert "replacement_identity" not in retirement
+    assert result["result"]["diagnostics"] == []
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_keeps_action_without_retirement_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A successor cannot silently remove an Action from prospective guidance."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    del successor["completion"]["actions"]
+    successor["completion"]["disposition"] = "terminal"
+    successor["completion"]["outcome"] = {
+        "kind": "complete",
+        "destination_satisfied": True,
+        "effective_at": "2026-07-22T18:00:00Z",
+        "evidence": [_issue(237)],
+        "summary": "Workstream complete.",
+    }
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _published, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    assert len(result["result"]["actions"]) == 1
+    assert result["result"]["actions"][0]["target"] == _issue(239)
+    assert any(
+        diagnostic["code"] == "missing_retirement_receipt"
+        and diagnostic["revision_id"]
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_diagnoses_receipt_naming_an_unrelated_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A receipt naming a revision that isn't actually a named parent is unverifiable."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    del successor["completion"]["actions"]
+    successor["completion"]["disposition"] = "terminal"
+    successor["completion"]["outcome"] = {
+        "kind": "complete",
+        "destination_satisfied": True,
+        "effective_at": "2026-07-22T18:00:00Z",
+        "evidence": [
+            {"kind": "issue", "repository": "octo/example", "number": 237}
+        ],
+        "summary": "Workstream complete.",
+    }
+    unrelated_revision_id = "0" * 64
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": unrelated_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+            ],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert result["result"]["retirements"] == []
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        and diagnostic["predecessor_revision_id"] == unrelated_revision_id
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_reports_supersession_replacement_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A supersession receipt carries a replacement identity that matches new Action identity."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "supersession",
+            "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+            ],
+            "replacement": {
+                "workstream_anchor": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237,
+                },
+                "kind": "Publish spec",
+                "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239,
+                },
+                "occurrence": "v2",
+            },
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert len(result["result"]["actions"]) == 1
+    successor_identity = result["result"]["actions"][0]["identity"]
+    [retirement] = result["result"]["retirements"]
+    assert retirement["reason"] == "supersession"
+    assert retirement["replacement_identity"] == successor_identity
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_rejects_supersession_reusing_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A repeated operation must use a new durable occurrence discriminator."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "supersession",
+            "evidence": [_issue(237)],
+            "replacement": {
+                "workstream_anchor": _issue(237),
+                "kind": "Publish spec",
+                "target": _issue(239),
+                "occurrence": "v1",
+            },
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert result["result"]["status"] == "guidance"
+    assert [action["identity"] for action in result["result"]["actions"]] == [
+        original_action["identity"]
+    ]
+    assert result["result"]["retirements"] == []
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_requires_occurrence_change_for_every_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A recurrence needs a new occurrence whatever the receipt's reason is."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    # Claim the Action completed while re-declaring the very same occurrence.
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert [action["identity"] for action in result["result"]["actions"]] == [
+        original_action["identity"]
+    ]
+    assert result["result"]["retirements"] == []
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_rejects_unrelated_supersession_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A replacement must recur the retired Action, not name an unrelated one."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    action = successor["completion"]["actions"][0]
+    action["occurrence"] = "v2"
+    action["target"] = _issue(240)
+    action["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "supersession",
+            "evidence": [_issue(237)],
+            # A different Target is a different Action, not a recurrence.
+            "replacement": {
+                "workstream_anchor": _issue(237),
+                "kind": "Publish spec",
+                "target": _issue(240),
+                "occurrence": "v2",
+            },
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert result["result"]["retirements"] == []
+    assert any(
+        diagnostic["code"] == "invalid_retirement_receipt"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_revision_protocol_refuses_resurrecting_a_retired_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A retirement anywhere in the ancestor chain outlives its immediate parent."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    [original_action] = observed["result"]["actions"]
+
+    # Generation 2 genuinely retires the root Action by recurring it as v2.
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, retired_view, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert original_action["identity"] not in [
+        action["identity"] for action in retired_view["result"]["actions"]
+    ]
+    [successor_head] = retired_view["result"]["observation"]["heads"]
+
+    # Generation 3 is entirely legitimate and says nothing about the root
+    # occurrence at all.
+    intermediate = _valid_publish_request("shared-continue")
+    intermediate.update({"trusted_apps": []})
+    intermediate["completion"]["actions"][0]["occurrence"] = "v3"
+    intermediate["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": successor_head["revision_id"],
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    intermediate["observation"] = retired_view["result"]["observation"]
+    intermediate["parents"] = [successor_head["revision_id"]]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        intermediate, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, intermediate_view, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    assert intermediate_view["result"]["diagnostics"] == []
+    [intermediate_head] = intermediate_view["result"]["observation"]["heads"]
+
+    # Generation 4 retires its own parent legitimately but re-declares the root
+    # occurrence. Only its grandparent proves that occurrence was retired, so
+    # nothing short of a full ancestor walk can catch this.
+    grandchild = _valid_publish_request("shared-continue")
+    grandchild.update({"trusted_apps": []})
+    grandchild["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": intermediate_head["revision_id"],
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    grandchild["observation"] = intermediate_view["result"]["observation"]
+    grandchild["parents"] = [intermediate_head["revision_id"]]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        grandchild, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0
+    resurrections = [
+        diagnostic
+        for diagnostic in result["result"]["diagnostics"]
+        if diagnostic["code"] == "retired_occurrence_resurrected"
+    ]
+    assert len(resurrections) == 1
+    assert original_action["identity"] in resurrections[0]["identities"]
+    assert original_action["identity"] not in [
+        action["identity"] for action in result["result"]["actions"]
+    ]
+    assert result["result"]["status"] == "guidance"
+    assert stderr == ""
+
+
+def test_python_reconcile_label_path_gates_retirements_on_revision_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Lineage-free discovery says so rather than dropping receipts silently."""
+    github = _RecordingGitHub()
+    revision_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, revision_request
+    )
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    [gate] = [
+        diagnostic
+        for diagnostic in result["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+    assert gate["revision_ids"] == sorted(gate["revision_ids"])
+    assert gate["revision_ids"]
+    assert result["result"]["retirements"] == []
+    assert stderr == ""
+
+
+def test_python_reconcile_always_emits_retirements_with_the_gate_as_discriminator(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The key is always present, so its absence never carries meaning.
+
+    One lineage, reconciled three ways. Under the revision protocol an empty
+    list is the projection's own answer ("nothing was retired") and a populated
+    one carries the receipts. On the lineage-free label-indexed path the list is
+    empty because Retirement is not computable at all -- identical JSON to the
+    first case, told apart only by the gating diagnostic, which is therefore the
+    sole discriminator rather than a redundant hint.
+    """
+    github = _RecordingGitHub()
+    revision_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, revision_request
+    )
+
+    exit_code, quiet, stderr = _command_result(
+        "reconcile", revision_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0, stderr
+    # Nothing has been retired yet: present, empty, and unaccompanied.
+    assert quiet["result"]["retirements"] == []
+    assert not [
+        diagnostic
+        for diagnostic in quiet["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    successor["completion"]["actions"][0]["occurrence"] = "v2"
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, publish_stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0, publish_stderr
+
+    exit_code, proven, stderr = _command_result(
+        "reconcile", revision_request, github, monkeypatch, capsys
+    )
+    assert exit_code == 0, stderr
+    [receipt] = proven["result"]["retirements"]
+    assert receipt["reason"] == "completed"
+    assert not [
+        diagnostic
+        for diagnostic in proven["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+    exit_code, gated, stderr = _command_result(
+        "reconcile",
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0, stderr
+    # Same lineage, same receipts -- but this path did not compute them. The
+    # list matches the "nothing was retired" case above byte for byte, so only
+    # the gate distinguishes them.
+    assert gated["result"]["retirements"] == quiet["result"]["retirements"] == []
+    assert [
+        diagnostic
+        for diagnostic in gated["result"]["diagnostics"]
+        if diagnostic["code"] == "retirements_require_revision_protocol"
+    ]
+
+
+def test_python_publish_rejects_retirement_with_unsupported_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Retirement shape is validated atomically, just like every other completion field."""
+    request = _valid_publish_request("shared-continue")
+    request["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": "0" * 64,
+            "action_key": "action",
+            "reason": "expired",
+            "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+            ],
+        }
+    ]
+    github = _RecordingGitHub()
+
+    exit_code, stdout, stderr = _publish_output(
+        request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 1
+    result = json.loads(stdout)
+    assert result["error"]["code"] == "invalid_request"
+    assert github.calls == []
+
+
+def test_python_publish_rejects_replacement_without_supersession_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A replacement descriptor is only meaningful alongside reason=supersession."""
+    request = _valid_publish_request("shared-continue")
+    request["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": "0" * 64,
+            "action_key": "action",
+            "reason": "completed",
+            "evidence": [
+                {"kind": "issue", "repository": "octo/example", "number": 237}
+            ],
+            "replacement": {
+                "workstream_anchor": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237,
+                },
+                "kind": "Publish spec",
+                "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 239,
+                },
+                "occurrence": "v2",
+            },
+        }
+    ]
+    github = _RecordingGitHub()
+
+    exit_code, stdout, stderr = _publish_output(
+        request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 1
+    result = json.loads(stdout)
+    assert result["error"]["code"] == "invalid_request"
+    assert github.calls == []
+
+
+def test_python_reconcile_computes_bounded_refresh_delta_from_explicit_prior_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refresh delta is only ever derived from an explicit caller-supplied prior.
+
+    Reconciliation never remembers a previous call: the caller must pass
+    back ``previous_actions`` (typically its own earlier Actions) to get
+    ``added``/``retired``/``changed`` -- omitting it omits the delta key
+    entirely rather than defaulting to an empty one.
+    """
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    reconcile_request = {"repository": "octo/example", "trusted_producers": ["planner"]}
+    baseline_exit, baseline, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert baseline_exit == 0
+    assert "delta" not in baseline["result"]
+    [existing] = baseline["result"]["actions"]
+
+    with_previous_exit, with_previous, stderr = _command_result(
+        "reconcile",
+        {**reconcile_request, "previous_actions": []},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert with_previous_exit == 0
+    assert with_previous["result"]["delta"] == {
+        "added": [existing["identity"]],
+        "retired": [],
+        "changed": [],
+    }
+    assert stderr == ""
+
+    unchanged_exit, unchanged, stderr = _command_result(
+        "reconcile",
+        {
+            **reconcile_request,
+            "previous_actions": [
+                {
+                    "identity": existing["identity"],
+                    "semantic_fingerprint": existing["semantic_fingerprint"],
+                }
+            ],
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert unchanged_exit == 0
+    assert unchanged["result"]["delta"] == {"added": [], "retired": [], "changed": []}
+    assert stderr == ""
+
+    retired_only_exit, retired_only, stderr = _command_result(
+        "reconcile",
+        {
+            **reconcile_request,
+            "previous_actions": [
+                {"identity": "0" * 64, "semantic_fingerprint": "1" * 64}
+            ],
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert retired_only_exit == 0
+    assert retired_only["result"]["delta"] == {
+        "added": [existing["identity"]],
+        "retired": ["0" * 64],
+        "changed": [],
+    }
+    assert stderr == ""
+
+    changed_exit, changed, stderr = _command_result(
+        "reconcile",
+        {
+            **reconcile_request,
+            "previous_actions": [
+                {
+                    "identity": existing["identity"],
+                    "semantic_fingerprint": "f" * 64,
+                }
+            ],
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert changed_exit == 0
+    assert changed["result"]["delta"] == {
+        "added": [],
+        "retired": [],
+        "changed": [existing["identity"]],
+    }
+    assert stderr == ""
+
+
+def test_python_reconcile_rejects_malformed_previous_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Prior-observation shape is validated atomically like every other request field."""
+    github = _RecordingGitHub()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "previous_actions": [{"identity": "abc"}],
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+
+
+def test_python_reconcile_attaches_one_handoff_reference_after_action_derivation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """At most one exact-occurrence Handoff reference is attached, post-derivation."""
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    reconcile_request = {"repository": "octo/example", "trusted_producers": ["planner"]}
+    baseline_exit, baseline, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert baseline_exit == 0
+    [existing] = baseline["result"]["actions"]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            **reconcile_request,
+            "handoff": {
+                "action_identity": existing["identity"],
+                "context_available": True,
+                "reference": "handoff://session/review-239",
+                "note": "picking back up mid-edit",
+            },
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    [action] = result["result"]["actions"]
+    assert action["handoff_reference"] == {
+        "available": True,
+        "reference": "handoff://session/review-239",
+        "note": "picking back up mid-edit",
+    }
+    assert action["readiness"] == existing["readiness"]
+    assert action["identity"] == existing["identity"]
+    assert result["result"]["diagnostics"] == []
+    assert stderr == ""
+
+
+def test_python_reconcile_treats_unavailable_handoff_context_as_diagnostic_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Unavailable local Handoff context cannot change identity, Readiness, or order."""
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    reconcile_request = {"repository": "octo/example", "trusted_producers": ["planner"]}
+    baseline_exit, baseline, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert baseline_exit == 0
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            **reconcile_request,
+            "handoff": {
+                "action_identity": baseline["result"]["actions"][0]["identity"],
+                "context_available": False,
+            },
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == baseline["result"]["actions"]
+    assert any(
+        diagnostic["code"] == "handoff_context_unavailable"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def test_python_reconcile_diagnoses_handoff_naming_an_action_no_longer_present(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Handoff naming a retired/unknown Action occurrence is diagnostic-only."""
+    github = _RecordingGitHub()
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "handoff": {
+                "action_identity": "0" * 64,
+                "context_available": True,
+                "reference": "handoff://session/retired-action",
+            },
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert result["result"]["actions"] == []
+    assert any(
+        diagnostic["code"] == "handoff_action_unavailable"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    assert stderr == ""
+
+
+def _terminal_result(
+    request: dict[str, Any],
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, str, str]:
+    monkeypatch.setattr(continuation, "_make_github_client", lambda: github)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(request, ensure_ascii=False, separators=(",", ":"))),
+    )
+    exit_code = cli.main(["continuation", "reconcile", "--terminal"])
+    captured = capsys.readouterr()
+    return exit_code, captured.out, captured.err
+
+
+def test_python_reconcile_terminal_renders_one_primary_action_and_waiting_state(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``reconcile --terminal`` renders plain text, never machine JSON."""
+    github = _RecordingGitHub()
+    exit_code, stdout, stderr = _terminal_result(
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(stdout)
+    assert "Continuation: octo/example \u2014 Waiting" in stdout
+    assert "Waiting" in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_renders_primary_action_with_expandable_remainder(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Terminal rendering bounds the remainder and states a true hidden count."""
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    for offset in range(5):
+        number = 240 + offset
+        actions.append(
+            {
+                **copy.deepcopy(actions[0]),
+                "key": f"extra-{offset}",
+                "summary": f"Ready action {offset}",
+                "target": _issue(number),
+                "occurrence": f"extra-{offset}",
+                "completion_condition": {
+                    "kind": "issue-closed",
+                    "target": _issue(number),
+                },
+            }
+        )
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert "Primary Action (Ready): Publish the specification" in stdout
+    assert "  Instruction (skill):\n/to-spec 237\n" in stdout
+    assert "Target: https://github.com/octo/example/issues/239" in stdout
+    assert "Basis: https://github.com/octo/example/issues/237" in stdout
+    # Five Ready Actions remain behind the primary one; only the bounded rows
+    # are printed and the stated hidden count matches what was withheld.
+    assert "Ready (5 more, 2 hidden):" in stdout
+    rendered_rows = [line for line in stdout.splitlines() if line.startswith("  - ")]
+    assert len(rendered_rows) == continuation._TERMINAL_REMAINDER_ROWS
+    assert "expand the remaining 2 with reconcile without --terminal." in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_remainder_hides_nothing_when_it_fits(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A remainder inside the bound reports zero hidden and offers no expansion."""
+    request = _valid_publish_request("shared-continue")
+    actions = request["completion"]["actions"]
+    actions.append(
+        {
+            **copy.deepcopy(actions[0]),
+            "key": "second",
+            "summary": "Second Ready action",
+            "target": _issue(240),
+            "occurrence": "second",
+            "completion_condition": {"kind": "issue-closed", "target": _issue(240)},
+        }
+    )
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert "Ready (1 more, 0 hidden):" in stdout
+    assert "Second Ready action" in stdout
+    assert "expand the remaining" not in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_renders_exact_occurrence_handoff_context(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Selected detail includes only the Handoff attached to that exact occurrence."""
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+    reconcile_request = {"repository": "octo/example", "trusted_producers": ["planner"]}
+    baseline_exit, baseline, _stderr = _command_result(
+        "reconcile", reconcile_request, github, monkeypatch, capsys
+    )
+    assert baseline_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {
+            **reconcile_request,
+            "handoff": {
+                "action_identity": baseline["result"]["actions"][0]["identity"],
+                "context_available": True,
+                "reference": "handoff://session/review-239",
+            },
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert "  Handoff: handoff://session/review-239" in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_labels_hitl_boundary_without_inference(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Human guidance exposes the typed boundary; Automation stop remains a later seam."""
+    request = _valid_publish_request("shared-continue")
+    action = request["completion"]["actions"][0]
+    action["kind"] = "Resolve decision"
+    action["instruction"] = {
+        "mode": "manual",
+        "value": "Choose the approved specification direction.",
+    }
+    action["interaction"] = copy.deepcopy(
+        FIXTURE["completion_records"]["interaction_examples"]["hitl-required"]
+    )
+    github = _RecordingGitHub()
+    publish_exit, _publish, _stderr = _publish_result(
+        request, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {"repository": "octo/example", "trusted_producers": ["planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert "  Interaction: HITL-required" in stdout
+    assert (
+        "  Instruction (manual):\nChoose the approved specification direction.\n"
+        in stdout
+    )
+    assert "Stopped:" not in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_renders_transient_retirement_and_refresh_delta(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The terminal view exposes bounded change evidence without a completed journal."""
+    github = _RecordingGitHub()
+    reconcile_request = {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "trusted_apps": [],
+        "revision_protocol": True,
+    }
+    observed, root_revision_id = _publish_root_and_observe(
+        github, monkeypatch, capsys, reconcile_request
+    )
+    previous_actions = [
+        {
+            "identity": action["identity"],
+            "semantic_fingerprint": action["semantic_fingerprint"],
+        }
+        for action in observed["result"]["actions"]
+    ]
+    successor = _valid_publish_request("shared-continue")
+    successor.update({"trusted_apps": []})
+    del successor["completion"]["actions"]
+    successor["completion"]["disposition"] = "terminal"
+    successor["completion"]["outcome"] = {
+        "kind": "complete",
+        "destination_satisfied": True,
+        "effective_at": "2026-07-22T18:00:00Z",
+        "evidence": [_issue(237)],
+        "summary": "Workstream complete.",
+    }
+    successor["completion"]["retirements"] = [
+        {
+            "predecessor_revision_id": root_revision_id,
+            "action_key": "action",
+            "reason": "workstream-outcome",
+            "evidence": [_issue(237)],
+        }
+    ]
+    successor["observation"] = observed["result"]["observation"]
+    successor["parents"] = [root_revision_id]
+    publish_exit, _publish, _stderr = _publish_result(
+        successor, github, monkeypatch, capsys
+    )
+    assert publish_exit == 0
+
+    exit_code, stdout, stderr = _terminal_result(
+        {**reconcile_request, "previous_actions": previous_actions},
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert "Retired this refresh (1):" in stdout
+    assert "workstream-outcome" in stdout
+    assert "Refresh delta: +0 added, -1 retired, ~0 changed" in stdout
+    assert "Completed" not in stdout
+    assert stderr == ""
+
+
+def test_python_reconcile_terminal_renders_needs_attention_and_outcomes_sections(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Conflicts and durable outcomes render in dedicated terminal sections."""
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+    ]
+
+    exit_code, stdout, stderr = _terminal_result(
+        {
+            "repository": "octo/example",
+            "trusted_producers": ["planner"],
+            "trusted_apps": [],
+            "revision_protocol": True,
+        },
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert "Continuation: octo/example \u2014 Complete" in stdout
+    assert "Outcomes:" in stdout
+    assert (
+        "https://github.com/octo/example/issues/300: "
+        "complete (destination satisfied)"
+    ) in stdout
     assert stderr == ""
 
 
@@ -2539,3 +4365,921 @@ def test_python_publish_locks_semantic_fingerprint_cases(
     assert stdout == expected["stdout_exact"]
     assert stderr == expected["stderr_exact"]
     assert github.calls == expected["github_calls"]
+
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization (issue #254)
+# ---------------------------------------------------------------------------
+
+
+def _afk_safety_case(action: dict[str, Any]) -> dict[str, Any]:
+    """A positive AFK safety case that covers ``action`` exactly."""
+    return {
+        "version": "1",
+        "instruction": copy.deepcopy(action["instruction"]),
+        "target": copy.deepcopy(action["target"]),
+        "completion_condition": copy.deepcopy(action["completion_condition"]),
+        "effects": [{"kind": "tracker-write", "scope": "issue:octo/example#239"}],
+        "assumptions": [
+            {
+                "kind": "durable-inputs-fixed",
+                "statement": "The approved map is already published.",
+            }
+        ],
+        "requirements": [
+            {"kind": "skill", "name": "to-spec"},
+            {"kind": "access", "name": "tracker-write"},
+        ],
+        "retry": {"kind": "idempotent"},
+        "triggers": [],
+    }
+
+
+def _afk_publish_request() -> dict[str, Any]:
+    """A publish request whose single Action carries its own safety case."""
+    request = _valid_publish_request("shared-continue")
+    request["completion"]["continuation_contract_version"] = "1.2"
+    action = request["completion"]["actions"][0]
+    action["safety_case"] = _afk_safety_case(action)
+    return request
+
+
+def test_python_publish_accepts_a_positive_versioned_afk_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An AFK-safe Action may carry the versioned safety case that justifies it."""
+    request = _afk_publish_request()
+    github = _RecordingGitHub()
+
+    exit_code, result, stderr = _publish_result(request, github, monkeypatch, capsys)
+
+    assert exit_code == 0
+    assert result["ok"] is True
+    assert stderr == ""
+
+
+def test_python_publish_refuses_a_safety_case_below_contract_1_2(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A 1.1 reader would drop the safety case and keep the AFK-safe claim.
+
+    The claim is what authorizes unattended Dispatch, so a record that carries
+    one field without the other must not be publishable at all.
+    """
+    request = _afk_publish_request()
+    request["completion"]["continuation_contract_version"] = "1.1"
+    github = _RecordingGitHub()
+
+    exit_code, result, _stderr = _publish_result(request, github, monkeypatch, capsys)
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "1.2" in result["error"]["message"]
+    assert github.calls == []
+
+
+def _automation_request(**overrides: Any) -> dict[str, Any]:
+    """A reconcile request that also asks for one fixed-frontier authorization."""
+    automation: dict[str, Any] = {
+        "performer": {
+            "id": "runner",
+            "posture": {
+                "noninteractive": True,
+                "satisfied_requirements": [
+                    {"kind": "skill", "name": "to-spec"},
+                    {"kind": "access", "name": "tracker-write"},
+                ],
+                "instruction_modes": ["skill"],
+            },
+        },
+        "scope": {
+            "ceilings": [
+                {
+                    "source": "global",
+                    "coverage": {"repositories": ["octo/example"]},
+                    "grants": [
+                        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+                    ],
+                    "denials": [],
+                },
+                {
+                    "source": "project",
+                    "coverage": {"repositories": ["octo/example"]},
+                    "grants": [
+                        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+                    ],
+                    "denials": [],
+                },
+            ],
+            "revocations": [],
+        },
+    }
+    automation.update(overrides)
+    return {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "automation": automation,
+    }
+
+
+def _publish_afk_action(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> dict[str, Any]:
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    exit_code, _result, _stderr = _publish_result(request, github, monkeypatch, capsys)
+    assert exit_code == 0
+    return action
+
+
+def test_python_reconcile_binds_one_dispatch_authorization_to_a_frozen_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One Ready, AFK-safe, in-scope, in-frontier Action binds one Dispatch."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        _automation_request(),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    [action] = result["result"]["actions"]
+    assert automation["frontier"]["actions"] == [
+        {
+            "identity": action["identity"],
+            "semantic_fingerprint": action["semantic_fingerprint"],
+        }
+    ]
+    authorization = automation["authorization"]
+    assert authorization["action_identity"] == action["identity"]
+    assert authorization["semantic_fingerprint"] == action["semantic_fingerprint"]
+    assert authorization["performer"] == "runner"
+    assert authorization["safety_case_version"] == "1"
+    assert authorization["completion_condition"] == action["completion_condition"]
+    assert authorization["effects"] == [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    ]
+    assert authorization["retry"] == {"kind": "idempotent"}
+    assert "stop" not in automation
+
+
+def _automation_result(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    **overrides: Any,
+) -> dict[str, Any]:
+    exit_code, result, stderr = _command_result(
+        "reconcile",
+        _automation_request(**overrides),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+    assert stderr == ""
+    return result["result"]["automation"]
+
+
+def test_python_automation_refuses_an_afk_claim_without_a_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An AFK-safe classification is never upgraded to eligibility on its own."""
+    request = _valid_publish_request("shared-continue")
+    github = _RecordingGitHub()
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    [entry] = automation["eligibility"]
+    assert entry["automation_selectable"] is False
+    assert entry["reasons"] == ["safety-case-absent"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "guidance-fault"
+    assert automation["stop"]["disposition"] == "attention-required"
+
+
+def test_python_automation_reports_a_human_boundary_ahead_of_a_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stop precedence prefers the barrier a person can act on."""
+    request = _valid_publish_request("shared-continue")
+    action = request["completion"]["actions"][0]
+    action["kind"] = "Resolve decision"
+    action["interaction"] = {
+        "classification": "HITL-required",
+        "evidence": {
+            "kind": "human-boundary",
+            "reason": "human-decision",
+            "resolution_condition": {
+                "kind": "issue-closed",
+                "target": _issue(239),
+            },
+        },
+    }
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["human-boundary", "not-ready"]
+    stop = automation["stop"]
+    assert stop["reason"] == "human-boundary"
+    assert stop["disposition"] == "expected-boundary"
+    assert stop["successor_executed"] is False
+    assert stop["nonterminal_status"] == "guidance"
+
+
+def test_python_automation_stops_on_awaiting_prerequisites(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frozen frontier member that is merely Blocked is an expected boundary."""
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    automation = _automation_result(github, monkeypatch, capsys)
+
+    stop = automation["stop"]
+    assert stop["reason"] == "awaiting-prerequisites"
+    assert stop["disposition"] == "expected-boundary"
+    assert stop["next"]["kind"] == "action"
+    assert stop["next"]["readiness"] == "Blocked"
+    assert stop["next"]["condition"] == {"kind": "issue-open", "target": _issue(501)}
+    assert stop["evidence"] == [_issue(239)]
+    assert stop["report_only_successors"] == []
+    assert stop["statement"] == (
+        "No successor Action was executed by this Reconciliation."
+    )
+
+
+def test_python_automation_lets_a_frozen_blocked_member_become_selectable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Readiness may change inside the frozen frontier; identity may not."""
+    request = _afk_publish_request()
+    action = request["completion"]["actions"][0]
+    action["prerequisites"] = [{"kind": "issue-open", "target": _issue(501)}]
+    github = _RecordingGitHub()
+    github.issues[501] = "CLOSED"
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+    frozen = _automation_result(github, monkeypatch, capsys)["frontier"]
+    assert len(frozen["actions"]) == 1
+
+    github.issues[501] = "OPEN"
+    automation = _automation_result(github, monkeypatch, capsys, frontier=frozen)
+
+    assert automation["frontier"] == frozen
+    assert (
+        automation["authorization"]["action_identity"]
+        == (frozen["actions"][0]["identity"])
+    )
+
+
+def test_python_automation_keeps_changed_semantics_report_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frozen identity whose semantics moved is reported, never dispatched."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    frozen = _automation_result(github, monkeypatch, capsys)["frontier"]
+    stale = {
+        "actions": [
+            {
+                "identity": frozen["actions"][0]["identity"],
+                "semantic_fingerprint": "0" * 64,
+            }
+        ]
+    }
+
+    automation = _automation_result(github, monkeypatch, capsys, frontier=stale)
+
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["outside-frontier"]
+    assert automation["report_only"] == [
+        {
+            "identity": frozen["actions"][0]["identity"],
+            "semantic_fingerprint": frozen["actions"][0]["semantic_fingerprint"],
+            "reason": "changed-semantics",
+        }
+    ]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "frontier-drained"
+
+
+def test_python_automation_keeps_a_newly_produced_action_report_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run never adds work its initial Reconciliation did not freeze."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    empty_frontier: dict[str, Any] = {"actions": []}
+
+    automation = _automation_result(
+        github, monkeypatch, capsys, frontier=empty_frontier
+    )
+
+    assert [entry["reason"] for entry in automation["report_only"]] == [
+        "newly-produced"
+    ]
+    assert automation["stop"]["reason"] == "frontier-drained"
+    assert automation["stop"]["disposition"] == "expected-boundary"
+
+
+def test_python_automation_intersects_global_and_project_ceilings(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A grant only one ceiling offers is not a grant."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["scope"]["ceilings"][1]["grants"] = []
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["scope"]["grants"] == []
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["grant-missing"]
+    assert automation["stop"]["reason"] == "grant-missing"
+    assert automation["stop"]["disposition"] == "expected-boundary"
+
+
+def test_python_automation_accumulates_denials_and_runtime_revocations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One ceiling's denial, or a runtime revocation, removes a shared grant."""
+    grant = {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    for narrowing in ("denials", "revocations"):
+        github = _RecordingGitHub()
+        _publish_afk_action(github, monkeypatch, capsys)
+        request = _automation_request()
+        if narrowing == "denials":
+            request["automation"]["scope"]["ceilings"][1]["denials"] = [grant]
+        else:
+            request["automation"]["scope"]["revocations"] = [grant]
+
+        exit_code, result, stderr = _command_result(
+            "reconcile", request, github, monkeypatch, capsys
+        )
+
+        assert exit_code == 0, narrowing
+        assert stderr == ""
+        automation = result["result"]["automation"]
+        assert automation["scope"]["grants"] == [], narrowing
+        assert automation["scope"]["denials"] == [grant], narrowing
+        assert "authorization" not in automation, narrowing
+
+
+def test_python_automation_requires_fresh_matching_performer_posture(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unmet Eligibility requirement is typed ineligibility, not a failure."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["performer"]["posture"]["satisfied_requirements"] = [
+        {"kind": "access", "name": "tracker-write"}
+    ]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["performer-ineligible"]
+    assert automation["stop"]["reason"] == "performer-ineligible"
+
+
+def test_python_automation_excludes_work_outside_frozen_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Coverage bounds the frontier itself, not just selection."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    for ceiling in request["automation"]["scope"]["ceilings"]:
+        ceiling["coverage"]["repositories"] = ["octo/other"]
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["frontier"]["actions"] == []
+    [entry] = automation["eligibility"]
+    assert "outside-coverage" in entry["reasons"]
+    assert automation["stop"]["reason"] == "frontier-drained"
+
+
+def _publish_two_afk_actions(
+    github: _RecordingGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request = _afk_publish_request()
+    first = request["completion"]["actions"][0]
+    second = copy.deepcopy(first)
+    second["key"] = "second"
+    second["summary"] = "Publish the second specification"
+    second["target"] = _issue(240)
+    second["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    second["safety_case"] = _afk_safety_case(second)
+    request["completion"]["actions"].append(second)
+    assert _publish_result(request, github, monkeypatch, capsys)[0] == 0
+
+
+def test_python_automation_binds_one_action_at_a_time_from_the_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run drains independent frontier members serially, never in one bind."""
+    github = _RecordingGitHub()
+    _publish_two_afk_actions(github, monkeypatch, capsys)
+
+    first = _automation_result(github, monkeypatch, capsys)
+    assert len(first["frontier"]["actions"]) == 2
+    first_identity = first["authorization"]["action_identity"]
+
+    second = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        dispatched=[first_identity],
+    )
+    second_identity = second["authorization"]["action_identity"]
+    assert second_identity != first_identity
+
+    drained = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        dispatched=[first_identity, second_identity],
+    )
+    assert "authorization" not in drained
+    assert drained["stop"]["reason"] == "frontier-drained"
+
+
+def test_python_automation_reports_workstreams_terminal_as_the_only_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Only a verified terminal outcome over closed coverage completes a Run."""
+    github = _RecordingGitHub()
+    github.carriers_override = [
+        _terminal_carrier(
+            300, 9101, outcome_kind="complete", destination_satisfied=True
+        ),
+    ]
+    request = _automation_request()
+    request["revision_protocol"] = True
+
+    exit_code, result, stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    automation = result["result"]["automation"]
+    assert automation["frontier"]["actions"] == []
+    stop = automation["stop"]
+    assert stop["reason"] == "workstreams-terminal"
+    assert stop["disposition"] == "complete"
+    assert stop["nonterminal_status"] == "complete"
+    assert stop["outcomes"] == result["result"]["outcomes"]
+    assert automation["validators"] == result["result"]["observation"]["validators"]
+
+
+def _dispatch_result_request(
+    action: dict[str, Any],
+    *,
+    evidence_class: str = "safety-case-violation",
+    **overrides: Any,
+) -> dict[str, Any]:
+    dispatch: dict[str, Any] = {
+        "action_identity": action["identity"],
+        "semantic_fingerprint": action["semantic_fingerprint"],
+        "performer": "runner",
+        "carrier": _issue(237),
+        "class": evidence_class,
+        "summary": "The Instruction required a credential no grant covers.",
+        "evidence": [_issue(237)],
+    }
+    if evidence_class == "safety-case-violation":
+        dispatch["reason"] = "credential-required"
+    dispatch.update(overrides)
+    return {
+        "repository": "octo/example",
+        "trusted_producers": ["planner"],
+        "dispatch": dispatch,
+    }
+
+
+def test_python_record_dispatch_result_quarantines_a_safety_case_violation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Dispatch evidence is durable, non-Producer, and quarantines the Action."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    github.actor_login = "runner"
+    github.comment_author = "runner"
+    identity = before["authorization"]["action_identity"]
+    fingerprint = before["authorization"]["semantic_fingerprint"]
+
+    exit_code, receipt, stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {"identity": identity, "semantic_fingerprint": fingerprint}
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert stderr == ""
+    assert receipt["ok"] is True
+    assert receipt["operation"] == "record-dispatch-result"
+    assert receipt["receipt"]["status"] == "committed"
+    assert receipt["receipt"]["class"] == "safety-case-violation"
+    assert receipt["receipt"]["action_identity"] == identity
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+    [entry] = after["eligibility"]
+    assert entry["reasons"] == ["quarantined"]
+    assert "authorization" not in after
+    assert after["stop"]["reason"] == "safety-case-violation"
+    assert after["stop"]["disposition"] == "attention-required"
+
+
+# ---------------------------------------------------------------------------
+# Review findings (issue #254)
+# ---------------------------------------------------------------------------
+
+
+def test_python_semantic_fingerprint_covers_the_safety_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The case owns effects and retry, so the freeze must see it move.
+
+    Before contract 1.2 those fields lived on the Action and the fingerprint
+    hashed them there. A case that widened its effects while the Action stayed
+    byte-identical would otherwise keep its frozen fingerprint and stay
+    dispatchable for the rest of the Run.
+    """
+    baseline = _afk_publish_request()
+    widened = copy.deepcopy(baseline)
+    case = widened["completion"]["actions"][0]["safety_case"]
+    case["effects"] = [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"},
+        {"kind": "repository-write", "scope": "branch:main"},
+    ]
+    case["retry"] = {"kind": "at-most-once"}
+
+    first = _publish_result(baseline, _RecordingGitHub(), monkeypatch, capsys)[1]
+    second = _publish_result(widened, _RecordingGitHub(), monkeypatch, capsys)[1]
+
+    assert (
+        first["receipt"]["semantic_fingerprints"]["action"]
+        != second["receipt"]["semantic_fingerprints"]["action"]
+    )
+
+
+def test_python_automation_refuses_to_authorize_beside_a_guidance_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A frontier frozen from an untrustworthy projection authorizes nothing.
+
+    The conflicted Action never reaches ``actions`` at all, so the selectable
+    one looks perfectly healthy. What is unsound is the *coverage*: the Run
+    froze a description of the project that the project disagrees with.
+    """
+    github = _RecordingGitHub()
+    _publish_two_afk_actions(github, monkeypatch, capsys)
+    conflicting = _afk_publish_request()
+    conflicting["trusted_producers"] = ["planner", "second-planner"]
+    conflicting["completion"]["producer"] = {
+        "login": "second-planner",
+        "role": "planning",
+    }
+    other = conflicting["completion"]["actions"][0]
+    other["key"] = "second"
+    other["summary"] = "Publish the second specification"
+    other["target"] = _issue(240)
+    other["completion_condition"] = {"kind": "issue-closed", "target": _issue(240)}
+    other["instruction"] = {"mode": "skill", "value": "/to-spec 237 --different"}
+    other["safety_case"] = _afk_safety_case(other)
+    github.comment_author = "second-planner"
+    assert _publish_result(conflicting, github, monkeypatch, capsys)[0] == 0
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile",
+        _automation_request() | {"trusted_producers": ["planner", "second-planner"]},
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert any(
+        diagnostic["code"] == "action_conflict"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+    automation = result["result"]["automation"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "guidance-fault"
+    assert automation["stop"]["disposition"] == "attention-required"
+
+
+def test_python_uncertain_effect_state_raises_its_own_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The two evidence classes are different problems for a human."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    authorization = before["authorization"]
+    github.actor_login = "runner"
+    github.comment_author = "runner"
+
+    exit_code, _receipt, _stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {
+                "identity": authorization["action_identity"],
+                "semantic_fingerprint": authorization["semantic_fingerprint"],
+            },
+            evidence_class="uncertain-effect-state",
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    assert exit_code == 0
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    assert after["stop"]["reason"] == "uncertain-effect-state"
+    assert after["stop"]["disposition"] == "attention-required"
+
+
+def test_python_a_corrected_occurrence_clears_its_quarantine(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Evidence names one semantics, not one identity forever.
+
+    Quarantining the identity alone would outlive the Transition owner's own
+    correction: the owner publishes a repaired occurrence, its fingerprint
+    moves, and the evidence that described the broken one would still be
+    holding the repaired one down.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    identity = before["authorization"]["action_identity"]
+    github.actor_login = "runner"
+    github.comment_author = "runner"
+
+    assert (
+        _command_result(
+            "record-dispatch-result",
+            _dispatch_result_request(
+                {"identity": identity, "semantic_fingerprint": "0" * 64}
+            ),
+            github,
+            monkeypatch,
+            capsys,
+        )[0]
+        == 0
+    )
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    [entry] = after["eligibility"]
+    assert "quarantined" not in entry.get("reasons", [])
+    assert after["authorization"]["action_identity"] == identity
+
+
+def test_python_dispatch_evidence_must_be_written_by_its_own_performer(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A record naming a Performer that did not write it is not evidence."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    github.actor_login = "someone-else"
+
+    exit_code, result, _stderr = _command_result(
+        "record-dispatch-result",
+        _dispatch_result_request(
+            {
+                "identity": before["authorization"]["action_identity"],
+                "semantic_fingerprint": before["authorization"]["semantic_fingerprint"],
+            }
+        ),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 1
+    assert result["error"]["code"] == "invalid_request"
+    assert "performer" in result["error"]["message"]
+
+
+def test_python_reconcile_ignores_evidence_its_author_did_not_perform(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reading must apply the same binding writing does.
+
+    Anyone with write access can leave a comment. Only the Performer named in
+    the record can have performed the Dispatch it describes, so a record whose
+    author is not that Performer narrows nothing.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    authorization = before["authorization"]
+    forged = {
+        "action_identity": authorization["action_identity"],
+        "semantic_fingerprint": authorization["semantic_fingerprint"],
+        "performer": "runner",
+        "carrier": _issue(237),
+        "class": "safety-case-violation",
+        "reason": "credential-required",
+        "summary": "Forged.",
+        "evidence": [_issue(237)],
+    }
+    github.append_comment(
+        237, continuation._dispatch_evidence_body(forged), author="impostor"
+    )
+
+    after = _automation_result(github, monkeypatch, capsys, frontier=before["frontier"])
+
+    assert "authorization" in after
+    assert [entry.get("reasons", []) for entry in after["eligibility"]] == [[]]
+
+
+def test_python_reconcile_ignores_a_malformed_evidence_record(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A quarantine is an authority change; it needs the whole record."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    before = _automation_result(github, monkeypatch, capsys)
+    partial = {
+        "class": "safety-case-violation",
+        "action_identity": before["authorization"]["action_identity"],
+    }
+    github.append_comment(
+        237, continuation._dispatch_evidence_body(partial), author="runner"
+    )
+
+    _exit_code, result, _stderr = _command_result(
+        "reconcile",
+        _automation_request(frontier=before["frontier"]),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert "authorization" in result["result"]["automation"]
+    assert not any(
+        diagnostic["code"] == "dispatch_evidence_quarantine"
+        for diagnostic in result["result"]["diagnostics"]
+    )
+
+
+def test_python_automation_scope_can_only_narrow_within_one_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Replaying a frozen frontier must replay the authority that froze with it.
+
+    The frontier alone is not the freeze. A Run that carried its frozen
+    frontier forward but recomputed its scope from whatever the caller supplied
+    next would let a grant added mid-Run authorize an Action the Run was never
+    entitled to -- which is the widening the freeze exists to prevent.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    first = _automation_result(github, monkeypatch, capsys)
+    frozen_scope = first["scope"]
+
+    widened = _automation_request(frontier=first["frontier"])
+    for ceiling in widened["automation"]["scope"]["ceilings"]:
+        ceiling["coverage"]["repositories"].append("octo/elsewhere")
+        ceiling["grants"].append({"kind": "repository-write", "scope": "branch:main"})
+    widened["automation"]["scope"]["prior"] = frozen_scope
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile", widened, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    assert result["result"]["automation"]["scope"] == frozen_scope
+
+
+def test_python_automation_narrows_a_prior_scope_further(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Narrowing still applies immediately; only widening is refused."""
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    first = _automation_result(github, monkeypatch, capsys)
+
+    revoked = _automation_request(frontier=first["frontier"])
+    revoked["automation"]["scope"]["prior"] = first["scope"]
+    revoked["automation"]["scope"]["revocations"] = [
+        {"kind": "tracker-write", "scope": "issue:octo/example#239"}
+    ]
+
+    automation = _automation_result(
+        github,
+        monkeypatch,
+        capsys,
+        frontier=first["frontier"],
+        scope=revoked["automation"]["scope"],
+    )
+
+    assert automation["scope"]["grants"] == []
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "grant-missing"
+
+
+def test_python_automation_refuses_an_instruction_mode_the_performer_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Performer must positively declare the Instruction modes it handles.
+
+    The safety case describes the work; it says nothing about whether *this*
+    Performer has a handler for the Instruction's mode. Inferring one from the
+    absence of a declaration is exactly the open-world assumption unattended
+    execution cannot make.
+    """
+    github = _RecordingGitHub()
+    _publish_afk_action(github, monkeypatch, capsys)
+    request = _automation_request()
+    request["automation"]["performer"]["posture"]["instruction_modes"] = ["manual"]
+
+    exit_code, result, _stderr = _command_result(
+        "reconcile", request, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 0
+    automation = result["result"]["automation"]
+    [entry] = automation["eligibility"]
+    assert entry["reasons"] == ["performer-ineligible"]
+    assert "authorization" not in automation
+    assert automation["stop"]["reason"] == "performer-ineligible"

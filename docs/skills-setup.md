@@ -74,6 +74,120 @@ missing catalog skills. This installs the commands but does not configure their
 issue tracker, labels, or domain layout - that is
 [Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
 
+Interactive `init` also establishes the scope's **Skill policy** — the
+closed-world set of Skills a Run may expose — through the same searchable
+picker as [`git-loopy skills edit`](../git-loopy/python/README.md). It is seeded
+from an existing lower-scope git-loopy policy, or, when none exists, from a
+fresh Copilot Skill baseline; Required Skills cannot be saved disabled, and an
+enabled project Skill that is not git-tracked blocks the save. `git-loopy init
+--yes` persists the **Minimal Skill policy** — exactly the Required Skills —
+without contacting the machine's Copilot inventory, which keeps a first CI setup
+reproducible. Change a saved policy later with `git-loopy skills edit`.
+
+Setup is where a policy is *established*; everything else about operating one —
+the Config surfaces, the `git-loopy skills` commands, the resolved-policy audit
+event, the Python-first family transition, and every preflight failure with its
+recovery command — is in [`docs/skill-policy.md`](skill-policy.md).
+
+#### The Skill picker has two renderings, and one set of rules
+
+Every path that asks you to choose Skills — `init`, `skills edit`, and the
+one-time legacy migration below — opens the *same* picker over the *same*
+selection state. Only the drawing differs, and git-loopy picks the drawing for
+you:
+
+| | Full-screen picker | Plain picker |
+| --- | --- | --- |
+| Used when | stdout is a terminal **and** the `[tui]` extra is installed | anywhere else — a pipe, CI, `--no-interactive`, or no `[tui]` extra |
+| Search | type to filter, live | type the text, then Enter |
+| Toggle | `Space` on the highlighted row | the row's number |
+| Clear the filter | delete the search text | an empty line |
+| Move | `Up` / `Down` | — the list is numbered |
+| Save | `Enter` | `done`, then `y` at the confirmation |
+| Cancel | `Esc` or `Ctrl+C` | `q` |
+
+The full-screen picker is **optional, never required**. `pip install
+'git-loopy[tui]'` (or `uv sync --extra tui`) enables it; without the extra the
+plain picker runs and nothing is lost — the two are interchangeable and return
+the same selection. git-loopy probes for the extra without importing it, so a
+base install never pays for a dependency it does not have.
+
+Both renderings obey identical rules, because both read one shared model:
+
+- **Filtering never changes a selection.** Skills you enabled that the current
+  search hides stay enabled and are saved. Canonical Skill names never contain a
+  space, which is exactly why `Space` is free to mean "toggle" while you type.
+- **Required Skills are marked and locked on.** Switching one off is refused in
+  place, with the reason shown; it is not a save-time surprise.
+- **An untracked project Skill is visible but locked off.** It stays listed —
+  with the reason — so you can see what would need committing, rather than
+  vanishing from a catalog you are trying to reason about.
+- **Save is refused, not silently corrected**, whenever the selection would not
+  validate; the refusal names the offending Skill.
+
+Every refusal is shown where you are about to type: the full-screen picker
+updates its status bar, and the plain picker redraws the reason *below* the
+list, on the line above the prompt — so a long catalog cannot scroll away the
+one line that explains why the last answer changed nothing.
+
+Copilot's own enabled state has no authority over a saved Skill policy — once
+established, the policy changes only through an explicit git-loopy action. When
+you *do* want to re-import it, `git-loopy skills sync` is that explicit action:
+
+```bash
+# Show what importing Copilot's current Skill baseline would change, then confirm.
+git-loopy skills sync            # project scope inside a repository, else global
+git-loopy skills sync --global
+```
+
+Sync prints the exact additions and removals before writing anything and saves
+only after you confirm. When the scope has no policy of its own — it inherits a
+lower-scope one, or falls back to the unconfigured default — there is nothing
+for the baseline to already match, so sync says so and offers to save the whole
+baseline as that scope's first policy. It replaces only the Skills Copilot
+actually reports:
+git-loopy's packaged fallbacks — and any configured name Copilot does not know —
+keep their current state rather than being synced away. The proposed policy is
+validated first, so a sync that would disable a Required Skill, enable an
+untracked project Skill, or leave an unresolvable name enabled fails without
+touching the Config. Cancelling writes nothing, and no path ever writes back to
+Copilot's own settings.
+
+#### Upgrading a Config written before Skill policies existed
+
+A Config that predates the closed-world Skill policy carries no
+`enabled_skills` key. git-loopy will not guess one for it: an absent key is not
+"expose everything", it resolves to the **Minimal Skill policy** — the Required
+Skills and nothing else — so an unmigrated Config keeps running, just with a
+narrower surface than its author expected.
+
+The first interactive `git-loopy` run on such a Config offers a one-time
+migration through the same picker as `skills edit`, seeded from your current
+Copilot Skill baseline with any Skill Copilot reports **disabled** left
+unchecked. It is offered once, before any work starts, and writes the scope a
+Run actually resolves — project when the repository carries Config, otherwise
+global:
+
+```text
+git-loopy: this project Config predates the closed-world Skill policy. Choose
+the Skills this installation may load; the selection is saved once and never
+asked again.
+```
+
+- Confirming saves the selection and the Run continues on the policy you just
+  established; later Runs see a configured Config and are never asked again.
+- Cancelling writes nothing **and starts nothing** — the Run exits non-zero so
+  no Iteration silently proceeds on a policy you declined to choose.
+- Without a TTY, or with `--no-interactive`, nothing is prompted or persisted:
+  the Run proceeds on the Minimal Skill policy and prints a warning naming
+  `git-loopy skills edit` as the fix. Automation therefore never blocks.
+- A Config with `enabled_skills = []` is a real policy — a deliberately empty
+  one — not a legacy Config, and is never offered for migration.
+- `GIT_LOOPY_ENABLED_SKILLS` replaces the policy for that Run outright, so it
+  also suppresses the offer. `--enable-skill` is a temporary overlay on top of
+  the base policy and does not, so the underlying Config is still offered for
+  migration.
+
 ### 1.3 Alternative: copy the source catalog manually
 
 Use a manual copy when Python or `uv` is not available yet, or when you want
@@ -256,6 +370,7 @@ GitHub, GitLab, local markdown, or "other" (free-form). There's no plugin to hun
 
 **Next:**
 - [`docs/workflow.md`](workflow.md) — the complete planning-to-review workflow.
+- [`docs/skill-policy.md`](skill-policy.md) — operating the closed-world Skill policy: Config surfaces, `git-loopy skills`, migration, audit, and troubleshooting.
 - [`docs/customization.md`](customization.md) — deeper tailoring of `AGENTS.md`, `PROMPT.md`, and the per-repo skill config.
 - [`docs/runners.md`](runners.md) — the Runner family, invocation, and contract.
 - Back to [`README.md`](../README.md).

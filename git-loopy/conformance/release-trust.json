@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "workflow": {
+    "path": ".github/workflows/tui-release.yml",
+    "credential_free_jobs": [
+      "identity",
+      "plan"
+    ],
+    "signing_job": "build",
+    "publication_job": "publish",
+    "protected_environment": "release",
+    "unprotected_environment": "validation",
+    "protected_ref_prefix": "refs/tags/v",
+    "channel_credentials": [
+      {
+        "name": "HOMEBREW_TAP_TOKEN",
+        "job": "homebrew",
+        "purpose": "commit the generated formula to the Homebrew tap and open its pull request"
+      },
+      {
+        "name": "WINGET_MANIFESTS_TOKEN",
+        "job": "winget",
+        "purpose": "commit the generated winget manifests to this project's winget-pkgs fork and open its pull request"
+      },
+      {
+        "name": "SCOOP_BUCKET_TOKEN",
+        "job": "scoop",
+        "purpose": "commit the generated bucket manifest to the Scoop bucket and open its pull request"
+      }
+    ]
+  },
+  "attestation": {
+    "action": "actions/attest-build-provenance",
+    "required_channels": [
+      "stable"
+    ]
+  },
+  "receipt_name_template": "{archive}.trust.json",
+  "channels": [
+    {
+      "id": "stable",
+      "prerelease": false
+    },
+    {
+      "id": "prerelease",
+      "prerelease": true
+    }
+  ],
+  "evidence_kinds": [
+    "signature",
+    "hardened_runtime",
+    "notarization",
+    "publisher_identity",
+    "checksum"
+  ],
+  "mechanisms": [
+    {
+      "platform": "macos",
+      "id": "apple-developer-id",
+      "signing_tool": "codesign",
+      "hardware_backed": false,
+      "cargo_dist_key": "macos-sign",
+      "cargo_dist_value": true,
+      "signature_authority_prefix": "Developer ID Application:",
+      "hardened_runtime_flag": "runtime",
+      "hardened_runtime_option_env": "CODESIGN_OPTIONS",
+      "notarization_accepted_status": "Accepted",
+      "credentials": [
+        "CODESIGN_CERTIFICATE",
+        "CODESIGN_CERTIFICATE_PASSWORD",
+        "CODESIGN_IDENTITY",
+        "APPLE_NOTARY_ISSUER_ID",
+        "APPLE_NOTARY_KEY_ID",
+        "APPLE_NOTARY_PRIVATE_KEY"
+      ],
+      "required_evidence": {
+        "stable": [
+          "signature",
+          "hardened_runtime",
+          "notarization",
+          "checksum"
+        ],
+        "prerelease": [
+          "checksum"
+        ]
+      },
+      "unavailable_evidence": [
+        {
+          "kind": "stapled_ticket",
+          "reason": "a stapled ticket can only be embedded in a bundle, .dmg, or .pkg; the helper ships as a bare Mach-O in a tar.xz, so Gatekeeper resolves its notarization ticket online instead"
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "id": "ssldotcom-esigner",
+      "signing_tool": "CodeSignTool",
+      "hardware_backed": true,
+      "cargo_dist_key": "ssldotcom-windows-sign",
+      "cargo_dist_value": "prod",
+      "signature_authority_prefix": null,
+      "hardened_runtime_flag": null,
+      "hardened_runtime_option_env": null,
+      "notarization_accepted_status": null,
+      "credentials": [
+        "SSLDOTCOM_USERNAME",
+        "SSLDOTCOM_PASSWORD",
+        "SSLDOTCOM_CREDENTIAL_ID",
+        "SSLDOTCOM_TOTP_SECRET"
+      ],
+      "required_evidence": {
+        "stable": [
+          "signature",
+          "publisher_identity",
+          "checksum"
+        ],
+        "prerelease": [
+          "checksum"
+        ]
+      },
+      "unavailable_evidence": []
+    },
+    {
+      "platform": "linux",
+      "id": "checksum-and-attestation-only",
+      "signing_tool": null,
+      "hardware_backed": false,
+      "cargo_dist_key": null,
+      "cargo_dist_value": null,
+      "signature_authority_prefix": null,
+      "hardened_runtime_flag": null,
+      "hardened_runtime_option_env": null,
+      "notarization_accepted_status": null,
+      "credentials": [],
+      "required_evidence": {
+        "stable": [
+          "checksum"
+        ],
+        "prerelease": [
+          "checksum"
+        ]
+      },
+      "unavailable_evidence": [
+        {
+          "kind": "signature",
+          "reason": "Linux has no platform-wide code-signing trust root for a bare executable; the published checksum and the Release attestation are the whole of this platform's trust story"
+        }
+      ]
+    }
+  ],
+  "publication_cases": [
+    {
+      "id": "a-complete-signed-stable-set-publishes",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": null,
+      "allowed": true,
+      "error": null
+    },
+    {
+      "id": "a-stable-release-refuses-an-unnotarized-macos-artifact",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "macos",
+        "kind": "omit-evidence",
+        "evidence": "notarization"
+      },
+      "allowed": false,
+      "error": "notarization"
+    },
+    {
+      "id": "a-stable-release-refuses-a-macos-artifact-built-without-the-hardened-runtime",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "macos",
+        "kind": "omit-evidence",
+        "evidence": "hardened_runtime"
+      },
+      "allowed": false,
+      "error": "hardened_runtime"
+    },
+    {
+      "id": "a-stable-release-refuses-a-windows-artifact-with-no-verifiable-publisher",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "windows",
+        "kind": "omit-evidence",
+        "evidence": "publisher_identity"
+      },
+      "allowed": false,
+      "error": "publisher_identity"
+    },
+    {
+      "id": "a-stable-release-refuses-an-unsigned-windows-artifact",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "windows",
+        "kind": "unsigned",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "unsigned"
+    },
+    {
+      "id": "a-clearly-marked-prerelease-may-ship-an-unsigned-windows-artifact",
+      "version": "1.2.3-rc.1",
+      "release_marked_prerelease": true,
+      "attestation": false,
+      "defect": {
+        "platform": "windows",
+        "kind": "unsigned",
+        "evidence": null
+      },
+      "allowed": true,
+      "error": null
+    },
+    {
+      "id": "a-stable-release-refuses-a-missing-attestation",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": false,
+      "defect": null,
+      "allowed": false,
+      "error": "attestation"
+    },
+    {
+      "id": "a-stable-release-refuses-an-artifact-with-no-trust-receipt",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "linux",
+        "kind": "missing-receipt",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "trust receipt"
+    },
+    {
+      "id": "a-stable-release-refuses-an-artifact-with-no-published-checksum",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "linux",
+        "kind": "missing-checksum",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "checksum"
+    },
+    {
+      "id": "a-stable-release-refuses-a-receipt-issued-for-another-release",
+      "version": "1.2.3",
+      "release_marked_prerelease": false,
+      "attestation": true,
+      "defect": {
+        "platform": "macos",
+        "kind": "version-drift",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "Release version"
+    },
+    {
+      "id": "a-prerelease-may-not-attach-to-a-release-marked-stable",
+      "version": "1.2.3-rc.1",
+      "release_marked_prerelease": false,
+      "attestation": false,
+      "defect": {
+        "platform": "windows",
+        "kind": "unsigned",
+        "evidence": null
+      },
+      "allowed": false,
+      "error": "is not marked as a prerelease"
+    },
+    {
+      "id": "a-stable-release-may-not-attach-to-a-release-marked-prerelease",
+      "version": "1.2.3",
+      "release_marked_prerelease": true,
+      "attestation": true,
+      "defect": null,
+      "allowed": false,
+      "error": "is marked as a prerelease"
+    }
+  ]
+}

@@ -20,24 +20,33 @@ from git_loopy.gh import (
 )
 from git_loopy.release_version import read_runtime_release_version
 
-CONTINUATION_CONTRACT_VERSION = "1.0"
+CONTINUATION_CONTRACT_VERSION = "1.2"
+SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1", "1.2")
+SAFETY_CASE_CONTRACT_VERSION = "1.2"
 RECORD_FORMAT = 1
-WRAPPER_CONTRACT_VERSION = "1.3"
+WRAPPER_CONTRACT_VERSION = "1.4"
 EVENT_SCHEMA_VERSION = "1.1"
 
 CAPABILITY_MANIFEST: dict[str, Any] = {
-    "continuation_contract_versions": [CONTINUATION_CONTRACT_VERSION],
+    "continuation_contract_versions": list(SUPPORTED_CONTINUATION_CONTRACT_VERSIONS),
     "record_formats": [RECORD_FORMAT],
     "wrapper_contract_version": WRAPPER_CONTRACT_VERSION,
     "event_schema_version": EVENT_SCHEMA_VERSION,
     "tracker_adapters": {
-        "github": {"operations": ["publish", "reconcile", "repair-index"]}
+        "github": {
+            "operations": [
+                "publish",
+                "reconcile",
+                "record-dispatch-result",
+                "repair-index",
+            ]
+        }
     },
     "operations": {
         "capabilities": True,
         "publish": True,
         "reconcile": True,
-        "record-dispatch-result": False,
+        "record-dispatch-result": True,
         "repair-index": True,
     },
     "instruction_handlers": [],
@@ -46,7 +55,9 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     "effect_scopes": [],
     "optional_capabilities": {
         "immutable_producer_revisions": True,
-        "terminal_rendering": False,
+        "prospective_projection": True,
+        "terminal_rendering": True,
+        "fixed_frontier_authorization": True,
         "concurrent_dispatch": False,
     },
     "continuation_modes": {
@@ -146,6 +157,49 @@ INTERACTION_EVIDENCE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 OUTCOME_KINDS = frozenset({"complete", "rejected", "abandoned", "superseded"})
 NO_GUIDANCE_REASONS = frozenset({"no-successor-created", "ephemeral-only"})
+RETIREMENT_REASONS = frozenset(
+    {"completed", "lost-basis", "workstream-outcome", "supersession"}
+)
+_COVERAGE_UNCERTAINTY_CODES = frozenset(
+    {
+        "invalid_revision",
+        "missing_predecessor",
+        "missing_retirement_receipt",
+        "mutated_revision",
+        "retired_occurrence_resurrected",
+        "revision_fork",
+    }
+)
+# The complete `reconcile` diagnostic vocabulary for the whole Runner family.
+# Registered here and pinned by the shared Conformance fixture so a new code
+# lands as one deliberate contract change rather than a silent addition. Every
+# code here is emitted by at least one distribution: a code nobody reports is a
+# vocabulary entry a reader must still handle, and the family-wide gate treats
+# widening the shared contract for nobody's benefit as the same kind of drift as
+# narrowing it.
+RECONCILE_DIAGNOSTIC_CODES = frozenset(
+    {
+        "action_conflict",
+        "dispatch_evidence_quarantine",
+        "handoff_action_unavailable",
+        "handoff_context_unavailable",
+        "index_label_missing",
+        "index_label_stale",
+        "invalid_retirement_receipt",
+        "invalid_revision",
+        "missing_predecessor",
+        "missing_retirement_receipt",
+        "mutated_revision",
+        "prerequisite_cycle",
+        "producer_permission_revoked",
+        "retired_occurrence_resurrected",
+        "retirements_require_revision_protocol",
+        "revision_fork",
+        "untrusted_marker_ignored",
+        "unverified_completion",
+        "unverified_prerequisite",
+    }
+)
 _REFERENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "issue": ("repository", "number"),
     "pull-request": ("repository", "number"),
@@ -281,6 +335,26 @@ _REQUIREMENT_KINDS = frozenset(
     {"access", "capability", "command", "evaluator", "policy", "skill"}
 )
 _TRIGGER_KINDS = HUMAN_BOUNDARY_REASONS
+# The typed safety assumptions an AFK safety case may declare. A Transition
+# owner states why unattended completion is safe; free prose would let a
+# Producer justify anything, so the vocabulary is closed and pinned by the
+# shared fixture.
+ASSUMPTION_KINDS = frozenset(
+    {
+        "bounded-effect-scope",
+        "durable-inputs-fixed",
+        "no-human-decision",
+        "noninteractive-environment",
+        "objective-completion",
+        "stable-external-state",
+    }
+)
+# How a Performer may repeat the Instruction after a failed attempt.
+# `at-most-once` is the honest answer for an effect that cannot be replayed;
+# it is what makes uncertain effect state a recordable Dispatch-evidence class
+# rather than an ordinary retry.
+RETRY_KINDS = frozenset({"at-most-once", "idempotent", "resumable"})
+INSTRUCTION_MODES = frozenset({"command", "manual", "skill"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _WRITE_PERMISSIONS = frozenset({"ADMIN", "MAINTAIN", "WRITE"})
@@ -932,11 +1006,287 @@ def _triggers(
     return result, local_references
 
 
+def _safety_case(
+    value: Any,
+    name: str,
+    *,
+    repository: str,
+    action: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Structurally validate one positive versioned AFK safety case.
+
+    The safety case is the Transition owner's evidence-backed argument that
+    every permitted completion path of *this* Action occurrence is unattended.
+    It is therefore bound to the Action it justifies: the exact Instruction
+    variant, the exact Target, and the exact objective completion condition
+    must be restated here, so a later Instruction or Target change invalidates
+    the argument instead of silently inheriting it.
+    """
+    entry = _object(value, name)
+    _fields(
+        entry,
+        name,
+        required=frozenset(
+            {
+                "version",
+                "instruction",
+                "target",
+                "completion_condition",
+                "effects",
+                "assumptions",
+                "requirements",
+                "retry",
+                "triggers",
+            }
+        ),
+        optional=frozenset({"advisory_extensions"}),
+    )
+    _string(entry.get("version"), f"{name}.version")
+    for field in ("instruction", "target", "completion_condition"):
+        if entry.get(field) != action.get(field):
+            raise ContinuationError(
+                f"{name}.{field} must match the Action it justifies"
+            )
+    _typed_semantics(
+        entry.get("effects"),
+        f"{name}.effects",
+        kinds=_EFFECT_KINDS,
+        second_field="scope",
+    )
+    _typed_semantics(
+        entry.get("assumptions"),
+        f"{name}.assumptions",
+        kinds=ASSUMPTION_KINDS,
+        second_field="statement",
+    )
+    _typed_semantics(
+        entry.get("requirements"),
+        f"{name}.requirements",
+        kinds=_REQUIREMENT_KINDS,
+        second_field="name",
+    )
+    retry_name = f"{name}.retry"
+    retry = _object(entry.get("retry"), retry_name)
+    _fields(
+        retry,
+        retry_name,
+        required=frozenset({"kind"}),
+        optional=frozenset({"advisory_extensions"}),
+    )
+    if retry.get("kind") not in RETRY_KINDS:
+        raise ContinuationError(f"{retry_name}.kind is unsupported")
+    _validated_triggers, local_references = _triggers(
+        entry.get("triggers"),
+        f"{name}.triggers",
+        repository=repository,
+    )
+    return entry, local_references
+
+
+def _validate_retirement(
+    value: Any,
+    name: str,
+    *,
+    repository: str,
+) -> dict[str, Any]:
+    """Structurally validate one typed Retirement receipt.
+
+    Reconciliation is what proves a receipt genuinely names a real
+    predecessor Action it removed (see ``_apply_retirement_receipts``); this
+    only pins the receipt's own shape so a malformed envelope is rejected
+    atomically like every other completion field.
+    """
+    entry = _object(value, name)
+    _fields(
+        entry,
+        name,
+        required=frozenset(
+            {"predecessor_revision_id", "action_key", "reason", "evidence"}
+        ),
+        optional=frozenset({"replacement", "advisory_extensions"}),
+    )
+    predecessor_revision_id = _string(
+        entry.get("predecessor_revision_id"), f"{name}.predecessor_revision_id"
+    )
+    if _DIGEST_RE.fullmatch(predecessor_revision_id) is None:
+        raise ContinuationError(
+            f"{name}.predecessor_revision_id must be a sha256 revision identity"
+        )
+    _string(entry.get("action_key"), f"{name}.action_key")
+    reason = _string(entry.get("reason"), f"{name}.reason")
+    if reason not in RETIREMENT_REASONS:
+        raise ContinuationError(f"{name}.reason is unsupported")
+    for item in _array(entry.get("evidence"), f"{name}.evidence", nonempty=True):
+        _durable_reference(item, f"{name}.evidence item", repository)
+    if "replacement" in entry:
+        if reason != "supersession":
+            raise ContinuationError(
+                f"{name}.replacement is valid only when reason is supersession"
+            )
+        replacement = _object(entry["replacement"], f"{name}.replacement")
+        _fields(
+            replacement,
+            f"{name}.replacement",
+            required=frozenset({"workstream_anchor", "kind", "target", "occurrence"}),
+            optional=frozenset({"advisory_extensions"}),
+        )
+        _durable_reference(
+            replacement.get("workstream_anchor"),
+            f"{name}.replacement.workstream_anchor",
+            repository,
+        )
+        replacement_kind = _string(
+            replacement.get("kind"), f"{name}.replacement.kind"
+        )
+        if replacement_kind not in ACTION_KINDS:
+            raise ContinuationError(f"{name}.replacement.kind is unsupported")
+        _durable_reference(
+            replacement.get("target"), f"{name}.replacement.target", repository
+        )
+        _string(replacement.get("occurrence"), f"{name}.replacement.occurrence")
+    elif reason == "supersession":
+        raise ContinuationError(
+            f"{name} with reason supersession must declare a replacement"
+        )
+    return entry
+
+
+def _validate_previous_actions(value: Any, name: str) -> list[dict[str, str]]:
+    """Structurally validate a caller-supplied prior observation for delta.
+
+    This is deliberately the only source of "previous": there is no hidden
+    process memory or cache. Callers must explicitly pass back what an
+    earlier Reconciliation returned (or narrower lineage evidence in the
+    same shape) for a bounded refresh delta to be computed at all.
+    """
+    entries = _array(value, name)
+    result: list[dict[str, str]] = []
+    for index, item in enumerate(entries):
+        item_name = f"{name}[{index}]"
+        entry = _object(item, item_name)
+        _fields(
+            entry,
+            item_name,
+            required=frozenset({"identity", "semantic_fingerprint"}),
+            optional=frozenset(),
+        )
+        result.append(
+            {
+                "identity": _string(entry.get("identity"), f"{item_name}.identity"),
+                "semantic_fingerprint": _string(
+                    entry.get("semantic_fingerprint"),
+                    f"{item_name}.semantic_fingerprint",
+                ),
+            }
+        )
+    return result
+
+
+def _actions_delta(
+    actions: list[dict[str, Any]],
+    previous_actions: list[dict[str, str]],
+) -> dict[str, list[str]]:
+    """Bound one refresh delta between an explicit prior observation and now.
+
+    Never uses hidden process memory: ``previous_actions`` must be supplied
+    by the caller (typically the prior reconcile result's own Actions) or
+    derived from durable lineage evidence, per call.
+    """
+    current = {action["identity"]: action["semantic_fingerprint"] for action in actions}
+    previous = {entry["identity"]: entry["semantic_fingerprint"] for entry in previous_actions}
+    return {
+        "added": sorted(identity for identity in current if identity not in previous),
+        "retired": sorted(identity for identity in previous if identity not in current),
+        "changed": sorted(
+            identity
+            for identity in current
+            if identity in previous and current[identity] != previous[identity]
+        ),
+    }
+
+
+def _validate_handoff(value: Any, name: str) -> dict[str, Any]:
+    """Structurally validate one Handoff resume request.
+
+    ``context_available`` is the caller's own machine-local diagnostic: it
+    is never used to derive Readiness, order, or completion, only to decide
+    whether a Handoff reference can be attached at all.
+    """
+    entry = _object(value, name)
+    _fields(
+        entry,
+        name,
+        required=frozenset({"action_identity", "context_available"}),
+        optional=frozenset({"reference", "note"}),
+    )
+    action_identity = _string(
+        entry.get("action_identity"), f"{name}.action_identity"
+    )
+    context_available = entry.get("context_available")
+    if not isinstance(context_available, bool):
+        raise ContinuationError(f"{name}.context_available must be a boolean")
+    result: dict[str, Any] = {
+        "action_identity": action_identity,
+        "context_available": context_available,
+    }
+    if context_available:
+        result["reference"] = _string(entry.get("reference"), f"{name}.reference")
+    elif "reference" in entry:
+        raise ContinuationError(
+            f"{name}.reference requires available machine-local context"
+        )
+    if "note" in entry:
+        result["note"] = _string(entry.get("note"), f"{name}.note")
+    return result
+
+
+def _apply_handoff(
+    actions: list[dict[str, Any]],
+    handoff: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach at most one exact-occurrence Handoff reference, after ordering.
+
+    Handoff availability is diagnostic-only context: unavailable local
+    context, or an Action Reconciliation no longer carries, is reported
+    only as a diagnostic and never recreates the Action, never changes
+    Readiness, eligibility, order, or completion.
+    """
+    if not handoff["context_available"]:
+        return [
+            {
+                "code": "handoff_context_unavailable",
+                "action_identity": handoff["action_identity"],
+            }
+        ]
+    matched = next(
+        (
+            action
+            for action in actions
+            if action["identity"] == handoff["action_identity"]
+        ),
+        None,
+    )
+    if matched is None:
+        return [
+            {
+                "code": "handoff_action_unavailable",
+                "action_identity": handoff["action_identity"],
+            }
+        ]
+    matched["handoff_reference"] = {
+        "available": True,
+        "reference": handoff["reference"],
+        **({"note": handoff["note"]} if "note" in handoff else {}),
+    }
+    return []
+
+
 def _validate_action(
     value: Any,
     *,
     repository: str,
     transition_owner: str,
+    contract_version: str,
 ) -> tuple[dict[str, Any], list[str]]:
     action = _object(value, "completion.actions item")
     _fields(
@@ -961,6 +1311,7 @@ def _validate_action(
                 "context_references",
                 "effects",
                 "requirements",
+                "safety_case",
                 "triggers",
                 "advisory_extensions",
             }
@@ -981,7 +1332,7 @@ def _validate_action(
         required=frozenset({"mode", "value"}),
         optional=frozenset({"behavior_version", "variant", "advisory_extensions"}),
     )
-    if instruction.get("mode") not in {"skill", "command", "manual"}:
+    if instruction.get("mode") not in INSTRUCTION_MODES:
         raise ContinuationError(
             "completion.actions item.instruction.mode is unsupported"
         )
@@ -1073,6 +1424,26 @@ def _validate_action(
         repository=repository,
     )
     local_references.extend(trigger_local_references)
+    if "safety_case" in action:
+        if contract_version != SAFETY_CASE_CONTRACT_VERSION:
+            raise ContinuationError(
+                "a safety case requires Continuation contract version "
+                f"{SAFETY_CASE_CONTRACT_VERSION}"
+            )
+        if classification != "AFK-safe":
+            raise ContinuationError("only AFK-safe Actions may carry a safety case")
+        for field in ("effects", "requirements", "triggers"):
+            if field in action:
+                raise ContinuationError(
+                    f"completion.actions item.safety_case owns {field}; declare it once"
+                )
+        _validated_case, case_local_references = _safety_case(
+            action["safety_case"],
+            "completion.actions item.safety_case",
+            repository=repository,
+            action=action,
+        )
+        local_references.extend(case_local_references)
     return action, local_references
 
 
@@ -1115,11 +1486,15 @@ def _validate_completion(
                 "actions",
                 "outcome",
                 "no_guidance",
+                "retirements",
                 "advisory_extensions",
             }
         ),
     )
-    if completion.get("continuation_contract_version") != CONTINUATION_CONTRACT_VERSION:
+    if (
+        completion.get("continuation_contract_version")
+        not in SUPPORTED_CONTINUATION_CONTRACT_VERSIONS
+    ):
         raise ContinuationError("unsupported Continuation contract version")
     if completion.get("record_format") != RECORD_FORMAT:
         raise ContinuationError("unsupported Continuation record format")
@@ -1234,6 +1609,7 @@ def _validate_completion(
                 item,
                 repository=repository,
                 transition_owner=transition_owner,
+                contract_version=str(completion.get("continuation_contract_version")),
             )
             key = str(action["key"])
             if key in keys:
@@ -1357,6 +1733,25 @@ def _validate_completion(
                 repository,
             )
 
+    if "retirements" in completion:
+        seen_predecessor_actions: set[tuple[str, str]] = set()
+        for index, item in enumerate(
+            _array(completion["retirements"], "completion.retirements")
+        ):
+            retirement = _validate_retirement(
+                item, f"completion.retirements[{index}]", repository=repository
+            )
+            dedupe_key = (
+                str(retirement["predecessor_revision_id"]),
+                str(retirement["action_key"]),
+            )
+            if dedupe_key in seen_predecessor_actions:
+                raise ContinuationError(
+                    "completion.retirements contains duplicate "
+                    "predecessor_revision_id/action_key pair"
+                )
+            seen_predecessor_actions.add(dedupe_key)
+
     canonical_completion = _canonical_json(completion).encode("utf-8")
     if len(canonical_completion) > _MAX_RECORD_BYTES:
         raise ContinuationError(
@@ -1387,6 +1782,10 @@ def _semantic_fingerprint(action: dict[str, Any]) -> str:
         "requirements": action.get("requirements", []),
         "triggers": action.get("triggers", []),
     }
+    # Conditional: a record published under 1.0 or 1.1 has no safety case, and
+    # its fingerprint must stay byte-identical across this contract bump.
+    if "safety_case" in action:
+        semantics["safety_case"] = action["safety_case"]
     return hashlib.sha256(
         _canonical_json(_without_advisory_extensions(semantics)).encode("utf-8")
     ).hexdigest()
@@ -1490,14 +1889,28 @@ def _parse_record(comment: ContinuationComment) -> dict[str, Any] | None:
     return record
 
 
-def _action_identity(record: dict[str, Any], action: dict[str, Any]) -> str:
+def _action_identity_from_parts(
+    anchor: dict[str, Any],
+    kind: str,
+    target: dict[str, Any],
+    occurrence: str,
+) -> str:
     source = {
-        "anchor": record["workstream"]["anchor"],
-        "kind": action["kind"],
-        "target": action["target"],
-        "occurrence": action["occurrence"],
+        "anchor": anchor,
+        "kind": kind,
+        "target": target,
+        "occurrence": occurrence,
     }
     return hashlib.sha256(_canonical_json(source).encode("utf-8")).hexdigest()
+
+
+def _action_identity(record: dict[str, Any], action: dict[str, Any]) -> str:
+    return _action_identity_from_parts(
+        record["workstream"]["anchor"],
+        action["kind"],
+        action["target"],
+        action["occurrence"],
+    )
 
 
 def _record_completion(record: dict[str, Any]) -> dict[str, Any]:
@@ -1539,6 +1952,220 @@ def _live_revision_entries(
         for parent in record.get("parents", [])
     }
     return [entry for entry in entries if entry[2]["revision_id"] not in referenced]
+
+
+def _record_identities(record: dict[str, Any]) -> set[str]:
+    return {_action_identity(record, action) for action in record.get("actions", [])}
+
+
+def _is_recurrence_of(
+    replacement: dict[str, Any],
+    predecessor_record: dict[str, Any],
+    retired_action: dict[str, Any],
+) -> bool:
+    """Decide whether one replacement repeats exactly the retired operation.
+
+    A recurrence is the *same* operation — identical Workstream Anchor,
+    Action kind, and durable Target — declared again under a genuinely new
+    durable occurrence discriminator. Reusing the retired occurrence is not a
+    recurrence, and neither is pointing at some unrelated Action.
+    """
+    return (
+        _canonical_json(replacement["workstream_anchor"])
+        == _canonical_json(predecessor_record["workstream"]["anchor"])
+        and replacement["kind"] == retired_action["kind"]
+        and _canonical_json(replacement["target"])
+        == _canonical_json(retired_action["target"])
+        and replacement["occurrence"] != retired_action["occurrence"]
+    )
+
+
+def _retirement_relationship(
+    record: dict[str, Any],
+    receipt: dict[str, Any],
+    predecessor_record: dict[str, Any],
+) -> tuple[str, str | None] | None:
+    """Prove that one receipt removes its predecessor and names a new replacement."""
+    action_key = str(receipt["action_key"])
+    retired_action = next(
+        (
+            action
+            for action in predecessor_record.get("actions", [])
+            if str(action["key"]) == action_key
+        ),
+        None,
+    )
+    if retired_action is None:
+        return None
+    retired_identity = _action_identity(predecessor_record, retired_action)
+    current_identities = _record_identities(record)
+    if retired_identity in current_identities:
+        return None
+    if receipt["reason"] != "supersession":
+        return retired_identity, None
+    replacement = receipt["replacement"]
+    if not _is_recurrence_of(replacement, predecessor_record, retired_action):
+        return None
+    replacement_identity = _action_identity_from_parts(
+        replacement["workstream_anchor"],
+        replacement["kind"],
+        replacement["target"],
+        replacement["occurrence"],
+    )
+    if replacement_identity not in current_identities:
+        return None
+    return retired_identity, replacement_identity
+
+
+def _proven_retirements(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> tuple[list[tuple[dict[str, Any], str, str | None]], list[dict[str, Any]]]:
+    """Split one record's receipts into the proven ones and the unprovable ones.
+
+    This is the single place a receipt's live legitimacy is decided, so the
+    retirement projection, the missing-receipt check, and the ancestry
+    resurrection check can never disagree about what was really retired.
+    """
+    proven: list[tuple[dict[str, Any], str, str | None]] = []
+    unproven: list[dict[str, Any]] = []
+    parents = record.get("parents", [])
+    for receipt in record.get("retirements", []):
+        predecessor_id = str(receipt["predecessor_revision_id"])
+        predecessor_entry = by_id.get(predecessor_id)
+        relationship = (
+            _retirement_relationship(record, receipt, predecessor_entry[2])
+            if predecessor_entry is not None and predecessor_id in parents
+            else None
+        )
+        if relationship is None:
+            unproven.append(receipt)
+            continue
+        proven.append((receipt, relationship[0], relationship[1]))
+    return proven, unproven
+
+
+def _invalid_receipt_diagnostic(
+    comment: ContinuationComment,
+    record: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "code": "invalid_retirement_receipt",
+        "comment_id": comment.id,
+        "revision_id": record["revision_id"],
+        "predecessor_revision_id": str(receipt["predecessor_revision_id"]),
+        "action_key": str(receipt["action_key"]),
+    }
+
+
+def _apply_retirement_receipts(
+    live_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Derive bounded, transient Retirement receipts for one lineage's heads.
+
+    Nothing is journaled or cached: every receipt is proven, per call,
+    directly against the immutable revision chain already read this
+    Reconciliation. A live successor names the predecessor revision it
+    retired as one of its own ``parents`` and must carry a typed receipt
+    whose ``action_key`` really existed there; anything else is an
+    unverifiable receipt and only becomes a diagnostic, never fatal to the
+    rest of guidance.
+    """
+    retirements: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    for _carrier, comment, record in live_entries:
+        proven, unproven = _proven_retirements(record, by_id)
+        diagnostics.extend(
+            _invalid_receipt_diagnostic(comment, record, receipt)
+            for receipt in unproven
+        )
+        for receipt, retired_identity, replacement_identity in proven:
+            retirement_entry = {
+                "workstream_anchor": record["workstream"]["anchor"],
+                "action_identity": retired_identity,
+                "predecessor_revision_id": str(receipt["predecessor_revision_id"]),
+                "reason": receipt["reason"],
+                "evidence": receipt["evidence"],
+            }
+            if replacement_identity is not None:
+                retirement_entry["replacement_identity"] = replacement_identity
+            retirements.append(retirement_entry)
+    return retirements, diagnostics
+
+
+def _retired_ancestor_identities(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> set[str]:
+    """Collect every Action identity provably retired anywhere in the ancestry.
+
+    Retirement binds the whole descendant chain, not just the revision that
+    proved it: a completed or invalidated occurrence stays retired however
+    many revisions later it is re-declared. Walking the full ancestry is what
+    makes that durable without a tombstone ledger — the immutable chain
+    already read this Reconciliation is the only evidence consulted.
+    """
+    retired: set[str] = set()
+    seen: set[str] = set()
+    frontier = [str(parent) for parent in record.get("parents", [])]
+    while frontier:
+        revision_id = frontier.pop()
+        if revision_id in seen:
+            continue
+        seen.add(revision_id)
+        entry = by_id.get(revision_id)
+        if entry is None:
+            continue
+        ancestor = entry[2]
+        proven, _unproven = _proven_retirements(ancestor, by_id)
+        retired.update(identity for _receipt, identity, _replacement in proven)
+        frontier.extend(str(parent) for parent in ancestor.get("parents", []))
+    return retired
+
+
+def _resurrected_identities(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> list[str]:
+    """Find retired occurrences this record re-declares as live guidance."""
+    retired = _retired_ancestor_identities(record, by_id)
+    if not retired:
+        return []
+    return sorted(_record_identities(record) & retired)
+
+
+def _missing_retirement_receipts(
+    record: dict[str, Any],
+    by_id: dict[str, tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> list[dict[str, str]]:
+    """Find predecessor Actions removed without a typed Retirement receipt."""
+    current_identities = _record_identities(record)
+    proven, _unproven = _proven_retirements(record, by_id)
+    declared = {
+        (str(receipt["predecessor_revision_id"]), str(receipt["action_key"]))
+        for receipt, _identity, _replacement in proven
+    }
+    missing: list[dict[str, str]] = []
+    for predecessor_id in record.get("parents", []):
+        predecessor_entry = by_id.get(str(predecessor_id))
+        if predecessor_entry is None:
+            continue
+        predecessor = predecessor_entry[2]
+        for action in predecessor.get("actions", []):
+            action_key = str(action["key"])
+            if (
+                _action_identity(predecessor, action) not in current_identities
+                and (str(predecessor_id), action_key) not in declared
+            ):
+                missing.append(
+                    {
+                        "predecessor_revision_id": str(predecessor_id),
+                        "action_key": action_key,
+                    }
+                )
+    return missing
 
 
 def _comment_taint_identity(carrier_number: int, comment_id: int) -> str:
@@ -1615,6 +2242,19 @@ def _tainted_lineage_heads(
         if parent in tainted
     }
     return tainted - referenced_tainted
+
+
+def _is_marked(comment: ContinuationComment) -> bool:
+    """Is this comment claiming to be a Continuation record or dispatch evidence?
+
+    Authentication is scoped to *marked* comments: an ordinary human comment on a
+    carrier issue is not a record, was never going to become one, and must not
+    cost a permission read or answer the mutation question. Testing for the marker
+    is a discriminator, not semantic parsing, so the contract's
+    authenticate-before-parse ordering is preserved — an unmarked comment is
+    simply never parsed at all.
+    """
+    return _RECORD_MARKER in comment.body or _DISPATCH_MARKER in comment.body
 
 
 def _authorized_comment(
@@ -1868,8 +2508,12 @@ def _evaluate_fragment(
     returned outstanding-action list and reported only via diagnostics,
     since Unverified evidence must never surface as an optimistic
     Ready/Blocked/completion classification.
+
+    A ``terminal`` or ``no-guidance`` disposition carries no ``actions`` at
+    all: it contributes no outstanding Action rather than raising, so a
+    Workstream outcome never crashes Reconciliation.
     """
-    actions_by_key = {action["key"]: action for action in record["actions"]}
+    actions_by_key = {action["key"]: action for action in record.get("actions", [])}
     status_cache: dict[str, str] = {}
     diagnostics: list[dict[str, Any]] = []
     revision_id = record["revision_id"]
@@ -1906,7 +2550,7 @@ def _evaluate_fragment(
         return status
 
     results: list[tuple[dict[str, Any], str, list[dict[str, Any]]]] = []
-    for action in record["actions"]:
+    for action in record.get("actions", []):
         key = action["key"]
         completion_status = resolve_completion(key, ())
         if completion_status in {"conflict", "satisfied"}:
@@ -1983,6 +2627,144 @@ def _union_provenance(contributed: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [seen[key] for key in sorted(seen)]
 
 
+_READINESS_RANK = {"Ready": 0, "Blocked": 1}
+
+
+def _local_topological_layers(record: dict[str, Any]) -> dict[str, int]:
+    """Layer every local Action by its own record's ``action-completed`` graph.
+
+    Layer 0 has no local completed-Action prerequisite; otherwise the layer
+    is one more than the deepest named local prerequisite. This captures
+    only the Producer's own per-Workstream sequencing decision (never a
+    global Action-kind stage table).
+
+    Layers are relaxed to a fixed point rather than resolved by recursive
+    descent, so the answer never depends on the order Actions were declared
+    or visited. Anything still unresolved when the relaxation stops is on, or
+    feeds, a prerequisite cycle and layers 0 — a cycle is already rejected at
+    publish time, and this keeps the order total either way. Every
+    distribution in the family implements this same fixed point.
+    """
+    prerequisites = {
+        str(action["key"]): sorted(
+            {
+                str(prerequisite["action_key"])
+                for prerequisite in action.get("prerequisites", [])
+                if prerequisite.get("kind") == "action-completed"
+            }
+        )
+        for action in record.get("actions", [])
+    }
+    layers: dict[str, int] = {}
+    for _round in range(len(prerequisites) + 1):
+        resolved = dict(layers)
+        for key, local_keys in prerequisites.items():
+            if key in resolved:
+                continue
+            if any(
+                other in prerequisites and other not in resolved
+                for other in local_keys
+            ):
+                continue
+            layers[key] = (
+                1 + max(resolved.get(other, 0) for other in local_keys)
+                if local_keys
+                else 0
+            )
+        if len(layers) == len(prerequisites):
+            break
+    return {key: layers.get(key, 0) for key in prerequisites}
+
+
+def _continuation_view_order_key(
+    action: dict[str, Any],
+) -> tuple[int, int, str, int, str]:
+    """Deterministic Continuation view order for verified guidance.
+
+    Orders Ready Actions ahead of Blocked ones, then by each Action's
+    deterministic local topological layer. Canonical Workstream Anchor keeps
+    a Producer's declaration position local to that Workstream; local
+    Workflow-semantic precedence then orders its own Actions before canonical
+    Action identity breaks the final tie. No global Action-kind stage order
+    and no timestamp or discovery order is ever consulted.
+    """
+    return (
+        _READINESS_RANK[action["readiness"]],
+        action["_topological_layer"],
+        _canonical_json(action["workstream_anchor"]),
+        action["_local_order_index"],
+        action["identity"],
+    )
+
+
+def _project_outcome(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Project one durable Workstream outcome from a terminal-disposition head.
+
+    ``continue`` and ``no-guidance`` records never carry ``outcome`` and
+    contribute nothing here; only an affirmatively terminal disposition does.
+    """
+    if record.get("disposition") != "terminal":
+        return None
+    outcome = record["outcome"]
+    projected = {
+        "workstream_anchor": record["workstream"]["anchor"],
+        "kind": outcome["kind"],
+        "destination_satisfied": outcome["destination_satisfied"],
+        "effective_at": outcome["effective_at"],
+        "evidence": outcome["evidence"],
+        "summary": outcome["summary"],
+    }
+    if "successor" in outcome:
+        projected["successor"] = outcome["successor"]
+    return projected
+
+
+def _workstream_outcomes(
+    guidance_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    outcomes = []
+    for _carrier, _comment, record in guidance_entries:
+        outcome = _project_outcome(record)
+        if outcome is not None:
+            outcomes.append(outcome)
+    outcomes.sort(key=lambda outcome: _canonical_json(outcome["workstream_anchor"]))
+    return outcomes
+
+
+def _guidance_status(
+    guidance_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
+    *,
+    actions: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    closed_coverage: bool,
+) -> str:
+    """Waiting/guidance/Complete per AC8.
+
+    Complete is never inferred from a merely empty Action list: it requires
+    an explicit destination-satisfied outcome for every currently observed
+    Workstream, gathered over a closed-coverage read. A project with no
+    guidance entries at all, or one still holding a non-terminal (e.g.
+    ``no-guidance``) lineage, renders Waiting rather than an unproven
+    Complete claim.
+    """
+    if actions:
+        return "guidance"
+    every_lineage_terminal = bool(guidance_entries) and all(
+        record.get("disposition") == "terminal"
+        for _carrier, _comment, record in guidance_entries
+    )
+    if (
+        closed_coverage
+        and every_lineage_terminal
+        and all(
+            outcome["kind"] == "complete" and outcome["destination_satisfied"]
+            for outcome in outcomes
+        )
+    ):
+        return "complete"
+    return "waiting"
+
+
 def _derive_actions(
     guidance_entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]],
     *,
@@ -2026,6 +2808,7 @@ def _derive_actions(
             )
 
     actions: list[dict[str, Any]] = []
+    layer_cache: dict[str, dict[str, int]] = {}
     for identity, contributed in contributions.items():
         fingerprints = {entry["semantic_fingerprint"] for entry in contributed}
         if len(fingerprints) > 1:
@@ -2045,10 +2828,20 @@ def _derive_actions(
         )
         canonical = contributed[0]
         action = canonical["action"]
+        canonical_record = canonical["record"]
+        canonical_revision_id = str(canonical_record["revision_id"])
+        if canonical_revision_id not in layer_cache:
+            layer_cache[canonical_revision_id] = _local_topological_layers(
+                canonical_record
+            )
+        local_keys = [
+            str(local_action["key"])
+            for local_action in canonical_record.get("actions", [])
+        ]
         item = {
             "identity": identity,
             "semantic_fingerprint": canonical["semantic_fingerprint"],
-            "workstream_anchor": canonical["record"]["workstream"]["anchor"],
+            "workstream_anchor": canonical_record["workstream"]["anchor"],
             "summary": action["summary"],
             "kind": action["kind"],
             "readiness": canonical["readiness"],
@@ -2057,14 +2850,19 @@ def _derive_actions(
             "basis": _union_basis(entry["action"]["basis"] for entry in contributed),
             "producer": {
                 **canonical["producer"],
-                "carrier": canonical["record"]["carrier"],
-                "revision_id": canonical["record"]["revision_id"],
+                "carrier": canonical_record["carrier"],
+                "revision_id": canonical_record["revision_id"],
                 "comment_id": canonical["comment"].id,
                 "comment_url": canonical["comment"].url,
             },
             "prerequisites": action["prerequisites"],
             "interaction": action["interaction"],
             "completion_condition": action["completion_condition"],
+            # Ordering-only fields; stripped before the Action is returned.
+            "_topological_layer": layer_cache[canonical_revision_id][
+                str(action["key"])
+            ],
+            "_local_order_index": local_keys.index(str(action["key"])),
         }
         if len(contributed) > 1:
             # Only surface provenance once a live claim was actually merged
@@ -2075,9 +2873,753 @@ def _derive_actions(
             # Only surface unsatisfied prerequisites for Blocked Actions,
             # preserving the exact existing Ready-only command framing.
             item["unsatisfied_prerequisites"] = canonical["unsatisfied"]
+        if "safety_case" in action:
+            # The positive AFK safety case is Action semantics a Consumer must
+            # be able to read; it is what an authorization is bound to.
+            item["safety_case"] = action["safety_case"]
         actions.append(item)
-    actions.sort(key=lambda action: action["identity"])
+    actions.sort(key=_continuation_view_order_key)
+    for item in actions:
+        del item["_topological_layer"]
+        del item["_local_order_index"]
     return actions, diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization
+#
+# Reconciliation derives what is true. This section decides, for one Performer
+# and one frozen Run boundary, which of those Actions that Performer could be
+# authorized to perform unattended -- and, when none can be, says exactly why.
+# It never performs an Action, and it never widens anything: every rule here
+# can only remove an Action from consideration.
+# ---------------------------------------------------------------------------
+
+# Typed reasons one in-coverage Action is not Automation-selectable. A Run may
+# read these; it may never invent one, and a missing reason is never a pass.
+AUTOMATION_INELIGIBILITY_REASONS = frozenset(
+    {
+        "already-dispatched",
+        "grant-missing",
+        "human-boundary",
+        "not-ready",
+        "outside-coverage",
+        "outside-frontier",
+        "performer-ineligible",
+        "quarantined",
+        "safety-case-absent",
+    }
+)
+# The locked Automation stop precedence, strongest first. Exactly one stop is
+# returned and the first matching reason wins, so a Run that is both blocked on
+# a human boundary and waiting on a Prerequisite reports the human boundary --
+# the thing a person can act on -- rather than the more numerous barrier.
+AUTOMATION_STOP_PRECEDENCE: tuple[tuple[str, str], ...] = (
+    ("workstreams-terminal", "complete"),
+    ("safety-case-violation", "attention-required"),
+    ("uncertain-effect-state", "attention-required"),
+    ("guidance-fault", "attention-required"),
+    ("human-boundary", "expected-boundary"),
+    ("grant-missing", "expected-boundary"),
+    ("performer-ineligible", "expected-boundary"),
+    ("frontier-drained", "expected-boundary"),
+    ("awaiting-prerequisites", "expected-boundary"),
+)
+# Why a current Action is visible to the Run but never selectable by it: its
+# semantics moved after the freeze, or the freeze never saw it at all.
+AUTOMATION_REPORT_ONLY_REASONS = frozenset({"changed-semantics", "newly-produced"})
+AUTOMATION_STOP_REASONS = frozenset(entry[0] for entry in AUTOMATION_STOP_PRECEDENCE)
+AUTOMATION_STOP_DISPOSITIONS = frozenset(
+    entry[1] for entry in AUTOMATION_STOP_PRECEDENCE
+)
+# Which ineligibility reason raises which stop. Reasons absent from this map
+# describe an Action the Run was never entitled to consider (report-only,
+# out of coverage, already dispatched) and so cannot themselves stop a Run.
+_INELIGIBILITY_STOP_REASONS = {
+    "human-boundary": "human-boundary",
+    "grant-missing": "grant-missing",
+    "performer-ineligible": "performer-ineligible",
+    "not-ready": "awaiting-prerequisites",
+    # An AFK-safe claim with no safety case behind it is a defect in the
+    # guidance, not a property of the Performer or the Run's authority.
+    "safety-case-absent": "guidance-fault",
+}
+
+
+def _scope_entries(value: Any, name: str) -> list[dict[str, str]]:
+    """Validate one typed effect-scope list and return it deduplicated."""
+    entries = _typed_semantics(value, name, kinds=_EFFECT_KINDS, second_field="scope")
+    return [{"kind": entry["kind"], "scope": entry["scope"]} for entry in entries]
+
+
+def _requirement_entries(value: Any, name: str) -> list[dict[str, str]]:
+    entries = _typed_semantics(
+        value, name, kinds=_REQUIREMENT_KINDS, second_field="name"
+    )
+    return [{"kind": entry["kind"], "name": entry["name"]} for entry in entries]
+
+
+def _sorted_pairs(entries: list[dict[str, str]], second: str) -> list[dict[str, str]]:
+    unique = {(entry["kind"], entry[second]) for entry in entries}
+    return [{"kind": kind, second: value} for kind, value in sorted(unique)]
+
+
+def _validate_automation(value: Any, name: str) -> dict[str, Any]:
+    """Validate the caller's Automation scope, posture, and frozen frontier."""
+    automation = _object(value, name)
+    _fields(
+        automation,
+        name,
+        required=frozenset({"performer", "scope"}),
+        optional=frozenset({"frontier", "dispatched"}),
+    )
+
+    performer_name = f"{name}.performer"
+    performer = _object(automation.get("performer"), performer_name)
+    _fields(
+        performer,
+        performer_name,
+        required=frozenset({"id", "posture"}),
+        optional=frozenset(),
+    )
+    performer_id = _string(performer.get("id"), f"{performer_name}.id")
+    posture_name = f"{performer_name}.posture"
+    posture = _object(performer.get("posture"), posture_name)
+    _fields(
+        posture,
+        posture_name,
+        required=frozenset(
+            {"noninteractive", "satisfied_requirements", "instruction_modes"}
+        ),
+        optional=frozenset(),
+    )
+    if posture.get("noninteractive") is not True:
+        raise ContinuationError(f"{posture_name}.noninteractive must be true")
+    satisfied = _requirement_entries(
+        posture.get("satisfied_requirements"),
+        f"{posture_name}.satisfied_requirements",
+    )
+    # Closed world: a Performer executes only the Instruction modes it declares
+    # a handler for. Silence is not a claim of universal competence.
+    handled_modes = set()
+    for entry in _array(
+        posture.get("instruction_modes"), f"{posture_name}.instruction_modes"
+    ):
+        mode = _string(entry, f"{posture_name}.instruction_modes item")
+        if mode not in INSTRUCTION_MODES:
+            raise ContinuationError(
+                f"{posture_name}.instruction_modes item is unsupported"
+            )
+        handled_modes.add(mode)
+
+    scope_name = f"{name}.scope"
+    scope = _object(automation.get("scope"), scope_name)
+    _fields(
+        scope,
+        scope_name,
+        required=frozenset({"ceilings", "revocations"}),
+        optional=frozenset({"prior"}),
+    )
+    ceilings = _array(scope.get("ceilings"), f"{scope_name}.ceilings", nonempty=True)
+    sources: set[str] = set()
+    repositories: set[str] | None = None
+    granted: set[tuple[str, str]] | None = None
+    denied: set[tuple[str, str]] = set()
+    for index, item in enumerate(ceilings):
+        ceiling_name = f"{scope_name}.ceilings[{index}]"
+        ceiling = _object(item, ceiling_name)
+        _fields(
+            ceiling,
+            ceiling_name,
+            required=frozenset({"source", "coverage", "grants", "denials"}),
+            optional=frozenset(),
+        )
+        source = _string(ceiling.get("source"), f"{ceiling_name}.source")
+        if source not in {"global", "project"}:
+            raise ContinuationError(f"{ceiling_name}.source is unsupported")
+        if source in sources:
+            raise ContinuationError(f"{ceiling_name}.source is declared twice")
+        sources.add(source)
+        coverage_name = f"{ceiling_name}.coverage"
+        coverage = _object(ceiling.get("coverage"), coverage_name)
+        _fields(
+            coverage,
+            coverage_name,
+            required=frozenset({"repositories"}),
+            optional=frozenset(),
+        )
+        ceiling_repositories = {
+            _string(entry, f"{coverage_name}.repositories item")
+            for entry in _array(
+                coverage.get("repositories"),
+                f"{coverage_name}.repositories",
+                nonempty=True,
+            )
+        }
+        # Ceilings intersect: a Run observes only what every ceiling admits.
+        repositories = (
+            ceiling_repositories
+            if repositories is None
+            else repositories & ceiling_repositories
+        )
+        ceiling_grants = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(ceiling.get("grants"), f"{ceiling_name}.grants")
+        }
+        granted = ceiling_grants if granted is None else granted & ceiling_grants
+        # Denials accumulate: one ceiling's refusal is the Run's refusal.
+        denied |= {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(
+                ceiling.get("denials"), f"{ceiling_name}.denials"
+            )
+        }
+    revocations = {
+        (entry["kind"], entry["scope"])
+        for entry in _scope_entries(
+            scope.get("revocations"), f"{scope_name}.revocations"
+        )
+    }
+    # A revocation observed during the Run narrows immediately and is
+    # indistinguishable from a denial thereafter.
+    denied |= revocations
+    effective_grants = (granted or set()) - denied
+
+    # The frozen scope of a Run is replayed alongside its frozen frontier, and
+    # the two must narrow together. Recomputing authority from whatever the
+    # caller supplies next would let a grant added mid-Run authorize an Action
+    # the Run was never entitled to.
+    if "prior" in scope:
+        prior_name = f"{scope_name}.prior"
+        prior = _object(scope["prior"], prior_name)
+        _fields(
+            prior,
+            prior_name,
+            required=frozenset({"coverage", "grants", "denials"}),
+            optional=frozenset({"frozen"}),
+        )
+        prior_coverage = _object(prior.get("coverage"), f"{prior_name}.coverage")
+        _fields(
+            prior_coverage,
+            f"{prior_name}.coverage",
+            required=frozenset({"repositories"}),
+            optional=frozenset(),
+        )
+        prior_repositories = {
+            _string(entry, f"{prior_name}.coverage.repositories item")
+            for entry in _array(
+                prior_coverage.get("repositories"),
+                f"{prior_name}.coverage.repositories",
+            )
+        }
+        prior_grants = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(prior.get("grants"), f"{prior_name}.grants")
+        }
+        prior_denials = {
+            (entry["kind"], entry["scope"])
+            for entry in _scope_entries(prior.get("denials"), f"{prior_name}.denials")
+        }
+        repositories = (repositories or set()) & prior_repositories
+        effective_grants &= prior_grants
+        denied |= prior_denials
+        effective_grants -= denied
+
+    frontier: list[dict[str, str]] | None = None
+    if "frontier" in automation:
+        frontier_name = f"{name}.frontier"
+        declared = _object(automation["frontier"], frontier_name)
+        _fields(
+            declared,
+            frontier_name,
+            required=frozenset({"actions"}),
+            optional=frozenset(),
+        )
+        frontier = _validate_previous_actions(
+            declared.get("actions"), f"{frontier_name}.actions"
+        )
+
+    dispatched = [
+        _string(entry, f"{name}.dispatched item")
+        for entry in _array(automation.get("dispatched", []), f"{name}.dispatched")
+    ]
+
+    return {
+        "performer_id": performer_id,
+        "satisfied_requirements": {
+            (entry["kind"], entry["name"]) for entry in satisfied
+        },
+        "instruction_modes": handled_modes,
+        "repositories": repositories or set(),
+        "grants": effective_grants,
+        "denials": denied,
+        "frontier": frontier,
+        "dispatched": set(dispatched),
+    }
+
+
+def _action_repositories(action: dict[str, Any]) -> set[str]:
+    return {
+        str(reference["repository"])
+        for reference in (action["workstream_anchor"], action["target"])
+        if isinstance(reference, dict) and "repository" in reference
+    }
+
+
+def _automation_ineligibility(
+    action: dict[str, Any],
+    *,
+    automation: dict[str, Any],
+    frontier: dict[str, str],
+    quarantined: dict[tuple[str, str], str],
+) -> list[str]:
+    """Every typed reason this Action is not Automation-selectable."""
+    reasons: set[str] = set()
+    identity = action["identity"]
+    if not _action_repositories(action) <= automation["repositories"]:
+        reasons.add("outside-coverage")
+    frozen_fingerprint = frontier.get(identity)
+    if frozen_fingerprint != action["semantic_fingerprint"]:
+        reasons.add("outside-frontier")
+    if identity in automation["dispatched"]:
+        reasons.add("already-dispatched")
+    if (identity, action["semantic_fingerprint"]) in quarantined:
+        reasons.add("quarantined")
+    if action["interaction"]["classification"] != "AFK-safe":
+        reasons.add("human-boundary")
+    if action["readiness"] != "Ready":
+        reasons.add("not-ready")
+    safety_case = action.get("safety_case")
+    if safety_case is None:
+        # An AFK-safe classification without its positive safety case is an
+        # assertion, not an argument. Absence is never upgraded to eligibility.
+        if "human-boundary" not in reasons:
+            reasons.add("safety-case-absent")
+    else:
+        effects = {(entry["kind"], entry["scope"]) for entry in safety_case["effects"]}
+        if not effects <= automation["grants"]:
+            reasons.add("grant-missing")
+        requirements = {
+            (entry["kind"], entry["name"]) for entry in safety_case["requirements"]
+        }
+        if (
+            not requirements <= automation["satisfied_requirements"]
+            or action["instruction"]["mode"] not in automation["instruction_modes"]
+        ):
+            reasons.add("performer-ineligible")
+    return sorted(reasons)
+
+
+def _automation_projection(
+    request: dict[str, Any],
+    *,
+    actions: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+    status: str,
+    validators: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project one Performer's authorization decision over a frozen frontier."""
+    automation = _validate_automation(request["automation"], "automation")
+
+    # The frontier freezes at the first stable Reconciliation of the Run and is
+    # replayed by the caller thereafter. Every in-coverage identity is frozen,
+    # including Blocked, HITL-required, ineligible, and quarantined members --
+    # otherwise a member that later became Ready would look like a newcomer.
+    if automation["frontier"] is None:
+        frozen = [
+            {
+                "identity": action["identity"],
+                "semantic_fingerprint": action["semantic_fingerprint"],
+            }
+            for action in actions
+            if _action_repositories(action) <= automation["repositories"]
+        ]
+    else:
+        frozen = automation["frontier"]
+    frontier_index = {
+        entry["identity"]: entry["semantic_fingerprint"] for entry in frozen
+    }
+
+    # Evidence names one *semantics*, not one identity forever: a Transition
+    # owner that publishes a repaired occurrence moves the fingerprint, and the
+    # evidence describing the broken one must stop holding the repaired one
+    # down. The class rides along so the stop can name the right problem.
+    quarantined = {
+        (str(identity), str(diagnostic["semantic_fingerprint"])): str(
+            diagnostic["class"]
+        )
+        for diagnostic in diagnostics
+        if diagnostic.get("code") == "dispatch_evidence_quarantine"
+        for identity in diagnostic.get("identities", [])
+    }
+    # A conflicted or unverifiable fragment never reaches ``actions`` at all,
+    # so a guidance fault is observed from the diagnostics rather than from any
+    # one Action. It must still stop the Run: the frontier it froze is not a
+    # trustworthy description of the project.
+    guidance_fault = any(
+        diagnostic.get("code") in _COVERAGE_UNCERTAINTY_CODES
+        or diagnostic.get("code") in {"action_conflict", "prerequisite_cycle"}
+        for diagnostic in diagnostics
+    )
+
+    eligibility: list[dict[str, Any]] = []
+    report_only: list[dict[str, Any]] = []
+    quarantine_stops: set[str] = set()
+    quarantine_identities: set[str] = set()
+    selected: dict[str, Any] | None = None
+    for action in actions:
+        reasons = _automation_ineligibility(
+            action,
+            automation=automation,
+            frontier=frontier_index,
+            quarantined=quarantined,
+        )
+        entry: dict[str, Any] = {
+            "identity": action["identity"],
+            "semantic_fingerprint": action["semantic_fingerprint"],
+            "automation_selectable": not reasons,
+        }
+        if reasons:
+            entry["reasons"] = reasons
+        eligibility.append(entry)
+        if "outside-frontier" in reasons:
+            report_only.append(
+                {
+                    "identity": action["identity"],
+                    "semantic_fingerprint": action["semantic_fingerprint"],
+                    "reason": (
+                        "changed-semantics"
+                        if action["identity"] in frontier_index
+                        else "newly-produced"
+                    ),
+                }
+            )
+        if "quarantined" in reasons:
+            quarantine_stops.add(
+                quarantined[(action["identity"], action["semantic_fingerprint"])]
+            )
+            quarantine_identities.add(action["identity"])
+        if not reasons and selected is None:
+            selected = action
+
+    projection: dict[str, Any] = {
+        "performer": automation["performer_id"],
+        "scope": {
+            "coverage": {"repositories": sorted(automation["repositories"])},
+            "grants": _sorted_pairs(
+                [
+                    {"kind": kind, "scope": scope}
+                    for kind, scope in automation["grants"]
+                ],
+                "scope",
+            ),
+            "denials": _sorted_pairs(
+                [
+                    {"kind": kind, "scope": scope}
+                    for kind, scope in automation["denials"]
+                ],
+                "scope",
+            ),
+            "frozen": True,
+        },
+        "frontier": {"actions": frozen},
+        "validators": validators,
+        "eligibility": eligibility,
+        "report_only": report_only,
+    }
+
+    # A guidance fault is not a property of the selected Action -- the
+    # conflicted or unverifiable fragment never reached ``actions`` at all.
+    # What it makes untrustworthy is the coverage the Run froze, so no Action
+    # inside that frozen description may be dispatched on the strength of it.
+    if selected is not None and not guidance_fault:
+        safety_case = selected["safety_case"]
+        projection["authorization"] = {
+            "action_identity": selected["identity"],
+            "semantic_fingerprint": selected["semantic_fingerprint"],
+            "performer": automation["performer_id"],
+            "workstream_anchor": selected["workstream_anchor"],
+            "target": selected["target"],
+            "safety_case_version": safety_case["version"],
+            "completion_condition": selected["completion_condition"],
+            "effects": _sorted_pairs(safety_case["effects"], "scope"),
+            "requirements": _sorted_pairs(safety_case["requirements"], "name"),
+            "retry": safety_case["retry"],
+            "triggers": safety_case["triggers"],
+        }
+        return projection
+
+    projection["stop"] = _automation_stop(
+        actions=actions,
+        eligibility=eligibility,
+        report_only=report_only,
+        outcomes=outcomes,
+        status=status,
+        frontier=frozen,
+        guidance_fault=guidance_fault,
+        quarantine_stops=quarantine_stops,
+        quarantine_identities=quarantine_identities,
+    )
+    return projection
+
+
+def _automation_stop(
+    *,
+    actions: list[dict[str, Any]],
+    eligibility: list[dict[str, Any]],
+    report_only: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    status: str,
+    frontier: list[dict[str, str]],
+    guidance_fault: bool,
+    quarantine_stops: set[str],
+    quarantine_identities: set[str],
+) -> dict[str, Any]:
+    """Explain, once and in typed terms, why nothing further can be selected."""
+    observed: set[str] = set()
+    for entry in eligibility:
+        for reason in entry.get("reasons", []):
+            mapped = _INELIGIBILITY_STOP_REASONS.get(reason)
+            if mapped is not None:
+                observed.add(mapped)
+    observed |= quarantine_stops
+    if guidance_fault:
+        observed.add("guidance-fault")
+    if status == "complete":
+        observed.add("workstreams-terminal")
+    if not frontier:
+        observed.add("frontier-drained")
+
+    reason = "frontier-drained"
+    disposition = "expected-boundary"
+    for candidate, candidate_disposition in AUTOMATION_STOP_PRECEDENCE:
+        if candidate in observed:
+            reason = candidate
+            disposition = candidate_disposition
+            break
+
+    if reason in DISPATCH_EVIDENCE_CLASSES:
+        decisive = [
+            entry for entry in eligibility if entry["identity"] in quarantine_identities
+        ]
+    else:
+        decisive = [
+            entry
+            for entry in eligibility
+            if _INELIGIBILITY_STOP_REASONS.get(
+                next(
+                    (
+                        item
+                        for item in entry.get("reasons", [])
+                        if _INELIGIBILITY_STOP_REASONS.get(item) == reason
+                    ),
+                    "",
+                )
+            )
+            == reason
+        ]
+    decisive_identities = {entry["identity"] for entry in decisive}
+    index = {action["identity"]: action for action in actions}
+    next_step: dict[str, Any] | None = None
+    if decisive:
+        primary = index.get(decisive[0]["identity"])
+        if primary is not None:
+            next_step = {
+                "kind": "action",
+                "identity": primary["identity"],
+                "summary": primary["summary"],
+                "readiness": primary["readiness"],
+            }
+            if primary.get("unsatisfied_prerequisites"):
+                next_step["condition"] = primary["unsatisfied_prerequisites"][0]
+
+    return {
+        "disposition": disposition,
+        "reason": reason,
+        "nonterminal_status": status,
+        **({"next": next_step} if next_step is not None else {}),
+        "evidence": [
+            index[identity]["target"]
+            for identity in sorted(decisive_identities)
+            if identity in index
+        ],
+        "secondary_barriers": [
+            {"identity": entry["identity"], "reasons": entry["reasons"]}
+            for entry in eligibility
+            if entry.get("reasons") and entry["identity"] not in decisive_identities
+        ],
+        "report_only_successors": report_only,
+        "outcomes": outcomes,
+        "successor_executed": False,
+        "statement": "No successor Action was executed by this Reconciliation.",
+    }
+
+
+DISPATCH_EVIDENCE_CLASSES = frozenset(
+    {"safety-case-violation", "uncertain-effect-state"}
+)
+_DISPATCH_MARKER = "<!-- git-loopy-continuation-dispatch:1 -->"
+
+
+def _dispatch_evidence_body(record: dict[str, Any]) -> str:
+    return f"{_DISPATCH_MARKER}\n```json\n{_canonical_json(record)}\n```"
+
+
+def _parse_dispatch_evidence(
+    comment: ContinuationComment, *, repository: str
+) -> dict[str, Any] | None:
+    """Read one durable Dispatch-evidence record, or ``None``.
+
+    Dispatch evidence is deliberately *not* a Producer revision: it carries no
+    lineage, creates and retires nothing, and is read only to quarantine. That
+    is exactly why reading applies the *whole* closed schema the writer applied
+    and the same Performer binding: a quarantine is a change of authority, and
+    a fragment naming an identity is not enough to make one.
+    """
+    if _DISPATCH_MARKER not in comment.body:
+        return None
+    _marker, _, remainder = comment.body.partition(_DISPATCH_MARKER)
+    _before, _, fenced = remainder.partition("```json\n")
+    body, _, _after = fenced.partition("\n```")
+    try:
+        record = json.loads(
+            body, object_pairs_hook=_unique_object, parse_float=_reject_float
+        )
+    except ValueError:
+        return None
+    try:
+        validated = _validate_dispatch(
+            record, "dispatch evidence", repository=repository
+        )
+    except ContinuationError:
+        return None
+    dispatch = validated["dispatch"]
+    # Anyone with write access can leave a comment; only the Performer named in
+    # the record can have performed the Dispatch it describes.
+    if dispatch["performer"] != comment.author:
+        return None
+    return dispatch
+
+
+def _validate_dispatch(value: Any, name: str, *, repository: str) -> dict[str, Any]:
+    """Validate one exceptional Dispatch-evidence record before it is written.
+
+    Only two classes exist, and neither carries an Instruction: ordinary
+    success and ordinary execution failure stay in the Runner's existing
+    artifacts, Events, retry, and Strike paths. The record's shape is what
+    keeps a runnable Instruction or a secret out of a durable comment -- there
+    is no field to put one in.
+    """
+    dispatch = _object(value, name)
+    _fields(
+        dispatch,
+        name,
+        required=frozenset(
+            {
+                "action_identity",
+                "semantic_fingerprint",
+                "performer",
+                "carrier",
+                "class",
+                "summary",
+                "evidence",
+            }
+        ),
+        optional=frozenset({"reason"}),
+    )
+    for field in ("action_identity", "semantic_fingerprint"):
+        digest = _string(dispatch.get(field), f"{name}.{field}")
+        if not _DIGEST_RE.fullmatch(digest):
+            raise ContinuationError(f"{name}.{field} must be a sha256 digest")
+    _string(dispatch.get("performer"), f"{name}.performer")
+    summary = _string(dispatch.get("summary"), f"{name}.summary")
+    if "\n" in summary or "\r" in summary:
+        raise ContinuationError(f"{name}.summary must be one line")
+    evidence_class = _string(dispatch.get("class"), f"{name}.class")
+    if evidence_class not in DISPATCH_EVIDENCE_CLASSES:
+        raise ContinuationError(f"{name}.class is unsupported")
+    if evidence_class == "safety-case-violation":
+        reason = _string(dispatch.get("reason"), f"{name}.reason")
+        if reason not in HUMAN_BOUNDARY_REASONS:
+            raise ContinuationError(f"{name}.reason is unsupported")
+    elif "reason" in dispatch:
+        raise ContinuationError(
+            f"{name}.reason belongs only to a safety-case-violation"
+        )
+    carrier = _issue_locator(dispatch.get("carrier"), f"{name}.carrier", repository)
+    for index, item in enumerate(
+        _array(dispatch.get("evidence"), f"{name}.evidence", nonempty=True)
+    ):
+        _durable_reference(item, f"{name}.evidence[{index}]", repository)
+    return {"dispatch": dispatch, "carrier": carrier}
+
+
+def _dispatch_evidence_diagnostics(
+    evidence: list[tuple[int, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Quarantine the smallest justified scope named by Dispatch evidence.
+
+    The record is immutable and non-Producer: it never retires the Action or
+    creates a replacement. Only the Transition owner can do that, so until it
+    does, the named semantics stay visible and stay unselectable.
+    """
+    return [
+        {
+            "code": "dispatch_evidence_quarantine",
+            "comment_id": comment_id,
+            "class": record["class"],
+            "identities": [record["action_identity"]],
+            "semantic_fingerprint": record["semantic_fingerprint"],
+        }
+        for comment_id, record in sorted(evidence, key=lambda entry: entry[0])
+    ]
+
+
+def _record_dispatch_result(
+    request: dict[str, Any],
+    github: ContinuationGitHubClient,
+) -> dict[str, Any]:
+    _fields(
+        request,
+        "request",
+        required=frozenset({"repository", "trusted_producers", "dispatch"}),
+        optional=frozenset({"trusted_apps"}),
+    )
+    repository = _repository(request)
+    _trusted_producers(request)
+    _trusted_apps(request)
+    validated = _validate_dispatch(
+        request["dispatch"], "dispatch", repository=repository
+    )
+    dispatch = validated["dispatch"]
+    carrier = validated["carrier"]
+    actor, _actor_type = github.authenticated_actor()
+    if actor != dispatch["performer"]:
+        raise ContinuationError(
+            "dispatch.performer must be the authenticated actor writing the record"
+        )
+    record = {key: value for key, value in sorted(dispatch.items())}
+    _portable_json(record, name="Dispatch evidence")
+    evidence_id = _digest(record)
+    committed = github.append_issue_comment(
+        repository,
+        carrier["number"],
+        _dispatch_evidence_body(record),
+    )
+    return {
+        "ok": True,
+        "operation": "record-dispatch-result",
+        "receipt": {
+            "status": "committed",
+            "dispatch_evidence_id": evidence_id,
+            "class": record["class"],
+            "action_identity": record["action_identity"],
+            "semantic_fingerprint": record["semantic_fingerprint"],
+            "carrier": carrier,
+            "comment": {"id": committed.id, "url": committed.url},
+        },
+    }
 
 
 def _reconcile_revision_protocol(
@@ -2092,10 +3634,13 @@ def _reconcile_revision_protocol(
     diagnostics: list[dict[str, Any]] = []
     entries: list[tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]] = []
     carriers_with_records: set[int] = set()
+    dispatch_evidence: list[tuple[int, dict[str, Any]]] = []
     carriers_with_trusted_markers: set[int] = set()
 
     for carrier in carriers:
         for comment in carrier.comments:
+            if not _is_marked(comment):
+                continue
             authorized, rejection = _authorized_comment(
                 comment,
                 repository=repository,
@@ -2129,6 +3674,10 @@ def _reconcile_revision_protocol(
                         "comment_id": comment.id,
                     }
                 )
+                continue
+            evidence = _parse_dispatch_evidence(comment, repository=repository)
+            if evidence is not None:
+                dispatch_evidence.append((comment.id, evidence))
                 continue
             try:
                 record = _parse_record(comment)
@@ -2193,6 +3742,7 @@ def _reconcile_revision_protocol(
     guidance_entries: list[
         tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
     ] = []
+    retirements: list[dict[str, Any]] = []
     for lineage_entries in lineages.values():
         by_id = {entry[2]["revision_id"]: entry for entry in lineage_entries}
         tainted: set[str] = set()
@@ -2208,6 +3758,34 @@ def _reconcile_revision_protocol(
                         "comment_id": comment.id,
                         "revision_id": record["revision_id"],
                         "missing": sorted(missing),
+                    }
+                )
+                continue
+            missing_retirements = _missing_retirement_receipts(record, by_id)
+            if missing_retirements:
+                tainted.add(str(record["revision_id"]))
+                _proven, unproven = _proven_retirements(record, by_id)
+                diagnostics.extend(
+                    _invalid_receipt_diagnostic(comment, record, receipt)
+                    for receipt in unproven
+                )
+                diagnostics.append(
+                    {
+                        "code": "missing_retirement_receipt",
+                        "comment_id": comment.id,
+                        "revision_id": record["revision_id"],
+                        "missing": missing_retirements,
+                    }
+                )
+            resurrected = _resurrected_identities(record, by_id)
+            if resurrected:
+                tainted.add(str(record["revision_id"]))
+                diagnostics.append(
+                    {
+                        "code": "retired_occurrence_resurrected",
+                        "comment_id": comment.id,
+                        "revision_id": record["revision_id"],
+                        "identities": resurrected,
                     }
                 )
         changed = True
@@ -2238,14 +3816,49 @@ def _reconcile_revision_protocol(
             guidance_entries.append(
                 min(live_entries, key=lambda entry: entry[2]["revision_id"])
             )
+        lineage_retirements, retirement_diagnostics = _apply_retirement_receipts(
+            live_entries, by_id
+        )
+        retirements.extend(lineage_retirements)
+        diagnostics.extend(retirement_diagnostics)
 
     observed_head_entries.sort(
         key=lambda entry: (entry[0].number, entry[2]["revision_id"])
+    )
+    retirements.sort(
+        key=lambda retirement: (
+            _canonical_json(retirement["workstream_anchor"]),
+            retirement["predecessor_revision_id"],
+        )
     )
     actions, action_diagnostics = _derive_actions(
         guidance_entries, github=github, repository=repository
     )
     diagnostics.extend(action_diagnostics)
+    diagnostics.extend(_dispatch_evidence_diagnostics(dispatch_evidence))
+    outcomes = _workstream_outcomes(guidance_entries)
+    # A complete all-state read establishes closed coverage only when every
+    # discovered lineage remains trustworthy. A malformed, incomplete, or
+    # forked lineage cannot disappear from the terminal-completion proof.
+    closed_coverage = not any(
+        diagnostic.get("code") in _COVERAGE_UNCERTAINTY_CODES
+        for diagnostic in diagnostics
+    )
+    status = _guidance_status(
+        guidance_entries,
+        actions=actions,
+        outcomes=outcomes,
+        closed_coverage=closed_coverage,
+    )
+    delta: dict[str, list[str]] | None = None
+    if "previous_actions" in request:
+        previous_actions = _validate_previous_actions(
+            request["previous_actions"], "previous_actions"
+        )
+        delta = _actions_delta(actions, previous_actions)
+    if "handoff" in request:
+        handoff = _validate_handoff(request["handoff"], "handoff")
+        diagnostics.extend(_apply_handoff(actions, handoff))
 
     heads = [
         {
@@ -2268,24 +3881,41 @@ def _reconcile_revision_protocol(
         "heads": heads,
         "validators": validators,
     }
+    result = {
+        "status": status,
+        "observed": {
+            "repository": repository,
+            "indexed_carriers": len(indexed_numbers),
+            "producer_revisions": len(entries),
+        },
+        "actions": actions,
+        **({"outcomes": outcomes} if outcomes else {}),
+        # Always present, so absence never carries meaning. Here the list
+        # is the projection's own answer: empty means nothing was retired
+        # by this refresh. The label-indexed path emits the same key with
+        # a gating diagnostic that marks it as uncomputed instead.
+        "retirements": retirements,
+        **({"delta": delta} if delta is not None else {}),
+        "diagnostics": diagnostics,
+        "observation": {
+            "heads": heads,
+            "token": "sha256:" + _digest(observation_source),
+            "validators": validators,
+        },
+    }
+    if "automation" in request:
+        result["automation"] = _automation_projection(
+            request,
+            actions=actions,
+            outcomes=outcomes,
+            diagnostics=diagnostics,
+            status=status,
+            validators=validators,
+        )
     return {
         "ok": True,
         "operation": "reconcile",
-        "result": {
-            "status": "guidance" if actions else "waiting",
-            "observed": {
-                "repository": repository,
-                "indexed_carriers": len(indexed_numbers),
-                "producer_revisions": len(entries),
-            },
-            "actions": actions,
-            "diagnostics": diagnostics,
-            "observation": {
-                "heads": heads,
-                "token": "sha256:" + _digest(observation_source),
-                "validators": validators,
-            },
-        },
+        "result": result,
     }
 
 
@@ -2491,18 +4121,19 @@ def _reconcile(
     if revision_protocol:
         return _reconcile_revision_protocol(request, github)
     _trusted_apps(request)
-    carriers = (
-        github.list_all_continuation_carriers(repository)
-        if revision_protocol
-        else github.list_continuation_carriers(repository, _INDEX_LABEL)
-    )
+    carriers = github.list_continuation_carriers(repository, _INDEX_LABEL)
     diagnostics: list[dict[str, Any]] = []
     revision_count = 0
     guidance_entries: list[
         tuple[ContinuationCarrier, ContinuationComment, dict[str, Any]]
     ] = []
+    dispatch_evidence: list[tuple[int, dict[str, Any]]] = []
     for carrier in carriers:
         for comment in carrier.comments:
+            evidence = _parse_dispatch_evidence(comment, repository=repository)
+            if evidence is not None:
+                dispatch_evidence.append((comment.id, evidence))
+                continue
             if comment.author not in trusted:
                 continue
             record = _parse_record(comment)
@@ -2527,16 +4158,74 @@ def _reconcile(
         guidance_entries, github=github, repository=repository
     )
     diagnostics.extend(action_diagnostics)
+    diagnostics.extend(_dispatch_evidence_diagnostics(dispatch_evidence))
+    outcomes = _workstream_outcomes(guidance_entries)
+    # Label-indexed discovery is not a complete, paginated all-state read, so
+    # it never has closed coverage and must never claim project-wide
+    # "complete" even when every discovered lineage happens to be terminal.
+    status = _guidance_status(
+        guidance_entries, actions=actions, outcomes=outcomes, closed_coverage=False
+    )
+    delta: dict[str, list[str]] | None = None
+    if "previous_actions" in request:
+        previous_actions = _validate_previous_actions(
+            request["previous_actions"], "previous_actions"
+        )
+        delta = _actions_delta(actions, previous_actions)
+    if "handoff" in request:
+        handoff = _validate_handoff(request["handoff"], "handoff")
+        diagnostics.extend(_apply_handoff(actions, handoff))
+    # Retirement legitimacy is proven only against an immutable revision
+    # chain. Label-indexed discovery is deliberately lineage-free (the
+    # atomic-root capability subset), so it can neither prove nor project a
+    # Retirement. Say so rather than silently dropping the receipts.
+    #
+    # The `retirements` key is still always emitted, so its absence never
+    # carries meaning on any path. Empty here is not the claim "nothing was
+    # retired" — the diagnostic below is the sole discriminator, and it names
+    # every revision whose receipts went unevaluated.
+    gated_retirements = sorted(
+        str(record["revision_id"])
+        for _carrier, _comment, record in guidance_entries
+        if record.get("retirements")
+    )
+    if gated_retirements:
+        diagnostics.append(
+            {
+                "code": "retirements_require_revision_protocol",
+                "revision_ids": gated_retirements,
+            }
+        )
     result = {
-        "status": "guidance" if actions else "waiting",
+        "status": status,
         "observed": {
             "repository": repository,
             "indexed_carriers": len(carriers),
             "producer_revisions": revision_count,
         },
         "actions": actions,
+        **({"outcomes": outcomes} if outcomes else {}),
+        "retirements": [],
+        **({"delta": delta} if delta is not None else {}),
         "diagnostics": diagnostics,
     }
+    if "automation" in request:
+        result["automation"] = _automation_projection(
+            request,
+            actions=actions,
+            outcomes=outcomes,
+            diagnostics=diagnostics,
+            status=status,
+            validators=[
+                {
+                    "comment_id": comment.id,
+                    "sha256": hashlib.sha256(comment.body.encode("utf-8")).hexdigest(),
+                }
+                for _carrier, comment, _record in sorted(
+                    guidance_entries, key=lambda entry: entry[1].id
+                )
+            ],
+        )
     return {
         "ok": True,
         "operation": "reconcile",
@@ -2566,6 +4255,10 @@ def _repair_index(
         has_record = False
         has_trusted_marker = False
         for comment in carrier.comments:
+            # Repair only ever asks whether a carrier holds a trusted *record*,
+            # so only the record marker earns a permission read here.
+            if _RECORD_MARKER not in comment.body:
+                continue
             authorized, _rejection = _authorized_comment(
                 comment,
                 repository=repository,
@@ -2620,6 +4313,154 @@ def _make_github_client() -> ContinuationGitHubClient:
     return SubprocessContinuationGitHubClient()
 
 
+def _render_locator(reference: dict[str, Any]) -> str:
+    """Render one durable Target/Basis/Anchor locator, never its content."""
+    kind = reference["kind"]
+    repository_url = f"https://github.com/{reference['repository']}"
+    if kind == "issue":
+        return f"{repository_url}/issues/{reference['number']}"
+    if kind == "pull-request":
+        return f"{repository_url}/pull/{reference['number']}"
+    if kind == "commit":
+        return f"{repository_url}/commit/{reference['sha']}"
+    if kind == "branch":
+        return f"{repository_url}/tree/{reference['sha']}"
+    if kind == "issue-comment":
+        return (
+            f"{repository_url}/issues/{reference['issue']}"
+            f"#issuecomment-{reference['comment_id']}"
+        )
+    if kind == "pull-request-review":
+        return (
+            f"{repository_url}/pull/{reference['pull_request']}"
+            f"#pullrequestreview-{reference['review_id']}"
+        )
+    return kind
+
+
+_TERMINAL_REMAINDER_ROWS = 3
+
+
+def _render_remainder(
+    lines: list[str],
+    title: str,
+    remainder: list[dict[str, Any]],
+) -> None:
+    """Render one bounded remainder group whose hidden count is truthful.
+
+    The group is genuinely bounded: at most ``_TERMINAL_REMAINDER_ROWS``
+    compact rows are printed and the count of Actions actually withheld is
+    stated, so the human projection never claims to hide rows it just
+    printed. Nothing is dropped silently — the machine projection remains the
+    expansion.
+    """
+    if not remainder:
+        return
+    shown = remainder[:_TERMINAL_REMAINDER_ROWS]
+    hidden = len(remainder) - len(shown)
+    lines.append("")
+    lines.append(f"{title} ({len(remainder)} more, {hidden} hidden):")
+    for action in shown:
+        lines.append(f"  - {action['summary']} [{_render_locator(action['target'])}]")
+    if hidden:
+        lines.append(
+            f"  \u2026 expand the remaining {hidden} with reconcile without --terminal."
+        )
+
+
+def _render_terminal(result: dict[str, Any]) -> str:
+    """Render one reconcile result as plain native terminal text.
+
+    Presentation-only: this never re-derives Readiness, order, or
+    completion, it only formats what Reconciliation already produced.
+    Exactly one primary Action is shown in full, standalone-exact detail;
+    any remainder is an expandable Ready/Blocked group with a hidden
+    count rather than being silently dropped. Every Target/Basis locator
+    is a durable reference, never inlined content.
+    """
+    status_title = {
+        "guidance": "Guidance",
+        "waiting": "Waiting",
+        "complete": "Complete",
+    }[result["status"]]
+    lines: list[str] = [
+        f"Continuation: {result['observed']['repository']} \u2014 {status_title}",
+        "",
+    ]
+    actions = result["actions"]
+    if not actions:
+        lines.append(status_title)
+    else:
+        primary, *remainder = actions
+        lines.append(f"Primary Action ({primary['readiness']}): {primary['summary']}")
+        lines.append(
+            f"  Interaction: {primary['interaction']['classification']}"
+        )
+        lines.append(f"  Instruction ({primary['instruction']['mode']}):")
+        lines.append(primary["instruction"]["value"])
+        lines.append(f"  Target: {_render_locator(primary['target'])}")
+        lines.append(
+            "  Basis: "
+            + ", ".join(_render_locator(item) for item in primary["basis"])
+        )
+        if "handoff_reference" in primary:
+            handoff = primary["handoff_reference"]
+            lines.append(f"  Handoff: {handoff['reference']}")
+        ready_remainder = [
+            action for action in remainder if action["readiness"] == "Ready"
+        ]
+        blocked_remainder = [
+            action for action in remainder if action["readiness"] == "Blocked"
+        ]
+        _render_remainder(lines, "Ready", ready_remainder)
+        _render_remainder(lines, "Blocked", blocked_remainder)
+
+    diagnostics = result.get("diagnostics", [])
+    if diagnostics:
+        lines.append("")
+        lines.append(f"Needs attention ({len(diagnostics)}):")
+        for diagnostic in diagnostics:
+            lines.append(f"  - {diagnostic['code']}")
+
+    outcomes = result.get("outcomes", [])
+    if outcomes:
+        lines.append("")
+        lines.append("Outcomes:")
+        for outcome in outcomes:
+            satisfaction = (
+                "destination satisfied"
+                if outcome["destination_satisfied"]
+                else "destination not satisfied"
+            )
+            lines.append(
+                f"  - {_render_locator(outcome['workstream_anchor'])}: "
+                f"{outcome['kind']} ({satisfaction})"
+            )
+
+    retirements = result.get("retirements", [])
+    if retirements:
+        lines.append("")
+        lines.append(f"Retired this refresh ({len(retirements)}):")
+        for retirement in retirements:
+            lines.append(
+                f"  - {retirement['reason']} "
+                f"(predecessor {retirement['predecessor_revision_id'][:12]}\u2026)"
+            )
+
+    delta = result.get("delta")
+    if delta is not None:
+        lines.append("")
+        lines.append(
+            "Refresh delta: "
+            f"+{len(delta['added'])} added, "
+            f"-{len(delta['retired'])} retired, "
+            f"~{len(delta['changed'])} changed"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def run_command(
     operation: str,
     *,
@@ -2634,11 +4475,7 @@ def run_command(
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
 
-    if operation == "capabilities":
-        _emit_json({"ok": True, "capabilities": _capability_manifest()}, stdout)
-        return 0
-
-    if terminal:
+    if terminal and operation != "reconcile":
         message = "terminal rendering is not supported by this distribution"
         _emit_json(
             {
@@ -2651,12 +4488,18 @@ def run_command(
         print(f"git-loopy continuation: {message}", file=stderr)
         return 1
 
+    if operation == "capabilities":
+        _emit_json({"ok": True, "capabilities": _capability_manifest()}, stdout)
+        return 0
+
     try:
         request = _read_request(input_path, stdin)
         if operation == "publish":
             result = _publish(request, _make_github_client())
         elif operation == "reconcile":
             result = _reconcile(request, _make_github_client())
+        elif operation == "record-dispatch-result":
+            result = _record_dispatch_result(request, _make_github_client())
         elif operation == "repair-index":
             result = _repair_index(request, _make_github_client())
         else:
@@ -2701,6 +4544,9 @@ def run_command(
         return 1
 
     if result is not None:
+        if terminal:
+            stdout.write(_render_terminal(result["result"]))
+            return 0
         _emit_json(result, stdout)
         return 0
 

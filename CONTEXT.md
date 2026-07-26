@@ -347,6 +347,23 @@ One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
 exhausted, an **Automation stop** occurs, or the strike limit is reached.
 
+**Agent**:
+One live harness session doing work in a **Run**, bound to a single **Routed pair** for
+its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or an
+**Integration** auto-resolution session. It is the unit a **Run** has several of at once
+in **Parallel mode**, and the unit an **Activity window** shows. Distinct from the
+`ready-for-agent` label, which describes an issue's triage state rather than anything
+live.
+_Avoid_: session (the harness's word), worker, lane (a Lane is a slot, and an Agent may
+outlive it).
+
+**Subagent**:
+An agent an **Agent** spawns inside its own session, on its own model. Its lifecycle —
+start, finish, failure, and the totals it reports — is observable; its output never
+reaches the **Run**'s event stream, so elapsed time is the only account of what it did.
+Its **Consumption** is accounted to its parent **Agent** and never tallied as its own.
+_Avoid_: child agent, nested session, task (the launching tool's name).
+
 **Skill**:
 A named capability package whose instructions and resources a **Performer** may load
 when a task matches its purpose. Its canonical name is its policy identity; when
@@ -419,8 +436,13 @@ new Iteration, including a context-cutover continuation pinned to the same
 _Avoid_: round, pass, tick; session as a separate accounting unit.
 
 **Pool**:
-The set of `ready-for-agent` issues collected at the start of an iteration and
-offered to the agent together in a single prompt; the agent picks one.
+The candidate `ready-for-agent` work discovered from the source. A serial **Iteration**
+collects its own full authoritative Pool at the start of the Iteration and offers it to
+the agent together in a single prompt; the agent picks one. **Rolling dispatch** instead
+keeps a continuously refreshed cache of *shallow* Pool membership and re-reads one
+candidate authoritatively immediately before reserving its **Lane** — membership alone is
+never authority to start a **Lane contribution**. An incomplete or failed read leaves the
+Pool's emptiness unknown rather than empty.
 _Avoid_: batch, backlog.
 
 **Strike**:
@@ -526,19 +548,28 @@ tools, skill calls, skills consulted, commits, closures, and strikes), mirrored 
 the run-end table. A band of the **Dashboard**, not a separate screen.
 
 **Activity**:
-The **Dashboard** band that renders the live current tail — the **Active issue**'s
-**Log**, or the pre-activation pending output — always visible below the **Queue** (between
-it and the **Summary**). An active-only, auto-scrolling glance at what the agent is
-doing right now, so a run reads as active instead of appearing stuck while issues sit
-**queued**; it complements, and does not replace, the per-issue **Log** that enter opens
-for the full, scrollable history. A band of the **Dashboard**, not a separate screen.
+The **Dashboard** band that holds one **Activity window** per live **Agent**, always
+visible below the **Queue** (between it and the **Summary**). A glance at what every
+Agent is doing right now, so a run reads as active instead of appearing stuck while
+issues sit **queued**; it complements, and does not replace, the per-issue **Log** that
+enter opens for the full, scrollable history. A band of the **Dashboard**, not a
+separate screen.
 _Avoid_: stream, feed.
 
+**Activity window**:
+One **Agent**'s pane within the **Activity** band: a header naming that Agent's issue,
+**Task type**, **Routed pair**, **Context fill**, and live **Subagent** count, above the
+Agent's own tail. It follows the newest line until the operator scrolls away from the
+bottom, and follows again when they return to it. In **Parallel mode** a window is held
+by a **Lane** slot and re-labelled when that slot refills; **Integration** holds its own.
+_Avoid_: pane, split, tab.
+
 **Context fill**:
-The current **Iteration**'s live context-window occupancy — current tokens divided by
-the model's token limit — shown in the **Dashboard** header with Smart-Zone target and
-ceiling cues. It resets at every Iteration boundary and is distinct from both
-**Observed tokens** and **Consumption**, which accumulates billed tokens and cost.
+One **Agent**'s live context-window occupancy — current tokens divided by the model's
+token limit — shown in the **Dashboard** header for a serial **Iteration** and in each
+**Activity window** in **Parallel mode**, with Smart-Zone target and ceiling cues. It is
+scoped to the Agent's own session and resets when a new one starts, and is distinct from
+both **Observed tokens** and **Consumption**, which accumulate billed tokens and cost.
 _Avoid_: context usage, cumulative tokens, token consumption.
 
 **Consumption**:
@@ -868,6 +899,12 @@ _Avoid_: independent, parallelizable (as the label name).
 - The **Dashboard** shows the **Queue**; selecting a row opens that issue's **Log**.
   Each issue has its own **Log**, which accumulates across every serial **Iteration**
   and parallel **Lane contribution** that worked it.
+- The **Activity** band shows one **Activity window** per live **Agent**; each window
+  renders the same lines as that Agent's issue **Log**, so the band is a live view of
+  existing per-issue record rather than a record of its own.
+- A serial **Iteration**, a **Lane**, and an **Integration** auto-resolution attempt each
+  run exactly one **Agent**. An **Agent** may spawn many **Subagents**, whose
+  **Consumption** its own telemetry already carries.
 - A **Checkpoint** is authored by the runner (not the agent) at a serial
   **Iteration** or Lane-work boundary and is attributed to the **Active issue**, but
   never counts as **Strike** progress.
@@ -920,7 +957,9 @@ _Avoid_: independent, parallelizable (as the label name).
   agent-authored commit is a plain commit and counts as progress; a runner-authored
   one is a **Checkpoint** and does not.
 - `wave` vs `iteration` — resolved historically as parallel and serial round units, then
-  superseded for Parallel mode: **Rolling dispatch** has no barrier round. An
+  superseded for Parallel mode by
+  [ADR-0020](docs/adr/0020-rolling-dispatch-with-bounded-green-integration.md):
+  **Rolling dispatch** has no barrier round. An
   **Iteration** remains the serial session/accounting unit; **Lanes** are reusable and
   **Integration** is a separate serialized stage. **Wave** remains only as the
   historical ADR-0008 model.

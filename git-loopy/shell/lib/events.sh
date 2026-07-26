@@ -30,6 +30,20 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_CONTINUATION_DISPATCH_STARTED]="wrapper.continuation_dispatch.started"
   [WRAPPER_CONTINUATION_DISPATCH_ENDED]="wrapper.continuation_dispatch.ended"
   [WRAPPER_CONTINUATION_STOPPED]="wrapper.continuation.stopped"
+  [WRAPPER_POOL_REFRESHED]="wrapper.pool.refreshed"
+  [WRAPPER_CONTRIBUTION_START]="wrapper.contribution.start"
+  [WRAPPER_CONTRIBUTION_WORK_FINISHED]="wrapper.contribution.work_finished"
+  [WRAPPER_INTEGRATION_PARKED]="wrapper.integration.parked"
+  [WRAPPER_INTEGRATION_ADMITTED]="wrapper.integration.admitted"
+  [WRAPPER_INTEGRATION_STARTED]="wrapper.integration.started"
+  [WRAPPER_INTEGRATION_BRANCH_OBSERVED]="wrapper.integration.branch_observed"
+  [WRAPPER_INTEGRATION_RECOVERY_STARTED]="wrapper.integration.recovery_started"
+  [WRAPPER_INTEGRATION_PUBLISHED]="wrapper.integration.published"
+  [WRAPPER_CONTRIBUTION_END]="wrapper.contribution.end"
+  [WRAPPER_CONCURRENCY_CHANGED]="wrapper.concurrency.changed"
+  [WRAPPER_SERIAL_REQUESTED]="wrapper.serial.requested"
+  [WRAPPER_PIPELINE_QUIESCENT]="wrapper.pipeline.quiescent"
+  [WRAPPER_ROLLING_REFILL_TURN]="wrapper.rolling.refill_turn"
   [AGENT_OUTPUT]="agent.output"
   [SESSION_CREATED]="session.created"
   [SESSION_IDLE]="session.idle"
@@ -56,6 +70,17 @@ declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
 GIT_LOOPY_RUN_ID=""
 GIT_LOOPY_STARTED_AT=""
 GIT_LOOPY_REPLAY_PATH=""
+
+# Where a serialized Event goes *live*. The replay log is written unconditionally
+# and first, so it stays the authoritative record no matter what the live
+# destination does; this indirection only decides who else sees the same bytes.
+# `lib/tui.sh` points it at the TUI helper's stdin for an interactive Run and
+# points it back here — permanently — the moment that child stops reading.
+GIT_LOOPY_LIVE_SINK="git_loopy_live_sink_stdout"
+
+git_loopy_live_sink_stdout() {
+  printf '%s\n' "$1"
+}
 
 _GIT_LOOPY_CROCKFORD_ALPHABET="0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _GIT_LOOPY_RUN_ID_PATTERN='^[0-9A-HJKMNP-TV-Z]{26}$'
@@ -300,5 +325,5 @@ git_loopy_emit_event() {
 
   mkdir -p "$(dirname "$GIT_LOOPY_REPLAY_PATH")" || return 1
   printf '%s\n' "$line" >>"$GIT_LOOPY_REPLAY_PATH" || return 1
-  printf '%s\n' "$line"
+  "$GIT_LOOPY_LIVE_SINK" "$line"
 }

@@ -44,10 +44,48 @@ delivered in later phases, sequenced value-first
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
   binary renders the Event schema for the shell and PowerShell ports (the Python
   member already has its Textual Dashboard), plus prebuilt binaries and
-  **package-manager distribution** (Homebrew, `winget`/`scoop`). Until it lands,
-  the native ports stream plain text and run in place from the clone — an
-  optional `install.sh` / `install.ps1` only adds a `git-loopy` launcher to your
-  `PATH` (no Python, no TUI helper, no package manager).
+  **package-manager distribution** (Homebrew, `winget`/`scoop`). The shell
+  Orchestrator now **supervises** that helper — selection precedence, clone-local
+  then `PATH` discovery, the `--schema-version` compatibility gate, and a
+  permanent fall back to plain JSONL on any helper failure — see
+  [its README](../git-loopy/shell/README.md#the-live-interface-git-loopy-tui).
+  A tagged Release now also builds the helper itself: seven prebuilt, checksummed,
+  attested artifacts from pinned cargo-dist tooling, described once in
+  [`tui-artifacts.json`](../git-loopy/conformance/tui-artifacts.json) and listed
+  in [the helper's README](../git-loopy/tui/README.md#release-artifacts).
+  A **stable** Release additionally has to prove its platform trust — Developer ID
+  signing with the hardened runtime and an accepted Apple notary verdict on macOS,
+  a hardware-backed signing service with a readable publisher on Windows — before
+  a single archive is attached; an unsigned Windows archive reaches operators only
+  through a clearly marked prerelease. Those rules live in
+  [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
+  applied by `git_loopy.release_trust`.
+  The **package channels** now follow that publication: a stable Release
+  updates the Homebrew tap from the artifacts it just published — `brew tap
+  bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
+  re-hashing nothing. What the formula is allowed to say is pinned in
+  [`homebrew-tap.json`](../git-loopy/conformance/homebrew-tap.json) and enforced
+  by `git_loopy.homebrew`, which reads the committed formula back and refuses any
+  version, URL, host, digest, or coverage that is not this Release's. A
+  `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
+  one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
+  The same Release now also updates the two Windows channels — `winget install
+  bradcstevens.git-loopy-tui` and `scoop install git-loopy-tui` — from the one
+  signed `x86_64-pc-windows-msvc` archive it published. Both are pinned in
+  [`windows-channels.json`](../git-loopy/conformance/windows-channels.json) and
+  enforced by `git_loopy.windows_channels`, which additionally reads that
+  artifact's `.trust.json` receipt: on Windows an operator is shown a publisher
+  rather than a digest, so an unsigned or unattributable archive reaches neither
+  channel, and winget's `Publisher` is proven against the certificate subject
+  the release runner actually observed. Both are `PATH` helpers too — see
+  [the helper's README](../git-loopy/tui/README.md#winget-and-scoop). Until a
+  helper is present or selected, the native ports stream plain text and run in
+  place from the clone. Both native installers now install both halves of their
+  distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
+  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — the shell
+  port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
+  `install.ps1` with `-NoTui` / `-TuiArchive` / `-TuiChecksum` on Windows, Linux,
+  and macOS. A Run itself never downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the
@@ -196,9 +234,45 @@ Run consumes their durable output. `PROMPT.md` keeps the reusable execution
 discipline while avoiding a second human-driven orchestrator inside an
 Iteration.
 
+## The closed-world Skill policy is Python-first
+
+Routing decides which Skill an Iteration *reaches for*. The **Skill policy**
+(ADR-0015, [contract §17](wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
+decides which Skills the Run may load at all — and it is not yet implemented
+identically across the family.
+
+| Orchestrator | Closed-world Skill policy |
+| --- | --- |
+| **Python** reference | **Implemented.** Resolves, freezes, enforces, and audits the policy. |
+| **shell** port | **Fails closed.** No `config.toml` tier yet, so it refuses to start. |
+| **PowerShell** port | **Fails closed.** Same reason, same behaviour. |
+
+A port that cannot honour a policy must not quietly ignore one: running an
+Iteration on a *wider* capability set than the operator configured is exactly
+what §17.6 exists to prevent. So the shell and PowerShell Orchestrators **abort
+before source collection and before Copilot is invoked**, exiting `1` with a
+diagnostic naming the surface they found:
+
+| Surface | Detected as |
+| --- | --- |
+| `GIT_LOOPY_ENABLED_SKILLS` | present — *including* an explicit empty value, which is a real empty policy |
+| `--enable-skill` | recognised as a policy overlay, never as an unknown option, and never applied |
+| `--disable-skill` | the same |
+| `enabled_skills` | any assignment of the key in a project or global `config.toml` |
+
+The deprecated legacy guards — `deny_skills`, `GIT_LOOPY_DENY_SKILLS`, and
+`--deny-skill` — are **not** a closed-world surface. They keep resolving and
+running unchanged on every port.
+
+Until the native ports reach Config parity, either use the Python Orchestrator
+for a Run with a configured policy, or remove the policy surfaces from the
+environment and Config that the native port is reading. The full operator guide
+is [`docs/skill-policy.md`](skill-policy.md).
+
 ---
 
 **Next:**
+- [`docs/skill-policy.md`](skill-policy.md) — establishing, inspecting, changing, migrating, and troubleshooting the closed-world Skill policy.
 - [`docs/workflow.md`](workflow.md) — where autonomous execution fits in the complete planning-to-review loop.
 - [`docs/customization.md`](customization.md) — adjusting `AGENTS.md` feedback loops and `PROMPT.md` skill routing.
 - [`git-loopy/python/README.md`](../git-loopy/python/README.md) — Python-specific bootstrap, observability artefacts, OpenTelemetry tracing.

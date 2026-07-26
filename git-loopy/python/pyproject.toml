@@ -61,6 +61,17 @@ tui = [
     "textual>=0.86,<6",
 ]
 
+# Release-channel tooling (issue #196). winget's manifests are YAML, and the
+# channel gate reads the *committed* text back with the same kind of parser
+# winget resolves it with rather than a line-shaped reader that could disagree
+# with it. Kept out of the base install because the standing rule still holds:
+# the runtime runner never reads YAML. Only `python -m
+# git_loopy.windows_channels` does, in release automation, which installs every
+# extra.
+release = [
+    "pyyaml>=6",
+]
+
 # Development tooling. Exposed as an extra (not a PEP 735 dependency-group) so
 # it can be installed with `uv pip install -e ".[dev]"` / `pip install -e ".[dev]"`.
 dev = [

@@ -768,7 +768,16 @@ class TestModuleStructure:
             "Completion",
             "IssueSource",
             "GitHubIssueSource",
+            "MembershipSnapshot",
+            "Pickup",
+            "PoolCandidate",
             "PrdsIssueSource",
+            "RollingIssueSource",
+            "LABEL_PARALLEL_SAFE",
+            "LABEL_READY_FOR_AGENT",
+            "PICKUP_STALE",
+            "PICKUP_UNAVAILABLE",
+            "PICKUP_VALIDATED",
             "is_afk_ready",
             "is_pr_afk_ready",
         }
@@ -1046,3 +1055,186 @@ class TestGitHubMixedPoolBackstop:
         )
         assert [num for num, _ in gh.issue_close_calls] == [42]
         assert [c.ref for c in completions] == [42]
+
+
+# --------------------------------------------------------------------------- #
+# Rolling dispatch: shallow membership + targeted pickup (#219 §2)             #
+# --------------------------------------------------------------------------- #
+
+
+class TestShallowMembership:
+    """The cheap membership read Rolling dispatch reconciles its cache from."""
+
+    def test_returns_afk_shaped_open_issues_in_source_order(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, labels=["ready-for-agent", "parallel-safe"]),
+                _make_issue(7, labels=["ready-for-agent"]),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = impl.shallow_membership()
+
+        assert snapshot.complete is True
+        assert [c.ref for c in snapshot.candidates] == [31, 7]
+        assert snapshot.candidates[0].labels == ("ready-for-agent", "parallel-safe")
+        assert snapshot.candidates[0].title == "Test issue 31"
+
+    def test_drops_issues_that_fail_the_afk_shape_discriminator(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(31), _make_issue(7, body="just a thought")]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [31]
+
+    def test_costs_no_per_issue_round_trip(self) -> None:
+        """Shallow means shallow: no ``issue_view`` enrichment during refresh."""
+        gh = FakeGitHubClient(issues=[_make_issue(31), _make_issue(7)])
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        impl.shallow_membership()
+
+        assert gh.issue_view_calls == []
+
+    def test_failed_read_is_incomplete_rather_than_empty(self) -> None:
+        """A failed refresh may never be read as 'the Pool is empty' (#219 §2.13)."""
+        gh = FakeGitHubClient(
+            issue_list_membership_error=gh_module.GhError(["gh"], 1, "boom")
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = impl.shallow_membership()
+
+        assert snapshot.candidates == ()
+        assert snapshot.complete is False
+
+    def test_truncated_read_is_incomplete(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(31)], membership_complete=False)
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = impl.shallow_membership()
+
+        assert [c.ref for c in snapshot.candidates] == [31]
+        assert snapshot.complete is False
+
+
+class TestPickup:
+    """The authoritative read taken immediately before a Lane reservation."""
+
+    def _source(self, **kw) -> GitHubIssueSource:
+        return GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(**kw))
+
+    def test_validates_and_enriches_an_eligible_candidate(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    31,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    comments=(
+                        gh_module.Comment(
+                            author="octo", body="a note", created_at="2026-07-25"
+                        ),
+                    ),
+                )
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        pickup = impl.pickup(31)
+
+        assert pickup.validated is True
+        assert pickup.item is not None
+        assert pickup.item.ref == 31
+        assert pickup.item.labels == ("ready-for-agent", "parallel-safe")
+        # The pickup read is what supplies comments + rendered prompt content.
+        assert "a note" in pickup.item.rendered_block
+
+    def test_closed_issue_is_stale(self) -> None:
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31, state="CLOSED", labels=["ready-for-agent", "parallel-safe"]
+                )
+            ]
+        )
+        pickup = impl.pickup(31)
+        assert pickup.outcome == sources_module.PICKUP_STALE
+        assert pickup.item is None
+
+    def test_issue_that_lost_parallel_safe_is_stale(self) -> None:
+        """Parallel-safe is a human assertion; losing it makes the pickup stale."""
+        impl = self._source(issues=[_make_issue(31, labels=["ready-for-agent"])])
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
+
+    def test_issue_that_lost_ready_for_agent_is_stale(self) -> None:
+        impl = self._source(issues=[_make_issue(31, labels=["parallel-safe"])])
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
+
+    def test_issue_whose_body_lost_the_afk_shape_is_stale(self) -> None:
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31,
+                    body="someone rewrote this",
+                    labels=["ready-for-agent", "parallel-safe"],
+                )
+            ]
+        )
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
+
+    def test_read_failure_is_unavailable_not_stale(self) -> None:
+        """A transient read failure must not permanently drop recoverable work."""
+        impl = self._source(
+            issues=[_make_issue(31, labels=["ready-for-agent", "parallel-safe"])],
+            issue_view_errors={31: gh_module.GhError(["gh"], 1, "HTTP 502")},
+        )
+        pickup = impl.pickup(31)
+        assert pickup.outcome == sources_module.PICKUP_UNAVAILABLE
+        assert pickup.item is None
+
+
+class TestRollingSourceSplit:
+    """Rolling dispatch is a GitHub-only capability, asked for structurally."""
+
+    def test_github_source_satisfies_the_rolling_protocol(self) -> None:
+        impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient())
+        assert isinstance(impl, sources_module.RollingIssueSource)
+
+    def test_prds_source_does_not_satisfy_the_rolling_protocol(self, tmp_path: Path) -> None:
+        """Local markdown carries no Parallel-safe assertion, so it never Lanes.
+
+        Rolling dispatch must be able to *ask* rather than assume; a PRDs source
+        that structurally answered would have to fake an eligibility signal it
+        cannot have.
+        """
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+        assert isinstance(impl, IssueSource)
+        assert not isinstance(impl, sources_module.RollingIssueSource)
+
+    def test_serial_collection_is_unchanged_by_the_rolling_seam(self) -> None:
+        """The serial Iteration still gets its full enriched, rendered Pool."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    31,
+                    labels=["ready-for-agent"],
+                    comments=(
+                        gh_module.Comment(
+                            author="octo", body="serial note", created_at="2026-07-25"
+                        ),
+                    ),
+                ),
+                _make_issue(7, labels=["ready-for-agent", "parallel-safe"]),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        pool = impl.collect_afk_ready()
+
+        # Both issues, enriched — the rolling seam never narrows serial collection
+        # to Parallel-safe work or drops the comment enrichment.
+        assert [i.ref for i in pool] == [31, 7]
+        assert "serial note" in pool[0].rendered_block
+        assert gh.issue_view_calls == [31, 7]

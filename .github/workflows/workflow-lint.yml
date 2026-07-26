@@ -1,0 +1,53 @@
+name: Lint the workflows
+
+# The one loop that can see a mistake in this repository's CI definitions.
+#
+# Every other gate here runs *inside* a workflow, so none of them can observe a
+# fault in the workflow itself. A job whose `runs-on` names a retired runner
+# image is the sharpest case: GitHub never schedules it, so it does not fail --
+# it simply does not happen. `tui-release.yml` builds seven artifacts and
+# refuses to publish an incomplete set, which means one silently unscheduled
+# target blocks every stable Release while every suite in this repository stays
+# green. That is exactly what a retired `macos-13` label did.
+#
+# actionlint knows the current GitHub-hosted runner roster, the expression
+# contexts available to each key, and the shell inside every `run:` block. It is
+# pinned to an exact release for the same reason cargo-dist is: a linter that
+# silently changes its rule set changes what this gate means. The shape of this
+# file is pinned by git-loopy/python/tests/test_workflow_lint.py.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: v1.7.12
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installed from source at an exact tag rather than through a third-party
+      # action or a piped installer script: the Go toolchain is already on the
+      # runner, and this keeps the supply chain to one pinned upstream module.
+      - name: Install the pinned linter
+        shell: bash
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Report the pinned linter version
+        shell: bash
+        run: actionlint -version
+
+      # Bare `actionlint` discovers every workflow in the repository itself -- a
+      # workflow added tomorrow must be linted without anyone remembering to add
+      # it to a list here.
+      - name: Lint every workflow
+        shell: bash
+        run: actionlint

@@ -1,0 +1,120 @@
+[package]
+name = "git-loopy-tui"
+version = "0.2.0-dev.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Shared git-loopy TUI helper: the semantic Dashboard core plus the standalone renderer binary."
+license = "MIT"
+# cargo-dist refuses `ci = ["github"]` without a repository URL, and the
+# generated download links in every Release artifact resolve against it.
+repository = "https://github.com/bradcstevens/git-loopy"
+publish = false
+
+# `publish = false` keeps the helper off crates.io — and cargo-dist reads it as
+# "this package has nothing to release", refusing the whole workspace before it
+# plans a single artifact. This is the documented opt-in that puts the binary
+# back in view; `test_tui_release.py` fails without it, because the alternative
+# is a release pipeline that dies at its first command complaining about an
+# empty workspace.
+[package.metadata.dist]
+dist = true
+
+# ADR-0013 locks one Cargo package with two targets, not two behaviour forks:
+# `git_loopy_tui` is embedded in-process by the future Rust Orchestrator, and
+# `git-loopy-tui` is the standalone helper the shell and PowerShell
+# Orchestrators launch and feed. Both drive the same library.
+[lib]
+name = "git_loopy_tui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "git-loopy-tui"
+path = "src/main.rs"
+
+# `preserve_order` keeps a serialized band/column map in declaration order, so
+# the canonical Dashboard inventory is observable at the JSON boundary the way
+# the shared Conformance fixture states it.
+#
+# `ratatui` is the family's locked renderer toolkit (ADR-0013 / PRD #173) and
+# lives in the *library* so the embedded Rust Orchestrator renders through the
+# identical code path rather than a fork. Default features are trimmed to the
+# crossterm backend the helper actually drives: the calendar widget and the
+# `ratatui-macros` crate are unused, and every removed feature is one less
+# thing to cross-compile for the seven release artifacts. Terminal *ownership*
+# still stops at `src/main.rs` — `tests/library_purity.rs` enforces that.
+[dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# The release toolchain, pinned (PRD #173, ADR-0016).
+#
+# `git-loopy-tui` is its own workspace root, so cargo-dist's configuration lives
+# here rather than in a parent manifest. The version is pinned exactly: the
+# release workflow refuses any other cargo-dist, so the artifact set cannot
+# change shape because a newer toolchain decided differently.
+#
+# `targets` is the Phase 2 matrix and must stay equal to
+# `git-loopy/conformance/tui-artifacts.json` — the manifest is what builds, the
+# fixture is what the installers and package channels resolve against, and
+# `git-loopy/python/tests/test_tui_release.py` fails if they disagree. Windows
+# arm64 is *deferred by name* in that fixture rather than silently absent here.
+#
+# No `installers` are generated: the shell and PowerShell installers this family
+# already ships do the fetching (#193, #194), and a second, differently-behaved
+# installer script would be a second contract to keep true.
+[workspace]
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = ["github"]
+installers = []
+checksum = "sha256"
+github-attestations = true
+# Generated CI is never committed: this repository drives pinned cargo-dist from
+# one reviewed workflow instead, so a plan change shows up as a failing job
+# rather than as a large generated diff nobody reads.
+allow-dirty = ["ci"]
+# A pull request proves the plan still resolves; it never builds a release.
+pr-run-mode = "plan"
+unix-archive = ".tar.xz"
+windows-archive = ".zip"
+# Signing runs *inside* `dist build`, which is the only place it can run: the
+# `.sha256` beside each archive is written afterwards, so a published checksum
+# is a checksum of the signed artifact. Both signers degrade to a warning when
+# their credentials are absent, which is what keeps a pull request buildable —
+# and exactly why `git_loopy.release_trust` proves the signature by asking the
+# artifact rather than by trusting a step that did not fail.
+macos-sign = true
+ssldotcom-windows-sign = "prod"
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-musl",
+]
+
+# The two arm64 Linux targets cannot execute on an x64 runner, so they are
+# cross-built through cargo-dist's container integration rather than
+# hand-maintained `cross` invocations, and their release job proves build and
+# metadata identity instead of pretending it ran a smoke test. Everything else
+# builds and runs on its own architecture — including x64 musl, which is
+# statically linked and runs on the glibc runner that produced it.
+[workspace.metadata.dist.github-custom-runners.aarch64-unknown-linux-gnu]
+runner = "ubuntu-22.04"
+container = { image = "ghcr.io/rust-cross/manylinux2014-cross:aarch64", host = "x86_64-unknown-linux-musl" }
+
+[workspace.metadata.dist.github-custom-runners.aarch64-unknown-linux-musl]
+runner = "ubuntu-22.04"
+container = { image = "messense/rust-musl-cross:aarch64-musl", host = "x86_64-unknown-linux-musl" }
+
+# cargo-dist always compiles `--profile dist`, and cargo will not invent a
+# profile it has never been told about. Without this section every one of the
+# seven build jobs dies at `error: profile 'dist' is not defined` — after the
+# artifact plan has already succeeded, which is the worst place for it.
+[profile.dist]
+inherits = "release"
+lto = "thin"

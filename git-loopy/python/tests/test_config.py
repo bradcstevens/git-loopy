@@ -217,22 +217,24 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         assert efforts <= REASONING_EFFORTS, model
 
 
-def test_recommended_routing_is_the_locked_six_type_core() -> None:
-    """The recommended core is the locked 6-type mapping in presentation order (#154).
+def test_recommended_routing_is_the_locked_core() -> None:
+    """The recommended core is the locked 7-type mapping in presentation order.
 
     Keyed by the bare ``task-type`` key (matching :attr:`RunConfig.routing` and
     the ``[routing]`` config table), in the fixed key order the guided-setup
-    surfaces present.
+    surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
+    so the original six keep the sequence the guided walk shipped with.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("gpt-5.6-sol", "xhigh"),
-        "review": ("claude-opus-4.8", "high"),
-        "implementation": ("gpt-5.6-terra", "high"),
+        "planning": ("claude-opus-5", "max"),
+        "review": ("gpt-5.6-sol", "xhigh"),
+        "implementation": ("claude-sonnet-5", "low"),
         "test": ("claude-sonnet-5", "medium"),
-        "docs": ("gpt-5.6-terra", "low"),
-        "chore": ("gpt-5.6-luna", "low"),
+        "docs": ("claude-sonnet-5", "low"),
+        "chore": ("claude-haiku-4.5", "none"),
+        "bugfix": ("claude-opus-5", "xhigh"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
     # sequence, so a plain set/dict-equality check is not enough.
@@ -243,6 +245,7 @@ def test_recommended_routing_is_the_locked_six_type_core() -> None:
         "test",
         "docs",
         "chore",
+        "bugfix",
     )
 
 
@@ -255,22 +258,40 @@ def test_recommended_routing_is_a_read_only_mapping() -> None:
 
 
 def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
-    """Every recommended pair survives the shared effort gate unchanged (#154).
+    """Every recommended pair gates *as documented* — clean, or a named exception.
 
     "Valid against the roster's per-model accepted-effort sets" means the pair
     passes :func:`gate_reasoning_effort` without being rewritten or warned — the
     same gate a routed pair flows through at Active-issue pickup.
+
+    One row is deliberately **not** clean. ``chore`` routes to
+    ``claude-haiku-4.5``, which exposes no reasoning-effort dial at all (its
+    roster entry is the empty set), so the gate forces the effort to ``None``
+    and signals :attr:`EffortGateWarning.INCAPABLE_MODEL`. That is a shipped,
+    intentional choice, so it is pinned here **by name** rather than waved
+    through by a blanket "warnings allowed": adding a second reasoning-incapable
+    route must fail this test until someone records why.
     """
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         RECOMMENDED_ROUTING,
+        EffortGateWarning,
         gate_reasoning_effort,
     )
 
+    #: Routes whose model exposes no effort dial: the gate drops the effort to
+    #: ``None`` and warns. Keep this set as small as the shipped table demands.
+    incapable_keys = {"chore"}
+
     for key, (model, effort) in RECOMMENDED_ROUTING.items():
         assert model in MODEL_REASONING_EFFORTS, key
-        assert effort in MODEL_REASONING_EFFORTS[model], key
         gated = gate_reasoning_effort(model, effort)
+        if key in incapable_keys:
+            assert MODEL_REASONING_EFFORTS[model] == frozenset(), key
+            assert (gated.model, gated.effort) == (model, None), key
+            assert gated.warning is EffortGateWarning.INCAPABLE_MODEL, key
+            continue
+        assert effort in MODEL_REASONING_EFFORTS[model], key
         assert (gated.model, gated.effort) == (model, effort), key
         assert gated.warning is None, key
 
@@ -291,7 +312,7 @@ def test_recommended_routing_preserves_the_shipped_global_default() -> None:
         "claude-opus-4.8",
         "max",
     )
-    assert RECOMMENDED_ROUTING["planning"] == ("gpt-5.6-sol", "xhigh")
+    assert RECOMMENDED_ROUTING["planning"] == ("claude-opus-5", "max")
     assert RECOMMENDED_ROUTING["planning"] != (
         cli._DEFAULT_MODEL,
         cli._DEFAULT_REASONING_EFFORT,
