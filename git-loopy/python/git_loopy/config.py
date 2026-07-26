@@ -71,14 +71,20 @@ TASK_TYPE_LABEL_PREFIX = "task-type:"
 #: table are treated as "unknown": the CLI warns and passes them through
 #: unchanged (the Copilot CLI is the final authority on model validity).
 #:
-#: Keep this in lockstep with the Copilot CLI's ``models.list`` output.
+#: This is a **mirror**, and the thing it mirrors is version-specific.
+#: ``models.list`` discards the catalogue's advertised effort array and reads a
+#: table hardcoded in the Copilot CLI bundle, so this matrix describes exactly
+#: one CLI: the binary ``github-copilot-sdk`` spawns (ADR-0019). Do not
+#: hand-edit it against the CLI on your ``PATH`` — that is how it drifted twice.
+#: Regenerate the stamped fixture from the pinned harness and follow it::
+#:
+#:     uv run --project git-loopy/python python \
+#:         git-loopy/python/scripts/sync_model_roster.py
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "auto": frozenset(),
     "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
-    "claude-sonnet-4.5": frozenset(),
     "claude-haiku-4.5": frozenset(),
-    "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
@@ -88,8 +94,9 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5-mini": frozenset({"low", "medium", "high"}),
     "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
-    "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
-    "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
+    "gemini-3.5-flash": frozenset({"low", "medium", "high"}),
+    "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "gemini-3.6-flash": frozenset(),
     "gpt-5.6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),

@@ -189,16 +189,16 @@ async def test_cancelled_picker_falls_back_silently() -> None:
 
 async def test_selection_with_no_effort_is_preserved() -> None:
     async def fetch() -> list:
-        return [_model("claude-sonnet-4.5")]  # reasoning-incapable
+        return [_model("claude-haiku-4.5")]  # reasoning-incapable
 
     async def run_app(choices, *, cursor) -> Selection:
-        return Selection("claude-sonnet-4.5", None)
+        return Selection("claude-haiku-4.5", None)
 
     model, effort = await resolve_run_model(
         _config(), warn=_Warn(), fetch=fetch, run_app=run_app
     )
 
-    assert model == "claude-sonnet-4.5"
+    assert model == "claude-haiku-4.5"
     assert effort is None
 
 
