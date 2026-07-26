@@ -235,7 +235,7 @@ def test_collect_model_effort_from_numbered_list() -> None:
 
 def test_collect_model_effort_skips_effort_when_unsupported() -> None:
     out = _Output()
-    choices = [_choice("claude-sonnet-4.5", efforts=())]  # no reasoning
+    choices = [_choice("claude-haiku-4.5", efforts=())]  # no reasoning
     model, effort = init_module._collect_model_and_effort(
         input_fn=_Input("1"),  # only the model prompt is asked
         output_fn=out,
@@ -244,7 +244,7 @@ def test_collect_model_effort_skips_effort_when_unsupported() -> None:
         default_effort="max",
         warn=lambda _m: None,
     )
-    assert (model, effort) == ("claude-sonnet-4.5", None)
+    assert (model, effort) == ("claude-haiku-4.5", None)
 
 
 def test_collect_model_effort_retains_live_none_and_minimal() -> None:
@@ -878,7 +878,7 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
         input_fn=_Input(),
         output_fn=_Output(),
         fetch_choices=lambda: [],
-        default_model="claude-sonnet-4.5",  # reasoning-incapable
+        default_model="claude-haiku-4.5",  # reasoning-incapable
         default_effort="max",
         **_packaged(tmp_path),
     )
@@ -886,7 +886,7 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
     cfg = settings.project_config_path(tmp_path)
     # The effort is gated out — a reasoning-incapable model writes model only.
     assert tomllib.loads(cfg.read_text()) == {
-        "model": "claude-sonnet-4.5",
+        "model": "claude-haiku-4.5",
         "enabled_skills": [],
     }
 
@@ -1578,7 +1578,7 @@ def test_run_init_drops_a_stale_effort_when_the_new_model_has_none(
         env=_env(tmp_path),
         input_fn=_Input("1", "n", "n"),  # no effort prompt: the model has none
         output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-sonnet-4.5", efforts=())],
+        fetch_choices=lambda: [_choice("claude-haiku-4.5", efforts=())],
         **_packaged(tmp_path),
     )
 
