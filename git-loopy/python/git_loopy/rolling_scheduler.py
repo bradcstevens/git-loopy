@@ -54,11 +54,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from git_loopy.rolling_concurrency import (
-    ConcurrencyController,
-    LimitChange,
-    Observation,
-)
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.sources import AfkReadyItem, PoolCandidate
 
@@ -196,18 +191,13 @@ class RollingScheduler:
         lane_cap: The configured **Lane cap** — a strict upper bound for the
             whole Run, never mutated (#219 §6).
         max_iterations: The Run's iteration cap; ``0`` means unbounded.
-        concurrency: The bounded adaptive policy that owns the *effective* Lane
-            limit. Defaults to one with no operator budgets configured, which
-            holds the Run at the static-safe ``min(lane_cap, 3)``.
     """
 
     diag: logging.Logger
     pool: RollingPool
     lane_cap: int
     max_iterations: int = 0
-    concurrency: ConcurrencyController | None = None
 
-    _controller: ConcurrencyController = field(init=False)
     _lanes_held: dict[str, object] = field(default_factory=dict, init=False)
     _units_spent: int = field(default=0, init=False)
     _finalized: list[Contribution] = field(default_factory=list, init=False)
@@ -232,9 +222,6 @@ class RollingScheduler:
         # ever approximate it.
         inner = self.pool.eligible
         self.pool.eligible = lambda c: inner(c) and self._unclaimed(c)
-        self._controller = self.concurrency or ConcurrencyController(
-            configured_lane_cap=self.lane_cap
-        )
 
     def _unclaimed(self, candidate: PoolCandidate) -> bool:
         """Whether this Run has neither worked ``candidate`` nor reserved it.
@@ -250,50 +237,14 @@ class RollingScheduler:
 
     @property
     def effective_limit(self) -> int:
-        """The current effective Lane concurrency (#219 §6).
+        """The current effective Lane concurrency.
 
-        The number :attr:`refillable` is bounded by, and the only Lane limit
-        that moves: the configured :attr:`lane_cap` is a strict upper bound for
-        the whole Run. A Run starts at the static-safe ``min(lane_cap, 3)`` and
-        stays there unless :meth:`observe_pressure` gives the controller
-        authoritative evidence to contract or expand.
+        #219 §6 starts a Run at ``min(configured Lane cap, 3)``. Adaptation
+        under **Integration**, 429, AI-credit, and host pressure is slice 6's;
+        until then this is the static-safe value the reaction table also
+        prescribes whenever a required signal is unavailable.
         """
-        return self._controller.effective_limit
-
-    def observe_pressure(
-        self,
-        *,
-        rate_limits: int | None = None,
-        credit_burn: float | None = None,
-        host_pressure: float | None = None,
-    ) -> LimitChange | None:
-        """Feed one pressure observation to the adaptive controller (#219 §6).
-
-        The caller passes only what it alone can see — 429s, authoritative
-        AI-credit burn, and the host/setup ratio — and the scheduler supplies
-        the pipeline half from its own state: whether the **Integration
-        backlog** is at its high-water, how much work is parked, how many Lane
-        slots are held, and whether eligible demand remains. Asking an
-        orchestrator to restate any of those would let the policy and the
-        pipeline disagree about the Run they describe.
-
-        Returns:
-            The authoritative effective-limit transition this observation
-            caused, or ``None``. #219 §6 emits ``wrapper.concurrency.changed``
-            for transitions only, never per sample, so a ``None`` is precisely
-            "nothing to announce".
-        """
-        return self._controller.observe(
-            Observation(
-                rate_limits=rate_limits,
-                credit_burn=credit_burn,
-                host_pressure=host_pressure,
-                integration_full=len(self._admitted) >= INTEGRATION_HIGH_WATER,
-                parked=len(self._parked),
-                lane_occupancy=len(self._lanes_held),
-                demand=self.pool.available > 0,
-            )
-        )
+        return min(self.lane_cap, 3)
 
     @property
     def remaining_units(self) -> int | None:

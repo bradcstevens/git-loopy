@@ -745,16 +745,6 @@ ceiling, not a utilization promise: **Rolling dispatch** may deliberately leave 
 idle when the eligible **Pool** is small or **Integration** applies backpressure.
 _Avoid_: worker count, target concurrency.
 
-**Effective Lane limit**:
-The number of **Lanes** **Rolling dispatch** may actually fill right now. It starts at
-a static-safe value below the **Lane cap**, contracts under sustained 429, AI-credit,
-host/setup, or **Integration backlog** pressure, and expands one Lane at a time against
-sustained evidence of health — never above the Lane cap, which never moves. It may reach
-zero, at which point started work and Integration still drain; nothing is cancelled for
-it. A pressure signal the Run cannot observe is shown unknown and never estimated, which
-also means it can never be used to justify an expansion.
-_Avoid_: dynamic cap, current cap, throttle, adjusted Lane cap.
-
 **Integration backlog**:
 The bounded set of finished Lane branches admitted to **Integration** but not yet
 landed. Its high-water mark applies backpressure to **Rolling dispatch**, preventing
