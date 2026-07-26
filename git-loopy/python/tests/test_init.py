@@ -16,6 +16,7 @@ import pytest
 
 from git_loopy import init as init_module
 from git_loopy import settings
+from git_loopy import verification as verification_module
 from git_loopy.interactive.models import ModelChoice
 from git_loopy.skill_catalog import SkillCatalogError
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
@@ -460,11 +461,12 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
             "",  # planning: keep
             "3",  # review: skip
             "2",  # implementation: override
-            "",  # keep the pre-seeded gpt-5.6-terra model
-            "",  # keep its pre-seeded "high" effort, not model default "max"
+            "",  # keep the pre-seeded claude-sonnet-5 model
+            "",  # keep its pre-seeded "low" effort, not model default "max"
             "3",  # test: skip
             "",  # docs: keep
             "3",  # chore: skip
+            "3",  # bugfix: skip
         ),
         output_fn=_Output(),
         fetch_choices=_routing_choices,
@@ -472,9 +474,9 @@ def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
     )
 
     assert routing == {
-        "planning": ("gpt-5.6-sol", "xhigh"),
-        "implementation": ("gpt-5.6-terra", "high"),
-        "docs": ("gpt-5.6-terra", "low"),
+        "planning": ("claude-opus-5", "max"),
+        "implementation": ("claude-sonnet-5", "low"),
+        "docs": ("claude-sonnet-5", "low"),
     }
 
 
@@ -602,12 +604,13 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
     assert rc == 0
     config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-5.6-sol", "effort": "xhigh"},
-        "review": {"model": "claude-opus-4.8", "effort": "high"},
-        "implementation": {"model": "gpt-5.6-terra", "effort": "high"},
+        "planning": {"model": "claude-opus-5", "effort": "max"},
+        "review": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "implementation": {"model": "claude-sonnet-5", "effort": "low"},
         "test": {"model": "claude-sonnet-5", "effort": "medium"},
-        "docs": {"model": "gpt-5.6-terra", "effort": "low"},
-        "chore": {"model": "gpt-5.6-luna", "effort": "low"},
+        "docs": {"model": "claude-sonnet-5", "effort": "low"},
+        "chore": {"model": "claude-haiku-4.5", "effort": "none"},
+        "bugfix": {"model": "claude-opus-5", "effort": "xhigh"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -634,6 +637,7 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
             "3",  # test: skip
             "",  # docs: keep
             "3",  # chore: skip
+            "3",  # bugfix: skip
             "n",  # scaffold
         ),
         output_fn=_Output(),
@@ -645,9 +649,9 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
     config_path = settings.global_config_path(_env(tmp_path))
     config = tomllib.loads(config_path.read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "planning": {"model": "claude-opus-5", "effort": "max"},
         "implementation": {"model": "claude-sonnet-5", "effort": "high"},
-        "docs": {"model": "gpt-5.6-terra", "effort": "low"},
+        "docs": {"model": "claude-sonnet-5", "effort": "low"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -901,6 +905,76 @@ def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
     )
     assert rc != 0
     assert any("git repository" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Setup-time Continuation capability verification (issue #257)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_reports_the_verified_continuation_capabilities(
+    tmp_path: Path,
+) -> None:
+    """Setup says which distribution it verified and what that distribution lacks.
+
+    An operator who is never told learns a capability is missing when a Run needs
+    it. The distribution being verified is the one running setup, so the line names
+    the profile and the release rather than an executable path: nothing host-specific
+    is stated, and nothing about the choice is persisted.
+    """
+    output = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=output,
+        fetch_choices=lambda: [],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    verified = [line for line in output.lines if "Continuation capabilities" in line]
+    assert len(verified) == 1
+    assert "foundation profile" in verified[0]
+    assert "concurrent_dispatch" in verified[0]
+
+
+def test_run_init_fails_closed_when_this_distribution_misses_a_capability(
+    tmp_path: Path,
+) -> None:
+    """An unsatisfied profile stops setup before the collect phase writes anything.
+
+    Verification runs first for the same reason preflight does: a Config written
+    against a distribution that cannot do the foundation work is a Run that fails
+    later, further from the cause.
+    """
+    warnings: list[str] = []
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [],
+        warn=warnings.append,
+        verify_continuation=lambda: verification_module.ContinuationVerification(
+            profile=verification_module.FOUNDATION_PROFILE,
+            release_version="0.1.0",
+            satisfied=False,
+            unsatisfied_requirements=("tracker-adapter",),
+            unsupported_optional_capabilities=(),
+        ),
+        **_packaged(tmp_path),
+    )
+
+    assert rc != 0
+    assert any("tracker-adapter" in warning for warning in warnings)
+    assert not settings.project_config_path(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------

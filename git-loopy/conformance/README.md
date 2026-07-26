@@ -8,12 +8,12 @@ Orchestrator's production decision seams rather than reproduce their logic.
 
 | Fixture | Contract decision |
 | --- | --- |
-| `discriminator.json` | Required issue headings and optional parent metadata |
+| `discriminator.json` | Required issue headings, optional parent metadata, and the Pool-exclusion reason each rejection carries |
 | `close-references.json` | Reference regex, line boundaries, deduplication, Pool whitelist, and issues-only closure |
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits |
-| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight capabilities, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.1): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows, and the fixed-frontier Automation vocabulary, safety case, eligibility, stop, and Dispatch-evidence scenarios |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
@@ -221,18 +221,21 @@ prospective-projection families reach. A blank or whitespace-only identity, refe
 typed `invalid_request`, not an accepted value that quietly renders as an empty line of human
 guidance.
 
-`shell-reconcile-terminal-preserves-invalid-request` pins that a terminal-mode failure still writes
-its typed machine JSON to stdout and exits 1 — `--terminal` selects a rendering, not a second error
-channel. It is scoped `["shell"]` rather than shared because the three families do not yet agree on
-which `invalid_request` message an empty request produces, and this scenario is byte-exact.
+`reconcile-terminal-preserves-invalid-request-{python,shell,powershell}` pin that a terminal-mode
+failure still writes its typed machine JSON to stdout and exits 1 — `--terminal` selects a rendering,
+not a second error channel. They are a `family-local-detail` variant group rather than one shared
+scenario because the three families do not yet agree on which `invalid_request` message an empty
+request produces, and these scenarios are byte-exact. The exit code and the `invalid_request` code
+are contract and the group asserts all three agree on them; only the message is family-local.
 
 `reconcile-reads-a-lineage-record-from-the-label-index` pins the label-indexed path against a record
 carrying `parents`. A revision identity over a lineage record is a digest of `{completion, parents}`,
 not of the completion alone, so a reader that recomputed it the flat way silently discards every
 lineage record it finds through the label index — reporting zero Producer revisions rather than a
-rejection. It is scoped `["python", "powershell"]` because shell carries the same defect on its own
-label-indexed reader — tracked by #300 — and widening the scenario before that lands would pin a
-failure rather than a contract.
+rejection. It is shared by all three distributions: shell carried the same defect on its own
+label-indexed reader — tracked by #300 — until that reader started going through the same record
+parser and Action derivation as the immutable-revision path, and the scenario is scoped to shell
+here because it now passes rather than because the gap was declared closed.
 
 `reconcile-terminal-bounds-the-ready-and-blocked-remainder` is the only scenario that exercises the
 terminal renderer's bounding arithmetic. A seven-Action projection produces
@@ -244,6 +247,207 @@ on an operator's terminal.
 `retired`, one `changed` — because a delta that reported only the groups it happened to populate
 would still look correct against a world where two of them are empty.
 
+Fixture schema 1.5 adds the fixed-frontier Automation vocabulary. The `automation` group pins the
+safety-case contract version, the assumption, retry, and Instruction-mode kinds, the ineligibility
+and report-only reasons, the locked stop precedence, and the two Dispatch-evidence classes and their
+comment marker. `automation-binds-one-dispatch`,
+`automation-refuses-an-afk-claim-without-a-safety-case`,
+`automation-quarantines-dispatched-semantics`,
+`record-dispatch-result-records-a-safety-case-violation`, and
+`record-dispatch-result-refuses-a-malformed-request-from-file` pin the authorization, the stop, the
+quarantine, the exact Dispatch-evidence digest, and the request framing byte for byte across every
+family member. They are scoped `["python", "shell", "powershell"]`: all three distributions now
+advertise `fixed_frontier_authorization`, so §9 is shared contract rather than a capability split.
+
+`record-dispatch-result-fails-closed-from-file` was deleted rather than rescoped. It asserted the
+absence of what those five scenarios add, and no distribution fails closed on
+`record-dispatch-result` any more, so there is no family member left that could demonstrate it.
+Rescoping it to nobody would have left a scenario the suites silently never run.
+
+Two further cases pin §9 against the *label-indexed* Reconciliation path, where every other
+Automation case runs. Both were unreachable while a distribution derived
+Actions differently on that path, and both are eyes the fixture did not previously have.
+
+`automation-refuses-to-authorize-beside-a-guidance-fault` publishes two trusted Producers that
+disagree about the same Action occurrence. The conflicted fragment never reaches `actions` at all,
+so the world looks empty and healthy — which is exactly why the case is needed: it is the only
+scenario anywhere proving that `action_conflict` reaches the *stop* rather than being a diagnostic
+a Run may authorize past. A derivation that silently picked one of the two claims would return an
+`authorization` here and pass every other Automation case.
+
+The `automation-blocked-frontier-member-becomes-selectable` workflow is the §8/§9 hinge that no
+single scenario can express: an initially Blocked member of the frozen frontier becoming selectable
+once its Prerequisite is satisfied. Its first command pins `readiness: "Blocked"`,
+`unsatisfied_prerequisites`, the `not-ready` ineligibility and the `awaiting-prerequisites` stop
+with its `condition`; its second replays that exact frozen frontier and prior scope over a closed
+Prerequisite and pins the authorization. Readiness may move within a Run; identity, semantics, and
+authority may not, and only two commands over one transport can show the difference.
+
+Thirty-seven further scenarios carry §9 the rest of the way, because a distribution that agrees
+with the oracle on six cases and was never asked about the others is not
+contract-identical — it is untested. They are grouped by the thing they can each get wrong alone:
+
+- **Stop precedence.** Exactly one stop is returned and the first matching reason wins, which is
+  only observable when more than one could match. `automation-reports-a-human-boundary-ahead-of-a-
+  blocker` publishes an Action that is both HITL-required and Blocked and pins `human-boundary`
+  over `awaiting-prerequisites` — the barrier a person can act on, not the more numerous one.
+  `automation-stops-on-awaiting-prerequisites` pins the Blocked case alone,
+  `automation-stops-on-a-drained-frontier` the exhausted one, and
+  `automation-reports-workstreams-terminal-as-the-only-completion` the single reason whose
+  disposition is `complete`.
+- **Grants.** `automation-intersects-global-and-project-ceilings` proves a grant only one ceiling
+  offers is not a grant; `automation-applies-a-ceiling-denial` and
+  `automation-applies-a-runtime-revocation` prove either narrowing removes a shared one; and
+  `automation-refuses-an-effect-outside-the-grant` proves the *safety case's* declared effects are
+  what the grant is measured against, not the Action's Target.
+- **Eligibility.** `automation-satisfies-every-requirement-kind` exercises all six requirement
+  kinds — access, capability, command, evaluator, policy, skill — through one Action, and
+  `automation-reports-an-unsatisfied-evaluator-requirement` and its policy twin prove an unmet one
+  is typed `performer-ineligible` rather than a failure.
+  `automation-matches-requirements-by-exact-name` pins that a name differing only in case is a
+  different requirement, and
+  `automation-refuses-an-instruction-mode-the-performer-cannot-run` pins the same for the
+  Instruction mode a Performer must positively declare.
+  `automation-fails-closed-on-an-interactive-performer` is the other half: an interactive posture
+  is a safety-critical semantic the command refuses outright, not an ineligibility it reports.
+- **The frozen frontier.** `automation-excludes-work-outside-frozen-coverage` proves coverage
+  bounds the frontier itself; `automation-keeps-changed-semantics-report-only` and
+  `automation-keeps-a-newly-produced-action-report-only` prove the two report-only reasons;
+  `automation-binds-the-second-frontier-member-after-the-first` proves independent members drain
+  serially; and `automation-scope-can-only-narrow-within-one-run` and
+  `automation-narrows-a-prior-scope-further` prove a replayed freeze carries its authority with it
+  — narrowing applies immediately, widening is refused.
+- **Dispatch evidence.** `record-dispatch-result-records-uncertain-effect-state` and
+  `automation-stops-on-uncertain-effect-state` pin the second locked class end to end, and
+  `record-dispatch-result-refuses-an-unlocked-evidence-class` pins that an ordinary execution
+  outcome is not a third one. `record-dispatch-result-requires-its-own-performer`,
+  `automation-ignores-evidence-its-author-did-not-perform`, and
+  `automation-ignores-a-malformed-evidence-record` pin the write-side and read-side halves of the
+  same binding: anyone with write access can leave a comment, so a record narrows authority only
+  when its author is the Performer it names and the whole record is there.
+  `automation-clears-quarantine-for-a-corrected-occurrence` proves evidence names one semantics
+  rather than one identity forever.
+- **The safety case as published data.** `publish-accepts-a-positive-versioned-afk-safety-case` and
+  `publish-refuses-a-safety-case-below-contract-1-2` are the version rule; the three
+  `publish-refuses-*` cases beside them pin the closed assumption and retry vocabularies and the
+  requirement that the case restate the exact Instruction, Target, and completion condition it
+  justifies, so a later Instruction change invalidates the argument instead of inheriting it.
+- **Ordering.** `automation-orders-grants-by-code-point`,
+  `automation-orders-denials-by-code-point`, `automation-orders-report-only-successors`, and
+  `automation-orders-secondary-barriers` order hyphen-, underscore-, and case-distinct values that
+  a culture-aware comparison reorders and an ordinal one does not. Ordering is contract, and it is
+  the failure this family has already shipped once.
+
+All of the above are now scoped `["python", "powershell", "shell"]`. That is the point of having
+generated them from the oracle rather than from one port's tests: they were written before shell
+implemented §9, so widening them was a measurement rather than a transcription.
+
+Ten `publish-refuses-a-…-strands-a-durable-transition` scenarios are the one §9-adjacent group
+shell did not merely have to pass. The durable Transition has already happened when `publish`
+starts, so a failed index label, a failed carrier index edit, a failed append, an author that is
+not the completion Producer, and a reread that does not match the append all strand exactly the
+same evidence — and they do so whether or not the request carried an `observation`.
+`post-transition-publication-failure-requires-repair` and `append-reread-mismatch-requires-repair`
+pinned two of those five steps and only on the revision-protocol path, so a distribution could
+report `github_error` or `invalid_request` on the other three, or on the whole atomic-root path,
+and still pass: it would be telling an unattended Runner to retry a write that can never succeed,
+and telling an operator nothing needs repairing. Shell did exactly that — `github_error` for the
+label and the index edit on *both* paths, and `github_error`/`invalid_request` for the append, the
+author, and the reread on the atomic-root path.
+
+The five failures are pinned once per discovery path, `whose-index-label-`, `whose-index-`,
+`whose-append-`, `whose-author-` and `whose-reread-`, with the `label-indexed-` prefix naming the
+atomic-root twin. Each pair is byte-identical apart from the request's `observation` and the three
+authorization calls the revision protocol adds, which is the whole claim. The author pair also pins
+the *call sequence*: the reread is issued before the appended author is judged, because both are
+the same post-transition write and a distribution that short-circuits leaves the operator one call
+short of the evidence the others record.
+
+Three `publish-repairs-…-revision-<family>` groups pin the sixth post-transition failure, and they
+are narrowed for a reason the other five are not. A `gh` call that *succeeds* but answers with
+something that is not a comment object leaves the same stranded write, so the code is
+`repair_required` in every family member — but the human-readable detail is the transport's own
+parse diagnostic, and Python's, PowerShell's and shell's decoders cannot produce the same bytes.
+`github_error` and post-transition transport detail are family-local prose throughout this fixture;
+the error *code* is the contract. So each group asks *every* distribution the same question and lets
+each record its own decoder's wording: an undecodable append, an undecodable reread, and a
+`gh` call that returns a decodable body that is not an object at all. That last group is why the
+grouping is enforced rather than described. Only the shell member of the undecodable pairs existed,
+and PowerShell had never been asked the non-object question — given a JSON array it indexed `["id"]`
+before checking the shape and threw `Cannot convert value "id" to type "System.Int32"` past every
+typed handler, returning no typed result at all where Python and shell returned `repair_required`.
+
+## Fixture schema 1.6 — the capability-coverage gate
+
+A scenario narrowed to a subset of the family is a question the rest of the family is never asked.
+Twenty-seven records are narrowed, and until 1.6 nothing anywhere said why: a distribution's
+advertised `optional_capabilities` manifest and the per-scenario `distributions` arrays were two
+hand-maintained lists kept in sync by author discipline. The PowerShell crash above hid behind
+exactly that gap for a full release, and so did a second defect — `maximum-depth-request-is-accepted`
+was scoped `["python"]`, and when it was widened shell rejected a request at exactly the maximum
+nesting depth 16 that Python and PowerShell accept.
+
+`capability_coverage` closes it as data. Every record whose `distributions` is a proper subset of
+the family MUST appear in `scoped_records` under one of three closed reasons:
+
+- **`manifest-identity`** — the three `capabilities-<family>` scenarios. Each asserts one
+  distribution's own manifest bytes, so it is intrinsically per-family.
+- **`capability-absent`** — the scenario exercises an optional capability. It names the
+  `capability` key and the `advertises` boolean, and its `distributions` MUST equal *exactly* the
+  set of distributions whose advertised manifest carries that key with that value. Scoping stops
+  being a hand-maintained list and becomes **derived** from what each distribution claims.
+- **`family-local-detail`** — one input asked of every family, each member recording its own
+  decoder's prose. It names the `operation` and a `variant_group`; the group's members must be
+  pairwise disjoint, their union must equal the set of distributions advertising that operation,
+  and they must agree on `arguments`, `expected.exit_code`, and the pinned error `code`. Only the
+  human-readable detail may differ.
+
+The manifests the gate measures against are read from the fixture's own `capabilities-<family>`
+scenarios, and each family's real CLI is separately proven to emit exactly those bytes by executing
+that scenario. The chain is therefore real CLI ⟷ advertised manifest ⟷ scenario scoping, with no
+link asserted by hand.
+
+The gate runs in **all three adapters**, not only in Python. The whole point of the family is that no
+distribution depends on a Python runtime; an operator who installs only shell runs only the shell
+suite, and a gate living in Python alone would let shell advertise a capability its own fixtures
+never exercise. Duplication across three implementations kept honest by shared data is the pattern
+this directory already is.
+
+## Fixture schema 1.7 — the end-to-end coverage gate
+
+`capability_coverage` proves a *narrowing* is honest. It cannot prove the fixture asks the questions
+that matter, because a question nobody wrote down is not narrowed — it is absent, and absence has no
+record to check. The foundation gate is a claim about ten specific end-to-end stories driven through
+the real `publish`, `reconcile`, and `record-dispatch-result` commands over one ordered scripted
+transport. Schema 1.6 opened `end_to_end_coverage.locked_scenarios` but filled three of the ten from
+four workflows, and only the Python adapter pinned the full roster of names — so seven stories were
+a roster entry with nothing behind it, and shell and PowerShell could not ask the question at all.
+
+Schema 1.7 fills the registry: all ten locked scenarios are named and mapped to the workflows that
+drive them. The names themselves are written into all three adapters rather than read
+from the fixture, because the fixture is the thing under test: a locked story that quietly left the
+registry would otherwise take its own gate with it. Beyond the names, each story must
+
+- name at least one workflow, and every named workflow must exist;
+- be asked of **every** distribution between its workflows, so a story a distribution cannot tell is
+  still a story it has to answer — by failing closed, in a workflow narrowed for a reason
+  `capability_coverage` already derives from the advertised manifests; and
+- collectively exercise all three native operations.
+
+`read_only_call_prefixes` is the second half. "Reconciliation is read-only" is a claim about the
+calls the command actually made, not about the words in its projection, so it is asserted against an
+allowlist of read shapes over every pinned `reconcile` — a call the allowlist has never heard of
+fails rather than passes unnoticed, and a `--method` anywhere in a reconcile transcript is a
+mutation by construction.
+
+Like the capability gate, this one runs in **all three adapters**, for the same reason: a
+distribution must be able to prove it tells all ten stories without a Python runtime present.
+
+`unsupported_reconciliation_semantics` is retired from `revision_protocol.diagnostic_codes` in the
+same revision. No distribution has emitted it since the private PowerShell derivation was deleted,
+and a registered code no family produces is vocabulary a port can implement against and never be
+told it got wrong.
+
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's
 stateful Iteration-lifecycle accumulator — the seam its own Run loop uses — rather
@@ -254,6 +458,24 @@ history leaks forward and the fixture silently pins case order instead of
 behavior. Because the adapter feeds decoded fixture values straight to the seam,
 these cases also pin that nested lifecycle timestamps are republished as RFC3339
 UTC regardless of how a producer represented the instant.
+
+`event-schema.json`'s `contribution_identity` section is the rolling-dispatch half
+of that file, and it exists because a **Lane** is reusable the moment its
+contribution is admitted to **Integration**. It partitions every literal into four
+disjoint scopes — the nine contribution lifecycle types that MUST carry
+`contribution_id`/`issue`/`lane_id` with a null `iter`, the existing per-Lane types
+that get stamped with the same triple, the five scheduler-scoped rolling types that
+describe the Run rather than one contribution, and the two serial Iteration types a
+contribution MUST NOT emit. A fixture cannot check its own partition, so the Python
+adapter asserts the disjointness, the coverage against `event_types`, and that the
+lifecycle contracts and terminal `reason` values equal the constants the production
+constructor enforces. The four rolling serialization cases are what every family
+executes: they pin a finalized contribution row, a stamped Lane commit, an unknown
+(`null`) versus observed-none (`0`) concurrency signal, and a refreshed **Pool**
+whose membership keeps source order while the payload keys around it sort. No
+Orchestrator emits these yet — the rolling-dispatch scheduler tickets own the
+producers — so the fixture revision advertised by each distribution's capability
+manifest deliberately has not moved.
 
 `release-version.json` is independent of the Wrapper, Event, and Continuation
 compatibility versions. `expected_release_version` mirrors the repository-root

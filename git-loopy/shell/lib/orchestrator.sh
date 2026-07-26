@@ -36,6 +36,10 @@ GIT_LOOPY_MAX_ITERATIONS=0
 GIT_LOOPY_REPO_ROOT=""
 GIT_LOOPY_PROMPT_PATH=""
 GIT_LOOPY_POOL_JSON='[]'
+# Wrapper contract §3.1 — the ready-for-agent candidates this collection
+# rejected, as `{issue, title, reason}` objects in source order. Rebuilt with
+# the Pool on every Iteration, never carried across one.
+GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
 # Tri-state interactive request: "on", "off", or empty for "no flag given".
 GIT_LOOPY_INTERACTIVE_FLAG=""
 
@@ -507,6 +511,27 @@ git_loopy_is_afk_ready() {
     [[ "$body" =~ (^|$'\n')##\ Acceptance\ criteria ]]
 }
 
+# Wrapper contract §3.1 — name *why* a candidate leaves the Pool. Prints one
+# reason from the closed exclusion vocabulary, or nothing when the body is
+# AFK-ready. `git_loopy_is_afk_ready` stays the boolean oracle so membership and
+# the reported reason are decided by the same two matches.
+git_loopy_afk_ready_exclusion() {
+  local body="$1"
+  local has_what=0 has_ac=0
+  [[ "$body" =~ (^|$'\n')##\ What\ to\ build ]] && has_what=1
+  [[ "$body" =~ (^|$'\n')##\ Acceptance\ criteria ]] && has_ac=1
+  if ((has_what && has_ac)); then
+    return 0
+  fi
+  if ((has_what)); then
+    printf 'missing_acceptance_criteria\n'
+  elif ((has_ac)); then
+    printf 'missing_what_to_build\n'
+  else
+    printf 'missing_both_sections\n'
+  fi
+}
+
 git_loopy_exit_code_for() {
   case "$1" in
     empty_pool | iteration_cap)
@@ -813,28 +838,43 @@ git_loopy_collect_github_pool() {
   )"; then
     printf 'git-loopy: gh issue list failed; treating this Pool as empty.\n' >&2
     GIT_LOOPY_POOL_JSON='[]'
+    GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
     return 0
   fi
   jq -e 'type == "array"' <<<"$candidates" >/dev/null 2>&1 || {
     printf 'git-loopy: gh issue list returned malformed JSON.\n' >&2
     GIT_LOOPY_POOL_JSON='[]'
+    GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
     return 0
   }
 
   local -a pool_items=()
+  local -a exclusion_items=()
   local candidate
   while IFS= read -r candidate; do
-    local body
+    local body number title reason
     body="$(jq -r '.body // ""' <<<"$candidate")"
-    git_loopy_is_afk_ready "$body" || continue
-
-    local number
     number="$(jq -r '.number' <<<"$candidate")"
+    title="$(jq -r '.title // ""' <<<"$candidate")"
     [[ "$number" =~ ^[1-9][0-9]*$ ]] || {
       printf 'git-loopy: skipping issue with malformed number %s.\n' \
         "$number" >&2
       continue
     }
+    # Wrapper contract §3.1: a rejected candidate is reported, not dropped
+    # silently. The reason comes from the same body the membership decision
+    # was made on, and no extra round-trip is paid for it.
+    reason="$(git_loopy_afk_ready_exclusion "$body")"
+    if [[ -n "$reason" ]]; then
+      exclusion_items+=("$(
+        jq -cn \
+          --argjson issue "$number" \
+          --arg title "$title" \
+          --arg reason "$reason" \
+          '{issue: $issue, title: $title, reason: $reason}'
+      )") || return 1
+      continue
+    fi
 
     local full
     if ! full="$(
@@ -850,7 +890,18 @@ git_loopy_collect_github_pool() {
         "$number" >&2
       continue
     }
-    git_loopy_is_afk_ready "$body" || continue
+    reason="$(git_loopy_afk_ready_exclusion "$body")"
+    if [[ -n "$reason" ]]; then
+      title="$(jq -r '.title // ""' <<<"$full" 2>/dev/null)" || title=""
+      exclusion_items+=("$(
+        jq -cn \
+          --argjson issue "$number" \
+          --arg title "$title" \
+          --arg reason "$reason" \
+          '{issue: $issue, title: $title, reason: $reason}'
+      )") || return 1
+      continue
+    fi
 
     local normalized
     normalized="$(_git_loopy_normalize_issue <<<"$full")" || {
@@ -865,20 +916,27 @@ git_loopy_collect_github_pool() {
     _git_loopy_json_object_array \
       ${pool_items[@]+"${pool_items[@]}"}
   )" || return 1
+  GIT_LOOPY_POOL_EXCLUSIONS_JSON="$(
+    _git_loopy_json_object_array \
+      ${exclusion_items[@]+"${exclusion_items[@]}"}
+  )" || return 1
 }
 
 git_loopy_collect_prds_pool() {
   local repo_root="$1"
   local -a pool_items=()
+  local -a exclusion_items=()
   local prds_dir="$repo_root/prds"
   if [[ ! -d "$prds_dir" ]]; then
     GIT_LOOPY_POOL_JSON='[]'
+    GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
     return 0
   fi
   if [[ -L "$prds_dir" ]]; then
     printf 'git-loopy: linked prds root is not allowed: %s\n' \
       "$prds_dir" >&2
     GIT_LOOPY_POOL_JSON='[]'
+    GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
     return 0
   fi
 
@@ -901,9 +959,22 @@ git_loopy_collect_prds_pool() {
         printf 'git-loopy: could not read %s; skipping.\n' "$path" >&2
         continue
       fi
-      git_loopy_is_afk_ready "$body" || continue
-
       local ref="${path#"$repo_root"/}"
+      # Wrapper contract §3.1 — the local-markdown backend shares the
+      # discriminator, so it shares the exclusion vocabulary too.
+      local reason
+      reason="$(git_loopy_afk_ready_exclusion "$body")"
+      if [[ -n "$reason" ]]; then
+        exclusion_items+=("$(
+          jq -cn \
+            --arg issue "$ref" \
+            --arg title "$ref" \
+            --arg reason "$reason" \
+            '{issue: $issue, title: $title, reason: $reason}'
+        )") || return 1
+        continue
+      fi
+
       local item
       item="$(
         jq -cn \
@@ -920,6 +991,11 @@ git_loopy_collect_prds_pool() {
     _git_loopy_json_object_array \
       ${pool_items[@]+"${pool_items[@]}"} |
       jq -c 'sort_by(.ref)'
+  )" || return 1
+  GIT_LOOPY_POOL_EXCLUSIONS_JSON="$(
+    _git_loopy_json_object_array \
+      ${exclusion_items[@]+"${exclusion_items[@]}"} |
+      jq -c 'sort_by(.issue)'
   )" || return 1
 }
 
@@ -1927,9 +2003,27 @@ git_loopy_run_discovery() {
         | if has("number") then .number else .ref end
       ]' <<<"$GIT_LOOPY_POOL_JSON"
     )" || return 1
+    # Wrapper contract §3.1 — report what the discriminator rejected BEFORE
+    # the collection it explains, and on the operator's own output as well as
+    # the replay log: only a human can fix the issue's sections.
+    local excluded_count exclusion
+    excluded_count="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_EXCLUSIONS_JSON")" ||
+      return 1
+    while IFS= read -r exclusion; do
+      [[ -n "$exclusion" ]] || continue
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_POOL_EXCLUDED]}" \
+        "$iteration" \
+        "$exclusion" || return 1
+      printf 'git-loopy: excluded %s — %s\n' \
+        "$(jq -r '.issue' <<<"$exclusion")" \
+        "$(jq -r '.reason | gsub("_"; " ")' <<<"$exclusion")" >&2
+    done < <(jq -c '.[]' <<<"$GIT_LOOPY_POOL_EXCLUSIONS_JSON")
+
     local collected_payload
     collected_payload="$(
-      jq -cn --argjson issues "$refs" '{issues: $issues}'
+      jq -cn --argjson issues "$refs" --argjson excluded "$excluded_count" \
+        '{issues: $issues, excluded: $excluded}'
     )" || return 1
     git_loopy_emit_event \
       "${GIT_LOOPY_EVENT_TYPES[WRAPPER_AFK_READY_COLLECTED]}" \

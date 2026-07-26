@@ -27,6 +27,438 @@ mkdir -p "$tmp/bin"
 cp "$scripted_github" "$tmp/bin/gh"
 chmod +x "$tmp/bin/gh"
 
+# The capability-coverage gate (Wrapper contract §8). Every scenario scoped to fewer
+# than the whole family is a question the rest are never asked, so each narrowing must
+# be registered and derived from what each distribution actually advertises. This runs
+# in every family: an operator who installs only this distribution must still be able
+# to prove it does not advertise an operation its own fixtures never exercise.
+# The end-to-end coverage gate. The foundation gate is a claim about ten locked
+# stories driven through the real native commands, not about a count of fixtures, so
+# the ten are written out here rather than read from the fixture: a locked story that
+# quietly leaves the registry would otherwise take its own gate with it. This runs in
+# every family for the same reason the capability gate does.
+LOCKED_END_TO_END_SCENARIOS=(
+  planning-publication-and-aggregation
+  read-only-human-refresh
+  concurrent-equivalent-and-conflicting-publication
+  blocked-to-ready-and-ready-to-blocked
+  completion-and-retirement-receipts
+  positive-afk-classification-and-dispatch
+  explicit-human-and-attention-stops
+  terminal-completion
+  optional-handoff-context
+  durable-transition-then-publication-failure
+)
+
+run_end_to_end_coverage_gate() {
+  local expected_locked
+  expected_locked="$(printf '%s\n' "${LOCKED_END_TO_END_SCENARIOS[@]}" |
+    jq -Rsc 'split("\n") | map(select(length > 0))')"
+  local violations
+  violations="$(
+    jq -r --argjson locked "$expected_locked" '
+      .end_to_end_coverage as $coverage
+      | (.workflows | map({key: .id, value: .}) | from_entries) as $indexed
+      | (.capability_coverage.distributions | sort) as $dists
+      | .capability_coverage.scoped_records as $scoped
+      | [
+          (
+            if ($coverage.locked_scenarios | keys_unsorted) != $locked
+            then "locked_scenarios does not name the ten locked end-to-end scenarios"
+            else empty
+            end
+          ),
+          (
+            $coverage.locked_scenarios
+            | to_entries[]
+            | . as $entry
+            | (
+                (
+                  if ($entry.value | length) == 0
+                  then "\($entry.key) names no workflow"
+                  else empty
+                  end
+                ),
+                (
+                  $entry.value[]
+                  | select($indexed[.] == null)
+                  | "\($entry.key) names unknown workflow \(.)"
+                ),
+                (
+                  $entry.value[]
+                  | select($indexed[.] != null)
+                  | select(($indexed[.].distributions | sort) != $dists)
+                  | select($scoped[.].reason != "capability-absent")
+                  | "\(.) is narrowed without a capability-absent record"
+                ),
+                (
+                  ($entry.value
+                    | map($indexed[.].distributions // [])
+                    | add // []
+                    | unique) as $covered
+                  | if ($dists - $covered) != []
+                    then "\($entry.key) leaves \(($dists - $covered) | join(", ")) unasked"
+                    else empty
+                    end
+                )
+              )
+          ),
+          (
+            (
+              [$coverage.locked_scenarios[][]]
+              | unique
+              | map($indexed[.].commands // [])
+              | add // []
+              | map(.arguments[1])
+              | unique
+            ) as $exercised
+            | (["publish", "reconcile", "record-dispatch-result"] - $exercised) as $unexercised
+            | if $unexercised != []
+              then "no locked scenario exercises \($unexercised | join(", "))"
+              else empty
+              end
+          ),
+          (
+            ([$coverage.locked_scenarios[][]] | unique) as $claimed
+            | (.workflows | map(.id) | unique) as $present
+            | ($present - $claimed)[]
+            | "workflow \(.) is claimed by no locked scenario"
+          ),
+          (
+            $coverage.read_only_call_prefixes as $prefixes
+            | .workflows[]
+            | select(([.commands[].arguments[1]] | unique) == ["reconcile"])
+            | . as $workflow
+            | $workflow.expected_github_calls[]
+            | . as $call
+            | select(
+                ([$prefixes[] | select($call | startswith(.))] | length) == 0
+                or ($call | contains("--method"))
+              )
+            | "read-only workflow \($workflow.id) made write call \($call)"
+          ),
+          (
+            if ([.workflows[]
+                 | select(([.commands[].arguments[1]] | unique) == ["reconcile"])]
+                | length) == 0
+            then "no end-to-end refresh is pinned, so the read-only gate proves less"
+            else empty
+            end
+          )
+        ]
+      | map(select(. != null))
+      | .[]
+    ' "$fixture"
+  )"
+  [[ -z "$violations" ]] ||
+    fail "end-to-end coverage gate:"$'\n'"$violations"
+}
+
+run_capability_coverage_gate() {
+  local violations
+  violations="$(
+    jq -r '
+      def records: (.scenarios + .workflows);
+      def pinned_code:
+        .expected as $e
+        | (
+            if ($e.stdout_exact // "") != "" then ($e.stdout_exact | fromjson)
+            elif ($e.stdout | type) == "object" then $e.stdout
+            else null
+            end
+          )
+        | if type == "object" and ((.error | type) == "object")
+          then (.error.code // null)
+          else null
+          end;
+
+      .capability_coverage as $coverage
+      | (records | map({key: .id, value: .}) | from_entries) as $indexed
+      | ($coverage.distributions | sort) as $dists
+      | (
+          $coverage.manifest_scenarios
+          | to_entries
+          | map({
+              key: .key,
+              value: $indexed[.value].expected.stdout.capabilities
+            })
+          | from_entries
+        ) as $manifests
+      | [
+          (
+            (
+              records
+              | map(select(has("distributions")
+                    and ((.distributions | sort) != $dists)))
+              | map(.id)
+              | sort
+            ) as $narrowed
+            | ($coverage.scoped_records | keys | sort) as $registered
+            | (
+                ($narrowed - $registered) as $missing
+                | if ($missing | length) > 0
+                  then "unregistered narrowed scope: \($missing | join(", "))"
+                  else empty
+                  end
+              ),
+              (
+                ($registered - $narrowed) as $stale
+                | if ($stale | length) > 0
+                  then "stale capability_coverage registration: \($stale | join(", "))"
+                  else empty
+                  end
+              )
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries[]
+            | select(([.value.reason] - $coverage.scope_reasons) != [])
+            | "\(.key) declares unregistered scope reason \(.value.reason)"
+          ),
+          (
+            if (($coverage.manifest_scenarios | keys | sort) != $dists)
+            then "manifest_scenarios does not name every distribution"
+            else empty
+            end
+          ),
+          (
+            $coverage.manifest_scenarios
+            | to_entries[]
+            | . as $entry
+            | (
+                if ($indexed[$entry.value].distributions != [$entry.key])
+                then "\($entry.value) is not scoped to \($entry.key) alone"
+                else empty
+                end
+              ),
+              (
+                if ($coverage.scoped_records[$entry.value].reason
+                    != "manifest-identity")
+                then "\($entry.value) is not registered as manifest-identity"
+                else empty
+                end
+              )
+          ),
+          (
+            (
+              $coverage.scoped_records
+              | to_entries
+              | map(select(.value.reason == "manifest-identity") | .key)
+              | sort
+            ) as $identities
+            | (
+                $coverage.manifest_scenarios | to_entries | map(.value) | sort
+              ) as $expected
+            | if $identities != $expected
+              then "manifest-identity is claimed by a record that is not a manifest"
+              else empty
+              end
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries[]
+            | select(.value.reason == "capability-absent")
+            | . as $record
+            | (
+                $manifests
+                | to_entries
+                | map(
+                    select(
+                      (.value.optional_capabilities
+                       | has($record.value.capability)) | not
+                    )
+                    | .key
+                  )
+              ) as $unknown
+            | if ($unknown | length) > 0
+              then
+                "\($record.key) names capability \($record.value.capability) that "
+                + "\($unknown | join(", ")) does not advertise at all"
+              else
+                (
+                  $manifests
+                  | to_entries
+                  | map(
+                      select(
+                        .value.optional_capabilities[$record.value.capability]
+                        == $record.value.advertises
+                      )
+                      | .key
+                    )
+                  | sort
+                ) as $expected
+                | if ($indexed[$record.key].distributions | sort) != $expected
+                  then
+                    "\($record.key) is scoped to "
+                    + "\($indexed[$record.key].distributions | sort | join(", "))"
+                    + " but \($record.value.capability)="
+                    + "\($record.value.advertises) is advertised by "
+                    + "\($expected | join(", "))"
+                  else empty
+                  end
+              end
+          ),
+          (
+            $coverage.scoped_records
+            | to_entries
+            | map(select(.value.reason == "family-local-detail"))
+            | group_by(.value.variant_group)[]
+            | . as $members
+            | ($members | map(.value.variant_group) | first) as $group
+            | ($members | map(.value.operation) | unique) as $operations
+            | if ($operations | length) != 1
+              then "variant group \($group) names more than one operation"
+              else
+                ($operations | first) as $operation
+                | (
+                    $manifests
+                    | to_entries
+                    | map(select((.value.operations | has($operation)) | not) | .key)
+                  ) as $unknown
+                | if ($unknown | length) > 0
+                  then
+                    "variant group \($group) names operation \($operation) unknown "
+                    + "to \($unknown | join(", "))"
+                  else
+                    (
+                      $manifests
+                      | to_entries
+                      | map(select(.value.operations[$operation]) | .key)
+                      | sort
+                    ) as $advertising
+                    | ($members | map($indexed[.key].distributions[])) as $covered
+                    | (
+                        if ($covered | sort) != ($covered | unique)
+                        then
+                          "variant group \($group) scopes one distribution to more "
+                          + "than one member"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($covered | unique) != $advertising
+                        then
+                          "variant group \($group) covers "
+                          + "\($covered | unique | join(", ")) but \($operation) is "
+                          + "advertised by \($advertising | join(", "))"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($members | map($indexed[.key].arguments)
+                            | unique | length) != 1
+                        then
+                          "variant group \($group) members drive different arguments"
+                        else empty
+                        end
+                      ),
+                      (
+                        if ($members | map($indexed[.key].expected.exit_code)
+                            | unique | length) != 1
+                        then
+                          "variant group \($group) members disagree on the exit code"
+                        else empty
+                        end
+                      ),
+                      (
+                        (
+                          $members | map($indexed[.key] | pinned_code) | unique
+                        ) as $codes
+                        | if ($codes | length) != 1
+                          then
+                            "variant group \($group) members disagree on the error "
+                            + "code: \($codes | map(. // "none") | join(", "))"
+                          else empty
+                          end
+                      )
+                  end
+              end
+          )
+        ]
+      | .[]
+    ' "$fixture"
+  )"
+  if [[ -n "$violations" ]]; then
+    fail "capability coverage gate"$'\n'"$violations"
+  fi
+}
+
+run_capability_verification_gate() {
+  # Setup verification (#257). The distribution running setup is the distribution
+  # being verified, so the profile it judges against is the only part any other
+  # family can see. It lands in the fixture as data and is pinned here against this
+  # distribution's own declaration: three members that quietly judged different
+  # requirements under one profile name would otherwise never disagree anywhere.
+  local fixture_profile declared
+  fixture_profile="$(jq -S -c '.capability_verification.profiles.foundation' "$fixture")"
+  declared="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_profile foundation | jq -S -c .
+  )"
+  [[ "$declared" == "$fixture_profile" ]] || fail \
+    "the shell foundation profile disagrees with the fixture:"$'\n'"declared: $declared"$'\n'"fixture:  $fixture_profile"
+
+  # The verdict is taken on the manifest this distribution really advertises, so the
+  # chain runs real manifest -> setup verdict with no hand-asserted link.
+  local expected_verdict actual_verdict
+  expected_verdict="$(jq -S -c '.capability_verification.verdicts.shell' "$fixture")"
+  actual_verdict="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_capabilities |
+      jq -c '.capabilities' |
+      git_loopy_evaluate_continuation_capabilities foundation |
+      jq -S -c 'del(.release_version)'
+  )"
+  [[ "$actual_verdict" == "$expected_verdict" ]] || fail \
+    "the shell verdict disagrees with the fixture:"$'\n'"actual:   $actual_verdict"$'\n'"expected: $expected_verdict"
+
+  # A verifier that answered "satisfied" unconditionally would pass both checks
+  # above, so every requirement is shown to fail on its own broken manifest.
+  local refusal_count index
+  refusal_count="$(jq '.capability_verification.refusals | length' "$fixture")"
+  ((refusal_count > 0)) || fail "the fixture registers no capability-verification refusals"
+  for ((index = 0; index < refusal_count; index++)); do
+    local refusal id remove expected actual
+    refusal="$(jq -c ".capability_verification.refusals[$index]" "$fixture")"
+    id="$(jq -r '.id' <<<"$refusal")"
+    remove="$(jq -c '.remove' <<<"$refusal")"
+    expected="$(jq -S -c '{satisfied: false, unsatisfied_requirements}' <<<"$refusal")"
+    actual="$(
+      # shellcheck disable=SC1091
+      source "$port_dir/lib/continuation.sh"
+      git_loopy_continuation_capabilities |
+        jq -c --argjson path "$remove" '
+          .capabilities
+          | if ($path | length) == 1
+            then del(.[$path[0]])
+            else .[$path[0]] |= del(.[$path[1]])
+            end
+        ' |
+        git_loopy_evaluate_continuation_capabilities foundation |
+        jq -S -c '{satisfied, unsatisfied_requirements}'
+    )"
+    [[ "$actual" == "$expected" ]] || fail \
+      "refusal $id was not refused as pinned:"$'\n'"actual:   $actual"$'\n'"expected: $expected"
+  done
+
+  # An unknown profile is refused rather than silently widened: `report` and
+  # `execute-frontier` are #263/#264 vocabulary, and answering them would let a pass
+  # be read as readiness for a mode no distribution supports.
+  local unknown_status=0
+  (
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_profile report
+  ) >/dev/null 2>&1 || unknown_status=$?
+  ((unknown_status != 0)) || fail "an unknown capability profile was answered"
+}
+
+run_capability_coverage_gate
+run_capability_verification_gate
+run_end_to_end_coverage_gate
+
 run_transport_probe() {
   local probe_script="$tmp/probe-github-script.json"
   local probe_state="$tmp/probe-github-state"
@@ -1148,12 +1580,18 @@ while IFS= read -r workflow; do
         '. == $expected' "$stdout_path" >/dev/null ||
         fail "$id stdout"$'\n'"expected: $expected_json"$'\n'"actual:   $actual_json"
     fi
-    stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$command")"
-    if [[ -z "$stderr_needle" ]]; then
-      [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+    if jq -e '.expected | has("stderr_exact")' <<<"$command" >/dev/null; then
+      expected_stderr="$(jq -r '.expected.stderr_exact' <<<"$command")"
+      [[ "$(<"$stderr_path")" == "$expected_stderr" ]] ||
+        fail "$id exact stderr mismatch"
     else
-      grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
-        fail "$id stderr does not contain: $stderr_needle"
+      stderr_needle="$(jq -r '.expected.stderr_contains // ""' <<<"$command")"
+      if [[ -z "$stderr_needle" ]]; then
+        [[ ! -s "$stderr_path" ]] || fail "$id unexpectedly wrote stderr"
+      else
+        grep -Fi -- "$stderr_needle" "$stderr_path" >/dev/null ||
+          fail "$id stderr does not contain: $stderr_needle"
+      fi
     fi
   done < <(jq -c '.commands[]' <<<"$workflow")
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 from . import settings
 from .config import SkillPolicyInput, SkillPolicyInputs
@@ -128,7 +128,16 @@ def _read_picker_input(
 def _render_picker(
     model: SkillSelectionModel,
     output_fn: Callable[[str], None],
+    status: Sequence[str] = (),
 ) -> None:
+    """Draw one round: the visible rows, then why the previous round was refused.
+
+    ``status`` is drawn *last*, because the line nearest the prompt is the only
+    position a plain terminal can dock: a reason printed before the repaint it
+    triggers scrolls off the moment the catalog is taller than the window, which
+    reads as "nothing happened" rather than as a refusal. Drawing it here is the
+    plain-terminal counterpart of the full-screen picker's status bar.
+    """
     output_fn(f"Skills (filter: {model.query or 'all'}):")
     enabled = frozenset(model.enabled)
     for index, row in enumerate(model.visible_rows, start=1):
@@ -146,6 +155,8 @@ def _render_picker(
         )
     if not model.visible_rows:
         output_fn("  No matching Skills.")
+    for line in status:
+        output_fn(line)
 
 
 def run_plain_skill_picker(
@@ -156,9 +167,13 @@ def run_plain_skill_picker(
 ) -> SkillSelectionResult | None:
     """Run the base-install searchable multi-select; return ``None`` on cancel."""
     current = model
+    status: tuple[str, ...] = ()
     cancel_tokens = frozenset({"q", "quit", "cancel"})
     while True:
-        _render_picker(current, output_fn)
+        _render_picker(current, output_fn, status)
+        # Each round explains the one before it, so a reason is never repeated
+        # into a round that did not earn it.
+        status = ()
         answer = _read_picker_input(
             input_fn,
             "Number toggles; text filters; blank clears; done saves; q cancels: ",
@@ -168,8 +183,9 @@ def run_plain_skill_picker(
         if answer.casefold() == "done":
             errors = current.validation_errors
             if errors:
-                for error in errors:
-                    output_fn(f"  Cannot save: {error}.")
+                status = tuple(f"  Cannot save: {error}." for error in errors) + (
+                    "  Type part of a named Skill to find it, then its number toggles it.",
+                )
                 continue
             confirmation = _read_picker_input(
                 input_fn,
@@ -179,6 +195,7 @@ def run_plain_skill_picker(
                 return None
             if confirmation.casefold() in {"y", "yes"}:
                 return SkillSelectionResult(current.enabled)
+            status = ("  Not saved (the confirmation needs y); done asks again.",)
             continue
         if not answer:
             current = current.filter("")
@@ -190,12 +207,12 @@ def run_plain_skill_picker(
             continue
         visible = current.visible_rows
         if not 0 <= picked < len(visible):
-            output_fn(f"  Please enter a number between 1 and {len(visible)}.")
+            status = (f"  Please enter a number between 1 and {len(visible)}.",)
             continue
         try:
             current = current.toggle(visible[picked].name)
         except SkillSelectionError as exc:
-            output_fn(f"  Cannot toggle: {exc}.")
+            status = (f"  Cannot toggle: {exc}.",)
 
 
 def run_textual_skill_picker(

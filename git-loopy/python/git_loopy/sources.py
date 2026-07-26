@@ -61,10 +61,51 @@ __all__ = [
     "Completion",
     "IssueSource",
     "GitHubIssueSource",
+    "MembershipSnapshot",
+    "Pickup",
+    "PoolCandidate",
     "PrdsIssueSource",
+    "RollingIssueSource",
+    "LABEL_PARALLEL_SAFE",
+    "LABEL_READY_FOR_AGENT",
+    "PICKUP_STALE",
+    "PICKUP_UNAVAILABLE",
+    "PICKUP_VALIDATED",
+    "EXCLUSION_MISSING_ACCEPTANCE_CRITERIA",
+    "EXCLUSION_MISSING_BOTH_SECTIONS",
+    "EXCLUSION_MISSING_WHAT_TO_BUILD",
+    "EXCLUSION_REASONS",
+    "PoolCollection",
+    "PoolExclusion",
+    "afk_ready_exclusion",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
+
+# The two human triage assertions Rolling dispatch reads. Both are labels and
+# neither is ever inferred (ADR-0008, CONTEXT.md "Parallel-safe").
+LABEL_READY_FOR_AGENT: str = "ready-for-agent"
+LABEL_PARALLEL_SAFE: str = "parallel-safe"
+
+# Pickup outcomes (#219 §2.10-2.11).
+PICKUP_VALIDATED: str = "validated"
+PICKUP_STALE: str = "stale"
+PICKUP_UNAVAILABLE: str = "unavailable"
+
+# Pool-exclusion reasons (#303). A ``ready-for-agent`` candidate that fails the
+# AFK-ready body discriminator leaves the **Pool**; these name *which* required
+# section it lacked so a human who deliberately triaged the issue can see why
+# the runner is ignoring it rather than watching it vanish.
+EXCLUSION_MISSING_WHAT_TO_BUILD: str = "missing_what_to_build"
+EXCLUSION_MISSING_ACCEPTANCE_CRITERIA: str = "missing_acceptance_criteria"
+EXCLUSION_MISSING_BOTH_SECTIONS: str = "missing_both_sections"
+
+# The closed reason vocabulary, in the order a contract reader should read it.
+EXCLUSION_REASONS: tuple[str, ...] = (
+    EXCLUSION_MISSING_WHAT_TO_BUILD,
+    EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
+    EXCLUSION_MISSING_BOTH_SECTIONS,
+)
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
 # Body must contain BOTH ``^## What to build`` and ``^## Acceptance
@@ -102,8 +143,39 @@ def is_afk_ready(body: str) -> bool:
         validly-authored parent-less slices are still picked up. Both
         backends apply this identical check so a body that wouldn't be
         picked up via GitHub also won't be picked up via PRDs.
+
+    This is the boolean *projection* of :func:`afk_ready_exclusion`, not an
+    independent check. Membership and the reported exclusion reason therefore
+    cannot drift apart — a candidate is out of the **Pool** exactly when there
+    is a reason to report for it.
     """
-    return bool(_RE_WHAT_TO_BUILD.search(body)) and bool(_RE_AC.search(body))
+    return afk_ready_exclusion(body) is None
+
+
+def afk_ready_exclusion(body: str) -> str | None:
+    """Return why ``body`` fails the AFK-ready discriminator, or ``None``.
+
+    Args:
+        body: Raw markdown body of an issue or local-markdown file.
+
+    Returns:
+        ``None`` when the body is AFK-ready, else one of
+        :data:`EXCLUSION_REASONS` naming which required section is absent.
+        The "missing both" case is reported as its own reason rather than
+        collapsed into either single-section reason, because an issue with
+        neither section is usually a specification document rather than a
+        slice that lost one heading — a distinction the operator acts on
+        differently.
+    """
+    has_what = bool(_RE_WHAT_TO_BUILD.search(body))
+    has_ac = bool(_RE_AC.search(body))
+    if has_what and has_ac:
+        return None
+    if has_what:
+        return EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
+    if has_ac:
+        return EXCLUSION_MISSING_WHAT_TO_BUILD
+    return EXCLUSION_MISSING_BOTH_SECTIONS
 
 
 def is_pr_afk_ready(pr: gh_module.PullRequest) -> bool:
@@ -165,6 +237,63 @@ class AfkReadyItem:
 
 
 @dataclass(frozen=True)
+class PoolExclusion:
+    """One ``ready-for-agent`` candidate the AFK-ready discriminator dropped.
+
+    A human deliberately triaged the issue to ``ready-for-agent``; the runner
+    then declined to work it because its body lacks a required section. Before
+    #303 that decision left no trace at all — the issue never entered the
+    **Pool**, never reached the **Dashboard**, and produced no diagnostic — so
+    the only way to discover it was to compare the tracker against the runner's
+    output by hand.
+
+    Attributes:
+        ref: Source-native identifier, matching :attr:`AfkReadyItem.ref` —
+            ``int`` issue number for the GitHub backend, repo-relative POSIX
+            path for the local-markdown backend.
+        title: Display title (GitHub) or path (local markdown), so the operator
+            can recognise the item without a second lookup.
+        reason: One of :data:`EXCLUSION_REASONS`, naming which required section
+            is absent.
+    """
+
+    ref: int | str
+    title: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PoolCollection:
+    """The whole result of collecting a **Pool**: what got in, and what did not.
+
+    Collection has always made two decisions per candidate and reported only
+    one of them. Returning both from the same call is what keeps them
+    consistent: there is exactly one walk of the source, so an exclusion is
+    always a candidate that this same collection declined.
+
+    Attributes:
+        items: The AFK-ready items to offer the agent, in source order.
+        exclusions: Candidates dropped by the AFK-ready discriminator, in the
+            same source order. A candidate the source could not *read* is not
+            an exclusion — it was never discriminated against.
+    """
+
+    items: tuple[AfkReadyItem, ...] = ()
+    exclusions: tuple[PoolExclusion, ...] = ()
+
+    @property
+    def excluded_only(self) -> bool:
+        """``True`` when the eligible Pool is empty *because* of exclusions.
+
+        The two empty-Pool situations demand opposite operator responses — an
+        empty tracker means triage more work, an all-excluded one means fix the
+        issues already triaged — so the loop reports them distinctly rather than
+        printing the same "no work" line for both.
+        """
+        return not self.items and bool(self.exclusions)
+
+
+@dataclass(frozen=True)
 class Completion:
     """An item completed by the wrapper-side backstop this iteration.
 
@@ -187,6 +316,97 @@ class Completion:
     sha: str
     shas: tuple[str, ...] = ()
     kind: str = "issue"
+
+
+@dataclass(frozen=True)
+class PoolCandidate:
+    """One shallow **Pool** membership record, cheap enough to refresh often.
+
+    **Rolling dispatch** (#219 §2) reconciles its candidate cache from
+    membership alone and pays the authoritative per-issue read only at Lane
+    pickup. A candidate is therefore *not* an :class:`AfkReadyItem` — it has no
+    rendered block and no comments, and nothing may be dispatched from it
+    without a :meth:`RollingIssueSource.pickup` first.
+
+    Attributes:
+        ref: Source-native identifier, matching :attr:`AfkReadyItem.ref`.
+        title: Display title, for diagnostics and the **Dashboard** **Queue**.
+        labels: The item's labels — the carrier of the human **Parallel-safe**
+            assertion. Eligibility is read from here, never inferred.
+    """
+
+    ref: int | str
+    title: str
+    labels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MembershipSnapshot:
+    """One shallow membership read plus whether it is authoritative.
+
+    Attributes:
+        candidates: The AFK-shaped candidates read, in source order.
+        complete: ``True`` only when the read paginated to completion and did
+            not fail. An incomplete snapshot is still usable for *reconciling*
+            survivors, but per #219 §2.13 it may never establish that the
+            **Pool** is empty — so the flag travels with the data rather than
+            being reconstructed by a caller comparing lengths.
+    """
+
+    candidates: tuple[PoolCandidate, ...]
+    complete: bool
+
+
+@dataclass(frozen=True)
+class Pickup:
+    """The result of the targeted read taken immediately before Lane reservation.
+
+    #219 §2.10-2.11 distinguish three outcomes, and the distinction is
+    load-bearing: a *stale* candidate is dropped from the cache outright, while
+    an *unavailable* one is quarantined and retried later — collapsing them
+    would either lose recoverable work or spin forever on a closed issue.
+
+    Attributes:
+        outcome: ``"validated"``, ``"stale"``, or ``"unavailable"``.
+        item: The enriched, dispatchable :class:`AfkReadyItem` — populated only
+            when ``outcome == "validated"``.
+    """
+
+    outcome: str
+    item: AfkReadyItem | None = None
+
+    @property
+    def validated(self) -> bool:
+        """``True`` iff this pickup may be dispatched into a **Lane**."""
+        return self.outcome == PICKUP_VALIDATED
+
+
+@runtime_checkable
+class RollingIssueSource(Protocol):
+    """The two extra operations **Rolling dispatch** needs from a source.
+
+    Deliberately separate from :class:`IssueSource`: the local-markdown backend
+    has no **Parallel-safe** assertion to read and never participates in
+    **Rolling dispatch**, so requiring these of every source would force a
+    meaningless implementation. A scheduler asks
+    ``isinstance(source, RollingIssueSource)`` before offering Parallel mode.
+
+    The split between the two methods is the whole point of #219 §2: membership
+    is cheap and refreshed continuously, authority is expensive and paid once
+    per Lane reservation.
+    """
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        """Read current candidate membership without per-issue enrichment.
+
+        Never raises for a source failure — a failure is reported as an
+        incomplete snapshot so the caller retains its last complete one.
+        """
+        ...
+
+    def pickup(self, ref: int | str) -> Pickup:
+        """Re-read one candidate authoritatively immediately before reservation."""
+        ...
 
 
 @runtime_checkable
@@ -212,11 +432,13 @@ class IssueSource(Protocol):
         """
         ...
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Discover and return the current AFK-ready pool.
+    def collect_pool(self) -> PoolCollection:
+        """Discover the current **Pool**: the AFK-ready items *and* what was dropped.
 
-        Empty list is the natural "no work" signal — the loop exits 0
-        for either backend when this returns ``[]``.
+        Empty :attr:`PoolCollection.items` is the natural "no work" signal —
+        the loop exits 0 for either backend when nothing is eligible. The
+        exclusions travel with the items so the loop can tell an empty tracker
+        apart from a tracker whose every candidate failed the discriminator.
         """
         ...
 
@@ -335,21 +557,33 @@ class GitHubIssueSource:
         self._diag.info("preflight ok: %s", repo.nwo)
         return None
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Fetch the AFK-ready GitHub-issue pool with comment enrichment.
+    def collect_pool(self) -> PoolCollection:
+        """Fetch the AFK-ready GitHub-issue **Pool** with comment enrichment.
 
         Two-pass: list first (cheap), filter by body discriminator
         BEFORE the N+1 ``issue_view`` enrichment so we don't pay the
         round-trip for PRD-style ready-for-agent issues that don't
-        satisfy the AFK shape.
+        satisfy the AFK shape. Those rejects are recorded as
+        :class:`PoolExclusion` rather than dropped silently (#303), which
+        costs nothing extra: the reason comes from the same discriminator
+        pass that already had to run.
         """
         try:
             candidates = self._gh.issue_list("ready-for-agent")
         except gh_module.GhError as exc:
             self._diag.error("gh issue list failed: %s", exc)
-            return []
+            return PoolCollection()
 
-        ready_candidates = [i for i in candidates if is_afk_ready(i.body or "")]
+        exclusions: list[PoolExclusion] = []
+        ready_candidates = []
+        for issue in candidates:
+            reason = afk_ready_exclusion(issue.body or "")
+            if reason is None:
+                ready_candidates.append(issue)
+            else:
+                exclusions.append(
+                    PoolExclusion(ref=issue.number, title=issue.title, reason=reason)
+                )
 
         items: list[AfkReadyItem] = []
         for issue in ready_candidates:
@@ -361,8 +595,18 @@ class GitHubIssueSource:
                     issue.number,
                     exc,
                 )
+                # Deliberately NOT an exclusion: an unreadable candidate was
+                # never discriminated against, and telling the operator to fix
+                # its headings would be a false accusation.
                 continue
-            if not is_afk_ready(full.body or ""):
+            # Re-verify against the authoritative body — and report *its*
+            # reason, not the cheaper list body's, since this is the read the
+            # decision was actually made on.
+            reason = afk_ready_exclusion(full.body or "")
+            if reason is not None:
+                exclusions.append(
+                    PoolExclusion(ref=full.number, title=full.title, reason=reason)
+                )
                 continue
             items.append(
                 AfkReadyItem(
@@ -375,7 +619,85 @@ class GitHubIssueSource:
 
         if self._include_prs:
             items.extend(self._collect_afk_ready_prs())
-        return items
+        return PoolCollection(items=tuple(items), exclusions=tuple(exclusions))
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        """Read AFK-shaped ``ready-for-agent`` membership with no enrichment.
+
+        One paginated list call. Nothing is viewed per-issue, so a **Rolling
+        dispatch** refresh costs a single round-trip however large the **Pool**
+        is; the authoritative read is deferred to :meth:`pickup`.
+
+        A list failure returns an *incomplete empty* snapshot rather than
+        raising or returning a clean empty one — #219 §2.12-2.13 require the
+        caller to retain its last complete snapshot and forbid a failed refresh
+        from establishing emptiness.
+        """
+        try:
+            page = self._gh.issue_list_membership(LABEL_READY_FOR_AGENT)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh issue list (membership refresh) failed: %s; "
+                "retaining last complete snapshot",
+                exc,
+            )
+            return MembershipSnapshot(candidates=(), complete=False)
+
+        candidates = tuple(
+            PoolCandidate(
+                ref=issue.number,
+                title=issue.title,
+                labels=tuple(issue.labels),
+            )
+            for issue in page.issues
+            if is_afk_ready(issue.body or "")
+        )
+        return MembershipSnapshot(candidates=candidates, complete=page.complete)
+
+    def pickup(self, ref: int | str) -> Pickup:
+        """Re-read ``ref`` authoritatively and render it for dispatch.
+
+        Applies #219 §2.10 verbatim: the issue must still be open, still carry
+        ``ready-for-agent`` *and* ``parallel-safe``, and still satisfy the
+        AFK-ready body discriminator. The same read supplies the comments and
+        rendered prompt block, so a **Lane** never dispatches from membership
+        that a cheap refresh happened to observe some seconds ago.
+
+        Returns:
+            A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
+            ``"stale"`` (no longer qualifies — drop it from the cache), or
+            ``"unavailable"`` (the read itself failed — quarantine and retry).
+        """
+        if not isinstance(ref, int):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            full = self._gh.issue_view(ref)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh issue view #%s during pickup failed: %s; quarantining candidate",
+                ref,
+                exc,
+            )
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        labels = tuple(full.labels)
+        if (
+            full.state.upper() != "OPEN"
+            or LABEL_READY_FOR_AGENT not in labels
+            or LABEL_PARALLEL_SAFE not in labels
+            or not is_afk_ready(full.body or "")
+        ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        return Pickup(
+            outcome=PICKUP_VALIDATED,
+            item=AfkReadyItem(
+                ref=full.number,
+                title=full.title,
+                rendered_block=_format_github_issue_block(full),
+                labels=labels,
+            ),
+        )
 
     def _collect_afk_ready_prs(self) -> list[AfkReadyItem]:
         """Fetch the AFK-ready PR pool (``ready-for-agent`` + agent brief).
@@ -451,9 +773,9 @@ class GitHubIssueSource:
         """Post one breadcrumb comment via the injected client (non-fatal).
 
         Only integer issue refs are commentable; a non-int ref, or a client
-        failure, is logged and swallowed so a failed breadcrumb never aborts the
-        Wave barrier — the issue simply falls through to a serial **Iteration**
-        without the note.
+        failure, is logged and swallowed so a failed breadcrumb never aborts
+        the calling Run — the issue simply falls through to a serial
+        **Iteration** without the note.
         """
         if not isinstance(ref, int):
             return
@@ -715,23 +1037,31 @@ class PrdsIssueSource:
         """
         return None
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Walk ``prds/<feature>/<NNN>-*.md`` files; apply AFK discriminator."""
+    def collect_pool(self) -> PoolCollection:
+        """Walk ``prds/<feature>/<NNN>-*.md`` files; apply AFK discriminator.
+
+        A file that matches the name shape but fails the discriminator is
+        reported as a :class:`PoolExclusion` (#303) using the same reason
+        vocabulary the GitHub backend uses — the discriminator is shared, so
+        its diagnostics are too. An unreadable or non-matching file is not an
+        exclusion: only a candidate the discriminator judged can be one.
+        """
         prds_dir = self._repo_root / "prds"
         if not prds_dir.is_dir():
-            return []
+            return PoolCollection()
         try:
             resolved_prds_dir = prds_dir.resolve(strict=True)
             expected_prds_dir = self._repo_root.resolve(strict=True) / "prds"
         except (OSError, RuntimeError):
-            return []
+            return PoolCollection()
         if resolved_prds_dir != expected_prds_dir:
             self._diag.warning(
                 "prds: linked root is not allowed: %s; skipping", prds_dir
             )
-            return []
+            return PoolCollection()
 
         items: list[tuple[str, AfkReadyItem]] = []
+        exclusions: list[tuple[str, PoolExclusion]] = []
         for feature_dir in sorted(
             prds_dir.iterdir(), key=lambda p: p.name
         ):
@@ -768,7 +1098,16 @@ class PrdsIssueSource:
                         "prds: could not read %s: %s; skipping", rel_path, exc,
                     )
                     continue
-                if not is_afk_ready(body):
+                reason = afk_ready_exclusion(body)
+                if reason is not None:
+                    exclusions.append(
+                        (
+                            rel_path,
+                            PoolExclusion(
+                                ref=rel_path, title=rel_path, reason=reason
+                            ),
+                        )
+                    )
                     continue
                 rendered = f"=== {rel_path} ===\n{body}"
                 items.append(
@@ -786,7 +1125,11 @@ class PrdsIssueSource:
         # name-keyed sort already produced numerical order with
         # zero-padded NNN.
         items.sort(key=lambda x: x[0])
-        return [item for _, item in items]
+        exclusions.sort(key=lambda x: x[0])
+        return PoolCollection(
+            items=tuple(item for _, item in items),
+            exclusions=tuple(exclusion for _, exclusion in exclusions),
+        )
 
     def handle_completions(
         self,

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
-from git_loopy.gh import GhError, Issue, PullRequest, Repo
+from git_loopy.gh import GhError, Issue, IssueListPage, PullRequest, Repo
 from git_loopy.git import Commit, GitError
 
 
@@ -470,6 +470,8 @@ class FakeGitHubClient:
         auth_status_error: GhError | None = None,
         repo_view_error: GhError | None = None,
         issue_list_error: GhError | None = None,
+        issue_list_membership_error: GhError | None = None,
+        membership_complete: bool = True,
         pr_list_error: GhError | None = None,
         issue_view_errors: Mapping[int, GhError] | None = None,
         issue_close_errors: Mapping[int, GhError] | None = None,
@@ -489,6 +491,8 @@ class FakeGitHubClient:
         self.auth_status_error = auth_status_error
         self.repo_view_error = repo_view_error
         self.issue_list_error = issue_list_error
+        self.issue_list_membership_error = issue_list_membership_error
+        self.membership_complete = membership_complete
         self.pr_list_error = pr_list_error
         # Per-number injected failures (a single item fails; the pool proceeds).
         self._issue_view_errors: dict[int, GhError] = dict(issue_view_errors or {})
@@ -499,6 +503,7 @@ class FakeGitHubClient:
         self._pr_view_errors: dict[int, GhError] = dict(pr_view_errors or {})
         # Read/write spies.
         self.issue_list_calls: list[tuple[str, str]] = []
+        self.issue_list_membership_calls: list[tuple[str, str]] = []
         self.issue_view_calls: list[int] = []
         self.issue_close_calls: list[tuple[int, str]] = []
         self.issue_comment_calls: list[tuple[int, str]] = []
@@ -522,6 +527,19 @@ class FakeGitHubClient:
         if self.issue_list_error is not None:
             raise self.issue_list_error
         return [issue for issue in self._issues.values() if _state_matches(issue.state, state)]
+
+    def issue_list_membership(
+        self, label: str, state: str = "open"
+    ) -> IssueListPage:
+        self.issue_list_membership_calls.append((label, state))
+        if self.issue_list_membership_error is not None:
+            raise self.issue_list_membership_error
+        issues = tuple(
+            issue
+            for issue in self._issues.values()
+            if _state_matches(issue.state, state)
+        )
+        return IssueListPage(issues=issues, complete=self.membership_complete)
 
     def issue_view(self, number: int) -> Issue:
         self.issue_view_calls.append(number)

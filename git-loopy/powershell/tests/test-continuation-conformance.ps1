@@ -7,6 +7,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
+Import-Module (Join-Path $PortDir "GitLoopy.Continuation.psm1") -Force
 $ScriptedGitHubPath = Join-Path $PSScriptRoot "ScriptedGitHub.ps1"
 $FixturePath = Join-Path (
     Split-Path -Parent $PortDir
@@ -1200,7 +1201,438 @@ function Test-NoGuidanceDispositions {
         -ExpectedStdout $null
 }
 
+# The capability-coverage gate (Wrapper contract §8). Every scenario scoped to fewer
+# than the whole family is a question the rest are never asked, so each narrowing must
+# be registered and derived from what each distribution actually advertises. This runs
+# in every family: an operator who installs only this distribution must still be able
+# to prove it does not advertise an operation its own fixtures never exercise.
+function Get-CoverageRecords {
+    $Records = [ordered]@{}
+    foreach ($Record in @($Fixture["scenarios"]) + @($Fixture["workflows"])) {
+        $Records[[string]$Record["id"]] = $Record
+    }
+    return $Records
+}
+
+function Get-PinnedErrorCode {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Record)
+
+    $Expected = $Record["expected"]
+    $Body = $null
+    $Exact = [string]($Expected["stdout_exact"] ?? "")
+    if (-not [string]::IsNullOrEmpty($Exact)) {
+        $Body = $Exact | ConvertFrom-Json -AsHashtable
+    }
+    elseif ($Expected["stdout"] -is [Collections.IDictionary]) {
+        $Body = $Expected["stdout"]
+    }
+    if (
+        $Body -is [Collections.IDictionary] -and
+        $Body["error"] -is [Collections.IDictionary]
+    ) {
+        return [string]$Body["error"]["code"]
+    }
+    return "none"
+}
+
+# The end-to-end coverage gate. The foundation gate is a claim about ten locked
+# stories driven through the real native commands, not about a count of fixtures, so
+# the ten are written out here rather than read from the fixture: a locked story that
+# quietly leaves the registry would otherwise take its own gate with it. This runs in
+# every family for the same reason the capability gate does.
+$LockedEndToEndScenarios = @(
+    "planning-publication-and-aggregation"
+    "read-only-human-refresh"
+    "concurrent-equivalent-and-conflicting-publication"
+    "blocked-to-ready-and-ready-to-blocked"
+    "completion-and-retirement-receipts"
+    "positive-afk-classification-and-dispatch"
+    "explicit-human-and-attention-stops"
+    "terminal-completion"
+    "optional-handoff-context"
+    "durable-transition-then-publication-failure"
+)
+
+function Test-EndToEndCoverageGate {
+    $Coverage = $Fixture["end_to_end_coverage"]
+    $Locked = $Coverage["locked_scenarios"]
+    $Distributions =
+        @($Fixture["capability_coverage"]["distributions"]) | Sort-Object -CaseSensitive
+    $ScopedRecords = $Fixture["capability_coverage"]["scoped_records"]
+
+    $Workflows = [ordered]@{}
+    foreach ($Workflow in @($Fixture["workflows"])) {
+        $Workflows[[string]$Workflow["id"]] = $Workflow
+    }
+
+    Assert-True (
+        (@($Locked.Keys | ForEach-Object { [string]$_ }) -join ",") -ceq
+            ($LockedEndToEndScenarios -join ",")
+    ) "locked_scenarios names the ten locked end-to-end scenarios in order"
+
+    $Exercised = [Collections.Generic.HashSet[string]]::new()
+    foreach ($Entry in $Locked.GetEnumerator()) {
+        $Scenario = [string]$Entry.Key
+        $Ids = @($Entry.Value | ForEach-Object { [string]$_ })
+        Assert-True ($Ids.Count -gt 0) "$Scenario names at least one workflow"
+
+        $Covered = [Collections.Generic.HashSet[string]]::new()
+        foreach ($Id in $Ids) {
+            Assert-True ($Workflows.Contains($Id)) "$Scenario names known workflow $Id"
+            $Workflow = $Workflows[$Id]
+            $Narrowed = @($Workflow["distributions"] | ForEach-Object { [string]$_ })
+            if (($Narrowed | Sort-Object -CaseSensitive) -join "," -cne ($Distributions -join ",")) {
+                Assert-True (
+                    [string]$ScopedRecords[$Id]["reason"] -ceq "capability-absent"
+                ) "$Id is narrowed for a registered capability reason"
+            }
+            foreach ($Distribution in $Narrowed) {
+                [void]$Covered.Add($Distribution)
+            }
+            foreach ($Command in @($Workflow["commands"])) {
+                [void]$Exercised.Add([string]@($Command["arguments"])[1])
+            }
+        }
+        Assert-True (
+            (@($Covered) | Sort-Object -CaseSensitive) -join "," -ceq ($Distributions -join ",")
+        ) "$Scenario is asked of every distribution"
+    }
+
+    foreach ($Operation in @("publish", "reconcile", "record-dispatch-result")) {
+        Assert-True (
+            $Exercised.Contains($Operation)
+        ) "a locked end-to-end scenario exercises $Operation"
+    }
+
+    $Claimed = [Collections.Generic.HashSet[string]]::new(
+        [string[]]@($Locked.GetEnumerator() | ForEach-Object {
+            $_.Value | ForEach-Object { [string]$_ }
+        }),
+        [StringComparer]::Ordinal
+    )
+    foreach ($Id in @($Workflows.Keys)) {
+        Assert-True (
+            $Claimed.Contains([string]$Id)
+        ) "workflow $Id is claimed by a locked scenario"
+    }
+
+    $Prefixes = @($Coverage["read_only_call_prefixes"] | ForEach-Object { [string]$_ })
+    $Refreshes = 0
+    foreach ($Id in @($Workflows.Keys)) {
+        $Workflow = $Workflows[$Id]
+        $Operations = @(
+            @($Workflow["commands"]) |
+                ForEach-Object { [string]@($_["arguments"])[1] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        if ($Operations.Count -ne 1 -or $Operations[0] -cne "reconcile") {
+            continue
+        }
+        $Refreshes++
+        foreach ($Call in @($Workflow["expected_github_calls"])) {
+            $Text = [string]$Call
+            $Allowed = @(
+                $Prefixes | Where-Object {
+                    $Text.StartsWith($_, [StringComparison]::Ordinal)
+                }
+            ).Count -gt 0
+            Assert-True (
+                $Allowed -and -not $Text.Contains("--method", [StringComparison]::Ordinal)
+            ) "read-only workflow $Id made only read calls"
+        }
+    }
+    Assert-True (
+        $Refreshes -gt 0
+    ) "an end-to-end refresh is pinned, so the read-only gate proves something"
+}
+
+function Test-CapabilityCoverageGate {
+    $Coverage = $Fixture["capability_coverage"]
+    $Indexed = Get-CoverageRecords
+    $Distributions = @($Coverage["distributions"]) | Sort-Object -CaseSensitive
+    $ScopedRecords = $Coverage["scoped_records"]
+
+    $Manifests = [ordered]@{}
+    foreach ($Entry in $Coverage["manifest_scenarios"].GetEnumerator()) {
+        $Manifests[[string]$Entry.Key] =
+            $Indexed[[string]$Entry.Value]["expected"]["stdout"]["capabilities"]
+    }
+
+    $Narrowed = @(
+        $Indexed.GetEnumerator() |
+            Where-Object {
+                $_.Value.Contains("distributions") -and
+                (
+                    (
+                        @($_.Value["distributions"]) |
+                            Sort-Object -CaseSensitive
+                    ) -join ","
+                ) -cne ($Distributions -join ",")
+            } |
+            ForEach-Object { [string]$_.Key } |
+            Sort-Object -CaseSensitive
+    )
+    $Registered = @($ScopedRecords.Keys | Sort-Object -CaseSensitive)
+    Assert-True (($Narrowed -join ",") -ceq ($Registered -join ",")) (
+        "capability coverage registers exactly the narrowed scopes " +
+        "(narrowed: $($Narrowed -join ', '); registered: $($Registered -join ', '))"
+    )
+
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        Assert-True (
+            [string]$Entry.Value["reason"] -cin @($Coverage["scope_reasons"])
+        ) "$($Entry.Key) declares a registered scope reason"
+    }
+
+    Assert-True (
+        (
+            @($Coverage["manifest_scenarios"].Keys | Sort-Object -CaseSensitive) -join ","
+        ) -ceq ($Distributions -join ",")
+    ) "manifest_scenarios names every distribution"
+
+    foreach ($Entry in $Coverage["manifest_scenarios"].GetEnumerator()) {
+        $ScenarioId = [string]$Entry.Value
+        Assert-True (
+            (@($Indexed[$ScenarioId]["distributions"]) -join ",") -ceq [string]$Entry.Key
+        ) "$ScenarioId is scoped to $($Entry.Key) alone"
+        Assert-True (
+            [string]$ScopedRecords[$ScenarioId]["reason"] -ceq "manifest-identity"
+        ) "$ScenarioId is registered as manifest-identity"
+    }
+    $Identities = @(
+        $ScopedRecords.GetEnumerator() |
+            Where-Object { [string]$_.Value["reason"] -ceq "manifest-identity" } |
+            ForEach-Object { [string]$_.Key } |
+            Sort-Object -CaseSensitive
+    )
+    Assert-True (
+        ($Identities -join ",") -ceq (
+            (
+                @($Coverage["manifest_scenarios"].Values) |
+                    ForEach-Object { [string]$_ } |
+                    Sort-Object -CaseSensitive
+            ) -join ","
+        )
+    ) "manifest-identity is claimed only by the manifest scenarios"
+
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        if ([string]$Entry.Value["reason"] -cne "capability-absent") {
+            continue
+        }
+        $Capability = [string]$Entry.Value["capability"]
+        $Advertises = [bool]$Entry.Value["advertises"]
+        $Expected = [Collections.Generic.List[string]]::new()
+        foreach ($Manifest in $Manifests.GetEnumerator()) {
+            $Optional = $Manifest.Value["optional_capabilities"]
+            Assert-True ($Optional.Contains($Capability)) (
+                "$($Entry.Key) names capability $Capability that " +
+                "$($Manifest.Key) advertises"
+            )
+            if ([bool]$Optional[$Capability] -eq $Advertises) {
+                $Expected.Add([string]$Manifest.Key)
+            }
+        }
+        $ExpectedSorted = @($Expected | Sort-Object -CaseSensitive)
+        $Actual = @(
+            @($Indexed[[string]$Entry.Key]["distributions"]) |
+                ForEach-Object { [string]$_ } |
+                Sort-Object -CaseSensitive
+        )
+        Assert-True (($Actual -join ",") -ceq ($ExpectedSorted -join ",")) (
+            "$($Entry.Key) is scoped to the distributions advertising " +
+            "$Capability=$Advertises (expected: $($ExpectedSorted -join ', '); " +
+            "actual: $($Actual -join ', '))"
+        )
+    }
+
+    $Groups = [ordered]@{}
+    foreach ($Entry in $ScopedRecords.GetEnumerator()) {
+        if ([string]$Entry.Value["reason"] -cne "family-local-detail") {
+            continue
+        }
+        $Group = [string]$Entry.Value["variant_group"]
+        if (-not $Groups.Contains($Group)) {
+            $Groups[$Group] = [Collections.Generic.List[string]]::new()
+        }
+        $Groups[$Group].Add([string]$Entry.Key)
+    }
+    Assert-True ($Groups.Count -gt 0) "the fixture declares family-local variant groups"
+
+    foreach ($Group in $Groups.GetEnumerator()) {
+        $MemberIds = @($Group.Value)
+        $Operations = @(
+            $MemberIds |
+                ForEach-Object { [string]$ScopedRecords[$_]["operation"] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Operations.Count -eq 1) (
+            "variant group $($Group.Key) names exactly one operation"
+        )
+        $Operation = $Operations[0]
+        $Advertising = [Collections.Generic.List[string]]::new()
+        foreach ($Manifest in $Manifests.GetEnumerator()) {
+            Assert-True ($Manifest.Value["operations"].Contains($Operation)) (
+                "variant group $($Group.Key) names operation $Operation that " +
+                "$($Manifest.Key) knows"
+            )
+            if ([bool]$Manifest.Value["operations"][$Operation]) {
+                $Advertising.Add([string]$Manifest.Key)
+            }
+        }
+        $Covered = [Collections.Generic.List[string]]::new()
+        foreach ($MemberId in $MemberIds) {
+            foreach ($Distribution in @($Indexed[$MemberId]["distributions"])) {
+                $Covered.Add([string]$Distribution)
+            }
+        }
+        $Unique = @($Covered | Sort-Object -CaseSensitive -Unique)
+        Assert-True ($Unique.Count -eq $Covered.Count) (
+            "variant group $($Group.Key) scopes each distribution to one member"
+        )
+        Assert-True (
+            ($Unique -join ",") -ceq (
+                (@($Advertising | Sort-Object -CaseSensitive)) -join ","
+            )
+        ) (
+            "variant group $($Group.Key) covers every distribution advertising " +
+            "$Operation (expected: $($Advertising -join ', '); " +
+            "actual: $($Unique -join ', '))"
+        )
+        $Arguments = @(
+            $MemberIds |
+                ForEach-Object {
+                    @($Indexed[$_]["arguments"]) -join " "
+                } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Arguments.Count -eq 1) (
+            "variant group $($Group.Key) members drive one argument vector"
+        )
+        $ExitCodes = @(
+            $MemberIds |
+                ForEach-Object { [int]$Indexed[$_]["expected"]["exit_code"] } |
+                Sort-Object -Unique
+        )
+        Assert-True ($ExitCodes.Count -eq 1) (
+            "variant group $($Group.Key) members agree on the exit code"
+        )
+        $Codes = @(
+            $MemberIds |
+                ForEach-Object { Get-PinnedErrorCode -Record $Indexed[$_] } |
+                Sort-Object -CaseSensitive -Unique
+        )
+        Assert-True ($Codes.Count -eq 1) (
+            "variant group $($Group.Key) members agree on the error code " +
+            "(found: $($Codes -join ', '))"
+        )
+    }
+}
+
+function Test-CapabilityVerificationGate {
+    # Setup verification (#257). The distribution running setup is the distribution
+    # being verified, so the profile it judges against is the only part any other
+    # family can see. It lands in the fixture as data and is pinned here against this
+    # distribution's own declaration: three members that quietly judged different
+    # requirements under one profile name would otherwise never disagree anywhere.
+    $Verification = $Fixture["capability_verification"]
+    $FixtureProfile = $Verification["profiles"]["foundation"]
+    $Declared = Get-GitLoopyContinuationProfile -Name "foundation"
+
+    Assert-True (
+        (@($FixtureProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["requirements"]) -join ",")
+    ) "the PowerShell foundation profile requires exactly what the fixture pins"
+    Assert-True (
+        [string]$FixtureProfile["continuation_contract_version"] -ceq
+            [string]$Declared["continuation_contract_version"]
+    ) "the PowerShell foundation profile pins the fixture's contract version"
+    Assert-True (
+        [int]$FixtureProfile["record_format"] -eq [int]$Declared["record_format"]
+    ) "the PowerShell foundation profile pins the fixture's record format"
+    Assert-True (
+        [string]$FixtureProfile["tracker_adapter"] -ceq
+            [string]$Declared["tracker_adapter"]
+    ) "the PowerShell foundation profile pins the fixture's tracker Adapter"
+    Assert-True (
+        (@($FixtureProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["tracker_operations"]) -join ",")
+    ) "the PowerShell foundation profile pins the fixture's tracker operations"
+    Assert-True (
+        (@($FixtureProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($Declared["native_operations"]) -join ",")
+    ) "the PowerShell foundation profile pins the fixture's native operations"
+    Assert-True (
+        [string]$FixtureProfile["mode_default"] -ceq [string]$Declared["mode_default"]
+    ) "the PowerShell foundation profile pins the fixture's default mode"
+
+    # The verdict is taken on the manifest this distribution really advertises, so
+    # the chain runs real manifest -> setup verdict with no hand-asserted link.
+    $Manifest = Get-GitLoopyCapabilityManifest
+    $Expected = $Verification["verdicts"]["powershell"]
+    $Verdict = Get-GitLoopyContinuationVerification `
+        -Manifest $Manifest -Name "foundation"
+
+    Assert-True (
+        [string]$Verdict["profile"] -ceq [string]$Expected["profile"]
+    ) "the PowerShell verdict names the profile the fixture pins"
+    Assert-True (
+        [bool]$Verdict["satisfied"] -eq [bool]$Expected["satisfied"]
+    ) "the PowerShell verdict on its own manifest matches the fixture"
+    Assert-True (
+        (@($Verdict["unsatisfied_requirements"]) -join ",") -ceq
+            (@($Expected["unsatisfied_requirements"] | ForEach-Object { [string]$_ }) -join ",")
+    ) "the PowerShell verdict leaves nothing unsatisfied the fixture does not pin"
+    Assert-True (
+        (@($Verdict["unsupported_optional_capabilities"]) -join ",") -ceq
+            (@($Expected["unsupported_optional_capabilities"] |
+                ForEach-Object { [string]$_ }) -join ",")
+    ) "the PowerShell verdict names the optional capabilities the fixture pins"
+
+    # A verifier that answered "satisfied" unconditionally would pass both checks
+    # above, so every requirement is shown to fail on its own broken manifest.
+    $Refusals = @($Verification["refusals"])
+    Assert-True ($Refusals.Count -gt 0) (
+        "the fixture registers at least one capability-verification refusal"
+    )
+    foreach ($Refusal in $Refusals) {
+        $Id = [string]$Refusal["id"]
+        $Broken = Copy-GitLoopyDeepValue $Manifest
+        $Path = @($Refusal["remove"] | ForEach-Object { [string]$_ })
+        if ($Path.Count -eq 1) {
+            $Broken.Remove($Path[0])
+        }
+        else {
+            $Broken[$Path[0]].Remove($Path[1])
+        }
+
+        $Refused = Get-GitLoopyContinuationVerification `
+            -Manifest $Broken -Name "foundation"
+        Assert-True (-not [bool]$Refused["satisfied"]) "refusal $Id is refused"
+        Assert-True (
+            (@($Refused["unsatisfied_requirements"]) -join ",") -ceq
+                (@($Refusal["unsatisfied_requirements"] |
+                    ForEach-Object { [string]$_ }) -join ",")
+        ) "refusal $Id names exactly the requirement the fixture pins"
+    }
+
+    # An unknown profile is refused rather than silently widened: `report` and
+    # `execute-frontier` are #263/#264 vocabulary, and answering them would let a
+    # pass be read as readiness for a mode no distribution supports.
+    $Widened = $false
+    try {
+        Get-GitLoopyContinuationProfile -Name "report" | Out-Null
+        $Widened = $true
+    }
+    catch {
+        $Widened = $false
+    }
+    Assert-True (-not $Widened) "an unknown capability profile is refused"
+}
+
 try {
+    Test-CapabilityCoverageGate
+    Test-CapabilityVerificationGate
+    Test-EndToEndCoverageGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(
         $Fixture["scenarios"] |

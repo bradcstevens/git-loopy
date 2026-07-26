@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.4 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.5 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -65,6 +65,38 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
 skipped. In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
+
+### 3.1 Pool exclusions (contract 1.5, MUST)
+
+A skipped candidate MUST be reported, not dropped silently. `ready-for-agent` is a *human*
+assertion — somebody deliberately triaged that issue — so an Orchestrator that declines it owes
+the operator the reason. An Orchestrator MUST, for every `ready-for-agent` candidate the
+discriminator rejects, report the candidate's reference and one **exclusion reason** from this
+closed vocabulary:
+
+| Reason | Meaning |
+| --- | --- |
+| `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
+| `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
+| `missing_both_sections` | Neither required heading present |
+
+The reason MUST be derived from the same discriminator pass that decides membership, so the
+reported reason and the membership decision cannot disagree. `discriminator.json` pins the
+vocabulary and the reason for every case.
+
+A candidate the source could **not read** (a failed per-issue view, an unreadable file) is NOT an
+exclusion — it was never discriminated against, and reporting it as one would send the operator to
+fix headings that are probably fine. The existing warn-and-skip path continues to cover it.
+
+Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
+`wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
+than only a debug log. An **empty eligible Pool caused entirely by exclusions** MUST read
+distinctly from a Pool that simply held no `ready-for-agent` work: the two demand opposite
+operator responses. It does **not** change the exit code — both remain the clean-exit-on-empty
+condition (§10).
+
+Reporting an exclusion MUST NOT change Pool membership, and MUST NOT cost an extra source
+round-trip: the cheap list read already carries the body the decision is made on.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -201,16 +233,25 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.run.end`, `wrapper.iteration.start`, `wrapper.iteration.end`,
 `wrapper.afk_ready.collected`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
 `wrapper.push.recorded`, `wrapper.auto_close`, `wrapper.strike`, `wrapper.pr.advanced`,
-`wrapper.ask_user.attempted`. Continuation-schema 1.1 additions:
+`wrapper.ask_user.attempted`. Contract-1.5 addition within compatibility schema 1:
+`wrapper.pool.excluded` — one per `ready-for-agent` candidate the discriminator rejected (§3.1),
+carrying `issue`, `title`, and one `reason` from the closed exclusion vocabulary, emitted in source
+order *before* the `wrapper.afk_ready.collected` it explains. That collection Event additionally
+carries `excluded`, the count of exclusions, so a replay can tell an empty tracker apart from a
+tracker whose every candidate was rejected. `wrapper.pool.excluded` is Run-scoped, never
+contribution-scoped: it names work that never became a **Lane contribution**, so it carries the
+collecting Iteration's `iter` and no contribution identity. Continuation-schema 1.1 additions:
 `wrapper.continuation.reconciled`, `wrapper.continuation_dispatch.started`,
 `wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
 observations only and never carry authoritative fragments, secrets, or runnable Instructions.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§17). Producing these additive events
-is capability-dependent.
+Run-scoped record of the frozen **Effective Skill policy** (§17). Rolling-dispatch additions
+within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
+Producing these additive events is capability-dependent.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
-segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`), and two that are
+segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`, `work_finished`,
+`branch_observed`, `recovery_started`, `refill_turn`), and two that are
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
 SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
 `assistant.reasoning`, `tool.call`, `tool.result`, `tool.permission_requested`,
@@ -280,6 +321,52 @@ counters or collections MUST NOT be reported as `0` or `[]`.
 Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.
+
+### Rolling-dispatch contribution lifecycle
+
+**Rolling dispatch** (Parallel mode) has no barrier round, so a Parallel record belongs to a
+**Lane contribution** rather than to an **Iteration**
+([ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)). These additive type
+literals are reserved within compatibility schema 1. Contribution lifecycle:
+`wrapper.contribution.start`,
+`wrapper.contribution.work_finished`, `wrapper.integration.parked`,
+`wrapper.integration.admitted`, `wrapper.integration.started`,
+`wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
+`wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
+`wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
+`wrapper.pipeline.quiescent`, and `wrapper.rolling.refill_turn`.
+
+- **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
+  and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
+  contribution *started* in and never changes, because a Lane is refillable the moment its
+  contribution is admitted to **Integration** — a record identifying only its Lane becomes
+  unattributable as soon as the next contribution starts there. Consumers MUST NOT rely on a
+  mutable Lane→issue lookup.
+- **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
+  `usage.tokens`, `usage.context_window`, `agent.output`, `wrapper.commit.recorded`,
+  `wrapper.checkpoint.recorded`, `wrapper.auto_close` — carry the same triple when they belong to
+  a contribution. The same literals remain valid, unstamped, for serial Iterations.
+- **Scope separation.** A Lane contribution MUST NOT emit `wrapper.iteration.start` or
+  `wrapper.iteration.end`; a serial Iteration keeps both and its positive `iter`.
+- **`wrapper.contribution.end` is the finalized Parallel row and the Strike transition.** Its
+  `reason` MUST at least distinguish `published`, `unchanged_branch`, `checkpoint_failed`, and
+  `serial_fallback`; only `published` is Parallel progress. A publication whose runner-driven
+  closure has not yet verified is *not* a contribution end. Lane-work and recovery Consumption and
+  commits appear exactly once, in the originating contribution, and runner **Checkpoint** commits
+  stay out of the commit total.
+- **Unknown stays unknown.** `wrapper.concurrency.changed` reports the immutable configured Lane
+  cap and the current effective limit, and reports a signal the Run cannot observe as `null` —
+  never an estimate and never `0`. It is emitted for an authoritative transition, not per
+  observation.
+- **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
+  They remain readable and MUST NOT be reinterpreted as contributions.
+
+The `contribution_identity` and `payload_contracts` sections of
+[`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, and the
+serialization cases pin the wire form. As with the other reserved Insight shapes above, producing
+these records is capability-dependent and the rolling-dispatch Orchestrator tickets own enabling
+the producers; the Event-schema fixture revision advances with the first Orchestrator that emits
+them, since that revision is what a distribution's capability manifest advertises.
 
 ### Renderer-neutral Dashboard seam
 

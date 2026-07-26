@@ -15,6 +15,7 @@ from rich.console import Console
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
+from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
@@ -220,7 +221,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.4"
+    assert _EVENT_SCHEMA["contract_version"] == "1.5"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -235,7 +236,14 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         == events_module.PYTHON_INSIGHT_CAPABILITIES
     )
 
-    assert _EVENT_SCHEMA["payload_contracts"] == {
+    insight_contracts = {
+        name: contract
+        for name, contract in _EVENT_SCHEMA["payload_contracts"].items()
+        if name not in _EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]
+        and name
+        not in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    }
+    assert insight_contracts == {
         "wrapper.run.start": {
             "required": [
                 "release_version",
@@ -325,6 +333,45 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         "duration_source": "monotonic clock",
         "duration_unit": "seconds",
     }
+
+
+def test_event_fixture_pins_rolling_contribution_contract() -> None:
+    """Rolling dispatch's identity rules are pinned as *relationships* the
+    fixture cannot self-check: the shared constructor, the fixture, and the
+    written contract must name the same triple, the same lifecycle set, and
+    the same terminal dispositions."""
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    assert tuple(identity["keys"]) == events_module.CONTRIBUTION_IDENTITY_KEYS
+    assert identity["iter"] is None
+    assert set(identity["lifecycle_types"]) == (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
+
+    literals = set(_EVENT_SCHEMA["event_types"].values())
+    grouped = (
+        identity["lifecycle_types"]
+        + identity["stamped_types"]
+        + identity["scheduler_scoped_types"]
+        + identity["forbidden_types"]
+    )
+    assert len(grouped) == len(set(grouped)), "an event type is in two scopes"
+    assert set(grouped) <= literals
+
+    # Every contribution-scoped lifecycle type requires the whole triple, and
+    # no scheduler-scoped rolling event pretends to carry one.
+    contracts = _EVENT_SCHEMA["payload_contracts"]
+    for type_name in identity["lifecycle_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert required[: len(identity["keys"])] == identity["keys"], type_name
+    for type_name in identity["scheduler_scoped_types"]:
+        required = contracts[type_name]["required_when_present"]
+        assert "contribution_id" not in required, type_name
+        assert "lane_id" not in required, type_name
+
+    end = contracts["wrapper.contribution.end"]
+    assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
+    assert end["strike_reaction_values"] == ["reset", "+1"]
+    assert "strike_reaction" in end["summary_required"]
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
@@ -538,7 +585,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.5"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.8"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -569,11 +616,355 @@ def test_continuation_fixture_pins_independent_version_axes() -> None:
     } == continuation_module.CAPABILITY_MANIFEST
 
 
+def test_continuation_capability_verification_pins_the_foundation_profile() -> None:
+    """Setup's requirement set is one shared declaration, not three private opinions.
+
+    Every family member verifies *itself* at setup, so nothing at runtime would ever
+    notice if the three drifted into judging different requirements under the same
+    profile name. The fixture is the one place the three can be compared, so the
+    profile lands there as data and each family pins its own declaration against it.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert tuple(verification["profiles"]) == tuple(
+        verification_module.CONTINUATION_PROFILES
+    )
+
+    fixture_profile = verification["profiles"][verification_module.FOUNDATION_PROFILE]
+    declared = verification_module.CONTINUATION_PROFILES[
+        verification_module.FOUNDATION_PROFILE
+    ]
+    assert tuple(fixture_profile["requirements"]) == declared.requirements
+    assert (
+        fixture_profile["continuation_contract_version"]
+        == declared.continuation_contract_version
+        == continuation_module.CONTINUATION_CONTRACT_VERSION
+    )
+    assert (
+        fixture_profile["record_format"]
+        == declared.record_format
+        == continuation_module.RECORD_FORMAT
+    )
+    assert fixture_profile["tracker_adapter"] == declared.tracker_adapter
+    assert tuple(fixture_profile["tracker_operations"]) == declared.tracker_operations
+    assert tuple(fixture_profile["native_operations"]) == declared.native_operations
+    assert fixture_profile["mode_default"] == declared.mode_default
+
+
+def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
+    """Copy ``manifest`` with the one key at ``path`` removed.
+
+    A refusal removes exactly one advertised key, so the requirement it defeats is
+    identified rather than merely implicated. The path is at most two deep, which is
+    all any family needs to express in jq or PowerShell.
+    """
+    reduced = json.loads(json.dumps(manifest))
+    target = reduced
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+    return reduced
+
+
+def test_continuation_capability_verification_pins_this_distribution_verdict() -> None:
+    """Setup's answer about this distribution is pinned against what it advertises.
+
+    The manifest comes from the scenario that executes the real native entrypoint, so
+    the chain runs real CLI ⟷ advertised manifest ⟷ setup verdict with no
+    hand-asserted link. A distribution that stops advertising an optional capability
+    changes its own verdict here rather than changing what setup silently tells an
+    operator.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    assert set(verification["verdicts"]) == set(
+        _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+    )
+
+    expected = verification["verdicts"]["python"]
+    verdict = verification_module.evaluate_continuation_capabilities(
+        _advertised_manifests()["python"], profile=expected["profile"]
+    )
+    assert verdict.profile == expected["profile"]
+    assert verdict.satisfied is expected["satisfied"]
+    assert list(verdict.unsatisfied_requirements) == expected["unsatisfied_requirements"]
+    assert (
+        list(verdict.unsupported_optional_capabilities)
+        == expected["unsupported_optional_capabilities"]
+    )
+
+
+def test_continuation_capability_verification_refuses_each_broken_manifest() -> None:
+    """Every requirement has a manifest that defeats exactly it, and only it.
+
+    A verifier that answered "satisfied" unconditionally would pass the verdict pin
+    above, so the profile is only a gate if each of its requirements can be shown to
+    fail on its own. The refusals are shared data for the same reason the profile is:
+    all three families run the same five broken manifests through their own verifier.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    manifest = _advertised_manifests()["python"]
+    refusals = verification["refusals"]
+
+    assert {
+        requirement
+        for refusal in refusals
+        for requirement in refusal["unsatisfied_requirements"]
+    } == set(verification_module.FOUNDATION_REQUIREMENT_IDS)
+
+    for refusal in refusals:
+        verdict = verification_module.evaluate_continuation_capabilities(
+            _manifest_without(manifest, refusal["remove"]),
+            profile=verification_module.FOUNDATION_PROFILE,
+        )
+        assert verdict.satisfied is False, refusal["id"]
+        assert (
+            list(verdict.unsatisfied_requirements)
+            == refusal["unsatisfied_requirements"]
+        ), refusal["id"]
+
+
 def test_continuation_fixture_pins_reconcile_diagnostic_vocabulary() -> None:
     """The fixture pins every diagnostic code reconcile is allowed to emit."""
     registered = _CONTINUATION_SCENARIOS["revision_protocol"]["diagnostic_codes"]
     assert set(registered) == continuation_module.RECONCILE_DIAGNOSTIC_CODES
     assert registered == sorted(registered)
+
+
+def _coverage_records() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    coverage = _CONTINUATION_SCENARIOS["capability_coverage"]
+    indexed = {
+        record["id"]: record
+        for record in _CONTINUATION_SCENARIOS["scenarios"]
+        + _CONTINUATION_SCENARIOS["workflows"]
+    }
+    return coverage, indexed
+
+
+def _advertised_manifests() -> dict[str, dict[str, Any]]:
+    coverage, indexed = _coverage_records()
+    return {
+        distribution: indexed[scenario_id]["expected"]["stdout"]["capabilities"]
+        for distribution, scenario_id in coverage["manifest_scenarios"].items()
+    }
+
+
+def _pinned_error_code(record: dict[str, Any]) -> str | None:
+    expected = record["expected"]
+    body: Any = None
+    if expected.get("stdout_exact"):
+        body = json.loads(expected["stdout_exact"])
+    elif isinstance(expected.get("stdout"), dict):
+        body = expected["stdout"]
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return body["error"].get("code")
+    return None
+
+
+def test_continuation_capability_coverage_registers_every_narrowed_scope() -> None:
+    """A scope narrower than the family is a question two distributions never face.
+
+    The registry is the only place that difference is allowed to exist, so it must
+    name exactly the narrowed records: an unregistered narrowing is a silent gap and
+    a stale registration is a justification for coverage nobody has.
+    """
+    coverage, indexed = _coverage_records()
+    distributions = set(coverage["distributions"])
+    assert distributions == {"python", "shell", "powershell"}
+
+    narrowed = {
+        record_id
+        for record_id, record in indexed.items()
+        if "distributions" in record and set(record["distributions"]) != distributions
+    }
+    assert set(coverage["scoped_records"]) == narrowed
+    for record_id, scope in coverage["scoped_records"].items():
+        assert scope["reason"] in coverage["scope_reasons"], record_id
+
+
+def test_continuation_capability_coverage_binds_each_manifest_to_its_distribution() -> (
+    None
+):
+    coverage, indexed = _coverage_records()
+    assert set(coverage["manifest_scenarios"]) == set(coverage["distributions"])
+    for distribution, scenario_id in coverage["manifest_scenarios"].items():
+        assert indexed[scenario_id]["distributions"] == [distribution]
+        assert coverage["scoped_records"][scenario_id] == {"reason": "manifest-identity"}
+    identities = {
+        record_id
+        for record_id, scope in coverage["scoped_records"].items()
+        if scope["reason"] == "manifest-identity"
+    }
+    assert identities == set(coverage["manifest_scenarios"].values())
+
+
+def test_continuation_capability_absent_scopes_are_derived_from_the_manifests() -> None:
+    """A capability-gated scope is computed from what each distribution advertises.
+
+    This is the gate itself: a distribution that starts advertising a capability and
+    does not widen the scenarios gated on it fails here rather than shipping an
+    operation nothing asked it about.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "capability-absent":
+            continue
+        capability = scope["capability"]
+        advertises = scope["advertises"]
+        expected = set()
+        for distribution, manifest in manifests.items():
+            optional = manifest["optional_capabilities"]
+            assert capability in optional, (record_id, distribution, capability)
+            if optional[capability] == advertises:
+                expected.add(distribution)
+        assert expected, record_id
+        assert set(indexed[record_id]["distributions"]) == expected, record_id
+
+
+def test_continuation_family_local_variants_cover_every_advertising_distribution() -> (
+    None
+):
+    """Family-local prose may differ; the contract the prose carries may not.
+
+    A variant group is one input asked of every distribution that advertises the
+    operation. Each member records its own decoder's wording, and the group pins the
+    exit code and error code they must nevertheless agree on — so scoping a case to
+    one family can never again mean the other two are never asked.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    groups: dict[str, list[str]] = {}
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "family-local-detail":
+            continue
+        groups.setdefault(scope["variant_group"], []).append(record_id)
+
+    assert groups
+    for group, member_ids in groups.items():
+        operations = {
+            coverage["scoped_records"][member_id]["operation"] for member_id in member_ids
+        }
+        assert len(operations) == 1, group
+        operation = operations.pop()
+        advertising = set()
+        for distribution, manifest in manifests.items():
+            assert operation in manifest["operations"], (group, distribution)
+            if manifest["operations"][operation]:
+                advertising.add(distribution)
+
+        covered: set[str] = set()
+        for member_id in member_ids:
+            member = set(indexed[member_id]["distributions"])
+            assert not (member & covered), (group, member_id)
+            covered |= member
+        assert covered == advertising, group
+
+        members = [indexed[member_id] for member_id in member_ids]
+        assert len({json.dumps(m["arguments"]) for m in members}) == 1, group
+        assert len({m["expected"]["exit_code"] for m in members}) == 1, group
+        codes = [_pinned_error_code(member) for member in members]
+        assert len(set(codes)) == 1, (group, codes)
+
+
+# The ten end-to-end scenarios PRD #237 locks for the foundation gate. They are
+# written out here, rather than read from the fixture, because the fixture is the
+# thing under test: a locked scenario that quietly leaves the registry would
+# otherwise take its own gate with it.
+_LOCKED_END_TO_END_SCENARIOS = (
+    "planning-publication-and-aggregation",
+    "read-only-human-refresh",
+    "concurrent-equivalent-and-conflicting-publication",
+    "blocked-to-ready-and-ready-to-blocked",
+    "completion-and-retirement-receipts",
+    "positive-afk-classification-and-dispatch",
+    "explicit-human-and-attention-stops",
+    "terminal-completion",
+    "optional-handoff-context",
+    "durable-transition-then-publication-failure",
+)
+
+_NATIVE_CONTINUATION_OPERATIONS = frozenset(
+    {"publish", "reconcile", "record-dispatch-result"}
+)
+
+
+def test_continuation_end_to_end_coverage_names_every_locked_scenario() -> None:
+    """A locked scenario nobody drives is the gap this gate exists to catch.
+
+    The foundation gate is a claim about ten end-to-end stories, not about a count
+    of fixtures. Naming them makes an uncovered story a failure here rather than an
+    absence a reader has to notice, and requiring each story's workflows to cover
+    the whole family between them keeps a capability-gated story honest: a
+    distribution that cannot render the human projection still has to answer the
+    same question, by failing closed.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    workflows = {
+        workflow["id"]: workflow for workflow in _CONTINUATION_SCENARIOS["workflows"]
+    }
+    scoped = _CONTINUATION_SCENARIOS["capability_coverage"]["scoped_records"]
+    distributions = set(_CONTINUATION_SCENARIOS["capability_coverage"]["distributions"])
+
+    assert tuple(coverage["locked_scenarios"]) == _LOCKED_END_TO_END_SCENARIOS
+
+    covering: set[str] = set()
+    exercised: set[str] = set()
+    for scenario, workflow_ids in coverage["locked_scenarios"].items():
+        assert workflow_ids, scenario
+        covered: set[str] = set()
+        for workflow_id in workflow_ids:
+            assert workflow_id in workflows, (scenario, workflow_id)
+            workflow = workflows[workflow_id]
+            narrowed = set(workflow["distributions"])
+            # A narrowed workflow is only allowed to be narrow for a capability
+            # reason the coverage registry already derives from the manifests.
+            if narrowed != distributions:
+                assert scoped[workflow_id]["reason"] == "capability-absent", workflow_id
+            covered |= narrowed
+            covering.add(workflow_id)
+            exercised.update(
+                command["arguments"][1] for command in workflow["commands"]
+            )
+        assert covered == distributions, (scenario, distributions - covered)
+
+    assert covering == set(workflows), set(workflows) - covering
+    assert _NATIVE_CONTINUATION_OPERATIONS <= exercised
+
+
+def test_continuation_reconciliation_never_writes() -> None:
+    """A refresh that writes is not a refresh, and the transport is the proof.
+
+    The claim is about the calls the command actually made, not about the words in
+    the projection, so it is asserted against an allowlist of read shapes: a call
+    the allowlist has never heard of fails rather than passes unnoticed. It is
+    asserted over every pinned `reconcile`, because read-only is a property of the
+    operation rather than of the handful of fixtures that happen to exercise it --
+    including the end-to-end workflows whose every command is a refresh, where one
+    write anywhere in the run is the whole failure the locked story is about.
+    """
+    coverage = _CONTINUATION_SCENARIOS["end_to_end_coverage"]
+    prefixes = tuple(coverage["read_only_call_prefixes"])
+
+    seen = 0
+    for scenario in _CONTINUATION_SCENARIOS["scenarios"]:
+        if scenario["arguments"][1] != "reconcile":
+            continue
+        for call in scenario["expected"].get("github_calls", []):
+            seen += 1
+            assert call.startswith(prefixes), (scenario["id"], call)
+            assert "--method" not in call, (scenario["id"], call)
+
+    refreshes = 0
+    for workflow in _CONTINUATION_SCENARIOS["workflows"]:
+        operations = {command["arguments"][1] for command in workflow["commands"]}
+        if operations != {"reconcile"}:
+            continue
+        refreshes += 1
+        for call in workflow["expected_github_calls"]:
+            seen += 1
+            assert call.startswith(prefixes), (workflow["id"], call)
+            assert "--method" not in call, (workflow["id"], call)
+    assert refreshes, "no end-to-end refresh is pinned, so this gate proves less"
+    assert seen, "no reconcile call is pinned, so this gate proves nothing"
 
 
 def test_continuation_fixture_pins_automation_vocabularies() -> None:

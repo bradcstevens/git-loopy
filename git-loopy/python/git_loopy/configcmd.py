@@ -462,7 +462,7 @@ def run_routing_use_recommended(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Merge the recommended six-type core into the chosen Config scope."""
+    """Merge the recommended task-type core into the chosen Config scope."""
     try:
         resolved_scope = _resolve_scope(scope, repo_root)
         path = _scope_config_path(resolved_scope, repo_root, env)

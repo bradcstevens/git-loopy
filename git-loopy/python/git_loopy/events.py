@@ -73,6 +73,7 @@ __all__ = [
     "WRAPPER_ITERATION_START",
     "WRAPPER_ITERATION_END",
     "WRAPPER_AFK_READY_COLLECTED",
+    "WRAPPER_POOL_EXCLUDED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
     "WRAPPER_PUSH_RECORDED",
@@ -84,6 +85,25 @@ __all__ = [
     "WRAPPER_CONTINUATION_DISPATCH_STARTED",
     "WRAPPER_CONTINUATION_DISPATCH_ENDED",
     "WRAPPER_CONTINUATION_STOPPED",
+    # Rolling-dispatch (Parallel mode) event-type constants
+    "WRAPPER_POOL_REFRESHED",
+    "WRAPPER_CONTRIBUTION_START",
+    "WRAPPER_CONTRIBUTION_WORK_FINISHED",
+    "WRAPPER_INTEGRATION_PARKED",
+    "WRAPPER_INTEGRATION_ADMITTED",
+    "WRAPPER_INTEGRATION_STARTED",
+    "WRAPPER_INTEGRATION_BRANCH_OBSERVED",
+    "WRAPPER_INTEGRATION_RECOVERY_STARTED",
+    "WRAPPER_INTEGRATION_PUBLISHED",
+    "WRAPPER_CONTRIBUTION_END",
+    "WRAPPER_CONCURRENCY_CHANGED",
+    "WRAPPER_SERIAL_REQUESTED",
+    "WRAPPER_PIPELINE_QUIESCENT",
+    "WRAPPER_ROLLING_REFILL_TURN",
+    # Rolling-dispatch contribution identity
+    "CONTRIBUTION_IDENTITY_KEYS",
+    "CONTRIBUTION_SCOPED_EVENT_TYPES",
+    "CONTRIBUTION_TERMINAL_REASONS",
     # SDK-mapped event-type constants
     "SESSION_CREATED",
     "SESSION_IDLE",
@@ -99,6 +119,7 @@ __all__ = [
     "USAGE_CONTEXT_WINDOW",
     # Functions
     "make_event",
+    "make_contribution_event",
     "to_jsonl_line",
     "scrub",
     "map_sdk_event",
@@ -141,6 +162,12 @@ WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
 WRAPPER_ITERATION_END = "wrapper.iteration.end"
 WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+# One per ``ready-for-agent`` candidate the AFK-ready discriminator dropped
+# (#303). Run-scoped rather than contribution-scoped: it describes what did NOT
+# become work, so there is no contribution to attribute it to. Emitted before
+# the ``wrapper.afk_ready.collected`` it explains, so a replay reads the
+# exclusions and then the Pool they were taken out of.
+WRAPPER_POOL_EXCLUDED = "wrapper.pool.excluded"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in
@@ -156,6 +183,70 @@ WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
 WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
 WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
 WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
+
+# Rolling-dispatch events (Parallel mode). Rolling dispatch reuses Lanes
+# continuously instead of synchronising a Wave, so the Parallel lifecycle is
+# owned by the **Lane contribution** — which outlives the Lane slot it started
+# in — rather than by a barrier round. Serial Iterations keep
+# ``wrapper.iteration.start`` / ``.end`` and their positive ``iter``; a Lane
+# contribution never emits either and always carries ``iter: null`` plus its
+# identity triple (see :func:`make_contribution_event`).
+WRAPPER_POOL_REFRESHED = "wrapper.pool.refreshed"
+WRAPPER_CONTRIBUTION_START = "wrapper.contribution.start"
+WRAPPER_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"
+WRAPPER_INTEGRATION_PARKED = "wrapper.integration.parked"
+WRAPPER_INTEGRATION_ADMITTED = "wrapper.integration.admitted"
+WRAPPER_INTEGRATION_STARTED = "wrapper.integration.started"
+WRAPPER_INTEGRATION_BRANCH_OBSERVED = "wrapper.integration.branch_observed"
+WRAPPER_INTEGRATION_RECOVERY_STARTED = "wrapper.integration.recovery_started"
+WRAPPER_INTEGRATION_PUBLISHED = "wrapper.integration.published"
+WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
+WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
+WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
+WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
+WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
+
+# The identity a Lane contribution carries on every event of its own: the
+# stable contribution, the issue it owns, and the reusable Lane it *started*
+# in. ``lane_id`` never changes for a contribution even after that Lane has
+# been refilled by a later one, so replay never needs a mutable Lane→issue
+# lookup.
+CONTRIBUTION_IDENTITY_KEYS: tuple[str, ...] = ("contribution_id", "issue", "lane_id")
+
+# The rolling lifecycle types that are *only* ever contribution-scoped. Every
+# one of these MUST carry :data:`CONTRIBUTION_IDENTITY_KEYS` and a null
+# ``iter``; :func:`make_event` refuses them otherwise. Scheduler-scoped rolling
+# events (``wrapper.pool.refreshed``, ``wrapper.concurrency.changed``,
+# ``wrapper.serial.requested``, ``wrapper.pipeline.quiescent``,
+# ``wrapper.rolling.refill_turn``) are deliberately absent: they describe the
+# Run, not one contribution. Existing per-Lane events (``assistant.*``,
+# ``tool.*``, ``usage.tokens``, ``wrapper.commit.recorded``,
+# ``wrapper.checkpoint.recorded``, ``wrapper.auto_close``) are also absent
+# because the same literals stay valid for serial Iterations; a Lane emits them
+# through :func:`make_contribution_event`.
+CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        WRAPPER_CONTRIBUTION_START,
+        WRAPPER_CONTRIBUTION_WORK_FINISHED,
+        WRAPPER_CONTRIBUTION_END,
+        WRAPPER_INTEGRATION_PARKED,
+        WRAPPER_INTEGRATION_ADMITTED,
+        WRAPPER_INTEGRATION_STARTED,
+        WRAPPER_INTEGRATION_BRANCH_OBSERVED,
+        WRAPPER_INTEGRATION_RECOVERY_STARTED,
+        WRAPPER_INTEGRATION_PUBLISHED,
+    }
+)
+
+# The behaviourally distinct terminal dispositions a ``wrapper.contribution.end``
+# MUST be able to tell apart. ``published`` is the only Parallel progress; the
+# other three each add exactly one Strike.
+CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
+    "published",
+    "unchanged_branch",
+    "checkpoint_failed",
+    "serial_fallback",
+)
 
 # SDK-mapped events. :func:`map_sdk_event` translates SDK :class:`SessionEvent`
 # instances to payload dicts using these type literals.
@@ -302,7 +393,15 @@ def make_event(
 
     Returns:
         A new dict carrying the envelope keys plus ``payload``.
+
+    Raises:
+        ValueError: If ``type`` is a rolling-dispatch contribution lifecycle
+            type (:data:`CONTRIBUTION_SCOPED_EVENT_TYPES`) that is missing an
+            identity key or carries a serial Iteration number. Prefer
+            :func:`make_contribution_event`, which supplies both.
     """
+    if type in CONTRIBUTION_SCOPED_EVENT_TYPES:
+        _require_contribution_identity(type, iter, payload)
     if ts is None:
         ts = datetime.now(timezone.utc)
     return {
@@ -312,6 +411,84 @@ def make_event(
         "type": type,
         **payload,
     }
+
+
+def _require_contribution_identity(
+    type: str, iter: int | None, payload: dict[str, Any]
+) -> None:
+    """Reject a contribution lifecycle event replay could not attribute.
+
+    A Lane is reusable the moment its contribution is admitted to
+    Integration, so a record that identifies only its Lane becomes
+    unattributable as soon as the next contribution starts there. And a
+    contribution is not an Iteration — Rolling dispatch has no barrier round —
+    so a positive ``iter`` would double-count the Run against serial
+    accounting.
+    """
+    missing = [
+        key
+        for key in CONTRIBUTION_IDENTITY_KEYS
+        if payload.get(key) is None or payload.get(key) == ""
+    ]
+    if missing:
+        raise ValueError(
+            f"{type} is contribution-scoped and requires "
+            f"{', '.join(CONTRIBUTION_IDENTITY_KEYS)}; missing: "
+            f"{', '.join(missing)}"
+        )
+    if iter is not None:
+        raise ValueError(
+            f"{type} is a Lane contribution, not a serial Iteration: "
+            f"iter must be None, got {iter!r}"
+        )
+
+
+def make_contribution_event(
+    type: str,
+    run_id: str,
+    *,
+    contribution_id: str,
+    issue: Any,
+    lane_id: str,
+    ts: datetime | None = None,
+    **payload: Any,
+) -> dict[str, Any]:
+    """Construct an event scoped to one **Lane contribution**.
+
+    This is the only way a Parallel-mode record acquires its identity. It
+    stamps the contribution triple, forces the envelope ``iter`` to ``None``
+    (a contribution is not an Iteration), and otherwise behaves like
+    :func:`make_event`. It accepts any event type, because a Lane's ordinary
+    records — SDK output, ``wrapper.commit.recorded``,
+    ``wrapper.checkpoint.recorded``, ``wrapper.auto_close``, ``usage.tokens``
+    — need the same attribution as the rolling lifecycle types do.
+
+    Args:
+        type: The event-type literal.
+        run_id: 26-character ULID identifying the ``git-loopy`` invocation.
+        contribution_id: Stable, Run-unique identity of the contribution. It
+            outlives the Lane slot: parking, FIFO wait, Integration, recovery,
+            and closure reconciliation all report under it.
+        issue: The issue this contribution owns.
+        lane_id: The reusable Lane the contribution *started* in. It never
+            changes, even after that Lane has been refilled.
+        ts: Wall-clock timestamp; defaults to :func:`datetime.now` in UTC.
+        **payload: Arbitrary payload fields.
+
+    Returns:
+        A new dict carrying the envelope keys, the identity triple, and
+        ``payload``.
+
+    Raises:
+        ValueError: If any identity value is absent or empty.
+    """
+    identity = {
+        "contribution_id": contribution_id,
+        "issue": issue,
+        "lane_id": lane_id,
+    }
+    _require_contribution_identity(type, None, identity)
+    return make_event(type, run_id, None, ts=ts, **identity, **payload)
 
 
 def to_jsonl_line(event: dict[str, Any]) -> str:

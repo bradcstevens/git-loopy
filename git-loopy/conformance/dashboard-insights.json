@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.1",
-  "wrapper_contract_version": "1.4",
+  "wrapper_contract_version": "1.5",
   "event_schema_version": "1.1",
   "semantic_contract": {
     "dashboard_band_order": [

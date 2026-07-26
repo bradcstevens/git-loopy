@@ -123,6 +123,37 @@ def test_dashboard_insight_vocabulary_is_additive_schema_version_one() -> None:
     assert events_module.USAGE_CONTEXT_WINDOW == "usage.context_window"
 
 
+def test_rolling_dispatch_event_constants_are_literal_strings() -> None:
+    """Rolling dispatch replaces the Wave barrier with a Lane-contribution
+    lifecycle (PRD #219 §8). The literals — not the constant names — are the
+    family contract, so every port copies these exact strings."""
+    assert events_module.WRAPPER_POOL_REFRESHED == "wrapper.pool.refreshed"
+    assert events_module.WRAPPER_CONTRIBUTION_START == "wrapper.contribution.start"
+    assert (
+        events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED
+        == "wrapper.contribution.work_finished"
+    )
+    assert events_module.WRAPPER_INTEGRATION_PARKED == "wrapper.integration.parked"
+    assert events_module.WRAPPER_INTEGRATION_ADMITTED == "wrapper.integration.admitted"
+    assert events_module.WRAPPER_INTEGRATION_STARTED == "wrapper.integration.started"
+    assert (
+        events_module.WRAPPER_INTEGRATION_BRANCH_OBSERVED
+        == "wrapper.integration.branch_observed"
+    )
+    assert (
+        events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED
+        == "wrapper.integration.recovery_started"
+    )
+    assert (
+        events_module.WRAPPER_INTEGRATION_PUBLISHED == "wrapper.integration.published"
+    )
+    assert events_module.WRAPPER_CONTRIBUTION_END == "wrapper.contribution.end"
+    assert events_module.WRAPPER_CONCURRENCY_CHANGED == "wrapper.concurrency.changed"
+    assert events_module.WRAPPER_SERIAL_REQUESTED == "wrapper.serial.requested"
+    assert events_module.WRAPPER_PIPELINE_QUIESCENT == "wrapper.pipeline.quiescent"
+    assert events_module.WRAPPER_ROLLING_REFILL_TURN == "wrapper.rolling.refill_turn"
+
+
 def test_sdk_mapped_event_constants_are_literal_strings() -> None:
     """Every SDK-mapped event-type literal listed in the PRD must exist."""
     assert SESSION_CREATED == "session.created"
@@ -135,6 +166,156 @@ def test_sdk_mapped_event_constants_are_literal_strings() -> None:
     assert TOOL_PERMISSION_REQUESTED == "tool.permission_requested"
     assert TOOL_PERMISSION_DENIED == "tool.permission_denied"
     assert USAGE_TOKENS == "usage.tokens"
+
+
+# ---------------------------------------------------------------------------
+# Lane-contribution identity (rolling dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_make_contribution_event_stamps_the_identity_triple() -> None:
+    """A Lane contribution outlives the Lane slot it started in, so its
+    events carry stable identity rather than a mutable Lane→issue lookup."""
+    e = events_module.make_contribution_event(
+        type=events_module.WRAPPER_CONTRIBUTION_START,
+        run_id="01HXR0000000000000000000AA",
+        contribution_id="c-1",
+        issue=42,
+        lane_id="L1",
+        ts=_fixed_ts(),
+    )
+    assert e["contribution_id"] == "c-1"
+    assert e["issue"] == 42
+    assert e["lane_id"] == "L1"
+    assert e["type"] == "wrapper.contribution.start"
+
+
+def test_make_contribution_event_is_never_iteration_scoped() -> None:
+    """Rolling dispatch has no barrier round: a contribution is not an
+    Iteration, so its envelope ``iter`` is always null."""
+    e = events_module.make_contribution_event(
+        type=events_module.WRAPPER_INTEGRATION_ADMITTED,
+        run_id="r",
+        contribution_id="c-1",
+        issue=42,
+        lane_id="L1",
+        ts=_fixed_ts(),
+    )
+    assert e["iter"] is None
+
+
+def test_make_contribution_event_stamps_existing_contribution_scoped_types() -> None:
+    """Existing per-Lane events (SDK output, commits, Consumption) are
+    attributable to the contribution, not just to the Lane."""
+    e = events_module.make_contribution_event(
+        type=WRAPPER_COMMIT_RECORDED,
+        run_id="r",
+        contribution_id="c-2",
+        issue=7,
+        lane_id="L1",
+        ts=_fixed_ts(),
+        sha="abc",
+    )
+    assert e["sha"] == "abc"
+    assert (e["contribution_id"], e["issue"], e["lane_id"]) == ("c-2", 7, "L1")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["contribution_id", "issue", "lane_id"],
+)
+def test_make_contribution_event_rejects_missing_identity(field: str) -> None:
+    """An unattributable contribution event would silently break Summary
+    accounting after its Lane was reused, so it cannot be constructed."""
+    identity: dict[str, object] = {
+        "contribution_id": "c-1",
+        "issue": 42,
+        "lane_id": "L1",
+    }
+    identity[field] = "" if field != "issue" else None
+    with pytest.raises(ValueError, match=field):
+        events_module.make_contribution_event(
+            type=events_module.WRAPPER_CONTRIBUTION_END,
+            run_id="r",
+            ts=_fixed_ts(),
+            **identity,
+        )
+
+
+def test_make_event_refuses_a_contribution_lifecycle_type_without_identity() -> None:
+    """The guard sits on the shared constructor so no caller can emit a
+    rolling lifecycle record that replay cannot attribute."""
+    with pytest.raises(ValueError, match="contribution_id"):
+        make_event(
+            type=events_module.WRAPPER_CONTRIBUTION_START,
+            run_id="r",
+            iter=None,
+            ts=_fixed_ts(),
+        )
+
+
+def test_make_event_refuses_an_iteration_number_on_a_contribution_type() -> None:
+    """Serial Iteration numbering and Parallel contributions are different
+    scopes; conflating them would double-count a Run."""
+    with pytest.raises(ValueError, match="iter"):
+        make_event(
+            type=events_module.WRAPPER_INTEGRATION_PUBLISHED,
+            run_id="r",
+            iter=3,
+            ts=_fixed_ts(),
+            contribution_id="c-1",
+            issue=42,
+            lane_id="L1",
+        )
+
+
+def test_contribution_scoped_lifecycle_types_are_the_pinned_set() -> None:
+    assert events_module.CONTRIBUTION_SCOPED_EVENT_TYPES == frozenset(
+        {
+            "wrapper.contribution.start",
+            "wrapper.contribution.work_finished",
+            "wrapper.contribution.end",
+            "wrapper.integration.parked",
+            "wrapper.integration.admitted",
+            "wrapper.integration.started",
+            "wrapper.integration.branch_observed",
+            "wrapper.integration.recovery_started",
+            "wrapper.integration.published",
+        }
+    )
+    assert events_module.CONTRIBUTION_IDENTITY_KEYS == (
+        "contribution_id",
+        "issue",
+        "lane_id",
+    )
+    assert events_module.CONTRIBUTION_TERMINAL_REASONS == (
+        "published",
+        "unchanged_branch",
+        "checkpoint_failed",
+        "serial_fallback",
+    )
+
+
+def test_contribution_event_serialises_with_null_iter_and_sorted_payload() -> None:
+    line = to_jsonl_line(
+        events_module.make_contribution_event(
+            type=events_module.WRAPPER_CONTRIBUTION_END,
+            run_id="01HXR0000000000000000000AA",
+            contribution_id="c-1",
+            issue=42,
+            lane_id="L1",
+            ts=_fixed_ts(),
+            published=True,
+            reason="published",
+        )
+    )
+    assert line == (
+        '{"ts": "2026-05-16T00:00:00.123Z", '
+        '"run_id": "01HXR0000000000000000000AA", '
+        '"iter": null, "type": "wrapper.contribution.end", '
+        '"contribution_id": "c-1", "issue": 42, "lane_id": "L1", '
+        '"published": true, "reason": "published"}\n'
+    )
 
 
 # ---------------------------------------------------------------------------

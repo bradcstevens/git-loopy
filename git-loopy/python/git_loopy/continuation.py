@@ -24,7 +24,7 @@ CONTINUATION_CONTRACT_VERSION = "1.2"
 SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1", "1.2")
 SAFETY_CASE_CONTRACT_VERSION = "1.2"
 RECORD_FORMAT = 1
-WRAPPER_CONTRACT_VERSION = "1.4"
+WRAPPER_CONTRACT_VERSION = "1.5"
 EVENT_SCHEMA_VERSION = "1.1"
 
 CAPABILITY_MANIFEST: dict[str, Any] = {
@@ -172,10 +172,11 @@ _COVERAGE_UNCERTAINTY_CODES = frozenset(
 )
 # The complete `reconcile` diagnostic vocabulary for the whole Runner family.
 # Registered here and pinned by the shared Conformance fixture so a new code
-# lands as one deliberate contract change rather than a silent addition. It is
-# a superset of what any one distribution emits: `unsupported_reconciliation_
-# semantics` is reported only by a distribution whose `reconcile` covers a
-# narrower slice of the Action vocabulary than this one.
+# lands as one deliberate contract change rather than a silent addition. Every
+# code here is emitted by at least one distribution: a code nobody reports is a
+# vocabulary entry a reader must still handle, and the family-wide gate treats
+# widening the shared contract for nobody's benefit as the same kind of drift as
+# narrowing it.
 RECONCILE_DIAGNOSTIC_CODES = frozenset(
     {
         "action_conflict",
@@ -194,7 +195,6 @@ RECONCILE_DIAGNOSTIC_CODES = frozenset(
         "retired_occurrence_resurrected",
         "retirements_require_revision_protocol",
         "revision_fork",
-        "unsupported_reconciliation_semantics",
         "untrusted_marker_ignored",
         "unverified_completion",
         "unverified_prerequisite",
@@ -2244,6 +2244,19 @@ def _tainted_lineage_heads(
     return tainted - referenced_tainted
 
 
+def _is_marked(comment: ContinuationComment) -> bool:
+    """Is this comment claiming to be a Continuation record or dispatch evidence?
+
+    Authentication is scoped to *marked* comments: an ordinary human comment on a
+    carrier issue is not a record, was never going to become one, and must not
+    cost a permission read or answer the mutation question. Testing for the marker
+    is a discriminator, not semantic parsing, so the contract's
+    authenticate-before-parse ordering is preserved — an unmarked comment is
+    simply never parsed at all.
+    """
+    return _RECORD_MARKER in comment.body or _DISPATCH_MARKER in comment.body
+
+
 def _authorized_comment(
     comment: ContinuationComment,
     *,
@@ -3626,6 +3639,8 @@ def _reconcile_revision_protocol(
 
     for carrier in carriers:
         for comment in carrier.comments:
+            if not _is_marked(comment):
+                continue
             authorized, rejection = _authorized_comment(
                 comment,
                 repository=repository,
@@ -4240,6 +4255,10 @@ def _repair_index(
         has_record = False
         has_trusted_marker = False
         for comment in carrier.comments:
+            # Repair only ever asks whether a carrier holds a trusted *record*,
+            # so only the record marker earns a permission read here.
+            if _RECORD_MARKER not in comment.body:
+                continue
             authorized, _rejection = _authorized_comment(
                 comment,
                 repository=repository,

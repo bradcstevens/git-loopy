@@ -103,7 +103,7 @@ you:
 | Toggle | `Space` on the highlighted row | the row's number |
 | Clear the filter | delete the search text | an empty line |
 | Move | `Up` / `Down` | — the list is numbered |
-| Save | `Enter` | `done`, then confirm |
+| Save | `Enter` | `done`, then `y` at the confirmation |
 | Cancel | `Esc` or `Ctrl+C` | `q` |
 
 The full-screen picker is **optional, never required**. `pip install
@@ -124,6 +124,11 @@ Both renderings obey identical rules, because both read one shared model:
   vanishing from a catalog you are trying to reason about.
 - **Save is refused, not silently corrected**, whenever the selection would not
   validate; the refusal names the offending Skill.
+
+Every refusal is shown where you are about to type: the full-screen picker
+updates its status bar, and the plain picker redraws the reason *below* the
+list, on the line above the prompt — so a long catalog cannot scroll away the
+one line that explains why the last answer changed nothing.
 
 Copilot's own enabled state has no authority over a saved Skill policy — once
 established, the policy changes only through an explicit git-loopy action. When

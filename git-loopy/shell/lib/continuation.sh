@@ -1,14 +1,50 @@
 #!/usr/bin/env bash
 
-GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.1"
-GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1"]'
+_git_loopy_continuation_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The manifest carries this clone's Release version, so a Consumer that sources
+# this module alone — setup verification, which is not an Orchestrator Run —
+# resolves it exactly the way the Orchestrator does. The Orchestrator sets both
+# before it sources this file, so neither assignment takes effect there.
+: "${_GIT_LOOPY_RELEASE_VERSION_PATH:="$_git_loopy_continuation_dir/../../../VERSION"}"
+if ! declare -F git_loopy_read_release_version >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  source "$_git_loopy_continuation_dir/release-version.sh"
+fi
+
+GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.2"
+GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1","1.2"]'
 GIT_LOOPY_CONTINUATION_RECORD_FORMAT=1
-GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION="1.4"
+GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION="1.5"
 GIT_LOOPY_CONTINUATION_EVENT_SCHEMA_VERSION="1.1"
 GIT_LOOPY_CONTINUATION_INDEX_LABEL="git-loopy-continuation"
 GIT_LOOPY_CONTINUATION_RECORD_MARKER="<!-- git-loopy-continuation:1 -->"
 GIT_LOOPY_CONTINUATION_REQUEST=""
 GIT_LOOPY_CONTINUATION_VALIDATION_ERROR=""
+GIT_LOOPY_CONTINUATION_DISPATCH_MARKER="<!-- git-loopy-continuation-dispatch:1 -->"
+
+# One comment shape for every discovery path. `gh issue list --json comments`
+# and the REST comment endpoints disagree about field names, so a reader that
+# picks one shape silently drops every carrier written through the other.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+_GIT_LOOPY_CONTINUATION_COMMENT_JQ='
+def continuation_normalized_comment:
+  (.url // .html_url // "") as $url
+  | {
+    id: (
+      if (.databaseId | type) == "number" then .databaseId
+      elif (.id | type) == "number" then .id
+      else ($url | capture("#issuecomment-(?<id>[0-9]+)$").id | tonumber)
+      end
+    ),
+    url: (.url // .html_url // ""),
+    body: (.body // ""),
+    author: (.user.login // .author.login),
+    author_type: (.user.type // .author.type // "User"),
+    created_at: (.createdAt // .created_at),
+    updated_at: (.updatedAt // .updated_at)
+  };
+'
 
 # Single source of the family's Continuation view order. Prepended to any jq
 # program that projects or orders Actions so the label-indexed and
@@ -63,6 +99,77 @@ def continuation_view_order:
   | map(del(._topological_layer, ._local_order_index));
 '
 
+# The one place a Reconciliation decides what it durably finished and whether
+# the project is Complete. Both discovery paths read it, so neither can invent
+# its own completion rule. Requires `canonical_json` from the order program.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+_GIT_LOOPY_CONTINUATION_GUIDANCE_JQ='
+def coverage_uncertainty_codes:
+  [
+    "invalid_revision", "missing_predecessor", "missing_retirement_receipt",
+    "mutated_revision", "retired_occurrence_resurrected", "revision_fork"
+  ];
+# `continue` and `no-guidance` heads never carry an outcome and contribute
+# nothing here; only an affirmatively terminal disposition does.
+def project_outcome($record):
+  if $record.disposition != "terminal" then empty
+  else
+    {
+      workstream_anchor: $record.workstream.anchor,
+      kind: $record.outcome.kind,
+      destination_satisfied: $record.outcome.destination_satisfied,
+      effective_at: $record.outcome.effective_at,
+      evidence: $record.outcome.evidence,
+      summary: $record.outcome.summary
+    }
+    + (if $record.outcome | has("successor")
+       then {successor: $record.outcome.successor} else {} end)
+  end;
+def workstream_outcomes($entries):
+  [$entries[] | project_outcome(.record)]
+  | sort_by(.workstream_anchor | canonical_json);
+def closed_coverage($diagnostics; $paginated):
+  $paginated
+  and ([$diagnostics[].code | . as $code
+        | select(coverage_uncertainty_codes | index($code))]
+       | length) == 0;
+# Complete is never inferred from a merely empty Action list: it requires an
+# explicit destination-satisfied outcome for every currently observed
+# Workstream, gathered over a closed-coverage read. Label-indexed discovery is
+# not a complete paginated all-state read, so it passes $paginated false and can
+# never claim project-wide completion.
+def guidance_status($entries; $actions; $outcomes; $closed_coverage):
+  if ($actions | length) > 0 then "guidance"
+  elif $closed_coverage
+    and ($entries | length) > 0
+    and all($entries[]; .record.disposition == "terminal")
+    and all($outcomes[]; .kind == "complete" and .destination_satisfied)
+  then "complete"
+  else "waiting"
+  end;
+'
+
+# Project the durable Workstream outcomes and the Waiting/guidance/Complete
+# status one Reconciliation observed. Emits `{outcomes, status}`.
+_git_loopy_continuation_guidance_projection() {
+  local entries="$1" actions="$2" diagnostics="$3" paginated="$4"
+  jq -cn \
+    --argjson entries "$entries" \
+    --argjson actions "$actions" \
+    --argjson diagnostics "$diagnostics" \
+    --argjson paginated "$paginated" \
+    "$_GIT_LOOPY_CONTINUATION_ORDER_JQ$_GIT_LOOPY_CONTINUATION_GUIDANCE_JQ"'
+    workstream_outcomes($entries) as $outcomes
+    | {
+        outcomes: $outcomes,
+        status: guidance_status(
+          $entries; $actions; $outcomes;
+          closed_coverage($diagnostics; $paginated)
+        )
+      }
+  '
+}
+
 git_loopy_continuation_usage() {
   cat <<'EOF'
 Usage: git-loopy.sh continuation <operation> [options]
@@ -81,9 +188,135 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":false,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":false},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
+}
+
+# --- Setup verification (#257) ----------------------------------------------
+#
+# Verification is a *Consumer* of the capability manifest, not a Continuation
+# operation: contract §1 scopes the contract to Continuation records and their
+# derivation, and §4 says the manifest "describes capability only". So the profile
+# and its evaluator live beside the manifest they judge, and the native command
+# namespace is unchanged.
+#
+# The distribution running this code is the distribution being verified. Nothing
+# resolves an entrypoint and nothing names a family member, which is how setup
+# records the operator's selection without committing a host-specific executable
+# path or a family-member choice.
+
+# The one named requirement set this distribution is judged against. `report` and
+# `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
+# profile nobody implements would let a pass be read as readiness for a mode no
+# distribution supports.
+_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
+  "requirements": [
+    "contract-version",
+    "record-format",
+    "tracker-adapter",
+    "native-operations",
+    "mode-default-off"
+  ],
+  "continuation_contract_version": "1.2",
+  "record_format": 1,
+  "tracker_adapter": "github",
+  "tracker_operations": [
+    "publish", "reconcile", "record-dispatch-result", "repair-index"
+  ],
+  "native_operations": [
+    "capabilities", "publish", "reconcile", "record-dispatch-result",
+    "repair-index"
+  ],
+  "mode_default": "off"
+}'
+
+git_loopy_continuation_profile() {
+  local name="${1:-foundation}"
+  if [[ "$name" != "foundation" ]]; then
+    printf 'git-loopy: unknown Continuation capability profile %s\n' "$name" >&2
+    return 1
+  fi
+  jq -c . <<<"$_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE"
+}
+
+# Judge one advertised manifest (stdin) against one named profile. The
+# unsatisfied requirements come out in the profile's own declaration order, and the
+# unsupported optional capabilities are sorted, so the answer never depends on the
+# order a family member happens to declare its manifest in.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+git_loopy_evaluate_continuation_capabilities() {
+  local profile
+  profile="$(git_loopy_continuation_profile "${1:-foundation}")" || return 1
+  jq -c --argjson profile "$profile" --arg name "${1:-foundation}" '
+    . as $manifest
+    | def unsatisfied($id):
+        if $id == "contract-version" then
+          (($manifest.continuation_contract_versions // [])
+            | index($profile.continuation_contract_version)) == null
+        elif $id == "record-format" then
+          (($manifest.record_formats // [])
+            | index($profile.record_format)) == null
+        elif $id == "tracker-adapter" then
+          (
+            ((($manifest.tracker_adapters // {})[$profile.tracker_adapter] // {})
+              .operations // [])
+          ) as $advertised
+          | ($profile.tracker_operations - $advertised) != []
+        elif $id == "native-operations" then
+          ($manifest.operations // {}) as $advertised
+          | [$profile.native_operations[] | select($advertised[.] != true)] != []
+        elif $id == "mode-default-off" then
+          ($manifest.continuation_modes // {}) as $modes
+          | ($modes.default != $profile.mode_default)
+            or ($modes[$profile.mode_default] != true)
+        else true
+        end;
+      [$profile.requirements[] | select(unsatisfied(.))] as $unsatisfied
+    | {
+        profile: $name,
+        release_version: ($manifest.release_version // ""),
+        satisfied: ($unsatisfied == []),
+        unsatisfied_requirements: $unsatisfied,
+        unsupported_optional_capabilities: (
+          [($manifest.optional_capabilities // {})
+            | to_entries[] | select(.value != true) | .key]
+          | sort
+        )
+      }
+  '
+}
+
+# Verify the running distribution and render one operator-facing line. Returns
+# non-zero when the profile is unsatisfied, so a setup surface can fail closed
+# before it writes or installs anything.
+git_loopy_verify_this_distribution() {
+  local name="${1:-foundation}"
+  local verdict
+  verdict="$(
+    git_loopy_continuation_capabilities |
+      jq -c '.capabilities' |
+      git_loopy_evaluate_continuation_capabilities "$name"
+  )" || return 1
+
+  if [[ "$(jq -r '.satisfied' <<<"$verdict")" != "true" ]]; then
+    printf 'git-loopy: this distribution does not satisfy the %s Continuation capability profile (%s).\n' \
+      "$name" "$(jq -r '.unsatisfied_requirements | join(", ")' <<<"$verdict")" >&2
+    return 1
+  fi
+
+  local unsupported line
+  unsupported="$(jq -r '.unsupported_optional_capabilities | join(", ")' <<<"$verdict")"
+  line="$(
+    printf "Verified this distribution's Continuation capabilities (%s profile, contract %s, release %s)" \
+      "$name" \
+      "$GIT_LOOPY_CONTINUATION_CONTRACT_VERSION" \
+      "$(jq -r '.release_version | if . == "" then "unknown" else . end' <<<"$verdict")"
+  )"
+  if [[ -n "$unsupported" ]]; then
+    line+="; unsupported optional capabilities: $unsupported"
+  fi
+  printf '%s.\n' "$line"
 }
 
 _git_loopy_continuation_error() {
@@ -106,6 +339,34 @@ _git_loopy_continuation_github_error() {
     "$operation" \
     "github_error" \
     "GitHub operation failed while $context"
+}
+
+# One bounded, readable tail of a failed `gh` call, matching the oracle's.
+_git_loopy_continuation_stderr_tail() {
+  local tail="$1"
+  tail="${tail#"${tail%%[![:space:]]*}"}"
+  tail="${tail%"${tail##*[![:space:]]}"}"
+  if [[ -z "$tail" ]]; then
+    printf '(no stderr)'
+  elif ((${#tail} > 400)); then
+    printf '...%s' "${tail: -400}"
+  else
+    printf '%s' "$tail"
+  fi
+}
+
+# Every durable Transition has already happened by the time publication starts,
+# so a GitHub failure from here on leaves the project describing a transition
+# whose revision was never published. That is a repair, not a retry, and it is
+# not conditional on the revision protocol: an atomic-root publication strands
+# exactly the same evidence.
+_git_loopy_continuation_publication_repair() {
+  local detail
+  detail="$(_git_loopy_continuation_stderr_tail "$1")"
+  _git_loopy_continuation_error \
+    "publish" \
+    "repair_required" \
+    "publication failed after durable transition: $detail; repair required"
 }
 
 _git_loopy_continuation_read_request() {
@@ -314,14 +575,18 @@ _git_loopy_continuation_validate_portable_json() {
   validation="$(
     jq -cn --argjson request "$request" '
       def validate($name; $depth):
-        if $depth > 16 then
-          error($name + " exceeds maximum nesting depth 16")
-        elif type == "object" then
-          to_entries[]
-          | (.key | validate($name; $depth + 1)),
-            (.value | validate($name; $depth + 1))
+        if type == "object" then
+          if $depth + 1 > 16 then
+            error($name + " exceeds maximum nesting depth 16")
+          else
+            to_entries[]
+            | (.key | validate($name; $depth + 1)),
+              (.value | validate($name; $depth + 1))
+          end
         elif type == "array" then
-          if length > 256 then
+          if $depth + 1 > 16 then
+            error($name + " exceeds maximum nesting depth 16")
+          elif length > 256 then
             error($name + " array exceeds maximum length 256")
           else
             .[] | validate($name; $depth + 1)
@@ -344,7 +609,7 @@ _git_loopy_continuation_validate_portable_json() {
           empty
         end;
       try (
-        $request | validate("request"; 1),
+        $request | validate("request"; 0),
         {ok: true}
       ) catch {ok: false, message: .}
     ' | tail -n 1
@@ -416,6 +681,7 @@ _git_loopy_continuation_semantic_fingerprint() {
         requirements: (.requirements // []),
         triggers: (.triggers // [])
       }
+      + (if has("safety_case") then {safety_case} else {} end)
       | without_advisory
     ' <<<"$action"
   )"
@@ -905,7 +1171,86 @@ _git_loopy_continuation_validate_completion_request() {
                  else fail($item_name + ".kind is unsupported") end)
             and string($value[$index][$second]; $item_name + "." + $second)
         );
-      def action($value; $repository; $owner):
+      def triggers($value; $name; $repository):
+        array($value; $name; false)
+        and all(
+          range(0; $value | length);
+          . as $index
+          | ($name + "[" + ($index | tostring) + "]") as $trigger_name
+          | ($value[$index]) as $trigger
+          | object($trigger; $trigger_name)
+            and fields(
+              $trigger; $trigger_name; ["kind", "condition"];
+              ["advisory_extensions"]
+            )
+            and (if [
+              "consent-required", "credential-required", "human-decision",
+              "physical-interaction", "privilege-expansion",
+              "scope-ambiguity", "subjective-validation"
+            ] | index($trigger.kind)
+            then true
+            else fail($trigger_name + ".kind is unsupported") end)
+            and condition(
+              $trigger.condition; $trigger_name + ".condition";
+              $repository; true
+            )
+        );
+      # The positive versioned AFK safety case is the Transition owner`s
+      # argument that every permitted completion path of *this* occurrence is
+      # unattended. It restates the Instruction, Target and completion
+      # condition it justifies, so a later change to any of them invalidates
+      # the argument instead of silently inheriting it.
+      def safety_case($value; $action; $repository):
+        "completion.actions item.safety_case" as $name
+        | object($value; $name)
+          and fields(
+            $value; $name;
+            [
+              "version", "instruction", "target", "completion_condition",
+              "effects", "assumptions", "requirements", "retry", "triggers"
+            ];
+            ["advisory_extensions"]
+          )
+          and string($value.version; $name + ".version")
+          and all(
+            ["instruction", "target", "completion_condition"][];
+            . as $field
+            | if $value[$field] == $action[$field] then true
+              else fail(
+                $name + "." + $field + " must match the Action it justifies"
+              ) end
+          )
+          and typed_semantics(
+            $value.effects; $name + ".effects";
+            [
+              "external-write", "git-read", "git-write", "network-read",
+              "repository-read", "repository-write", "tracker-read",
+              "tracker-write"
+            ]; "scope"
+          )
+          and typed_semantics(
+            $value.assumptions; $name + ".assumptions";
+            [
+              "bounded-effect-scope", "durable-inputs-fixed",
+              "no-human-decision", "noninteractive-environment",
+              "objective-completion", "stable-external-state"
+            ]; "statement"
+          )
+          and typed_semantics(
+            $value.requirements; $name + ".requirements";
+            ["access", "capability", "command", "evaluator", "policy", "skill"];
+            "name"
+          )
+          and object($value.retry; $name + ".retry")
+          and fields(
+            $value.retry; $name + ".retry"; ["kind"]; ["advisory_extensions"]
+          )
+          and (if ["at-most-once", "idempotent", "resumable"]
+                    | index($value.retry.kind)
+               then true
+               else fail($name + ".retry.kind is unsupported") end)
+          and triggers($value.triggers; $name + ".triggers"; $repository);
+      def action($value; $repository; $owner; $contract_version):
         "completion.actions item" as $name
         | {
           "Address review findings": ["AFK-safe", "HITL-required"],
@@ -935,7 +1280,7 @@ _git_loopy_continuation_validate_completion_request() {
             ];
             [
               "context_references", "effects", "requirements", "triggers",
-              "advisory_extensions"
+              "safety_case", "advisory_extensions"
             ]
           )
           and all(
@@ -1011,102 +1356,26 @@ _git_loopy_continuation_validate_completion_request() {
             "name"
           )
           and array(($value.triggers // []); $name + ".triggers"; false)
-          and all(
-            range(0; ($value.triggers // []) | length);
-            . as $index
-            | ($name + ".triggers[" + ($index | tostring) + "]") as $trigger_name
-            | ($value.triggers[$index]) as $trigger
-            | object($trigger; $trigger_name)
-              and fields(
-                $trigger; $trigger_name; ["kind", "condition"];
-                ["advisory_extensions"]
-              )
-              and (if [
-                "consent-required", "credential-required", "human-decision",
-                "physical-interaction", "privilege-expansion",
-                "scope-ambiguity", "subjective-validation"
-              ] | index($trigger.kind)
-              then true
-              else fail($trigger_name + ".kind is unsupported") end)
-              and condition(
-                $trigger.condition; $trigger_name + ".condition";
-                $repository; true
-              )
-          );
-      def retirement($value; $name; $repository):
-        object($value; $name)
-        and fields(
-          $value; $name;
-          ["predecessor_revision_id", "action_key", "reason", "evidence"];
-          ["replacement", "advisory_extensions"]
-        )
-        and string(
-          $value.predecessor_revision_id;
-          $name + ".predecessor_revision_id"
-        )
-        and (if ($value.predecessor_revision_id | test("^[0-9a-f]{64}$")) then true
-               else fail(
-                 $name
-                 + ".predecessor_revision_id must be a sha256 revision identity"
-               ) end)
-        and string($value.action_key; $name + ".action_key")
-        and string($value.reason; $name + ".reason")
-        and (if [
-          "completed", "lost-basis", "workstream-outcome", "supersession"
-        ] | index($value.reason)
-               then true
-               else fail($name + ".reason is unsupported") end)
-        and array($value.evidence; $name + ".evidence"; true)
-        and all(
-          $value.evidence[];
-          durable(.; $name + ".evidence item"; $repository; [])
-        )
-        and (
-          if ($value | has("replacement")) then
-              if $value.reason != "supersession" then
-                fail($name + ".replacement is valid only when reason is supersession")
-              else
-                object($value.replacement; $name + ".replacement")
-                and fields(
-                  $value.replacement; $name + ".replacement";
-                  ["workstream_anchor", "kind", "target", "occurrence"];
-                  ["advisory_extensions"]
-                )
-                and durable(
-                  $value.replacement.workstream_anchor;
-                  $name + ".replacement.workstream_anchor";
-                  $repository; []
-                )
-                and string(
-                  $value.replacement.kind;
-                  $name + ".replacement.kind"
-                )
-                and (if [
-                  "Address review findings", "Authorize operation",
-                  "Chart workstream", "Close parent", "Decompose spec",
-                  "Implement ticket", "Perform manual validation",
-                  "Prototype evidence", "Provide information", "Publish head",
-                  "Publish spec", "Research fact", "Resolve conflict",
-                  "Resolve decision", "Review and merge PR", "Review head",
-                  "Triage item"
-                ] | index($value.replacement.kind)
-                     then true
-                     else fail($name + ".replacement.kind is unsupported") end)
-                and durable(
-                  $value.replacement.target;
-                  $name + ".replacement.target";
-                  $repository; []
-                )
-                and string(
-                  $value.replacement.occurrence;
-                  $name + ".replacement.occurrence"
-                )
-              end
-          elif $value.reason == "supersession" then
-              fail($name + " with reason supersession must declare a replacement")
-          else true
-          end
-        );
+          and triggers(($value.triggers // []); $name + ".triggers"; $repository)
+          and (if ($value | has("safety_case")) then
+                 (if $contract_version != "1.2" then
+                    fail(
+                      "a safety case requires Continuation contract version 1.2"
+                    )
+                  elif $value.interaction.classification != "AFK-safe" then
+                    fail("only AFK-safe Actions may carry a safety case")
+                  else
+                    all(
+                      ["effects", "requirements", "triggers"][];
+                      . as $field
+                      | if ($value | has($field)) then fail(
+                          $name + ".safety_case owns " + $field
+                          + "; declare it once"
+                        ) else true end
+                    )
+                    and safety_case($value.safety_case; $value; $repository)
+                  end)
+               else true end);
       def validate_request($request):
         object($request; "request")
         and fields(
@@ -1287,7 +1556,9 @@ _git_loopy_continuation_validate_completion_request() {
                and all(
                  $request.completion.actions[];
                  action(
-                   .; $request.repository; $request.completion.transition.owner
+                   .; $request.repository;
+                   $request.completion.transition.owner;
+                   $request.completion.continuation_contract_version
                  )
                )
                and (
@@ -1310,7 +1581,8 @@ _git_loopy_continuation_validate_completion_request() {
                      [
                        $action.prerequisites[]?,
                        $action.completion_condition,
-                       $action.triggers[]?.condition
+                       $action.triggers[]?.condition,
+                       $action.safety_case.triggers[]?.condition
                      ]
                      | map(select(.kind == "action-completed").action_key)
                    )[] as $reference
@@ -1441,36 +1713,7 @@ _git_loopy_continuation_validate_completion_request() {
                    $request.repository; []
                  )
                )
-             end)
-        and (
-          if ($request.completion | has("retirements")) then
-            array($request.completion.retirements; "completion.retirements"; false)
-            and all(
-             range(0; ($request.completion.retirements | length));
-             . as $index
-             | retirement(
-                 $request.completion.retirements[$index];
-                 "completion.retirements[" + ($index | tostring) + "]";
-                 $request.repository
-               )
-            )
-            and (
-             [
-               $request.completion.retirements[]
-               | [
-                   .predecessor_revision_id,
-                   (.action_key | tostring)
-                 ]
-             ] as $pairs
-             | if ($pairs | unique | length) == ($pairs | length) then true
-               else fail(
-                 "completion.retirements contains duplicate predecessor_revision_id/action_key pair"
-               )
-               end
-            )
-          else true
-          end
-        );
+             end);
       try (
         validate_request($request),
         {ok: true}
@@ -1767,22 +2010,24 @@ _git_loopy_continuation_publish() {
       return 1
     fi
   done < <(jq -r '.transition.evidence[].comment_id' <<<"$completion")
-  if ! gh label create "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
-    --repo "$repository" \
-    --color 5319E7 \
-    --description "Repairable discovery index for git-loopy Continuation records" \
-    --force >/dev/null; then
-    _git_loopy_continuation_github_error \
-      "publish" \
-      "establishing the discovery label"
+  local label_failure
+  if ! label_failure="$(
+    gh label create "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" \
+      --repo "$repository" \
+      --color 5319E7 \
+      --description "Repairable discovery index for git-loopy Continuation records" \
+      --force 2>&1 >/dev/null
+  )"; then
+    _git_loopy_continuation_publication_repair "$label_failure"
     return 1
   fi
-  if ! gh issue edit "$carrier_number" \
-    --repo "$repository" \
-    --add-label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" >/dev/null; then
-    _git_loopy_continuation_github_error \
-      "publish" \
-      "indexing the carrier"
+  local index_failure
+  if ! index_failure="$(
+    gh issue edit "$carrier_number" \
+      --repo "$repository" \
+      --add-label "$GIT_LOOPY_CONTINUATION_INDEX_LABEL" 2>&1 >/dev/null
+  )"; then
+    _git_loopy_continuation_publication_repair "$index_failure"
     return 1
   fi
 
@@ -1794,68 +2039,40 @@ _git_loopy_continuation_publish() {
         "repos/$repository/issues/$carrier_number/comments" \
         --input - 2>&1
   )"; then
-    if ((protocol)); then
-      _git_loopy_continuation_error \
-        "publish" \
-        "repair_required" \
-        "publication failed after durable transition: $appended; repair required"
-    else
-      _git_loopy_continuation_github_error \
-        "publish" \
-        "appending the Producer revision"
-    fi
+    _git_loopy_continuation_publication_repair "$appended"
     return 1
   fi
   if ! jq -e 'type == "object"' <<<"$appended" >/dev/null 2>&1; then
-    _git_loopy_continuation_github_error \
-      "publish" \
-      "decoding the appended Producer revision"
+    _git_loopy_continuation_publication_repair \
+      "GitHub returned an undecodable appended Producer revision"
     return 1
   fi
-  if [[ "$(jq -r '.user.login' <<<"$appended")" != "$producer" ]]; then
-    if ((protocol)); then
-      _git_loopy_continuation_error \
-        "publish" \
-        "repair_required" \
-        "published Producer revision author does not match completion producer; repair required"
-    else
-      _git_loopy_continuation_error \
-        "publish" \
-        "invalid_request" \
-        "authenticated comment author does not match completion producer"
-    fi
-    return 1
-  fi
-
   local comment_id committed
   comment_id="$(jq -r '.id' <<<"$appended")"
   if ! committed="$(
-    gh api "repos/$repository/issues/comments/$comment_id"
+    gh api "repos/$repository/issues/comments/$comment_id" 2>&1
   )"; then
-    _git_loopy_continuation_github_error \
+    _git_loopy_continuation_publication_repair "$committed"
+    return 1
+  fi
+  if [[ "$(jq -r '.user.login' <<<"$appended")" != "$producer" ]]; then
+    _git_loopy_continuation_error \
       "publish" \
-      "rereading the Producer revision"
+      "repair_required" \
+      "published Producer revision author does not match completion producer; repair required"
     return 1
   fi
   if ! jq -e 'type == "object"' <<<"$committed" >/dev/null 2>&1; then
-    _git_loopy_continuation_github_error \
-      "publish" \
-      "decoding the committed Producer revision"
+    _git_loopy_continuation_publication_repair \
+      "GitHub returned an undecodable committed Producer revision"
     return 1
   fi
   if [[ "$(jq -r '.body' <<<"$committed")" != "$body" ]] ||
     [[ "$(jq -r '.user.login' <<<"$committed")" != "$producer" ]]; then
-    if ((protocol)); then
-      _git_loopy_continuation_error \
-        "publish" \
-        "repair_required" \
-        "Producer revision reread did not match the append; repair required"
-    else
-      _git_loopy_continuation_error \
-        "publish" \
-        "invalid_request" \
-        "Producer revision reread did not match the append"
-    fi
+    _git_loopy_continuation_error \
+      "publish" \
+      "repair_required" \
+      "Producer revision reread did not match the append; repair required"
     return 1
   fi
 
@@ -3297,61 +3514,6 @@ _git_loopy_continuation_apply_retirement_receipts() {
     '{retirements:$retirements, diagnostics:$diagnostics}'
 }
 
-_git_loopy_continuation_workstream_outcomes() {
-  local guidance_entries="$1"
-  jq -c '
-    [
-      .[]
-      | .record as $record
-      | select($record.disposition == "terminal")
-      | ($record.outcome) as $outcome
-      | {
-          workstream_anchor: $record.workstream.anchor,
-          kind: $outcome.kind,
-          destination_satisfied: $outcome.destination_satisfied,
-          effective_at: $outcome.effective_at,
-          evidence: $outcome.evidence,
-          summary: $outcome.summary
-        }
-      | if ($outcome | has("successor"))
-        then .successor = $outcome.successor
-        else .
-        end
-    ]
-    | sort_by(.workstream_anchor | tojson)
-  ' <<<"$guidance_entries"
-}
-
-_git_loopy_continuation_guidance_status() {
-  local guidance_entries="$1"
-  local actions="$2"
-  local outcomes="$3"
-  local closed_coverage="$4"
-  jq -nr \
-    --argjson guidance_entries "$guidance_entries" \
-    --argjson actions "$actions" \
-    --argjson outcomes "$outcomes" \
-    --argjson closed_coverage "$closed_coverage" '
-      if ($actions | length) > 0 then
-        "guidance"
-      else
-        ($guidance_entries | length > 0 and all(
-          $guidance_entries[];
-          .record.disposition == "terminal"
-        )) as $every_lineage_terminal
-        | if $closed_coverage
-            and $every_lineage_terminal
-            and all(
-              $outcomes[];
-              .kind == "complete" and .destination_satisfied
-            )
-          then "complete"
-          else "waiting"
-          end
-      end
-    '
-}
-
 _git_loopy_continuation_render_locator() {
   local reference="$1"
   local kind repository
@@ -3565,17 +3727,7 @@ _git_loopy_continuation_load_all_carriers() {
             jq -cn \
               --argjson current "$comments" \
               --argjson page "$comment_response" \
-              '$current + [
-                $page[] | {
-                  id: (.databaseId // .id),
-                  url: (.url // .html_url),
-                  body: .body,
-                  author: (.user.login // .author.login),
-                  author_type: (.user.type // .author.type // "User"),
-                  created_at: (.createdAt // .created_at),
-                  updated_at: (.updatedAt // .updated_at)
-                }
-              ]'
+              "$_GIT_LOOPY_CONTINUATION_COMMENT_JQ"'$current + [$page[] | continuation_normalized_comment]'
           )"
           (($(jq 'length' <<<"$comment_response") == 100)) || break
           comment_page=$((comment_page + 1))
@@ -3607,6 +3759,1131 @@ _git_loopy_continuation_load_all_carriers() {
     (($(jq 'length' <<<"$response") == 100)) || break
     page=$((page + 1))
   done
+}
+
+# One Action derivation for the whole distribution. Both discovery paths --
+# label-indexed and revision-protocol -- evaluate every guidance-selected
+# fragment against one shared stable fact set, group equivalent live claims
+# under one Action identity, and quarantine incompatible semantics as a
+# Continuation conflict. The atomic-root subset narrows *discovery*; it never
+# narrows derivation, so a second, weaker description of what an Action is can
+# never authorize work this one refuses.
+_git_loopy_continuation_derive_actions() {
+  local guidance_entries="$1"
+  local repository="$2"
+  local candidate actions diagnostics action_conflicts
+  diagnostics="[]"
+  GIT_LOOPY_CONTINUATION_FACT_STATUS=()
+  GIT_LOOPY_CONTINUATION_FACT_VALUE=()
+  GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID=""
+  GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS="[]"
+  actions="[]"
+  while IFS= read -r candidate; do
+    local action action_key revision_id completion_status
+    local prerequisite prerequisite_status prerequisite_unverified conflicted
+    local unsatisfied identity projection
+    action="$(jq -c '.action' <<<"$candidate")"
+    action_key="$(jq -r '.key' <<<"$action")"
+    revision_id="$(jq -r '.record.revision_id' <<<"$candidate")"
+    if [[ "$revision_id" != "$GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID" ]]; then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --argjson local_diagnostics \
+            "$GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS" \
+          '$current + $local_diagnostics'
+      )"
+      GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID="$revision_id"
+      GIT_LOOPY_CONTINUATION_LOCAL_ACTIONS="$(
+        jq -c '.record.actions' <<<"$candidate"
+      )"
+      GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS="[]"
+      GIT_LOOPY_CONTINUATION_COMPLETION_STATUS=()
+    fi
+    _git_loopy_continuation_resolve_completion \
+      "$action_key" "[]" "$repository"
+    completion_status="$GIT_LOOPY_CONTINUATION_RESOLVED_STATUS"
+    if [[ "$completion_status" == "satisfied" ||
+      "$completion_status" == "conflict" ]]; then
+      continue
+    fi
+    if [[ "$completion_status" == "unverified" ]]; then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --arg revision_id "$revision_id" \
+          --arg action_key "$action_key" \
+          '$current + [{
+            code:"unverified_completion",
+            revision_id:$revision_id,
+            action_key:$action_key
+          }]'
+      )"
+      continue
+    fi
+
+    unsatisfied="[]"
+    prerequisite_unverified=0
+    conflicted=0
+    while IFS= read -r prerequisite; do
+      _git_loopy_continuation_evaluate_condition \
+        "$prerequisite" "$repository" || {
+        prerequisite_unverified=1
+        continue
+      }
+      prerequisite_status="$GIT_LOOPY_CONTINUATION_CONDITION_STATUS"
+      if [[ "$prerequisite_status" == "local" ]]; then
+        _git_loopy_continuation_resolve_completion \
+          "$GIT_LOOPY_CONTINUATION_CONDITION_LOCAL_KEY" \
+          "$(jq -cn --arg key "$action_key" '[$key]')" \
+          "$repository"
+        prerequisite_status="$GIT_LOOPY_CONTINUATION_RESOLVED_STATUS"
+      fi
+      if [[ "$prerequisite_status" == "conflict" ]]; then
+        conflicted=1
+        break
+      elif [[ "$prerequisite_status" == "unverified" ]]; then
+        prerequisite_unverified=1
+      elif [[ "$prerequisite_status" == "unsatisfied" ]]; then
+        unsatisfied="$(
+          jq -cn \
+            --argjson current "$unsatisfied" \
+            --argjson prerequisite "$prerequisite" \
+            '$current + [$prerequisite]'
+        )"
+      fi
+    done < <(jq -c '.prerequisites[]' <<<"$action")
+    if ((conflicted)); then
+      continue
+    fi
+    if ((prerequisite_unverified)); then
+      diagnostics="$(
+        jq -cn \
+          --argjson current "$diagnostics" \
+          --arg revision_id "$revision_id" \
+          --arg action_key "$action_key" \
+          '$current + [{
+            code:"unverified_prerequisite",
+            revision_id:$revision_id,
+            action_key:$action_key
+          }]'
+      )"
+      continue
+    fi
+
+    identity="$(
+      _git_loopy_continuation_action_identity \
+        "$(jq -c '.record' <<<"$candidate")" \
+        "$action"
+    )"
+    projection="$(
+      jq -cn \
+        --arg identity "$identity" \
+        --argjson candidate "$candidate" \
+        --argjson unsatisfied "$unsatisfied" \
+        "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
+        ($candidate.record) as $record
+        | ($candidate.action) as $action
+        | {
+            identity:$identity,
+            semantic_fingerprint:
+              $record.semantic_fingerprints[$action.key],
+            workstream_anchor:$record.workstream.anchor,
+            summary:$action.summary,
+            kind:$action.kind,
+            readiness:(
+              if ($unsatisfied | length) > 0 then "Blocked" else "Ready" end
+            ),
+            instruction:$action.instruction,
+            target:$action.target,
+            basis:$action.basis,
+            producer:(
+              $record.producer + {
+                carrier:$record.carrier,
+                revision_id:$record.revision_id,
+                comment_id:$candidate.comment.id,
+                comment_url:$candidate.comment.url
+              }
+            ),
+            prerequisites:$action.prerequisites,
+            interaction:$action.interaction,
+            completion_condition:$action.completion_condition
+          }
+        | ordering_fields($record; $action)
+        | if ($unsatisfied | length) > 0
+          then .unsatisfied_prerequisites = $unsatisfied
+          else .
+          end
+        | if ($action | has("safety_case"))
+          then .safety_case = $action.safety_case
+          else .
+          end'
+    )"
+    actions="$(
+      jq -cn \
+        --argjson current "$actions" \
+        --argjson projection "$projection" \
+        '$current + [$projection]'
+    )"
+  done < <(jq -c '.[] as $entry | $entry.record.actions[]? | {
+    record:$entry.record,
+    comment:$entry.comment,
+    action:.
+  }' <<<"$guidance_entries")
+  diagnostics="$(
+    jq -cn \
+      --argjson current "$diagnostics" \
+      --argjson local_diagnostics "$GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS" \
+      '$current + $local_diagnostics'
+  )"
+  local action_conflicts
+  action_conflicts="$(
+    jq -c '
+      sort_by(.identity)
+      | group_by(.identity)
+      | map(
+          select([.[].semantic_fingerprint] | unique | length > 1)
+          | {
+              code:"action_conflict",
+              identity:.[0].identity,
+              revision_ids:([.[].producer.revision_id] | sort),
+              semantic_fingerprints:([.[].semantic_fingerprint] | unique | sort)
+            }
+        )
+    ' <<<"$actions"
+  )"
+  diagnostics="$(
+    jq -cn \
+      --argjson current "$diagnostics" \
+      --argjson conflicts "$action_conflicts" \
+      '$current + $conflicts'
+  )"
+  actions="$(
+    jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
+      sort_by(.identity)
+      | group_by(.identity)
+      | map(
+          select([.[].semantic_fingerprint] | unique | length == 1)
+          | . as $claims
+          | min_by(.producer.revision_id, .producer.comment_id)
+          | .basis = (
+              [$claims[].basis[]]
+              | sort_by(tojson)
+              | unique_by(tojson)
+            )
+          | if ($claims | length) > 1 then
+              .provenance = (
+                [
+                  $claims[].producer
+                  | {
+                      login,
+                      role,
+                      carrier,
+                      revision_id,
+                      comment_id,
+                      comment_url
+                    }
+                ]
+                | sort_by(.carrier.number, .revision_id, .comment_id)
+                | unique_by([.carrier.number, .revision_id, .comment_id])
+              )
+            else .
+            end
+        )
+      | continuation_view_order
+    ' <<<"$actions"
+  )"
+  GIT_LOOPY_CONTINUATION_ACTIONS="$actions"
+  GIT_LOOPY_CONTINUATION_ACTION_DIAGNOSTICS="$diagnostics"
+}
+
+# ---------------------------------------------------------------------------
+# Fixed-frontier Automation authorization
+#
+# Reconciliation derives what is true. This section decides, for one Performer
+# and one frozen Run boundary, which of those Actions that Performer could be
+# authorized to perform unattended -- and, when none can be, says exactly why.
+# It never performs an Action, and it never widens anything: every rule here
+# can only remove an Action from consideration.
+# ---------------------------------------------------------------------------
+
+# Shared jq validation vocabulary. The Automation block and the Dispatch
+# evidence record are validated by the same primitives the completion request
+# uses, so one description of "missing required field" serves every operation.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+_GIT_LOOPY_CONTINUATION_VALIDATE_JQ='
+def fail($message): error($message);
+def object($value; $name):
+  if ($value | type) == "object" then true
+  else fail($name + " must be an object")
+  end;
+def string($value; $name):
+  if ($value | type) == "string" and ($value | gsub("\\s"; "") | length) > 0
+  then true
+  else fail($name + " must be a non-empty string")
+  end;
+def positive_integer($value; $name):
+  if ($value | type) == "number" and $value > 0 and $value == ($value | floor)
+  then true
+  else fail($name + " must be a positive integer")
+  end;
+def array($value; $name; $nonempty):
+  if ($value | type) == "array" and (($nonempty | not) or ($value | length) > 0)
+  then true
+  else fail(
+    $name + " must be a " + (if $nonempty then "non-empty " else "" end) + "array"
+  )
+  end;
+def fields($value; $name; $required; $optional):
+  ($required - ($value | keys) | sort) as $missing
+  | (($value | keys) - ($required + $optional) | sort) as $unknown
+  | if ($missing | length) > 0 then
+      fail($name + " is missing required field: " + $missing[0])
+    elif ($unknown | length) > 0 then
+      fail($name + " contains unknown field: " + $unknown[0])
+    elif ($value | has("advisory_extensions")) then
+      object($value.advisory_extensions; $name + ".advisory_extensions")
+    else true
+    end;
+def typed_semantics($value; $name; $kinds; $second):
+  array($value; $name; false)
+  and all(
+    range(0; $value | length);
+    . as $index
+    | ($name + "[" + ($index | tostring) + "]") as $item_name
+    | object($value[$index]; $item_name)
+      and fields(
+        $value[$index]; $item_name; ["kind", $second]; ["advisory_extensions"]
+      )
+      and string($value[$index].kind; $item_name + ".kind")
+      and (if $kinds | index($value[$index].kind) then true
+           else fail($item_name + ".kind is unsupported") end)
+      and string($value[$index][$second]; $item_name + "." + $second)
+  );
+def effect_kinds:
+  [
+    "external-write", "git-read", "git-write", "network-read",
+    "repository-read", "repository-write", "tracker-read", "tracker-write"
+  ];
+def requirement_kinds:
+  ["access", "capability", "command", "evaluator", "policy", "skill"];
+def human_boundary_reasons:
+  [
+    "consent-required", "credential-required", "human-decision",
+    "irreversible-effect", "policy-gate", "subjective-acceptance"
+  ];
+def instruction_modes: ["command", "manual", "skill"];
+def scope_pairs($value; $name):
+  typed_semantics($value; $name; effect_kinds; "scope")
+  | [$value[] | [.kind, .scope]] | unique;
+def requirement_pairs($value; $name):
+  typed_semantics($value; $name; requirement_kinds; "name")
+  | [$value[] | [.kind, .name]] | unique;
+# `index` searches for a *subsequence* when its argument is an array, so a
+# typed pair is never a member of a pair list under it. Set membership over
+# `[kind, value]` pairs goes through this instead.
+def has_pair($list; $pair): any($list[]; . == $pair);
+def sorted_scope_pairs($pairs):
+  $pairs | unique | sort | map({kind:.[0], scope:.[1]});
+def sorted_requirement_pairs($pairs):
+  $pairs | unique | sort | map({kind:.[0], name:.[1]});
+'
+
+# The locked Automation stop precedence, strongest first. Exactly one stop is
+# returned and the first matching reason wins, so a Run that is both blocked on
+# a human boundary and waiting on a Prerequisite reports the human boundary --
+# the thing a person can act on -- rather than the more numerous barrier.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+_GIT_LOOPY_CONTINUATION_AUTOMATION_JQ='
+def stop_precedence:
+  [
+    ["workstreams-terminal", "complete"],
+    ["safety-case-violation", "attention-required"],
+    ["uncertain-effect-state", "attention-required"],
+    ["guidance-fault", "attention-required"],
+    ["human-boundary", "expected-boundary"],
+    ["grant-missing", "expected-boundary"],
+    ["performer-ineligible", "expected-boundary"],
+    ["frontier-drained", "expected-boundary"],
+    ["awaiting-prerequisites", "expected-boundary"]
+  ];
+# Which ineligibility reason raises which stop. Reasons absent from this map
+# describe an Action the Run was never entitled to consider (report-only,
+# out of coverage, already dispatched) and so cannot themselves stop a Run.
+def ineligibility_stop_reasons:
+  {
+    "human-boundary": "human-boundary",
+    "grant-missing": "grant-missing",
+    "performer-ineligible": "performer-ineligible",
+    "not-ready": "awaiting-prerequisites",
+    "safety-case-absent": "guidance-fault"
+  };
+def dispatch_evidence_classes:
+  ["safety-case-violation", "uncertain-effect-state"];
+
+def validate_ceiling($ceiling; $ceiling_name; $seen):
+  object($ceiling; $ceiling_name)
+  | fields($ceiling; $ceiling_name; ["coverage", "denials", "grants", "source"]; [])
+  | string($ceiling.source; $ceiling_name + ".source")
+  | (if ["global", "project"] | index($ceiling.source) then true
+     else fail($ceiling_name + ".source is unsupported") end)
+  | (if $seen | index($ceiling.source) then
+       fail($ceiling_name + ".source is declared twice")
+     else true end)
+  | object($ceiling.coverage; $ceiling_name + ".coverage")
+  | fields($ceiling.coverage; $ceiling_name + ".coverage"; ["repositories"]; [])
+  | array(
+      $ceiling.coverage.repositories;
+      $ceiling_name + ".coverage.repositories"; true
+    )
+  | all(
+      $ceiling.coverage.repositories[];
+      string(.; $ceiling_name + ".coverage.repositories item")
+    )
+  | {
+      repositories: ($ceiling.coverage.repositories | unique),
+      grants: scope_pairs($ceiling.grants; $ceiling_name + ".grants"),
+      denials: scope_pairs($ceiling.denials; $ceiling_name + ".denials")
+    };
+
+def validate_posture($posture; $posture_name):
+  object($posture; $posture_name)
+  | fields(
+      $posture; $posture_name;
+      ["instruction_modes", "noninteractive", "satisfied_requirements"]; []
+    )
+  | (if $posture.noninteractive == true then true
+     else fail($posture_name + ".noninteractive must be true") end)
+  | requirement_pairs(
+      $posture.satisfied_requirements; $posture_name + ".satisfied_requirements"
+    ) as $satisfied
+  # Closed world: a Performer executes only the Instruction modes it declares a
+  # handler for. Silence is not a claim of universal competence.
+  | array($posture.instruction_modes; $posture_name + ".instruction_modes"; false)
+  | all(
+      $posture.instruction_modes[];
+      string(.; $posture_name + ".instruction_modes item")
+      and (. as $mode
+           | if instruction_modes | index($mode) then true
+             else fail($posture_name + ".instruction_modes item is unsupported") end)
+    )
+  | {
+      satisfied_requirements: $satisfied,
+      instruction_modes: ($posture.instruction_modes | unique)
+    };
+
+# The frozen frontier is caller-replayed state, never a fresh claim of
+# authority: an entry that matches nothing simply leaves every live Action
+# outside the frontier and therefore report-only. It is validated for shape
+# only, exactly as the oracle does -- a distribution that additionally demanded
+# a digest here would refuse a Run the contract authorizes.
+def validate_frontier($declared; $frontier_name):
+  object($declared; $frontier_name)
+  | fields($declared; $frontier_name; ["actions"]; [])
+  | array($declared.actions; $frontier_name + ".actions"; false)
+  | all(
+      range(0; $declared.actions | length);
+      . as $index
+      | ($frontier_name + ".actions[" + ($index | tostring) + "]") as $entry_name
+      | ($declared.actions[$index]) as $entry
+      | object($entry; $entry_name)
+        and fields(
+          $entry; $entry_name; ["identity", "semantic_fingerprint"]; []
+        )
+        and all(
+          ["identity", "semantic_fingerprint"][];
+          . as $field
+          | string($entry[$field]; $entry_name + "." + $field)
+        )
+    )
+  | [$declared.actions[] | {identity, semantic_fingerprint}];
+
+# Validate the caller s Automation scope, posture, and frozen frontier.
+def validate_automation($automation; $name):
+  object($automation; $name)
+  | fields($automation; $name; ["performer", "scope"]; ["frontier", "dispatched"])
+  | ($name + ".performer") as $performer_name
+  | ($automation.performer) as $performer
+  | object($performer; $performer_name)
+  | fields($performer; $performer_name; ["id", "posture"]; [])
+  | string($performer.id; $performer_name + ".id")
+  | validate_posture($performer.posture; $performer_name + ".posture") as $posture
+  | ($name + ".scope") as $scope_name
+  | ($automation.scope) as $scope
+  | object($scope; $scope_name)
+  | fields($scope; $scope_name; ["ceilings", "revocations"]; ["prior"])
+  | array($scope.ceilings; $scope_name + ".ceilings"; true)
+  | (
+      reduce range(0; $scope.ceilings | length) as $index (
+        {repositories: null, granted: null, denied: [], sources: []};
+        . as $state
+        | validate_ceiling(
+            $scope.ceilings[$index];
+            $scope_name + ".ceilings[" + ($index | tostring) + "]";
+            $state.sources
+          ) as $ceiling
+        | {
+            # Ceilings intersect: a Run observes only what every ceiling admits.
+            repositories: (
+              if $state.repositories == null then $ceiling.repositories
+              else [
+                $state.repositories[]
+                | select(. as $r | $ceiling.repositories | index($r) != null)
+              ]
+              end
+            ),
+            granted: (
+              if $state.granted == null then $ceiling.grants
+              else [
+                $state.granted[]
+                | select(. as $g | has_pair($ceiling.grants; $g))
+              ]
+              end
+            ),
+            # Denials accumulate: one ceiling s refusal is the Run s refusal.
+            denied: (($state.denied + $ceiling.denials) | unique),
+            sources: ($state.sources + [$scope.ceilings[$index].source])
+          }
+      )
+    ) as $ceilings
+  | scope_pairs($scope.revocations; $scope_name + ".revocations") as $revocations
+  # A revocation observed during the Run narrows immediately and is
+  # indistinguishable from a denial thereafter.
+  | (($ceilings.denied + $revocations) | unique) as $denied
+  | (($ceilings.repositories // []) | unique) as $repositories
+  | (
+      [($ceilings.granted // [])[] | select(. as $g | has_pair($denied; $g) | not)]
+      | unique
+    ) as $grants
+  # The frozen scope of a Run is replayed alongside its frozen frontier, and the
+  # two must narrow together. Recomputing authority from whatever the caller
+  # supplies next would let a grant added mid-Run authorize an Action the Run
+  # was never entitled to.
+  | (
+      if $scope | has("prior") then
+        ($scope_name + ".prior") as $prior_name
+        | ($scope.prior) as $prior
+        | object($prior; $prior_name)
+        | fields($prior; $prior_name; ["coverage", "denials", "grants"]; ["frozen"])
+        | object($prior.coverage; $prior_name + ".coverage")
+        | fields($prior.coverage; $prior_name + ".coverage"; ["repositories"]; [])
+        | array(
+            $prior.coverage.repositories;
+            $prior_name + ".coverage.repositories"; false
+          )
+        | all(
+            $prior.coverage.repositories[];
+            string(.; $prior_name + ".coverage.repositories item")
+          )
+        | scope_pairs($prior.grants; $prior_name + ".grants") as $prior_grants
+        | scope_pairs($prior.denials; $prior_name + ".denials") as $prior_denials
+        | (($denied + $prior_denials) | unique) as $narrowed_denied
+        | {
+            repositories: [
+              $repositories[]
+              | select(
+                  . as $r | $prior.coverage.repositories | index($r) != null
+                )
+            ],
+            grants: [
+              $grants[]
+              | select(. as $g | has_pair($prior_grants; $g))
+              | select(. as $g | has_pair($narrowed_denied; $g) | not)
+            ],
+            denials: $narrowed_denied
+          }
+      else
+        {repositories: $repositories, grants: $grants, denials: $denied}
+      end
+    ) as $narrowed
+  | (
+      if $automation | has("frontier") then
+        validate_frontier($automation.frontier; $name + ".frontier")
+      else null
+      end
+    ) as $frontier
+  | array($automation.dispatched // []; $name + ".dispatched"; false)
+  | all(($automation.dispatched // [])[]; string(.; $name + ".dispatched item"))
+  | {
+      performer_id: $performer.id,
+      satisfied_requirements: $posture.satisfied_requirements,
+      instruction_modes: $posture.instruction_modes,
+      repositories: $narrowed.repositories,
+      grants: $narrowed.grants,
+      denials: $narrowed.denials,
+      frontier: $frontier,
+      dispatched: (($automation.dispatched // []) | unique)
+    };
+
+def action_repositories($action):
+  [$action.workstream_anchor, $action.target]
+  | map(select(type == "object" and has("repository")) | .repository)
+  | unique;
+
+# Every typed reason this Action is not Automation-selectable.
+def ineligibility($action; $automation; $frontier_index; $quarantined):
+  ([]
+   + (if action_repositories($action)
+        | all(.[]; . as $r | $automation.repositories | index($r) != null)
+      then [] else ["outside-coverage"] end)
+   + (if $frontier_index[$action.identity] == $action.semantic_fingerprint
+      then [] else ["outside-frontier"] end)
+   + (if $automation.dispatched | index($action.identity)
+      then ["already-dispatched"] else [] end)
+   + (if $quarantined
+        | map(select(
+            .identity == $action.identity
+            and .semantic_fingerprint == $action.semantic_fingerprint
+          ))
+        | length > 0
+      then ["quarantined"] else [] end)
+   + (if $action.interaction.classification != "AFK-safe"
+      then ["human-boundary"] else [] end)
+   + (if $action.readiness != "Ready" then ["not-ready"] else [] end)
+  ) as $base
+  | $base + (
+      if ($action | has("safety_case") | not) or $action.safety_case == null then
+        # An AFK-safe classification without its positive safety case is an
+        # assertion, not an argument. Absence is never upgraded to eligibility.
+        (if $base | index("human-boundary") then [] else ["safety-case-absent"] end)
+      else
+        ([$action.safety_case.effects[] | [.kind, .scope]]) as $effects
+        | ([$action.safety_case.requirements[] | [.kind, .name]]) as $requirements
+        | (if all($effects[]; . as $e | has_pair($automation.grants; $e))
+           then [] else ["grant-missing"] end)
+          + (if all(
+                 $requirements[];
+                 . as $r | has_pair($automation.satisfied_requirements; $r)
+               )
+               and ($automation.instruction_modes | index($action.instruction.mode))
+             then [] else ["performer-ineligible"] end)
+      end
+    )
+  | unique | sort;
+
+def automation_stop(
+  $actions; $eligibility; $report_only; $outcomes; $status; $frontier;
+  $guidance_fault; $quarantine_stops; $quarantine_identities
+):
+  ((
+    [
+      $eligibility[]
+      | (.reasons // [])[]
+      | ineligibility_stop_reasons[.]
+      | select(. != null)
+    ]
+    + $quarantine_stops
+    + (if $guidance_fault then ["guidance-fault"] else [] end)
+    + (if $status == "complete" then ["workstreams-terminal"] else [] end)
+    + (if ($frontier | length) == 0 then ["frontier-drained"] else [] end)
+  ) | unique) as $observed
+  | (
+      [stop_precedence[] | select(.[0] as $c | $observed | index($c))]
+      | if length > 0 then .[0] else ["frontier-drained", "expected-boundary"] end
+    ) as $chosen
+  | $chosen[0] as $reason
+  | $chosen[1] as $disposition
+  | (
+      if dispatch_evidence_classes | index($reason) then
+        [$eligibility[] | select(.identity as $i | $quarantine_identities | index($i))]
+      else
+        [
+          $eligibility[]
+          | select(
+              [(.reasons // [])[] | ineligibility_stop_reasons[.]]
+              | index($reason)
+            )
+        ]
+      end
+    ) as $decisive
+  | ([$decisive[].identity] | unique) as $decisive_identities
+  | (reduce $actions[] as $action ({}; .[$action.identity] = $action)) as $index
+  | (
+      if ($decisive | length) > 0 and ($index[$decisive[0].identity] != null) then
+        ($index[$decisive[0].identity]) as $primary
+        | {
+            kind: "action",
+            identity: $primary.identity,
+            summary: $primary.summary,
+            readiness: $primary.readiness
+          }
+          + (
+            if ($primary.unsatisfied_prerequisites // []) | length > 0
+            then {condition: $primary.unsatisfied_prerequisites[0]}
+            else {}
+            end
+          )
+      else null
+      end
+    ) as $next_step
+  | {disposition: $disposition, reason: $reason, nonterminal_status: $status}
+    + (if $next_step != null then {next: $next_step} else {} end)
+    + {
+        evidence: [
+          $decisive_identities | sort[]
+          | select($index[.] != null)
+          | $index[.].target
+        ],
+        secondary_barriers: [
+          $eligibility[]
+          | select(((.reasons // []) | length) > 0)
+          | select(.identity as $i | $decisive_identities | index($i) | not)
+          | {identity: .identity, reasons: .reasons}
+        ],
+        report_only_successors: $report_only,
+        outcomes: $outcomes,
+        successor_executed: false,
+        statement: "No successor Action was executed by this Reconciliation."
+      };
+
+# Project one Performer s authorization decision over a frozen frontier.
+def automation_projection(
+  $request; $actions; $outcomes; $diagnostics; $status; $validators
+):
+  validate_automation($request.automation; "automation") as $automation
+  # The frontier freezes at the first stable Reconciliation of the Run and is
+  # replayed by the caller thereafter. Every in-coverage identity is frozen,
+  # including Blocked, HITL-required, ineligible, and quarantined members --
+  # otherwise a member that later became Ready would look like a newcomer.
+  | (
+      if $automation.frontier == null then
+        [
+          $actions[]
+          | select(
+              action_repositories(.)
+              | all(.[]; . as $r | $automation.repositories | index($r) != null)
+            )
+          | {identity, semantic_fingerprint}
+        ]
+      else $automation.frontier
+      end
+    ) as $frozen
+  | (reduce $frozen[] as $entry ({}; .[$entry.identity] = $entry.semantic_fingerprint))
+    as $frontier_index
+  # Evidence names one *semantics*, not one identity forever: a Transition
+  # owner that publishes a repaired occurrence moves the fingerprint, and the
+  # evidence describing the broken one must stop holding the repaired one
+  # down. The class rides along so the stop can name the right problem.
+  | [
+      $diagnostics[]
+      | select(.code == "dispatch_evidence_quarantine")
+      | . as $diagnostic
+      | .identities[]
+      | {
+          identity: .,
+          semantic_fingerprint: $diagnostic.semantic_fingerprint,
+          class: $diagnostic["class"]
+        }
+    ] as $quarantined
+  # A conflicted or unverifiable fragment never reaches `actions` at all, so a
+  # guidance fault is observed from the diagnostics rather than from any one
+  # Action. It must still stop the Run: the frontier it froze is not a
+  # trustworthy description of the project.
+  | (
+      [
+        $diagnostics[].code
+        | . as $code
+        | select(
+            (coverage_uncertainty_codes | index($code))
+            or (["action_conflict", "prerequisite_cycle"] | index($code))
+          )
+      ] | length > 0
+    ) as $guidance_fault
+  | [
+      $actions[]
+      | . as $action
+      | ineligibility($action; $automation; $frontier_index; $quarantined) as $reasons
+      | {
+          action: $action,
+          reasons: $reasons,
+          entry: (
+            {
+              identity: $action.identity,
+              semantic_fingerprint: $action.semantic_fingerprint,
+              automation_selectable: (($reasons | length) == 0)
+            }
+            + (if ($reasons | length) > 0 then {reasons: $reasons} else {} end)
+          )
+        }
+    ] as $evaluated
+  | [$evaluated[].entry] as $eligibility
+  | [
+      $evaluated[]
+      | select(.reasons | index("outside-frontier"))
+      | .action as $action
+      | {
+          identity: $action.identity,
+          semantic_fingerprint: $action.semantic_fingerprint,
+          reason: (
+            if $frontier_index | has($action.identity)
+            then "changed-semantics" else "newly-produced"
+            end
+          )
+        }
+    ] as $report_only
+  | (
+      [
+        $evaluated[]
+        | select(.reasons | index("quarantined"))
+        | .action as $action
+        | $quarantined[]
+        | select(
+            .identity == $action.identity
+            and .semantic_fingerprint == $action.semantic_fingerprint
+          )
+        | .["class"]
+      ] | unique
+    ) as $quarantine_stops
+  | (
+      [
+        $evaluated[]
+        | select(.reasons | index("quarantined"))
+        | .action.identity
+      ] | unique
+    ) as $quarantine_identities
+  | (
+      [$evaluated[] | select((.reasons | length) == 0) | .action] | first
+    ) as $selected
+  | {
+      performer: $automation.performer_id,
+      scope: {
+        coverage: {repositories: ($automation.repositories | sort)},
+        grants: sorted_scope_pairs($automation.grants),
+        denials: sorted_scope_pairs($automation.denials),
+        frozen: true
+      },
+      frontier: {actions: $frozen},
+      validators: $validators,
+      eligibility: $eligibility,
+      report_only: $report_only
+    }
+  # A guidance fault is not a property of the selected Action -- the
+  # conflicted or unverifiable fragment never reached `actions` at all. What it
+  # makes untrustworthy is the coverage the Run froze, so no Action inside that
+  # frozen description may be dispatched on the strength of it.
+  + (
+      if $selected != null and ($guidance_fault | not) then
+        {
+          authorization: {
+            action_identity: $selected.identity,
+            semantic_fingerprint: $selected.semantic_fingerprint,
+            performer: $automation.performer_id,
+            workstream_anchor: $selected.workstream_anchor,
+            target: $selected.target,
+            safety_case_version: $selected.safety_case.version,
+            completion_condition: $selected.completion_condition,
+            effects: sorted_scope_pairs(
+              [$selected.safety_case.effects[] | [.kind, .scope]]
+            ),
+            requirements: sorted_requirement_pairs(
+              [$selected.safety_case.requirements[] | [.kind, .name]]
+            ),
+            retry: $selected.safety_case.retry,
+            triggers: $selected.safety_case.triggers
+          }
+        }
+      else
+        {
+          stop: automation_stop(
+            $actions; $eligibility; $report_only; $outcomes; $status; $frozen;
+            $guidance_fault; $quarantine_stops; $quarantine_identities
+          )
+        }
+      end
+    );
+'
+
+# Project the Automation decision, or report the Automation request as invalid.
+# Sets GIT_LOOPY_CONTINUATION_AUTOMATION on success.
+_git_loopy_continuation_automation_projection() {
+  local request="$1"
+  local actions="$2"
+  local diagnostics="$3"
+  local status="$4"
+  local validators="$5"
+  local outcomes="${6:-[]}"
+  local projected
+  projected="$(
+    jq -cn \
+      --argjson request "$request" \
+      --argjson actions "$actions" \
+      --argjson diagnostics "$diagnostics" \
+      --arg status "$status" \
+      --argjson validators "$validators" \
+      --argjson outcomes "$outcomes" \
+      "$_GIT_LOOPY_CONTINUATION_ORDER_JQ$_GIT_LOOPY_CONTINUATION_GUIDANCE_JQ$_GIT_LOOPY_CONTINUATION_VALIDATE_JQ$_GIT_LOOPY_CONTINUATION_AUTOMATION_JQ"'
+      try {
+        ok: true,
+        automation: automation_projection(
+          $request; $actions; $outcomes; $diagnostics; $status; $validators
+        )
+      } catch {ok: false, message: .}
+    ' | tail -n 1
+  )"
+  if [[ "$(jq -r '.ok' <<<"$projected")" != "true" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(jq -r '.message' <<<"$projected")"
+    return 1
+  fi
+  GIT_LOOPY_CONTINUATION_AUTOMATION="$(jq -c '.automation' <<<"$projected")"
+}
+
+# Validate one exceptional Dispatch-evidence record before it is written.
+#
+# Only two classes exist, and neither carries an Instruction: ordinary success
+# and ordinary execution failure stay in the Runner's existing artifacts,
+# Events, retry, and Strike paths. The record's shape is what keeps a runnable
+# Instruction or a secret out of a durable comment -- there is no field to put
+# one in.
+_git_loopy_continuation_validate_dispatch() {
+  local dispatch="$1"
+  local name="$2"
+  local repository="$3"
+  local validation
+  validation="$(
+    jq -cn \
+      --argjson dispatch "$dispatch" \
+      --arg name "$name" \
+      --arg repository "$repository" \
+      "$_GIT_LOOPY_CONTINUATION_VALIDATE_JQ"'
+      def durable($value; $vname):
+        {
+          "issue": ["repository", "number"],
+          "pull-request": ["repository", "number"],
+          "issue-comment": ["repository", "issue", "comment_id"],
+          "pull-request-review": ["repository", "pull_request", "review_id"],
+          "commit": ["repository", "sha"],
+          "branch": ["repository", "name", "sha"]
+        } as $schemas
+        | object($value; $vname)
+          and string($value.kind; $vname + ".kind")
+          and (if $schemas | has($value.kind) then true
+               else fail($vname + ".kind is unsupported") end)
+          and fields($value; $vname; ["kind"] + $schemas[$value.kind]; [])
+          and (if $value.repository == $repository then true
+               else fail($vname + ".repository must match repository") end)
+          and all(
+            ["number", "issue", "comment_id", "pull_request", "review_id"][]
+            | select(. as $field | $value | has($field));
+            . as $field
+            | positive_integer($value[$field]; $vname + "." + $field)
+          )
+          and (if ($value.kind == "commit" or $value.kind == "branch") then
+                 string($value.sha; $vname + ".sha")
+                 and (if $value.sha | test("\\A[0-9a-f]{40}\\z") then true
+                      else fail(
+                        $vname + ".sha must be a lowercase 40-character SHA"
+                      ) end)
+               else true end)
+          and (if $value.kind == "branch"
+               then string($value.name; $vname + ".name")
+               else true end);
+      def validate:
+        object($dispatch; $name)
+        and fields(
+          $dispatch; $name;
+          [
+            "action_identity", "carrier", "class", "evidence", "performer",
+            "semantic_fingerprint", "summary"
+          ];
+          ["reason"]
+        )
+        and all(
+          ["action_identity", "semantic_fingerprint"][];
+          . as $field
+          | string($dispatch[$field]; $name + "." + $field)
+            and (if $dispatch[$field] | test("\\A[0-9a-f]{64}\\z") then true
+                 else fail($name + "." + $field + " must be a sha256 digest") end)
+        )
+        and string($dispatch.performer; $name + ".performer")
+        and string($dispatch.summary; $name + ".summary")
+        and (if $dispatch.summary | test("[\\n\\r]") then
+               fail($name + ".summary must be one line")
+             else true end)
+        and string($dispatch["class"]; $name + ".class")
+        and (if ["safety-case-violation", "uncertain-effect-state"]
+                 | index($dispatch["class"])
+             then true
+             else fail($name + ".class is unsupported") end)
+        and (if $dispatch["class"] == "safety-case-violation" then
+               string($dispatch.reason; $name + ".reason")
+               and (if human_boundary_reasons | index($dispatch.reason) then true
+                    else fail($name + ".reason is unsupported") end)
+             elif $dispatch | has("reason") then
+               fail($name + ".reason belongs only to a safety-case-violation")
+             else true end)
+        and durable($dispatch.carrier; $name + ".carrier")
+        and (if $dispatch.carrier.kind == "issue" then true
+             else fail($name + ".carrier.kind must be one of: issue") end)
+        and array($dispatch.evidence; $name + ".evidence"; true)
+        and all(
+          range(0; $dispatch.evidence | length);
+          . as $index
+          | durable(
+              $dispatch.evidence[$index];
+              $name + ".evidence[" + ($index | tostring) + "]"
+            )
+        )
+        | {carrier: $dispatch.carrier};
+      try (validate | {ok: true, carrier: .carrier}) catch {ok: false, message: .}
+    ' | tail -n 1
+  )"
+  if [[ "$(jq -r '.ok' <<<"$validation")" != "true" ]]; then
+    GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(jq -r '.message' <<<"$validation")"
+    return 1
+  fi
+  GIT_LOOPY_CONTINUATION_DISPATCH_CARRIER="$(jq -c '.carrier' <<<"$validation")"
+}
+
+# Read one durable Dispatch-evidence record from a comment, or nothing.
+#
+# Dispatch evidence is deliberately *not* a Producer revision: it carries no
+# lineage, creates and retires nothing, and is read only to quarantine. That is
+# exactly why reading applies the *whole* closed schema the writer applied and
+# the same Performer binding: a quarantine is a change of authority, and a
+# fragment naming an identity is not enough to make one.
+_git_loopy_continuation_parse_dispatch_evidence() {
+  local comment="$1"
+  local repository="$2"
+  local body raw record
+  body="$(jq -r '.body' <<<"$comment")"
+  [[ "$body" == *"$GIT_LOOPY_CONTINUATION_DISPATCH_MARKER"* ]] || return 1
+  raw="${body#*"$GIT_LOOPY_CONTINUATION_DISPATCH_MARKER"}"
+  [[ "$raw" == *'```json'$'\n'* ]] || return 1
+  raw="${raw#*'```json'$'\n'}"
+  [[ "$raw" == *$'\n```'* ]] || return 1
+  raw="${raw%%$'\n```'*}"
+  record="$(jq -c . <<<"$raw" 2>/dev/null)" || return 1
+  _git_loopy_continuation_validate_dispatch "$record" "dispatch evidence" \
+    "$repository" >/dev/null 2>&1 || return 1
+  # Anyone with write access can leave a comment; only the Performer named in
+  # the record can have performed the Dispatch it describes.
+  [[ "$(jq -r '.performer' <<<"$record")" == \
+    "$(jq -r '.author' <<<"$comment")" ]] || return 1
+  GIT_LOOPY_CONTINUATION_DISPATCH_RECORD="$record"
+}
+
+# Quarantine the smallest justified scope named by Dispatch evidence.
+#
+# The record is immutable and non-Producer: it never retires the Action or
+# creates a replacement. Only the Transition owner can do that, so until it
+# does, the named semantics stay visible and stay unselectable.
+_git_loopy_continuation_dispatch_evidence_diagnostics() {
+  jq -c '
+    sort_by(.comment_id)
+    | map({
+        code: "dispatch_evidence_quarantine",
+        comment_id: .comment_id,
+        "class": .record["class"],
+        identities: [.record.action_identity],
+        semantic_fingerprint: .record.semantic_fingerprint
+      })
+  ' <<<"$1"
+}
+
+_git_loopy_continuation_record_dispatch_result() {
+  local request="$1"
+  local validation
+  validation="$(
+    jq -cn --argjson request "$request" \
+      "$_GIT_LOOPY_CONTINUATION_VALIDATE_JQ"'
+      def validate:
+        object($request; "request")
+        and fields(
+          $request; "request";
+          ["dispatch", "repository", "trusted_producers"]; ["trusted_apps"]
+        )
+        and string($request.repository; "repository")
+        and (if $request.repository | test("\\A[^/]+/[^/]+\\z") then true
+             else fail("repository must be owner/name") end)
+        and array($request.trusted_producers; "trusted_producers"; true)
+        and all($request.trusted_producers[]; string(.; "trusted_producers item"))
+        and array($request.trusted_apps // []; "trusted_apps"; false)
+        and all(($request.trusted_apps // [])[]; string(.; "trusted_apps item"));
+      try (validate | {ok: true}) catch {ok: false, message: .}
+    ' | tail -n 1
+  )"
+  if [[ "$(jq -r '.ok' <<<"$validation")" != "true" ]]; then
+    _git_loopy_continuation_error \
+      "record-dispatch-result" \
+      "invalid_request" \
+      "$(jq -r '.message' <<<"$validation")"
+    return 1
+  fi
+
+  local repository dispatch carrier
+  repository="$(jq -r '.repository' <<<"$request")"
+  dispatch="$(jq -c '.dispatch' <<<"$request")"
+  if ! _git_loopy_continuation_validate_dispatch \
+    "$dispatch" "dispatch" "$repository"; then
+    _git_loopy_continuation_error \
+      "record-dispatch-result" \
+      "invalid_request" \
+      "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+    return 1
+  fi
+  carrier="$GIT_LOOPY_CONTINUATION_DISPATCH_CARRIER"
+
+  local actor_response actor
+  if ! actor_response="$(gh api user)"; then
+    _git_loopy_continuation_github_error \
+      "record-dispatch-result" \
+      "reading the authenticated actor"
+    return 1
+  fi
+  actor="$(jq -r '.login // ""' <<<"$actor_response")"
+  if [[ "$actor" != "$(jq -r '.performer' <<<"$dispatch")" ]]; then
+    _git_loopy_continuation_error \
+      "record-dispatch-result" \
+      "invalid_request" \
+      "dispatch.performer must be the authenticated actor writing the record"
+    return 1
+  fi
+
+  local record evidence_id body payload committed
+  record="$(jq -cS . <<<"$dispatch")"
+  if ! _git_loopy_continuation_validate_portable_json "$record" "Dispatch evidence"; then
+    _git_loopy_continuation_error \
+      "record-dispatch-result" \
+      "invalid_request" \
+      "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+    return 1
+  fi
+  evidence_id="$(printf '%s' "$record" | _git_loopy_continuation_sha256)"
+  body="$GIT_LOOPY_CONTINUATION_DISPATCH_MARKER"$'\n```json\n'"$record"$'\n```'
+  payload="$(jq -cn --arg body "$body" '{body:$body}')"
+  if ! committed="$(
+    printf '%s' "$payload" |
+      gh api \
+        --method POST \
+        "repos/$repository/issues/$(jq -r '.number' <<<"$carrier")/comments" \
+        --input -
+  )"; then
+    _git_loopy_continuation_github_error \
+      "record-dispatch-result" \
+      "recording the Dispatch result"
+    return 1
+  fi
+  jq -cn \
+    --arg evidence_id "$evidence_id" \
+    --argjson record "$record" \
+    --argjson carrier "$carrier" \
+    --argjson committed "$committed" \
+    '{
+      ok: true,
+      operation: "record-dispatch-result",
+      receipt: {
+        status: "committed",
+        dispatch_evidence_id: $evidence_id,
+        "class": $record["class"],
+        action_identity: $record.action_identity,
+        semantic_fingerprint: $record.semantic_fingerprint,
+        carrier: $carrier,
+        comment: {
+          id: ($committed.databaseId // $committed.id),
+          url: ($committed.url // $committed.html_url)
+        }
+      }
+    }'
 }
 
 _git_loopy_continuation_reconcile_revision_protocol() {
@@ -4086,224 +5363,16 @@ _git_loopy_continuation_reconcile_revision_protocol() {
     done < <(jq -c 'sort_by(.comment.id)[]' <<<"$entries") |
       jq -sc .
   )"
-  GIT_LOOPY_CONTINUATION_FACT_STATUS=()
-  GIT_LOOPY_CONTINUATION_FACT_VALUE=()
-  GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID=""
-  GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS="[]"
-  actions="[]"
-  while IFS= read -r candidate; do
-    local action action_key revision_id completion_status
-    local prerequisite prerequisite_status prerequisite_unverified conflicted
-    local unsatisfied identity projection
-    action="$(jq -c '.action' <<<"$candidate")"
-    action_key="$(jq -r '.key' <<<"$action")"
-    revision_id="$(jq -r '.record.revision_id' <<<"$candidate")"
-    if [[ "$revision_id" != "$GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID" ]]; then
-      diagnostics="$(
-        jq -cn \
-          --argjson current "$diagnostics" \
-          --argjson local_diagnostics \
-            "$GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS" \
-          '$current + $local_diagnostics'
-      )"
-      GIT_LOOPY_CONTINUATION_LOCAL_REVISION_ID="$revision_id"
-      GIT_LOOPY_CONTINUATION_LOCAL_ACTIONS="$(
-        jq -c '.record.actions' <<<"$candidate"
-      )"
-      GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS="[]"
-      GIT_LOOPY_CONTINUATION_COMPLETION_STATUS=()
-    fi
-    _git_loopy_continuation_resolve_completion \
-      "$action_key" "[]" "$repository"
-    completion_status="$GIT_LOOPY_CONTINUATION_RESOLVED_STATUS"
-    if [[ "$completion_status" == "satisfied" ||
-      "$completion_status" == "conflict" ]]; then
-      continue
-    fi
-    if [[ "$completion_status" == "unverified" ]]; then
-      diagnostics="$(
-        jq -cn \
-          --argjson current "$diagnostics" \
-          --arg revision_id "$revision_id" \
-          --arg action_key "$action_key" \
-          '$current + [{
-            code:"unverified_completion",
-            revision_id:$revision_id,
-            action_key:$action_key
-          }]'
-      )"
-      continue
-    fi
-
-    unsatisfied="[]"
-    prerequisite_unverified=0
-    conflicted=0
-    while IFS= read -r prerequisite; do
-      _git_loopy_continuation_evaluate_condition \
-        "$prerequisite" "$repository" || {
-        prerequisite_unverified=1
-        continue
-      }
-      prerequisite_status="$GIT_LOOPY_CONTINUATION_CONDITION_STATUS"
-      if [[ "$prerequisite_status" == "local" ]]; then
-        _git_loopy_continuation_resolve_completion \
-          "$GIT_LOOPY_CONTINUATION_CONDITION_LOCAL_KEY" \
-          "$(jq -cn --arg key "$action_key" '[$key]')" \
-          "$repository"
-        prerequisite_status="$GIT_LOOPY_CONTINUATION_RESOLVED_STATUS"
-      fi
-      if [[ "$prerequisite_status" == "conflict" ]]; then
-        conflicted=1
-        break
-      elif [[ "$prerequisite_status" == "unverified" ]]; then
-        prerequisite_unverified=1
-      elif [[ "$prerequisite_status" == "unsatisfied" ]]; then
-        unsatisfied="$(
-          jq -cn \
-            --argjson current "$unsatisfied" \
-            --argjson prerequisite "$prerequisite" \
-            '$current + [$prerequisite]'
-        )"
-      fi
-    done < <(jq -c '.prerequisites[]' <<<"$action")
-    if ((conflicted)); then
-      continue
-    fi
-    if ((prerequisite_unverified)); then
-      diagnostics="$(
-        jq -cn \
-          --argjson current "$diagnostics" \
-          --arg revision_id "$revision_id" \
-          --arg action_key "$action_key" \
-          '$current + [{
-            code:"unverified_prerequisite",
-            revision_id:$revision_id,
-            action_key:$action_key
-          }]'
-      )"
-      continue
-    fi
-
-    identity="$(
-      _git_loopy_continuation_action_identity \
-        "$(jq -c '.record' <<<"$candidate")" \
-        "$action"
-    )"
-    projection="$(
-      jq -cn \
-        --arg identity "$identity" \
-        --argjson candidate "$candidate" \
-        --argjson unsatisfied "$unsatisfied" \
-        "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
-        ($candidate.record) as $record
-        | ($candidate.action) as $action
-        | {
-            identity:$identity,
-            semantic_fingerprint:
-              $record.semantic_fingerprints[$action.key],
-            workstream_anchor:$record.workstream.anchor,
-            summary:$action.summary,
-            kind:$action.kind,
-            readiness:(
-              if ($unsatisfied | length) > 0 then "Blocked" else "Ready" end
-            ),
-            instruction:$action.instruction,
-            target:$action.target,
-            basis:$action.basis,
-            producer:(
-              $record.producer + {
-                carrier:$record.carrier,
-                revision_id:$record.revision_id,
-                comment_id:$candidate.comment.id,
-                comment_url:$candidate.comment.url
-              }
-            ),
-            prerequisites:$action.prerequisites,
-            interaction:$action.interaction,
-            completion_condition:$action.completion_condition
-          }
-        | ordering_fields($record; $action)
-        | if ($unsatisfied | length) > 0
-          then .unsatisfied_prerequisites = $unsatisfied
-          else .
-          end'
-    )"
-    actions="$(
-      jq -cn \
-        --argjson current "$actions" \
-        --argjson projection "$projection" \
-        '$current + [$projection]'
-    )"
-  done < <(jq -c '.[] as $entry | $entry.record.actions[]? | {
-    record:$entry.record,
-    comment:$entry.comment,
-    action:.
-  }' <<<"$guidance_entries")
+  _git_loopy_continuation_derive_actions "$guidance_entries" "$repository"
+  actions="$GIT_LOOPY_CONTINUATION_ACTIONS"
   diagnostics="$(
     jq -cn \
       --argjson current "$diagnostics" \
-      --argjson local_diagnostics "$GIT_LOOPY_CONTINUATION_LOCAL_DIAGNOSTICS" \
-      '$current + $local_diagnostics'
-  )"
-  local action_conflicts
-  action_conflicts="$(
-    jq -c '
-      sort_by(.identity)
-      | group_by(.identity)
-      | map(
-          select([.[].semantic_fingerprint] | unique | length > 1)
-          | {
-              code:"action_conflict",
-              identity:.[0].identity,
-              revision_ids:([.[].producer.revision_id] | sort),
-              semantic_fingerprints:([.[].semantic_fingerprint] | unique | sort)
-            }
-        )
-    ' <<<"$actions"
-  )"
-  diagnostics="$(
-    jq -cn \
-      --argjson current "$diagnostics" \
-      --argjson conflicts "$action_conflicts" \
-      '$current + $conflicts'
-  )"
-  actions="$(
-    jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'
-      sort_by(.identity)
-      | group_by(.identity)
-      | map(
-          select([.[].semantic_fingerprint] | unique | length == 1)
-          | . as $claims
-          | min_by(.producer.revision_id, .producer.comment_id)
-          | .basis = (
-              [$claims[].basis[]]
-              | sort_by(tojson)
-              | unique_by(tojson)
-            )
-          | if ($claims | length) > 1 then
-              .provenance = (
-                [
-                  $claims[].producer
-                  | {
-                      login,
-                      role,
-                      carrier,
-                      revision_id,
-                      comment_id,
-                      comment_url
-                    }
-                ]
-                | sort_by(.carrier.number, .revision_id, .comment_id)
-                | unique_by([.carrier.number, .revision_id, .comment_id])
-              )
-            else .
-            end
-        )
-      | continuation_view_order
-    ' <<<"$actions"
+      --argjson derived "$GIT_LOOPY_CONTINUATION_ACTION_DIAGNOSTICS" \
+      '$current + $derived'
   )"
 
-  local observation_source token outcomes closed_coverage status delta
+  local observation_source token guidance status outcomes result delta
   observation_source="$(
     jq -cn \
       --arg repository "$repository" \
@@ -4315,29 +5384,15 @@ _git_loopy_continuation_reconcile_revision_protocol() {
     printf '%s' "$(jq -cS . <<<"$observation_source")" |
       _git_loopy_continuation_sha256
   )"
-  outcomes="$(_git_loopy_continuation_workstream_outcomes "$guidance_entries")"
-  closed_coverage="$(
-    jq -cn --argjson diagnostics "$diagnostics" '
-      [
-        $diagnostics[]?
-        | select(
-            .code == "invalid_revision"
-            or .code == "missing_predecessor"
-            or .code == "missing_retirement_receipt"
-            or .code == "mutated_revision"
-            or .code == "retired_occurrence_resurrected"
-            or .code == "revision_fork"
-          )
-      ] | length == 0
-    '
+  # A complete all-state read establishes closed coverage only when every
+  # discovered lineage remains trustworthy, so a malformed, incomplete, or
+  # forked lineage cannot disappear from the terminal-completion proof.
+  guidance="$(
+    _git_loopy_continuation_guidance_projection \
+      "$guidance_entries" "$actions" "$diagnostics" "true"
   )"
-  status="$(
-    _git_loopy_continuation_guidance_status \
-      "$guidance_entries" \
-      "$actions" \
-      "$outcomes" \
-      "$closed_coverage"
-  )"
+  status="$(jq -r '.status' <<<"$guidance")"
+  outcomes="$(jq -c '.outcomes' <<<"$guidance")"
   delta="null"
   if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
     if ! _git_loopy_continuation_validate_previous_actions \
@@ -4375,23 +5430,21 @@ _git_loopy_continuation_reconcile_revision_protocol() {
         '$current + $handoff_diagnostics'
     )"
   fi
-  jq -cn \
-    --arg repository "$repository" \
-    --argjson indexed_carriers "$indexed_carriers" \
-    --argjson diagnostics "$diagnostics" \
-    --argjson heads "$heads" \
-    --arg token "$token" \
-    --argjson validators "$validators" \
-    --argjson producer_revisions "$(jq 'length' <<<"$entries")" \
-    --argjson actions "$actions" \
-    --argjson outcomes "$outcomes" \
-    --argjson retirements "$retirements" \
-    --argjson delta "$delta" \
-    --arg status "$status" \
-    '{
-      ok: true,
-      operation: "reconcile",
-      result: {
+  result="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson indexed_carriers "$indexed_carriers" \
+      --argjson diagnostics "$diagnostics" \
+      --argjson heads "$heads" \
+      --arg token "$token" \
+      --argjson validators "$validators" \
+      --argjson producer_revisions "$(jq 'length' <<<"$entries")" \
+      --argjson actions "$actions" \
+      --argjson outcomes "$outcomes" \
+      --argjson retirements "$retirements" \
+      --argjson delta "$delta" \
+      --arg status "$status" \
+      '{
         status: $status,
         observed: {
           repository: $repository,
@@ -4409,15 +5462,35 @@ _git_loopy_continuation_reconcile_revision_protocol() {
           validators: $validators
         }
       }
-    }
-    | if ($outcomes | length) > 0
-      then .
-      else del(.result.outcomes)
-      end
-    | if $delta != null
-      then .
-      else del(.result.delta)
-      end'
+      | if ($outcomes | length) > 0
+        then .
+        else del(.outcomes)
+        end
+      | if $delta != null
+        then .
+        else del(.delta)
+        end'
+  )"
+
+  if jq -e 'has("automation")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_automation_projection \
+      "$request" "$actions" "$diagnostics" "$status" "$validators" "$outcomes"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    result="$(
+      jq -cn \
+        --argjson result "$result" \
+        --argjson automation "$GIT_LOOPY_CONTINUATION_AUTOMATION" \
+        '$result + {automation:$automation}'
+    )"
+  fi
+
+  jq -cn --argjson result "$result" \
+    '{ok: true, operation: "reconcile", result: $result}'
 }
 
 _git_loopy_continuation_reconcile() {
@@ -4476,59 +5549,48 @@ _git_loopy_continuation_reconcile() {
       "decoding indexed carriers"
     return 1
   fi
-  actions="[]"
+  local guidance_entries revision_count actions diagnostics comment
+  local dispatch_evidence validators gated_retirements
+  guidance_entries="[]"
+  dispatch_evidence="[]"
   revision_count=0
   gated_retirements="[]"
-  guidance_entries="[]"
 
-  local comment
   while IFS= read -r comment; do
-    local author
-    author="$(jq -r '.author.login' <<<"$comment")"
+    local author parse_status
+    if _git_loopy_continuation_parse_dispatch_evidence "$comment" "$repository"; then
+      dispatch_evidence="$(
+        jq -cn \
+          --argjson current "$dispatch_evidence" \
+          --argjson comment_id "$(jq '.id' <<<"$comment")" \
+          --argjson record "$GIT_LOOPY_CONTINUATION_DISPATCH_RECORD" \
+          '$current + [{comment_id:$comment_id,record:$record}]'
+      )"
+      continue
+    fi
+    author="$(jq -r '.author' <<<"$comment")"
     if ! jq -e --arg author "$author" \
       '.trusted_producers | index($author) != null' \
       <<<"$request" >/dev/null; then
       continue
     fi
-
-    local body prefix raw record completion expected_revision fingerprints
-    body="$(jq -r '.body' <<<"$comment")"
-    prefix="$GIT_LOOPY_CONTINUATION_RECORD_MARKER"$'\n```json\n'
-    [[ "$body" == "$prefix"* && "$body" == *$'\n```' ]] || continue
-    raw="${body#"$prefix"}"
-    raw="${raw%$'\n```'}"
-    record="$(jq -cS . <<<"$raw" 2>/dev/null)" || continue
-    completion="$(jq -cS 'del(.revision_id, .semantic_fingerprints)' <<<"$record")"
-    expected_revision="$(
-      printf '%s' "$completion" | _git_loopy_continuation_sha256
-    )"
-    [[ "$(jq -r '.revision_id' <<<"$record")" == "$expected_revision" ]] ||
-      continue
-    fingerprints="$(_git_loopy_continuation_fingerprints "$completion")"
-    local stored_fingerprints
-    stored_fingerprints="$(jq -cS '.semantic_fingerprints' <<<"$record")"
-    [[ "$stored_fingerprints" == "$(jq -cS . <<<"$fingerprints")" ]] ||
-      continue
+    parse_status=0
+    _git_loopy_continuation_parse_revision_record \
+      "$comment" \
+      "$repository" \
+      "$(jq -c '.trusted_producers' <<<"$request")" ||
+      parse_status=$?
+    ((parse_status == 0)) || continue
+    local record
+    record="$GIT_LOOPY_CONTINUATION_RECORD"
     [[ "$(jq -r '.producer.login' <<<"$record")" == "$author" ]] || continue
-    local validation_request
-    validation_request="$(
-      jq -cn \
-        --arg repository "$repository" \
-        --argjson trusted_producers "$(jq -c '.trusted_producers' <<<"$request")" \
-        --argjson completion "$completion" \
-        '{
-          repository: $repository,
-          trusted_producers: $trusted_producers,
-          completion: $completion
-        }'
-    )"
-    _git_loopy_continuation_validate_completion_request "$validation_request" true ||
-      continue
     revision_count=$((revision_count + 1))
     guidance_entries="$(
-      jq -c \
+      jq -cn \
         --argjson current "$guidance_entries" \
-        '$current + [{record: .}]' <<<"$record"
+        --argjson comment "$comment" \
+        --argjson record "$record" \
+        '$current + [{comment:$comment,record:$record}]'
     )"
 
     # Retirement legitimacy is proven only against an immutable revision
@@ -4545,88 +5607,22 @@ _git_loopy_continuation_reconcile() {
           '$current + [.revision_id | tostring]' <<<"$record"
       )"
     fi
+  done < <(jq -c "$_GIT_LOOPY_CONTINUATION_COMMENT_JQ"'
+    .[] | .comments[] | continuation_normalized_comment
+  ' <<<"$carriers")
 
-    local action
-    while IFS= read -r action; do
-      if ! jq -e '
-        .target.kind == "issue"
-        and .prerequisites == []
-        and .completion_condition.kind == "issue-closed"
-        and .completion_condition.target.kind == "issue"
-      ' <<<"$action" >/dev/null; then
-        continue
-      fi
-
-      local target_number target
-      target_number="$(jq -r '.target.number' <<<"$action")"
-      if ! target="$(
-        gh issue view "$target_number" \
-          --repo "$repository" \
-          --json number,state,url
-      )"; then
-        _git_loopy_continuation_github_error \
-          "reconcile" \
-          "reading an Action Target"
-        return 1
-      fi
-      if ! jq -e 'type == "object"' <<<"$target" >/dev/null 2>&1; then
-        _git_loopy_continuation_github_error \
-          "reconcile" \
-          "decoding an Action Target"
-        return 1
-      fi
-      [[ "$(jq -r '.state' <<<"$target")" == "OPEN" ]] || continue
-
-      local identity comment_id projection
-      identity="$(
-        _git_loopy_continuation_action_identity "$record" "$action"
-      )"
-      comment_id="$(_git_loopy_continuation_comment_id "$comment")"
-      projection="$(
-        jq -cn \
-          --arg identity "$identity" \
-          --argjson record "$record" \
-          --argjson action "$action" \
-          --argjson comment_id "$comment_id" \
-          --arg comment_url "$(jq -r '.url' <<<"$comment")" \
-          "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'{
-            identity: $identity,
-            semantic_fingerprint:
-              $record.semantic_fingerprints[$action.key],
-            workstream_anchor: $record.workstream.anchor,
-            summary: $action.summary,
-            kind: $action.kind,
-            readiness: "Ready",
-            instruction: $action.instruction,
-            target: $action.target,
-            basis: $action.basis,
-            producer: (
-              $record.producer + {
-                carrier: $record.carrier,
-                revision_id: $record.revision_id,
-                comment_id: $comment_id,
-                comment_url: $comment_url
-              }
-            ),
-            prerequisites: $action.prerequisites,
-            interaction: $action.interaction,
-            completion_condition: $action.completion_condition
-          }
-          | ordering_fields($record; $action)'
-      )"
-      actions="$(
-        jq -cn \
-          --argjson actions "$actions" \
-          --argjson projection "$projection" \
-          '$actions + [$projection]'
-      )"
-    done < <(jq -c '.actions[]?' <<<"$record")
-  done < <(jq -c '.[] | .comments[]' <<<"$carriers")
-
-  actions="$(
-    jq -c "$_GIT_LOOPY_CONTINUATION_ORDER_JQ"'continuation_view_order' \
-      <<<"$actions"
+  _git_loopy_continuation_derive_actions "$guidance_entries" "$repository"
+  actions="$GIT_LOOPY_CONTINUATION_ACTIONS"
+  diagnostics="$(
+    jq -cn \
+      --argjson derived "$GIT_LOOPY_CONTINUATION_ACTION_DIAGNOSTICS" \
+      --argjson quarantines "$(
+        _git_loopy_continuation_dispatch_evidence_diagnostics "$dispatch_evidence"
+      )" \
+      '$derived + $quarantines'
   )"
+
+  local status result guidance delta
   delta="null"
   if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
     if ! _git_loopy_continuation_validate_previous_actions \
@@ -4656,9 +5652,13 @@ _git_loopy_continuation_reconcile() {
     fi
     _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
     actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
-    diagnostics="$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS"
-  else
-    diagnostics="[]"
+    diagnostics="$(
+      jq -cn \
+        --argjson current "$diagnostics" \
+        --argjson handoff_diagnostics \
+          "$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS" \
+        '$current + $handoff_diagnostics'
+    )"
   fi
   if [[ "$(jq 'length' <<<"$gated_retirements")" != "0" ]]; then
     diagnostics="$(
@@ -4670,20 +5670,25 @@ _git_loopy_continuation_reconcile() {
         }]' <<<"$gated_retirements"
     )"
   fi
-  outcomes="$(_git_loopy_continuation_workstream_outcomes "$guidance_entries")"
-  jq -cn \
-    --arg repository "$repository" \
-    --argjson indexed_carriers "$(jq 'length' <<<"$carriers")" \
-    --argjson producer_revisions "$revision_count" \
-    --argjson actions "$actions" \
-    --argjson outcomes "$outcomes" \
-    --argjson delta "$delta" \
-    --argjson diagnostics "$diagnostics" \
-    '{
-      ok: true,
-      operation: "reconcile",
-      result: {
-        status: (if ($actions | length) > 0 then "guidance" else "waiting" end),
+  guidance="$(
+    _git_loopy_continuation_guidance_projection \
+      "$guidance_entries" "$actions" "$diagnostics" "false"
+  )"
+  status="$(jq -r '.status' <<<"$guidance")"
+  local outcomes
+  outcomes="$(jq -c '.outcomes' <<<"$guidance")"
+  result="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson indexed_carriers "$(jq 'length' <<<"$carriers")" \
+      --argjson producer_revisions "$revision_count" \
+      --arg status "$status" \
+      --argjson actions "$actions" \
+      --argjson outcomes "$outcomes" \
+      --argjson delta "$delta" \
+      --argjson diagnostics "$diagnostics" \
+      '{
+        status: $status,
         observed: {
           repository: $repository,
           indexed_carriers: $indexed_carriers,
@@ -4695,15 +5700,47 @@ _git_loopy_continuation_reconcile() {
         delta: $delta,
         diagnostics: $diagnostics
       }
-    }
-    | if ($outcomes | length) > 0
-      then .
-      else del(.result.outcomes)
-      end
-    | if $delta != null
-      then .
-      else del(.result.delta)
-      end'
+      | if ($outcomes | length) > 0
+        then .
+        else del(.outcomes)
+        end
+      | if $delta != null
+        then .
+        else del(.delta)
+        end'
+  )"
+
+  if jq -e 'has("automation")' <<<"$request" >/dev/null; then
+    validators="$(
+      while IFS= read -r entry; do
+        jq -cn \
+          --argjson comment_id "$(jq '.comment.id' <<<"$entry")" \
+          --arg sha256 "$(
+            printf '%s' "$(jq -r '.comment.body' <<<"$entry")" |
+              _git_loopy_continuation_sha256
+          )" \
+          '{comment_id:$comment_id,sha256:$sha256}'
+      done < <(jq -c 'sort_by(.comment.id)[]' <<<"$guidance_entries") |
+        jq -sc .
+    )"
+    if ! _git_loopy_continuation_automation_projection \
+      "$request" "$actions" "$diagnostics" "$status" "$validators" "$outcomes"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    result="$(
+      jq -cn \
+        --argjson result "$result" \
+        --argjson automation "$GIT_LOOPY_CONTINUATION_AUTOMATION" \
+        '$result + {automation:$automation}'
+    )"
+  fi
+
+  jq -cn --argjson result "$result" \
+    '{ok: true, operation: "reconcile", result: $result}'
 }
 
 _git_loopy_continuation_repair_index() {
@@ -4793,6 +5830,10 @@ _git_loopy_continuation_repair_index() {
       has_trusted_marker=0
       while IFS= read -r comment; do
         local author author_type authorized comment_permission
+        # Authentication is scoped to marked comments: an ordinary human comment
+        # on a carrier is not a record and must not cost a permission read.
+        [[ "$(jq -r '.body' <<<"$comment")" == \
+          *"$GIT_LOOPY_CONTINUATION_RECORD_MARKER"* ]] || continue
         author="$(jq -r '.author' <<<"$comment")"
         author_type="$(jq -r '.author_type' <<<"$comment")"
         authorized=0
@@ -4967,6 +6008,9 @@ git_loopy_continuation_main() {
       else
         _git_loopy_continuation_reconcile "$request"
       fi
+      ;;
+    record-dispatch-result)
+      _git_loopy_continuation_record_dispatch_result "$request"
       ;;
     repair-index)
       _git_loopy_continuation_repair_index "$request"

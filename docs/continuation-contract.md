@@ -66,30 +66,38 @@ At the 1.0 foundation gate, every family member advertised the GitHub Adapter bu
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
-concurrent Dispatch remain unsupported everywhere, and `record-dispatch-result` is supported only
-where §9 is advertised. Python, shell, and PowerShell now all advertise `terminal_rendering: true`;
-no family member fails closed on `reconcile --terminal` any longer. Python, shell, and PowerShell
-advertise their trusted immutable-revision protocol and explicit `repair-index`. Mode is `off`.
+concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by every
+family member. Python, shell, and PowerShell now all advertise `terminal_rendering: true`; no family
+member fails closed on `reconcile --terminal` any longer. Python, shell, and PowerShell advertise
+their trusted immutable-revision protocol and explicit `repair-index`. Mode is `off`.
 
 Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A distribution
 advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
 frontier, typed Performer eligibility, the single DispatchAuthorization, the locked stop
 precedence, and the two Dispatch-evidence classes — and supports the `record-dispatch-result`
-operation. Python advertises `fixed_frontier_authorization: true`; shell and PowerShell advertise
-`false` explicitly, accept no record declaring contract 1.2, and continue to fail closed on
-`record-dispatch-result` with `unsupported_operation`.
+operation. Python, shell, and PowerShell all advertise `fixed_frontier_authorization: true`.
+
+The §9 stop `workstreams-terminal` is derived from a `complete` Reconciliation status over closed
+coverage, and `complete` is derived from the §8 `outcomes` projection. Workstream outcomes and the
+Waiting/guidance/Complete status are therefore **not** gated by `prospective_projection`: they are
+a prerequisite of the locked stop precedence, and a distribution that advertised
+`fixed_frontier_authorization` without them could never return the one stop that means the Run is
+finished. Every family member projects `outcomes` and the three statuses. `prospective_projection`
+continues to gate only the fields §9 does not need — retirement receipts, the refresh delta, and
+the Handoff reference — so a distribution may advertise `fixed_frontier_authorization: true` beside
+`prospective_projection: false`, as shell did until its native §8 projection landed.
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
-implements every §8 field — retirement receipts, Workstream outcomes, refresh delta, and Handoff
+implements the §8 fields §9 does not require — retirement receipts, refresh delta, and Handoff
 reference. Python, shell, and PowerShell all advertise `prospective_projection: true`. A
 distribution that does not advertise it fails closed rather than ignoring the gated fields:
 `completion.retirements` is a structural `publish` rejection, and `previous_actions` or `handoff` on
 `reconcile` returns `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it
 is the contract's ordering rule and every family member implements it.
 
-A distribution advertises the contract versions whose records it accepts. Python advertises
-`["1.0", "1.1", "1.2"]`; shell and PowerShell advertise `["1.0", "1.1"]`. Each added version
-introduces only optional fields, so a record published under an earlier version stays valid
+A distribution advertises the contract versions whose records it accepts. Python, shell, and
+PowerShell all advertise `["1.0", "1.1", "1.2"]`. Each added version introduces only optional
+fields, so a record published under an earlier version stays valid
 without rewriting. A record whose Action carries a `safety_case` **must** declare `1.2`: the
 AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently
 drop the case while keeping the claim must reject the whole record instead.
@@ -104,7 +112,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.5,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.7,
 Continuation contract 1.2, record format 1, Wrapper contract 1.4, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -139,6 +147,38 @@ unregistered code is a fixture change rather than a silent addition. Scenarios m
 view order. Ordering scenarios name every distribution, because ordering is ungated; scenarios
 exercising the gated §8 request fields name only the distributions advertising
 `prospective_projection`.
+
+Fixture schema 1.6 makes a narrowed scope a claim the fixture checks rather than an authoring
+convention. Family adapters run only the scenarios and workflows naming their distribution, so a
+record narrowed to a subset is a question the rest of the family is never asked; until 1.6 the
+advertised `optional_capabilities` manifests and the per-record `distributions` arrays were two
+hand-maintained lists kept in sync by discipline alone. `capability_coverage` requires every
+narrowed record to declare one of three reasons. `manifest-identity` is reserved for the per-family
+capability scenarios. `capability-absent` names an optional capability, and the record's
+`distributions` MUST equal exactly the set of distributions whose advertised manifest carries that
+capability with the declared value — scoping is derived from advertisement, not asserted beside it.
+`family-local-detail` names an operation and a variant group whose members MUST be pairwise
+disjoint, MUST together cover every distribution advertising that operation, and MUST agree on
+arguments, exit code, and error code; only human-readable detail may differ. The manifests measured
+against are the fixture's own per-family capability scenarios, each proven by executing the real
+native entrypoint, so the chain runs from real CLI through advertised manifest to scenario scoping
+with no hand-asserted link. Every family adapter enforces the gate, because a distribution must be
+able to prove itself without a Python runtime present.
+
+Fixture schema 1.7 completes the foundation gate's registry of ten end-to-end scenarios and puts the
+check in every family. `end_to_end_coverage.locked_scenarios` maps each locked scenario to the
+workflows driving it through the real native commands; every family adapter pins the ten names
+itself, requires each scenario to name an existing workflow, requires a scenario's workflows to
+cover every distribution between them — a member lacking an optional capability answers by failing
+closed, in a workflow narrowed for a `capability_coverage` reason — and requires `publish`,
+`reconcile`, and `record-dispatch-result` all to be exercised. `read_only_call_prefixes` pins the
+read-only shape of Reconciliation against the observed transport for every pinned `reconcile`, so a
+refresh that writes fails on the call it made rather than on the words it printed.
+
+The same revision retires `unsupported_reconciliation_semantics` from
+`revision_protocol.diagnostic_codes`. The vocabulary is the union across every distribution, and no
+distribution emits that code since the path-local PowerShell derivation was deleted; a registered
+code nobody produces is vocabulary a port can implement wrongly and never be told.
 
 ## 7. Native atomic completion records
 
@@ -254,12 +294,34 @@ Callers select the Python, shell, or PowerShell immutable-revision capability wi
 Supplying `parents` or `reattestation` without an observation is invalid rather than silently
 ignored.
 
+The subset narrows *discovery*, never *derivation*. Both paths decide what an Action means through
+the same evaluation: the same Prerequisite and completion-condition evaluators, the same stable
+fact reads, the same readiness and `unsatisfied_prerequisites`, the same union basis and
+provenance, and the same `action_conflict`, `prerequisite_cycle`, `unverified_completion`, and
+`unverified_prerequisite` diagnostics. A path-local derivation is a rejection, not an
+implementation choice: an §9 authorization is computed over whatever `actions` and `diagnostics`
+Reconciliation returned, so a narrower label-indexed derivation would drop the very
+`action_conflict` that makes the frozen coverage untrustworthy and authorize a Dispatch the
+revision-protocol path refuses.
+
 Normal Reconciliation reports missing or stale index labels but never mutates them. Python, shell,
 and PowerShell `repair-index` are the only index mutation paths. Each command authenticates the
 operator and every record author, adds labels to trusted carriers, and removes labels only from
 artifacts with no marked record. Publication still establishes the label before append and rereads
 the exact comment before commit. Any operational failure after the durable workflow transition
 returns `repair_required`; it never falls back to ephemeral guidance or a success-shaped receipt.
+
+"After the durable workflow transition" is not conditional on the revision protocol. The transition
+has already happened by the time `publish` starts, so a failed index label, a failed carrier index
+edit, a failed append, an author that does not match the completion Producer, and a reread that
+does not match the append all strand exactly the same evidence whether or not the request carried
+an `observation`. All five are `repair_required` on both discovery paths in every family member.
+Reading the transition's own evidence happens *before* the index label and is therefore an ordinary
+`github_error`. The reread is issued before the appended author is judged: both describe the same
+post-transition write, so a reader that short-circuits on the author records one call less evidence
+than the operator needs to repair it. A `gh` call that succeeds but answers with something that is
+not a comment object strands the same write and is `repair_required` too; only the human-readable
+detail is the transport's own parse diagnostic and therefore family-local prose.
 
 ## 8. Prospective projection: retirement, ordering, delta, Handoff, and terminal rendering
 
