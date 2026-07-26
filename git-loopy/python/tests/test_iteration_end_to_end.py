@@ -61,10 +61,12 @@ from copilot.generated.session_events import (
 )
 
 from git_loopy import cli
+from git_loopy import events as events_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
 from git_loopy import settings
+from git_loopy import sources as sources_module
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
@@ -631,6 +633,170 @@ def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     )
     # client.stop() still ran in the loop's finally.
     assert fake_client.stop_call_count == 1
+
+
+def _read_events(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every replay envelope this Run wrote, in order."""
+    logs = sorted((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    assert logs, "expected a replay log"
+    return [
+        json.loads(line)
+        for line in logs[0].read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_loop_reports_pool_exclusions_as_events(tmp_path, monkeypatch) -> None:
+    """A ``ready-for-agent`` issue the discriminator drops is named, with a reason.
+
+    Issue #303: before this, such an issue never entered the Pool, never
+    reached the Dashboard, and produced no diagnostic — a human who had
+    deliberately triaged it had no way to learn the runner was ignoring it.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(7, body="## Parent\n- #1\n\n## Acceptance criteria\n- x"),
+            _make_issue(8, body="A PRD with neither section."),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module, "_make_client", lambda: FakeCopilotClient(scripted_events=[])
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    events = _read_events(tmp_path)
+    excluded = [
+        e for e in events if e["type"] == events_module.WRAPPER_POOL_EXCLUDED
+    ]
+    assert [(e["issue"], e["reason"]) for e in excluded] == [
+        (7, sources_module.EXCLUSION_MISSING_WHAT_TO_BUILD),
+        (8, sources_module.EXCLUSION_MISSING_BOTH_SECTIONS),
+    ]
+    assert excluded[0]["title"] == "Test issue 7"
+
+    collected = next(
+        e for e in events if e["type"] == events_module.WRAPPER_AFK_READY_COLLECTED
+    )
+    # The count travels with the collection so a replay can tell an empty
+    # tracker apart from a tracker whose every candidate was dropped.
+    assert collected["issues"] == []
+    assert collected["excluded"] == 2
+
+    # Every exclusion is reported before the collection it explains.
+    types = [e["type"] for e in events]
+    assert types.index(events_module.WRAPPER_POOL_EXCLUDED) < types.index(
+        events_module.WRAPPER_AFK_READY_COLLECTED
+    )
+
+
+def test_loop_emits_no_exclusion_events_when_nothing_is_dropped(
+    tmp_path, monkeypatch
+) -> None:
+    """A clean Pool's output is unchanged — this slice only adds visibility."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"), issues=[]
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module, "_make_client", lambda: FakeCopilotClient(scripted_events=[])
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    events = _read_events(tmp_path)
+    assert not [
+        e for e in events if e["type"] == events_module.WRAPPER_POOL_EXCLUDED
+    ]
+    collected = next(
+        e for e in events if e["type"] == events_module.WRAPPER_AFK_READY_COLLECTED
+    )
+    assert collected["excluded"] == 0
+
+
+def test_loop_reports_an_all_excluded_pool_distinctly(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An all-excluded Pool reads differently from a Pool with no work.
+
+    Same clean exit 0 — the two situations differ in what the operator should
+    do next, not in whether the Run failed.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(8, body="A PRD with neither section.")],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module, "_make_client", lambda: FakeCopilotClient(scripted_events=[])
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "#8" in out
+    assert sources_module.EXCLUSION_MISSING_BOTH_SECTIONS.replace("_", " ") in out
+
+
+def test_loop_reports_prds_pool_exclusions(tmp_path, monkeypatch) -> None:
+    """The local-markdown backend shares the discriminator, so it reports too."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    slice_dir = tmp_path / "prds" / "featA"
+    slice_dir.mkdir(parents=True)
+    (slice_dir / "001-incomplete.md").write_text(
+        "## What to build\nthing", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
+    monkeypatch.setattr(
+        loop_module, "_make_client", lambda: FakeCopilotClient(scripted_events=[])
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="prds", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    excluded = [
+        e
+        for e in _read_events(tmp_path)
+        if e["type"] == events_module.WRAPPER_POOL_EXCLUDED
+    ]
+    assert [(e["issue"], e["reason"]) for e in excluded] == [
+        (
+            "prds/featA/001-incomplete.md",
+            sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
+        )
+    ]
 
 
 def _wire_single_issue_github(
@@ -1734,8 +1900,10 @@ class _NoopSource:
     def preflight(self) -> int | None:
         return None
 
-    def collect_afk_ready(self) -> list[Any]:
-        return []
+    def collect_pool(self) -> Any:
+        from git_loopy.sources import PoolCollection
+
+        return PoolCollection()
 
     def handle_completions(
         self, *, pool: list[Any], new_commits: list[Any]

@@ -122,6 +122,64 @@ class TestIsAfkReady:
 
 
 # --------------------------------------------------------------------------- #
+# afk_ready_exclusion — the discriminator's reason (issue #303)               #
+# --------------------------------------------------------------------------- #
+
+
+class TestAfkReadyExclusion:
+    """``afk_ready_exclusion`` names *why* a candidate leaves the Pool.
+
+    ``is_afk_ready`` stays the boolean projection of this function, so a Pool
+    exclusion can never disagree with Pool membership — the drift that made
+    the silent drop invisible in the first place.
+    """
+
+    def test_returns_none_when_afk_ready(self) -> None:
+        body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
+        assert sources_module.afk_ready_exclusion(body) is None
+
+    def test_names_the_missing_what_to_build_section(self) -> None:
+        body = "## Parent\n#1\n\n## Acceptance criteria\n- foo"
+        assert (
+            sources_module.afk_ready_exclusion(body)
+            == sources_module.EXCLUSION_MISSING_WHAT_TO_BUILD
+        )
+
+    def test_names_the_missing_acceptance_criteria_section(self) -> None:
+        body = "## What to build\nthing"
+        assert (
+            sources_module.afk_ready_exclusion(body)
+            == sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
+        )
+
+    def test_names_both_sections_when_neither_is_present(self) -> None:
+        body = "A bare planning document with no task sections."
+        assert (
+            sources_module.afk_ready_exclusion(body)
+            == sources_module.EXCLUSION_MISSING_BOTH_SECTIONS
+        )
+
+    def test_empty_body_is_missing_both_sections(self) -> None:
+        assert (
+            sources_module.afk_ready_exclusion("")
+            == sources_module.EXCLUSION_MISSING_BOTH_SECTIONS
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "## What to build\nthing\n\n## Acceptance criteria\n- foo",
+            "## Parent\n#1\n\n## Acceptance criteria\n- foo",
+            "## What to build\nthing",
+            "",
+            "blah ## What to build x ## Acceptance criteria done",
+        ],
+    )
+    def test_is_afk_ready_is_the_boolean_projection(self, body: str) -> None:
+        assert is_afk_ready(body) is (sources_module.afk_ready_exclusion(body) is None)
+
+
+# --------------------------------------------------------------------------- #
 # AfkReadyItem + Completion dataclass shape                                   #
 # --------------------------------------------------------------------------- #
 
@@ -213,17 +271,17 @@ class TestGitHubPreflight:
 
 
 # --------------------------------------------------------------------------- #
-# GitHubIssueSource.collect_afk_ready                                          #
+# GitHubIssueSource.collect_pool                                              #
 # --------------------------------------------------------------------------- #
 
 
-class TestGitHubCollectAfkReady:
+class TestGitHubCollectPool:
     def test_returns_empty_when_list_raises(self) -> None:
         gh = FakeGitHubClient(
             issue_list_error=gh_module.GhError(["gh", "issue", "list"], 1, "boom")
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
     def test_filters_out_issues_lacking_discriminator(self) -> None:
         good = _make_issue(42)
@@ -231,7 +289,7 @@ class TestGitHubCollectAfkReady:
         gh = FakeGitHubClient(issues=[good, bad])
 
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
 
         assert [i.ref for i in items] == [42]
         # Discriminator filter runs BEFORE the per-issue view to save
@@ -248,7 +306,7 @@ class TestGitHubCollectAfkReady:
             body="## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- ok",
         )
         impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert len(items) == 1
         block = items[0].rendered_block
         assert block.startswith(
@@ -265,7 +323,7 @@ class TestGitHubCollectAfkReady:
         """
         issue = _make_issue(42, labels=["ready-for-agent", "parallel-safe"])
         impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert len(items) == 1
         assert items[0].labels == ("ready-for-agent", "parallel-safe")
         assert "parallel-safe" in items[0].labels
@@ -281,7 +339,7 @@ class TestGitHubCollectAfkReady:
         )
         issue = _make_issue(42, comments=comments)
         impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         block = items[0].rendered_block
 
         # Newest comment should appear first in the block (after the
@@ -307,7 +365,7 @@ class TestGitHubCollectAfkReady:
         )
 
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == [42]
 
     def test_re_verifies_discriminator_on_full_body(self) -> None:
@@ -320,7 +378,170 @@ class TestGitHubCollectAfkReady:
         )
 
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
+
+
+# --------------------------------------------------------------------------- #
+# GitHubIssueSource.collect_pool — Pool exclusions (issue #303)               #
+# --------------------------------------------------------------------------- #
+
+
+class TestGitHubCollectPoolExclusions:
+    """A ``ready-for-agent`` candidate the discriminator drops is reported.
+
+    A human deliberately triaged these issues; before #303 they left the
+    **Pool** with no diagnostic at all, so the runner looked like it was
+    ignoring triage.
+    """
+
+    def test_records_the_excluded_candidate_with_its_reason(self) -> None:
+        good = _make_issue(42)
+        bad = _make_issue(43, title="PRD: something", body="## Acceptance criteria\n- x")
+        impl = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[good, bad])
+        )
+
+        collection = impl.collect_pool()
+
+        assert [i.ref for i in collection.items] == [42]
+        assert len(collection.exclusions) == 1
+        exclusion = collection.exclusions[0]
+        assert exclusion.ref == 43
+        assert exclusion.title == "PRD: something"
+        assert exclusion.reason == sources_module.EXCLUSION_MISSING_WHAT_TO_BUILD
+
+    def test_records_every_excluded_candidate_in_source_order(self) -> None:
+        impl = GitHubIssueSource(
+            _silent_logger(),
+            gh=FakeGitHubClient(
+                issues=[
+                    _make_issue(10, body="## What to build\nthing"),
+                    _make_issue(11, body="nothing at all"),
+                    _make_issue(12),
+                ]
+            ),
+        )
+
+        collection = impl.collect_pool()
+
+        assert [e.ref for e in collection.exclusions] == [10, 11]
+        assert [e.reason for e in collection.exclusions] == [
+            sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
+            sources_module.EXCLUSION_MISSING_BOTH_SECTIONS,
+        ]
+
+    def test_no_exclusions_when_every_candidate_is_afk_ready(self) -> None:
+        impl = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[_make_issue(1)])
+        )
+        assert impl.collect_pool().exclusions == ()
+
+    def test_records_a_candidate_excluded_on_re_verification(self) -> None:
+        """A body that loses the shape between list and view is still reported.
+
+        The re-verify step is the second place a candidate can silently leave
+        the Pool, and it drops the *authoritative* body — so it must report the
+        authoritative reason rather than the cheaper list body's.
+        """
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42)],
+            issue_views={42: _make_issue(42, body="## What to build\nonly this")},
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        assert collection.items == ()
+        assert [e.ref for e in collection.exclusions] == [42]
+        assert (
+            collection.exclusions[0].reason
+            == sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
+        )
+
+    def test_a_failed_issue_view_is_not_reported_as_an_exclusion(self) -> None:
+        """An unreadable candidate was not *discriminated* against.
+
+        Reporting it as an exclusion would tell the operator to fix headings
+        that are probably fine; the existing warn-and-skip path already covers
+        a transient read failure.
+        """
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42), _make_issue(99)],
+            issue_view_errors={99: gh_module.GhError(["gh"], 1, "broken")},
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        assert [i.ref for i in collection.items] == [42]
+        assert collection.exclusions == ()
+
+    def test_a_failed_list_reports_no_exclusions(self) -> None:
+        """A failed list saw no candidates, so it excluded none of them."""
+        gh = FakeGitHubClient(
+            issue_list_error=gh_module.GhError(["gh", "issue", "list"], 1, "boom")
+        )
+        collection = GitHubIssueSource(_silent_logger(), gh=gh).collect_pool()
+        assert collection.items == ()
+        assert collection.exclusions == ()
+
+    def test_collect_pool_never_views_an_excluded_candidate(self) -> None:
+        """Reporting the exclusion must not re-introduce the N+1 round trip."""
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42), _make_issue(43, body="no sections")]
+        )
+        GitHubIssueSource(_silent_logger(), gh=gh).collect_pool()
+        assert gh.issue_view_calls == [42]
+
+
+# --------------------------------------------------------------------------- #
+# PoolCollection / PoolExclusion shape (issue #303)                           #
+# --------------------------------------------------------------------------- #
+
+
+class TestPoolCollectionShape:
+    def test_pool_exclusion_is_frozen(self) -> None:
+        exclusion = sources_module.PoolExclusion(
+            ref=1, title="t", reason=sources_module.EXCLUSION_MISSING_BOTH_SECTIONS
+        )
+        with pytest.raises(Exception):
+            exclusion.ref = 2  # type: ignore[misc]
+
+    def test_pool_collection_defaults_to_empty(self) -> None:
+        collection = sources_module.PoolCollection()
+        assert collection.items == ()
+        assert collection.exclusions == ()
+
+    def test_excluded_only_is_true_when_everything_was_dropped(self) -> None:
+        collection = sources_module.PoolCollection(
+            items=(),
+            exclusions=(
+                sources_module.PoolExclusion(
+                    ref=7,
+                    title="t",
+                    reason=sources_module.EXCLUSION_MISSING_BOTH_SECTIONS,
+                ),
+            ),
+        )
+        assert collection.excluded_only is True
+
+    def test_excluded_only_is_false_for_a_genuinely_empty_pool(self) -> None:
+        # No ready-for-agent work at all is a different operator situation
+        # from work that exists but was dropped for its shape.
+        assert sources_module.PoolCollection().excluded_only is False
+
+    def test_excluded_only_is_false_when_work_survived(self) -> None:
+        collection = sources_module.PoolCollection(
+            items=(AfkReadyItem(ref=1, title="t", rendered_block="x"),),
+            exclusions=(
+                sources_module.PoolExclusion(
+                    ref=7,
+                    title="t",
+                    reason=sources_module.EXCLUSION_MISSING_BOTH_SECTIONS,
+                ),
+            ),
+        )
+        assert collection.excluded_only is False
 
 
 # --------------------------------------------------------------------------- #
@@ -489,7 +710,7 @@ class TestPrdsPreflight:
 
 
 # --------------------------------------------------------------------------- #
-# PrdsIssueSource.collect_afk_ready                                           #
+# PrdsIssueSource.collect_pool                                                #
 # --------------------------------------------------------------------------- #
 
 
@@ -502,22 +723,22 @@ def _write_md(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
 
 
-class TestPrdsCollectAfkReady:
+class TestPrdsCollectPool:
     def test_returns_empty_when_no_prds_dir(self, tmp_path: Path) -> None:
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
     def test_returns_empty_when_prds_dir_empty(self, tmp_path: Path) -> None:
         (tmp_path / "prds").mkdir()
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
     def test_discovers_single_nnn_file_with_discriminator(
         self, tmp_path: Path
     ) -> None:
         _write_md(tmp_path / "prds" / "featA" / "001-foo.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert len(items) == 1
         assert items[0].ref == "prds/featA/001-foo.md"
         assert items[0].title == "prds/featA/001-foo.md"
@@ -527,28 +748,77 @@ class TestPrdsCollectAfkReady:
     def test_skips_prd_md(self, tmp_path: Path) -> None:
         _write_md(tmp_path / "prds" / "featA" / "prd.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
     def test_skips_files_without_nnn_prefix(self, tmp_path: Path) -> None:
         _write_md(tmp_path / "prds" / "featA" / "notes.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "001-real.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/001-real.md"]
 
     def test_skips_files_lacking_afk_discriminator(self, tmp_path: Path) -> None:
         _write_md(tmp_path / "prds" / "featA" / "001-incomplete.md", _NON_AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "002-ready.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/002-ready.md"]
 
     def test_skips_done_subdirectory_files(self, tmp_path: Path) -> None:
         _write_md(tmp_path / "prds" / "featA" / "done" / "001-archived.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "002-active.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/002-active.md"]
+
+    # -- Pool exclusions (issue #303) ------------------------------------- #
+
+    def test_reports_a_dropped_file_with_its_reason(self, tmp_path: Path) -> None:
+        """The shared discriminator means the shared exclusion vocabulary."""
+        _write_md(tmp_path / "prds" / "featA" / "001-incomplete.md", _NON_AFK_BODY)
+        _write_md(tmp_path / "prds" / "featA" / "002-ready.md", _AFK_BODY)
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+
+        collection = impl.collect_pool()
+
+        assert [i.ref for i in collection.items] == ["prds/featA/002-ready.md"]
+        assert [e.ref for e in collection.exclusions] == [
+            "prds/featA/001-incomplete.md"
+        ]
+        assert (
+            collection.exclusions[0].reason
+            == sources_module.EXCLUSION_MISSING_BOTH_SECTIONS
+        )
+        assert collection.exclusions[0].title == "prds/featA/001-incomplete.md"
+
+    def test_orders_exclusions_by_repo_relative_path(self, tmp_path: Path) -> None:
+        _write_md(tmp_path / "prds" / "featB" / "001-b.md", _NON_AFK_BODY)
+        _write_md(tmp_path / "prds" / "featA" / "001-a.md", "## What to build\nx")
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+
+        collection = impl.collect_pool()
+
+        assert [e.ref for e in collection.exclusions] == [
+            "prds/featA/001-a.md",
+            "prds/featB/001-b.md",
+        ]
+        assert collection.exclusions[0].reason == (
+            sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
+        )
+
+    def test_a_non_candidate_file_is_not_an_exclusion(self, tmp_path: Path) -> None:
+        """``prd.md`` and un-numbered notes never entered the discriminator."""
+        _write_md(tmp_path / "prds" / "featA" / "prd.md", _NON_AFK_BODY)
+        _write_md(tmp_path / "prds" / "featA" / "notes.md", _NON_AFK_BODY)
+        _write_md(tmp_path / "prds" / "featA" / "001-ready.md", _AFK_BODY)
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+
+        assert impl.collect_pool().exclusions == ()
+
+    def test_an_archived_file_is_not_an_exclusion(self, tmp_path: Path) -> None:
+        _write_md(tmp_path / "prds" / "featA" / "done" / "001-old.md", _NON_AFK_BODY)
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+        assert impl.collect_pool().exclusions == ()
 
     def test_orders_within_feature_numerically_by_nnn(
         self, tmp_path: Path
@@ -559,7 +829,7 @@ class TestPrdsCollectAfkReady:
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "002-b.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == [
             "prds/featA/001-a.md",
             "prds/featA/002-b.md",
@@ -574,7 +844,7 @@ class TestPrdsCollectAfkReady:
             tmp_path / "prds" / "alpha-beta" / "001-ab.md", _AFK_BODY
         )
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == [
             "prds/alpha-beta/001-ab.md",
             "prds/alpha/001-a.md",
@@ -590,7 +860,7 @@ class TestPrdsCollectAfkReady:
         _write_md(tmp_path / "prds" / "featB" / "005-b5.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featB" / "001-b1.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == [
             "prds/featA/001-a.md",
             "prds/featA/002-b.md",
@@ -605,7 +875,7 @@ class TestPrdsCollectAfkReady:
         _write_md(tmp_path / "prds" / "done" / "001-archived.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "001-active.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/001-active.md"]
 
     def test_skips_loose_md_files_at_top_level(self, tmp_path: Path) -> None:
@@ -613,7 +883,7 @@ class TestPrdsCollectAfkReady:
         _write_md(tmp_path / "prds" / "README.md", _AFK_BODY)
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", _AFK_BODY)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/001-a.md"]
 
     def test_skips_symlinked_feature_directories(self, tmp_path: Path) -> None:
@@ -629,7 +899,7 @@ class TestPrdsCollectAfkReady:
 
         impl = PrdsIssueSource(tmp_path, _silent_logger())
 
-        assert [i.ref for i in impl.collect_afk_ready()] == [
+        assert [i.ref for i in list(impl.collect_pool().items)] == [
             "prds/featA/002-active.md"
         ]
 
@@ -646,7 +916,7 @@ class TestPrdsCollectAfkReady:
 
         impl = PrdsIssueSource(tmp_path, _silent_logger())
 
-        assert [i.ref for i in impl.collect_afk_ready()] == [
+        assert [i.ref for i in list(impl.collect_pool().items)] == [
             "prds/featA/002-active.md"
         ]
 
@@ -662,7 +932,7 @@ class TestPrdsCollectAfkReady:
 
         impl = PrdsIssueSource(linked.parent, _silent_logger())
 
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
     def test_rendered_block_format_matches_bash_collector(
         self, tmp_path: Path
@@ -671,7 +941,7 @@ class TestPrdsCollectAfkReady:
         body = "## Parent\n#1\n\n## What to build\nthing\n\n## Acceptance criteria\n- ok\n"
         _write_md(tmp_path / "prds" / "featA" / "001-a.md", body)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert items[0].rendered_block == f"=== prds/featA/001-a.md ===\n{body}"
 
     def test_unreadable_file_is_skipped_not_raised(
@@ -690,7 +960,7 @@ class TestPrdsCollectAfkReady:
 
         monkeypatch.setattr(Path, "read_text", fake_read)
         impl = PrdsIssueSource(tmp_path, _silent_logger())
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == ["prds/featA/001-good.md"]
 
 
@@ -778,6 +1048,13 @@ class TestModuleStructure:
             "PICKUP_STALE",
             "PICKUP_UNAVAILABLE",
             "PICKUP_VALIDATED",
+            "EXCLUSION_MISSING_ACCEPTANCE_CRITERIA",
+            "EXCLUSION_MISSING_BOTH_SECTIONS",
+            "EXCLUSION_MISSING_WHAT_TO_BUILD",
+            "EXCLUSION_REASONS",
+            "PoolCollection",
+            "PoolExclusion",
+            "afk_ready_exclusion",
             "is_afk_ready",
             "is_pr_afk_ready",
         }
@@ -948,7 +1225,7 @@ class TestGitHubCollectAfkReadyPrs:
         # include_prs defaults False, so pr_list must never be called.
         gh = FakeGitHubClient(issues=[], prs=[_make_pr(7)])
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
         assert gh.pr_list_calls == []
 
     def test_collects_only_prs_with_brief_when_enabled(self) -> None:
@@ -961,7 +1238,7 @@ class TestGitHubCollectAfkReadyPrs:
             ],
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh, include_prs=True)
-        items = impl.collect_afk_ready()
+        items = list(impl.collect_pool().items)
 
         assert [i.ref for i in items] == [7]
         assert items[0].kind == "pr"
@@ -974,7 +1251,7 @@ class TestGitHubCollectAfkReadyPrs:
             issues=[], pr_list_error=gh_module.GhError(["gh", "pr", "list"], 1, "boom")
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh, include_prs=True)
-        assert impl.collect_afk_ready() == []
+        assert impl.collect_pool().items == ()
 
 
 # --------------------------------------------------------------------------- #
@@ -1231,7 +1508,7 @@ class TestRollingSourceSplit:
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
 
-        pool = impl.collect_afk_ready()
+        pool = list(impl.collect_pool().items)
 
         # Both issues, enriched — the rolling seam never narrows serial collection
         # to Parallel-safe work or drops the comment enrichment.

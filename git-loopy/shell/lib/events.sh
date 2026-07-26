@@ -19,6 +19,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_ITERATION_START]="wrapper.iteration.start"
   [WRAPPER_ITERATION_END]="wrapper.iteration.end"
   [WRAPPER_AFK_READY_COLLECTED]="wrapper.afk_ready.collected"
+  [WRAPPER_POOL_EXCLUDED]="wrapper.pool.excluded"
   [WRAPPER_CHECKPOINT_RECORDED]="wrapper.checkpoint.recorded"
   [WRAPPER_COMMIT_RECORDED]="wrapper.commit.recorded"
   [WRAPPER_PUSH_RECORDED]="wrapper.push.recorded"

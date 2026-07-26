@@ -59,6 +59,7 @@ from git_loopy.events import (
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
@@ -243,6 +244,7 @@ class Renderer:
     def _on_afk_ready_collected(self, event: dict[str, Any]) -> None:
         issues = event.get("issues") or []
         count = len(issues) if hasattr(issues, "__len__") else 0
+        excluded = event.get("excluded") or 0
         text = Text()
         text.append("ⓘ ", style=STYLES["meta"])
         text.append("AFK-ready pool: ", style=STYLES["meta"])
@@ -260,6 +262,36 @@ class Renderer:
                 + ")",
                 style=STYLES["meta"],
             )
+        if excluded:
+            # An all-excluded Pool is a different operator situation from a
+            # tracker with no work (#303) — the first says "fix the issues you
+            # already triaged", the second says "triage more". Saying so here
+            # keeps the two apart on the one line that reports Pool size.
+            text.append(
+                f"  ({excluded} ready-for-agent candidate"
+                f"{'' if excluded == 1 else 's'} excluded"
+                + (" — nothing eligible remains" if count == 0 else "")
+                + ")",
+                style=STYLES["meta"],
+            )
+        self.console.print(text)
+
+    def _on_pool_excluded(self, event: dict[str, Any]) -> None:
+        # A ready-for-agent issue a human deliberately triaged that the
+        # AFK-ready discriminator dropped (#303). Named on the console rather
+        # than only in the replay log, because the operator is the only one who
+        # can fix the issue's sections.
+        ref = event.get("issue")
+        reason = event.get("reason", "")
+        title = event.get("title", "")
+        text = Text()
+        text.append("⊘ ", style=STYLES["meta"])
+        text.append("excluded ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        if title:
+            text.append(f" {title}", style=STYLES["meta"])
+        if reason:
+            text.append(f" — {str(reason).replace('_', ' ')}", style=STYLES["meta"])
         self.console.print(text)
 
     def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:
@@ -552,6 +584,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
+    WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
     WRAPPER_PUSH_RECORDED: Renderer._on_push_recorded,

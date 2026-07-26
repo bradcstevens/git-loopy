@@ -71,6 +71,13 @@ __all__ = [
     "PICKUP_STALE",
     "PICKUP_UNAVAILABLE",
     "PICKUP_VALIDATED",
+    "EXCLUSION_MISSING_ACCEPTANCE_CRITERIA",
+    "EXCLUSION_MISSING_BOTH_SECTIONS",
+    "EXCLUSION_MISSING_WHAT_TO_BUILD",
+    "EXCLUSION_REASONS",
+    "PoolCollection",
+    "PoolExclusion",
+    "afk_ready_exclusion",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
@@ -84,6 +91,21 @@ LABEL_PARALLEL_SAFE: str = "parallel-safe"
 PICKUP_VALIDATED: str = "validated"
 PICKUP_STALE: str = "stale"
 PICKUP_UNAVAILABLE: str = "unavailable"
+
+# Pool-exclusion reasons (#303). A ``ready-for-agent`` candidate that fails the
+# AFK-ready body discriminator leaves the **Pool**; these name *which* required
+# section it lacked so a human who deliberately triaged the issue can see why
+# the runner is ignoring it rather than watching it vanish.
+EXCLUSION_MISSING_WHAT_TO_BUILD: str = "missing_what_to_build"
+EXCLUSION_MISSING_ACCEPTANCE_CRITERIA: str = "missing_acceptance_criteria"
+EXCLUSION_MISSING_BOTH_SECTIONS: str = "missing_both_sections"
+
+# The closed reason vocabulary, in the order a contract reader should read it.
+EXCLUSION_REASONS: tuple[str, ...] = (
+    EXCLUSION_MISSING_WHAT_TO_BUILD,
+    EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
+    EXCLUSION_MISSING_BOTH_SECTIONS,
+)
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
 # Body must contain BOTH ``^## What to build`` and ``^## Acceptance
@@ -121,8 +143,39 @@ def is_afk_ready(body: str) -> bool:
         validly-authored parent-less slices are still picked up. Both
         backends apply this identical check so a body that wouldn't be
         picked up via GitHub also won't be picked up via PRDs.
+
+    This is the boolean *projection* of :func:`afk_ready_exclusion`, not an
+    independent check. Membership and the reported exclusion reason therefore
+    cannot drift apart — a candidate is out of the **Pool** exactly when there
+    is a reason to report for it.
     """
-    return bool(_RE_WHAT_TO_BUILD.search(body)) and bool(_RE_AC.search(body))
+    return afk_ready_exclusion(body) is None
+
+
+def afk_ready_exclusion(body: str) -> str | None:
+    """Return why ``body`` fails the AFK-ready discriminator, or ``None``.
+
+    Args:
+        body: Raw markdown body of an issue or local-markdown file.
+
+    Returns:
+        ``None`` when the body is AFK-ready, else one of
+        :data:`EXCLUSION_REASONS` naming which required section is absent.
+        The "missing both" case is reported as its own reason rather than
+        collapsed into either single-section reason, because an issue with
+        neither section is usually a specification document rather than a
+        slice that lost one heading — a distinction the operator acts on
+        differently.
+    """
+    has_what = bool(_RE_WHAT_TO_BUILD.search(body))
+    has_ac = bool(_RE_AC.search(body))
+    if has_what and has_ac:
+        return None
+    if has_what:
+        return EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
+    if has_ac:
+        return EXCLUSION_MISSING_WHAT_TO_BUILD
+    return EXCLUSION_MISSING_BOTH_SECTIONS
 
 
 def is_pr_afk_ready(pr: gh_module.PullRequest) -> bool:
@@ -181,6 +234,63 @@ class AfkReadyItem:
     kind: str = "issue"
     head_sha: str = ""
     labels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PoolExclusion:
+    """One ``ready-for-agent`` candidate the AFK-ready discriminator dropped.
+
+    A human deliberately triaged the issue to ``ready-for-agent``; the runner
+    then declined to work it because its body lacks a required section. Before
+    #303 that decision left no trace at all — the issue never entered the
+    **Pool**, never reached the **Dashboard**, and produced no diagnostic — so
+    the only way to discover it was to compare the tracker against the runner's
+    output by hand.
+
+    Attributes:
+        ref: Source-native identifier, matching :attr:`AfkReadyItem.ref` —
+            ``int`` issue number for the GitHub backend, repo-relative POSIX
+            path for the local-markdown backend.
+        title: Display title (GitHub) or path (local markdown), so the operator
+            can recognise the item without a second lookup.
+        reason: One of :data:`EXCLUSION_REASONS`, naming which required section
+            is absent.
+    """
+
+    ref: int | str
+    title: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PoolCollection:
+    """The whole result of collecting a **Pool**: what got in, and what did not.
+
+    Collection has always made two decisions per candidate and reported only
+    one of them. Returning both from the same call is what keeps them
+    consistent: there is exactly one walk of the source, so an exclusion is
+    always a candidate that this same collection declined.
+
+    Attributes:
+        items: The AFK-ready items to offer the agent, in source order.
+        exclusions: Candidates dropped by the AFK-ready discriminator, in the
+            same source order. A candidate the source could not *read* is not
+            an exclusion — it was never discriminated against.
+    """
+
+    items: tuple[AfkReadyItem, ...] = ()
+    exclusions: tuple[PoolExclusion, ...] = ()
+
+    @property
+    def excluded_only(self) -> bool:
+        """``True`` when the eligible Pool is empty *because* of exclusions.
+
+        The two empty-Pool situations demand opposite operator responses — an
+        empty tracker means triage more work, an all-excluded one means fix the
+        issues already triaged — so the loop reports them distinctly rather than
+        printing the same "no work" line for both.
+        """
+        return not self.items and bool(self.exclusions)
 
 
 @dataclass(frozen=True)
@@ -322,11 +432,13 @@ class IssueSource(Protocol):
         """
         ...
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Discover and return the current AFK-ready pool.
+    def collect_pool(self) -> PoolCollection:
+        """Discover the current **Pool**: the AFK-ready items *and* what was dropped.
 
-        Empty list is the natural "no work" signal — the loop exits 0
-        for either backend when this returns ``[]``.
+        Empty :attr:`PoolCollection.items` is the natural "no work" signal —
+        the loop exits 0 for either backend when nothing is eligible. The
+        exclusions travel with the items so the loop can tell an empty tracker
+        apart from a tracker whose every candidate failed the discriminator.
         """
         ...
 
@@ -445,21 +557,33 @@ class GitHubIssueSource:
         self._diag.info("preflight ok: %s", repo.nwo)
         return None
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Fetch the AFK-ready GitHub-issue pool with comment enrichment.
+    def collect_pool(self) -> PoolCollection:
+        """Fetch the AFK-ready GitHub-issue **Pool** with comment enrichment.
 
         Two-pass: list first (cheap), filter by body discriminator
         BEFORE the N+1 ``issue_view`` enrichment so we don't pay the
         round-trip for PRD-style ready-for-agent issues that don't
-        satisfy the AFK shape.
+        satisfy the AFK shape. Those rejects are recorded as
+        :class:`PoolExclusion` rather than dropped silently (#303), which
+        costs nothing extra: the reason comes from the same discriminator
+        pass that already had to run.
         """
         try:
             candidates = self._gh.issue_list("ready-for-agent")
         except gh_module.GhError as exc:
             self._diag.error("gh issue list failed: %s", exc)
-            return []
+            return PoolCollection()
 
-        ready_candidates = [i for i in candidates if is_afk_ready(i.body or "")]
+        exclusions: list[PoolExclusion] = []
+        ready_candidates = []
+        for issue in candidates:
+            reason = afk_ready_exclusion(issue.body or "")
+            if reason is None:
+                ready_candidates.append(issue)
+            else:
+                exclusions.append(
+                    PoolExclusion(ref=issue.number, title=issue.title, reason=reason)
+                )
 
         items: list[AfkReadyItem] = []
         for issue in ready_candidates:
@@ -471,8 +595,18 @@ class GitHubIssueSource:
                     issue.number,
                     exc,
                 )
+                # Deliberately NOT an exclusion: an unreadable candidate was
+                # never discriminated against, and telling the operator to fix
+                # its headings would be a false accusation.
                 continue
-            if not is_afk_ready(full.body or ""):
+            # Re-verify against the authoritative body — and report *its*
+            # reason, not the cheaper list body's, since this is the read the
+            # decision was actually made on.
+            reason = afk_ready_exclusion(full.body or "")
+            if reason is not None:
+                exclusions.append(
+                    PoolExclusion(ref=full.number, title=full.title, reason=reason)
+                )
                 continue
             items.append(
                 AfkReadyItem(
@@ -485,7 +619,7 @@ class GitHubIssueSource:
 
         if self._include_prs:
             items.extend(self._collect_afk_ready_prs())
-        return items
+        return PoolCollection(items=tuple(items), exclusions=tuple(exclusions))
 
     def shallow_membership(self) -> MembershipSnapshot:
         """Read AFK-shaped ``ready-for-agent`` membership with no enrichment.
@@ -903,23 +1037,31 @@ class PrdsIssueSource:
         """
         return None
 
-    def collect_afk_ready(self) -> list[AfkReadyItem]:
-        """Walk ``prds/<feature>/<NNN>-*.md`` files; apply AFK discriminator."""
+    def collect_pool(self) -> PoolCollection:
+        """Walk ``prds/<feature>/<NNN>-*.md`` files; apply AFK discriminator.
+
+        A file that matches the name shape but fails the discriminator is
+        reported as a :class:`PoolExclusion` (#303) using the same reason
+        vocabulary the GitHub backend uses — the discriminator is shared, so
+        its diagnostics are too. An unreadable or non-matching file is not an
+        exclusion: only a candidate the discriminator judged can be one.
+        """
         prds_dir = self._repo_root / "prds"
         if not prds_dir.is_dir():
-            return []
+            return PoolCollection()
         try:
             resolved_prds_dir = prds_dir.resolve(strict=True)
             expected_prds_dir = self._repo_root.resolve(strict=True) / "prds"
         except (OSError, RuntimeError):
-            return []
+            return PoolCollection()
         if resolved_prds_dir != expected_prds_dir:
             self._diag.warning(
                 "prds: linked root is not allowed: %s; skipping", prds_dir
             )
-            return []
+            return PoolCollection()
 
         items: list[tuple[str, AfkReadyItem]] = []
+        exclusions: list[tuple[str, PoolExclusion]] = []
         for feature_dir in sorted(
             prds_dir.iterdir(), key=lambda p: p.name
         ):
@@ -956,7 +1098,16 @@ class PrdsIssueSource:
                         "prds: could not read %s: %s; skipping", rel_path, exc,
                     )
                     continue
-                if not is_afk_ready(body):
+                reason = afk_ready_exclusion(body)
+                if reason is not None:
+                    exclusions.append(
+                        (
+                            rel_path,
+                            PoolExclusion(
+                                ref=rel_path, title=rel_path, reason=reason
+                            ),
+                        )
+                    )
                     continue
                 rendered = f"=== {rel_path} ===\n{body}"
                 items.append(
@@ -974,7 +1125,11 @@ class PrdsIssueSource:
         # name-keyed sort already produced numerical order with
         # zero-padded NNN.
         items.sort(key=lambda x: x[0])
-        return [item for _, item in items]
+        exclusions.sort(key=lambda x: x[0])
+        return PoolCollection(
+            items=tuple(item for _, item in items),
+            exclusions=tuple(exclusion for _, exclusion in exclusions),
+        )
 
     def handle_completions(
         self,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.4",
+  "contract_version": "1.5",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -107,6 +107,16 @@
       "required_when_present": ["issues"],
       "emitted": "Only for a complete successful shallow snapshot. An incomplete pagination, an unresolved candidate, or a failed refresh emits nothing and cannot establish emptiness.",
       "order": "Source order, as read. The membership list is not re-sorted."
+    },
+    "wrapper.pool.excluded": {
+      "required_when_present": ["issue", "title", "reason"],
+      "reason_values": [
+        "missing_what_to_build",
+        "missing_acceptance_criteria",
+        "missing_both_sections"
+      ],
+      "emitted": "Once per ready-for-agent candidate the AFK-ready discriminator rejected, in source order, before the wrapper.afk_ready.collected it explains. A candidate the source could not read is not an exclusion: it was never discriminated against.",
+      "scope": "Run-scoped, not contribution-scoped. It names work that never became a Lane contribution, so it carries the collecting Iteration's iter and no contribution identity."
     },
     "wrapper.contribution.start": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]
@@ -246,6 +256,7 @@
     ],
     "scheduler_scoped_types": [
       "wrapper.pool.refreshed",
+      "wrapper.pool.excluded",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
@@ -274,6 +285,7 @@
     "WRAPPER_ITERATION_START": "wrapper.iteration.start",
     "WRAPPER_ITERATION_END": "wrapper.iteration.end",
     "WRAPPER_AFK_READY_COLLECTED": "wrapper.afk_ready.collected",
+    "WRAPPER_POOL_EXCLUDED": "wrapper.pool.excluded",
     "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",

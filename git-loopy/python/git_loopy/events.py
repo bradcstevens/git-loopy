@@ -73,6 +73,7 @@ __all__ = [
     "WRAPPER_ITERATION_START",
     "WRAPPER_ITERATION_END",
     "WRAPPER_AFK_READY_COLLECTED",
+    "WRAPPER_POOL_EXCLUDED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
     "WRAPPER_PUSH_RECORDED",
@@ -161,6 +162,12 @@ WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
 WRAPPER_ITERATION_END = "wrapper.iteration.end"
 WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+# One per ``ready-for-agent`` candidate the AFK-ready discriminator dropped
+# (#303). Run-scoped rather than contribution-scoped: it describes what did NOT
+# become work, so there is no contribution to attribute it to. Emitted before
+# the ``wrapper.afk_ready.collected`` it explains, so a replay reads the
+# exclusions and then the Pool they were taken out of.
+WRAPPER_POOL_EXCLUDED = "wrapper.pool.excluded"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in

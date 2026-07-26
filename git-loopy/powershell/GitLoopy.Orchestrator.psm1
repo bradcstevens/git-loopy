@@ -574,10 +574,31 @@ function Test-GitLoopyAfkReady {
         [string]$Body
     )
 
-    return (
-        $Body -cmatch "(?m)^## What to build" -and
-        $Body -cmatch "(?m)^## Acceptance criteria"
+    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body)
+}
+
+# The deep discriminator: names *why* a `ready-for-agent` candidate is not
+# AFK-ready, or $null when it is. Test-GitLoopyAfkReady is its boolean
+# projection, so Pool membership and the reported reason cannot drift apart.
+function Get-GitLoopyAfkReadyExclusion {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()]
+        [string]$Body
     )
+
+    $HasWhat = $Body -cmatch "(?m)^## What to build"
+    $HasCriteria = $Body -cmatch "(?m)^## Acceptance criteria"
+    if ($HasWhat -and $HasCriteria) {
+        return $null
+    }
+    if (-not $HasWhat -and -not $HasCriteria) {
+        return "missing_both_sections"
+    }
+    if (-not $HasWhat) {
+        return "missing_what_to_build"
+    }
+    return "missing_acceptance_criteria"
 }
 
 function Get-GitLoopyExitCode {
@@ -1142,6 +1163,33 @@ function ConvertTo-GitLoopyCommentTimestamp {
     return [string]$Value
 }
 
+# Record a `ready-for-agent` candidate the discriminator dropped. Recorded once
+# per candidate per Iteration: the GitHub collector runs the discriminator twice
+# (cheap list body, then the authoritative view body), and the operator must see
+# one exclusion, not two.
+function Add-GitLoopyPoolExclusion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Ref,
+        [AllowEmptyString()]
+        [string]$Title,
+        [Parameter(Mandatory)]
+        [string]$Reason
+    )
+
+    foreach ($Existing in @($script:GitLoopyPoolExclusions)) {
+        if ([string]$Existing["ref"] -ceq [string]$Ref) {
+            return
+        }
+    }
+    $script:GitLoopyPoolExclusions.Add([ordered]@{
+        ref = $Ref
+        title = $Title
+        reason = $Reason
+    })
+}
+
 function Get-GitLoopyGitHubPool {
     [CmdletBinding()]
     param()
@@ -1178,14 +1226,21 @@ function Get-GitLoopyGitHubPool {
         else {
             [string]$Candidate["body"]
         }
-        if (-not (Test-GitLoopyAfkReady -Body $Body)) {
-            continue
-        }
         [int]$Number = 0
         if (-not [int]::TryParse([string]$Candidate["number"], [ref]$Number)) {
             [Console]::Error.WriteLine(
                 "git-loopy: skipping issue with a malformed number."
             )
+            continue
+        }
+        # Wrapper contract §3.1: a rejected candidate is reported, not dropped
+        # silently. The reason comes from the same body the membership decision
+        # was made on, and no extra round-trip is paid for it.
+        if (-not (Test-GitLoopyAfkReady -Body $Body)) {
+            Add-GitLoopyPoolExclusion `
+                -Ref $Number `
+                -Title ([string]$Candidate["title"]) `
+                -Reason (Get-GitLoopyAfkReadyExclusion -Body $Body)
             continue
         }
 
@@ -1223,6 +1278,10 @@ function Get-GitLoopyGitHubPool {
             [string]$Full["body"]
         }
         if (-not (Test-GitLoopyAfkReady -Body $FullBody)) {
+            Add-GitLoopyPoolExclusion `
+                -Ref $Number `
+                -Title ([string]$Full["title"]) `
+                -Reason (Get-GitLoopyAfkReadyExclusion -Body $FullBody)
             continue
         }
 
@@ -1317,6 +1376,12 @@ function Get-GitLoopyPrdsPool {
                 continue
             }
             if (-not (Test-GitLoopyAfkReady -Body $Body)) {
+                Add-GitLoopyPoolExclusion `
+                    -Ref ([IO.Path]::GetRelativePath(
+                        $RepoRoot, $FilePath).Replace("\", "/")) `
+                    -Title ([IO.Path]::GetRelativePath(
+                        $RepoRoot, $FilePath).Replace("\", "/")) `
+                    -Reason (Get-GitLoopyAfkReadyExclusion -Body $Body)
                 continue
             }
             $Ref = [IO.Path]::GetRelativePath(
@@ -1618,6 +1683,11 @@ $script:GitLoopyWarnedMarkerRefs = [Collections.Generic.HashSet[string]]::new(
 # source state is authoritative lifecycle evidence the Orchestrator did not
 # produce — never a wrapper auto-closure.
 $script:GitLoopySourceClosedRefs = [Collections.Generic.List[string]]::new()
+# Candidates this Iteration's Pool read dropped, in discovery order. The
+# collectors write the Pool to the pipeline, so an exclusion cannot travel with
+# it without being mistaken for eligible work; it accumulates here instead and
+# is drained by the caller that emits wrapper.pool.excluded.
+$script:GitLoopyPoolExclusions = [Collections.Generic.List[object]]::new()
 
 function Reset-GitLoopyIterationLifecycleState {
     [CmdletBinding()]
@@ -1638,6 +1708,7 @@ function Reset-GitLoopyIterationLifecycleState {
     $script:GitLoopyIssueCumulativeActiveSeconds = @{}
     $script:GitLoopyWarnedMarkerRefs.Clear()
     $script:GitLoopySourceClosedRefs.Clear()
+    $script:GitLoopyPoolExclusions.Clear()
 }
 
 function ConvertTo-GitLoopyLifecycleInstant {
@@ -1857,6 +1928,39 @@ function Register-GitLoopySourceClosure {
     $script:GitLoopyActiveClosedAt = Get-GitLoopyIsoTimestamp `
         -Timestamp ([DateTimeOffset]::UtcNow)
     $script:GitLoopyActiveClosedMonotonic = Get-GitLoopyMonotonicSeconds
+}
+
+function Write-GitLoopyPoolExclusions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration
+    )
+
+    # Wrapper contract §3.1 — report what the discriminator rejected on the
+    # operator's own output as well as the replay log: only a human can fix the
+    # issue's sections, so a diagnostic that reaches only the Event stream is
+    # invisible to the person who can act on it.
+    foreach ($Exclusion in @($script:GitLoopyPoolExclusions)) {
+        $Ref = $Exclusion["ref"]
+        $Reason = [string]$Exclusion["reason"]
+        Write-GitLoopyEvent `
+            -Context $Context `
+            -Type $EventTypes["WRAPPER_POOL_EXCLUDED"] `
+            -Iteration $Iteration `
+            -Payload ([ordered]@{
+                issue = $Ref
+                title = [string]$Exclusion["title"]
+                reason = $Reason
+            })
+        [Console]::Error.WriteLine(
+            "git-loopy: excluded $Ref — $($Reason.Replace('_', ' '))"
+        )
+    }
 }
 
 function Register-GitLoopyObservedSourceClosures {
@@ -2769,6 +2873,7 @@ function Invoke-GitLoopyDiscoveryLoop {
             -ObservedMonotonic (Get-GitLoopyMonotonicSeconds)
         $script:GitLoopyWarnedMarkerRefs.Clear()
         $script:GitLoopySourceClosedRefs.Clear()
+        $script:GitLoopyPoolExclusions.Clear()
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_START"] `
@@ -2788,11 +2893,22 @@ function Invoke-GitLoopyDiscoveryLoop {
                 }
             }
         )
+        # Wrapper contract §3.1 — a human triaged these to ready-for-agent and
+        # the discriminator dropped them. Report each by name, with its reason,
+        # before the collection it explains, so an empty Pool caused by
+        # malformed issues is distinguishable from one that has no work.
+        Write-GitLoopyPoolExclusions `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_AFK_READY_COLLECTED"] `
             -Iteration $Iteration `
-            -Payload ([ordered]@{ issues = [object[]]$Refs })
+            -Payload ([ordered]@{
+                issues = [object[]]$Refs
+                excluded = $script:GitLoopyPoolExclusions.Count
+            })
 
         if ($Pool.Count -eq 0) {
             # No turn runs, so no Working marker can claim this Iteration: any
@@ -3097,6 +3213,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopySkillPolicySurfaces",
     "Assert-GitLoopySkillPolicySupported",
     "Test-GitLoopyAfkReady",
+    "Get-GitLoopyAfkReadyExclusion",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",

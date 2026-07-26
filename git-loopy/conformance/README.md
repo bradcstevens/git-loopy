@@ -8,7 +8,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 
 | Fixture | Contract decision |
 | --- | --- |
-| `discriminator.json` | Required issue headings and optional parent metadata |
+| `discriminator.json` | Required issue headings, optional parent metadata, and the Pool-exclusion reason each rejection carries |
 | `close-references.json` | Reference regex, line boundaries, deduplication, Pool whitelist, and issues-only closure |
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, Strike resets, and abort thresholds |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
