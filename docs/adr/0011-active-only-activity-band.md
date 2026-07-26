@@ -1,6 +1,8 @@
 # Active-only Activity band below the Queue
 
-**Status:** accepted — extends ADR-0003 (tabless two-level live interface with per-issue Logs)
+**Status:** superseded by [ADR-0021](0021-activity-windows-per-agent.md) (Activity windows:
+one per Agent, operator-sized, follow-with-release) — extended ADR-0003 (tabless two-level
+live interface with per-issue Logs)
 
 ## Context
 
