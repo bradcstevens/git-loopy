@@ -322,15 +322,60 @@ the *call sequence*: the reread is issued before the appended author is judged, 
 the same post-transition write and a distribution that short-circuits leaves the operator one call
 short of the evidence the others record.
 
-`publish-repairs-an-undecodable-appended-revision-shell` and
-`publish-repairs-an-undecodable-reread-revision-shell` pin the sixth post-transition failure and
-are scoped `["shell"]` for a reason the other five are not. A `gh` call that *succeeds* but answers
-with something that is not a comment object leaves the same stranded write, so the code is
+Three `publish-repairs-…-revision-<family>` groups pin the sixth post-transition failure, and they
+are narrowed for a reason the other five are not. A `gh` call that *succeeds* but answers with
+something that is not a comment object leaves the same stranded write, so the code is
 `repair_required` in every family member — but the human-readable detail is the transport's own
 parse diagnostic, and Python's, PowerShell's and shell's decoders cannot produce the same bytes.
 `github_error` and post-transition transport detail are family-local prose throughout this fixture;
-the error *code* is the contract. Scoping these two to shell pins the code where it had regressed
-without pretending three decoders can agree on a parser's wording.
+the error *code* is the contract. So each group asks *every* distribution the same question and lets
+each record its own decoder's wording: an undecodable append, an undecodable reread, and a
+`gh` call that returns a decodable body that is not an object at all. That last group is why the
+grouping is enforced rather than described. Only the shell member of the undecodable pairs existed,
+and PowerShell had never been asked the non-object question — given a JSON array it indexed `["id"]`
+before checking the shape and threw `Cannot convert value "id" to type "System.Int32"` past every
+typed handler, returning no typed result at all where Python and shell returned `repair_required`.
+
+## Fixture schema 1.6 — the capability-coverage gate
+
+A scenario narrowed to a subset of the family is a question the rest of the family is never asked.
+Twenty-seven records are narrowed, and until 1.6 nothing anywhere said why: a distribution's
+advertised `optional_capabilities` manifest and the per-scenario `distributions` arrays were two
+hand-maintained lists kept in sync by author discipline. The PowerShell crash above hid behind
+exactly that gap for a full release, and so did a second defect — `maximum-depth-request-is-accepted`
+was scoped `["python"]`, and when it was widened shell rejected a request at exactly the maximum
+nesting depth 16 that Python and PowerShell accept.
+
+`capability_coverage` closes it as data. Every record whose `distributions` is a proper subset of
+the family MUST appear in `scoped_records` under one of three closed reasons:
+
+- **`manifest-identity`** — the three `capabilities-<family>` scenarios. Each asserts one
+  distribution's own manifest bytes, so it is intrinsically per-family.
+- **`capability-absent`** — the scenario exercises an optional capability. It names the
+  `capability` key and the `advertises` boolean, and its `distributions` MUST equal *exactly* the
+  set of distributions whose advertised manifest carries that key with that value. Scoping stops
+  being a hand-maintained list and becomes **derived** from what each distribution claims.
+- **`family-local-detail`** — one input asked of every family, each member recording its own
+  decoder's prose. It names the `operation` and a `variant_group`; the group's members must be
+  pairwise disjoint, their union must equal the set of distributions advertising that operation,
+  and they must agree on `arguments`, `expected.exit_code`, and the pinned error `code`. Only the
+  human-readable detail may differ.
+
+The manifests the gate measures against are read from the fixture's own `capabilities-<family>`
+scenarios, and each family's real CLI is separately proven to emit exactly those bytes by executing
+that scenario. The chain is therefore real CLI ⟷ advertised manifest ⟷ scenario scoping, with no
+link asserted by hand.
+
+The gate runs in **all three adapters**, not only in Python. The whole point of the family is that no
+distribution depends on a Python runtime; an operator who installs only shell runs only the shell
+suite, and a gate living in Python alone would let shell advertise a capability its own fixtures
+never exercise. Duplication across three implementations kept honest by shared data is the pattern
+this directory already is.
+
+`unsupported_reconciliation_semantics` is retired from `revision_protocol.diagnostic_codes` in the
+same revision. No distribution has emitted it since the private PowerShell derivation was deleted,
+and a registered code no family produces is vocabulary a port can implement against and never be
+told it got wrong.
 
 The `event-schema.json` normalized rollup cases are production-seam cases in the
 same sense. A case whose input is a list of `iterations` drives the Orchestrator's

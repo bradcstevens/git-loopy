@@ -114,7 +114,7 @@ Producer authority, carry authoritative records, grant Dispatch, or contain runn
 ## 6. Native scenario harness
 
 [`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) is the
-language-neutral, data-only public-command harness. It independently declares fixture schema 1.5,
+language-neutral, data-only public-command harness. It independently declares fixture schema 1.6,
 Continuation contract 1.2, record format 1, Wrapper contract 1.4, and Event schema 1.1.
 
 Every family adapter reads the fixture directly and invokes its real native entrypoint. Request
@@ -149,6 +149,28 @@ unregistered code is a fixture change rather than a silent addition. Scenarios m
 view order. Ordering scenarios name every distribution, because ordering is ungated; scenarios
 exercising the gated §8 request fields name only the distributions advertising
 `prospective_projection`.
+
+Fixture schema 1.6 makes a narrowed scope a claim the fixture checks rather than an authoring
+convention. Family adapters run only the scenarios and workflows naming their distribution, so a
+record narrowed to a subset is a question the rest of the family is never asked; until 1.6 the
+advertised `optional_capabilities` manifests and the per-record `distributions` arrays were two
+hand-maintained lists kept in sync by discipline alone. `capability_coverage` requires every
+narrowed record to declare one of three reasons. `manifest-identity` is reserved for the per-family
+capability scenarios. `capability-absent` names an optional capability, and the record's
+`distributions` MUST equal exactly the set of distributions whose advertised manifest carries that
+capability with the declared value — scoping is derived from advertisement, not asserted beside it.
+`family-local-detail` names an operation and a variant group whose members MUST be pairwise
+disjoint, MUST together cover every distribution advertising that operation, and MUST agree on
+arguments, exit code, and error code; only human-readable detail may differ. The manifests measured
+against are the fixture's own per-family capability scenarios, each proven by executing the real
+native entrypoint, so the chain runs from real CLI through advertised manifest to scenario scoping
+with no hand-asserted link. Every family adapter enforces the gate, because a distribution must be
+able to prove itself without a Python runtime present.
+
+The same revision retires `unsupported_reconciliation_semantics` from
+`revision_protocol.diagnostic_codes`. The vocabulary is the union across every distribution, and no
+distribution emits that code since the path-local PowerShell derivation was deleted; a registered
+code nobody produces is vocabulary a port can implement wrongly and never be told.
 
 ## 7. Native atomic completion records
 
