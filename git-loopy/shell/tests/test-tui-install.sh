@@ -503,7 +503,7 @@ assert_contains "$guidance_out" "Continuation capabilities" \
   "the installation reports the Continuation capabilities it verified"
 assert_contains "$guidance_out" "foundation profile" \
   "the report names the capability profile that was satisfied"
-assert_contains "$guidance_out" "prospective_projection" \
+assert_contains "$guidance_out" "concurrent_dispatch" \
   "the report names the optional capabilities this distribution does not support"
 
 # 11. A distribution that misses a required capability installs nothing at all.

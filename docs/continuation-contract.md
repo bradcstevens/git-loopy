@@ -67,11 +67,9 @@ tracker operation. The Python, shell, and PowerShell distributions now advertise
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
 manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
 concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by every
-family member. Python and PowerShell advertise `terminal_rendering: true`; shell continues to
-advertise `terminal_rendering: false`
-and fails closed on `reconcile --terminal` with `unsupported_operation` until its native renderer
-lands. Python, shell, and PowerShell advertise their trusted immutable-revision protocol and explicit
-`repair-index`. Mode is `off`.
+family member. Python, shell, and PowerShell now all advertise `terminal_rendering: true`; no family
+member fails closed on `reconcile --terminal` any longer. Python, shell, and PowerShell advertise
+their trusted immutable-revision protocol and explicit `repair-index`. Mode is `off`.
 
 Contract 1.2 adds the optional `fixed_frontier_authorization` capability. A distribution
 advertising it implements every §9 field — the AFK safety case, the frozen Automation scope and
@@ -86,16 +84,16 @@ a prerequisite of the locked stop precedence, and a distribution that advertised
 `fixed_frontier_authorization` without them could never return the one stop that means the Run is
 finished. Every family member projects `outcomes` and the three statuses. `prospective_projection`
 continues to gate only the fields §9 does not need — retirement receipts, the refresh delta, and
-the Handoff reference — which is why shell advertises `fixed_frontier_authorization: true` beside
-`prospective_projection: false`.
+the Handoff reference — so a distribution may advertise `fixed_frontier_authorization: true` beside
+`prospective_projection: false`, as shell did until its native §8 projection landed.
 
 Contract 1.1 adds the optional `prospective_projection` capability. A distribution advertising it
 implements the §8 fields §9 does not require — retirement receipts, refresh delta, and Handoff
-reference. Python and PowerShell advertise `prospective_projection: true`; shell advertises `false`
-and fails closed rather than ignoring the gated fields: `completion.retirements` is a structural
-`publish` rejection, and `previous_actions` or `handoff` on `reconcile` returns
-`unsupported_operation`. The deterministic ordering of §8 is **not** gated: it is the contract's
-ordering rule and every family member implements it.
+reference. Python, shell, and PowerShell all advertise `prospective_projection: true`. A
+distribution that does not advertise it fails closed rather than ignoring the gated fields:
+`completion.retirements` is a structural `publish` rejection, and `previous_actions` or `handoff` on
+`reconcile` returns `unsupported_operation`. The deterministic ordering of §8 is **not** gated: it
+is the contract's ordering rule and every family member implements it.
 
 A distribution advertises the contract versions whose records it accepts. Python, shell, and
 PowerShell all advertise `["1.0", "1.1", "1.2"]`. Each added version introduces only optional
@@ -434,8 +432,9 @@ refresh delta when present. Each remainder group states both its full count and 
 withheld — `Ready (N more, H hidden)` — and points at plain `reconcile` to see the rest, so the
 rendering stays bounded no matter how large the projection is. `--terminal` is accepted only by
 `reconcile`; any other operation rejects it as a malformed invocation and exits `2` per §3. It is
-never mixed with machine JSON on the same invocation. Independent verified guidance remains usable
-even while unrelated occurrences sit in Needs attention.
+never mixed with machine JSON on the same invocation. A terminal-mode Reconciliation failure
+preserves its typed machine JSON and exit `1` rather than rendering human guidance. Independent
+verified guidance remains usable even while unrelated occurrences sit in Needs attention.
 
 
 ## 9. Fixed-frontier Automation authorization
