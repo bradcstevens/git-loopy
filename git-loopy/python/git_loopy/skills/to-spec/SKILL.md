@@ -74,4 +74,132 @@ Any further notes about the feature.
 
 </spec-template>
 
-At the conclusion of a `/to-spec` session, run the `/next` skill.
+4. Publish the transition (see below), then run the `/next` skill.
+
+## Publish the specification transition
+
+Publishing a spec is a durable workflow transition, and this skill owns it. Record it so the
+next session — human or agent — reads the same answer you did.
+
+**Only publish after the spec is durably published.** You need the real issue number of the
+spec, and a durable comment on it recording the transition. In order:
+
+1. Create the spec issue on the tracker (step 3 above). Everything below references it.
+2. Post one short transition-evidence comment on that issue — what this transition changed and
+   what it came from (`gh issue comment <spec-issue> --body "..."`). Capture its comment id:
+   `gh api repos/<owner>/<repo>/issues/comments --jq '.[-1].id'`, or read the id from the
+   comment URL you just created.
+3. Build the completion request below and hand it to the native command. Never write the
+   Continuation record, its `<!-- git-loopy-continuation... -->` marker, or its index label
+   yourself — the command owns the carrier comment, and a hand-written one is not a record.
+
+```bash
+git-loopy continuation publish --input /tmp/publish-spec.json
+```
+
+A published spec is a **specification artifact**, not an executable ticket — it keeps the
+`ready-for-agent` label so triage stays simple, and this record is what says the next step is
+**decomposition** rather than implementation. Do not publish an `Implement ticket` action for
+the spec parent.
+
+Replace every `<placeholder>` with the durable identifier it names:
+
+<!-- continuation-request: publish-spec -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<spec-issue>"
+      },
+      "destination": {
+        "kind": "sub-issues-complete",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<spec-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "specification",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<spec-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<spec-issue>"
+    },
+    "actions": [
+      {
+        "key": "decompose",
+        "summary": "Decompose the specification into tracer-bullet tickets",
+        "kind": "Decompose spec",
+        "occurrence": "v1",
+        "instruction": {"mode": "skill", "value": "/to-tickets <spec-issue>"},
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<spec-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<spec-issue>"
+          }
+        ],
+        "prerequisites": [],
+        "interaction": {
+          "classification": "HITL-required",
+          "evidence": {
+            "kind": "human-boundary",
+            "reason": "human-decision",
+            "resolution_condition": {
+              "kind": "issue-closed",
+              "target": {
+                "kind": "issue",
+                "repository": "<repository>",
+                "number": "<spec-issue>"
+              }
+            }
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<spec-issue>"
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+`<producer-login>` is the authenticated tracker account (`gh api user --jq .login`).
+Decomposition is `HITL-required` because the breakdown needs the user's approval before any
+ticket exists.
+
+**If `publish` fails, the work is repair-required, not done.** The spec issue and its comment
+are already durable, so an exit-`1` result carrying `"code": "repair_required"` means the
+transition happened but its record did not. Say so plainly, quote the message, and stop — do
+not retry blindly, invent a record, or report the session as complete.
