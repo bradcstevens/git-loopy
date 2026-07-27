@@ -31,6 +31,17 @@ worktree setup may freely overlap another Lane's agent session. See
 :func:`test_parallel_lane_refills_without_waiting_for_sibling` and
 :func:`test_parallel_lane_cap_never_exceeded_under_bursty_refill`.
 
+**Membership is never authority (#219 §2.10).** Candidate discovery reads the
+cheap **Pool** membership cache and pays the authoritative per-issue read only
+at pickup; a candidate that fails that read costs no **Lane** and no
+``max_iterations`` unit. See
+:func:`test_parallel_stale_candidate_never_consumes_a_lane`.
+
+**Per-Lane Checkpoint (ADR-0004).** A Lane whose agent leaves the tree dirty is
+Checkpointed in *its own* worktree, on its own branch, attributed to its own
+issue — never on the shared main worktree. See
+:func:`test_parallel_lane_checkpoint_commits_in_its_own_worktree`.
+
 **Drain-everything (#67, ADR-0008).** A Parallel run interleaves Lane work for
 the ``parallel-safe`` issues with serial Iterations for every other
 ``ready-for-agent`` issue, in one run, draining all eligible work. Under
@@ -52,6 +63,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -1135,6 +1147,211 @@ def test_parallel_contribution_survives_lane_reuse(
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
+
+
+class _StaleOnPickupGitHubClient(FakeGitHubClient):
+    """A candidate a human closed between the membership read and pickup.
+
+    Models the one divergence Rolling dispatch's two-read seam is built for
+    (#219 §2.10): the cheap ``issue_list_membership`` snapshot that put a
+    candidate in the **Pool** cache is never authority to start a **Lane
+    contribution**, because the issue may have moved on since. ``issue_view``
+    — the authoritative read :meth:`~git_loopy.sources.GitHubIssueSource.pickup`
+    pays — reports the ``stale_refs`` ``CLOSED``, and once observed they stop
+    appearing in later membership reads, exactly as ``gh`` behaves once the
+    issue is really closed. Both halves matter: a fake that kept listing a
+    permanently-closed issue would model a divergence real ``gh`` never
+    produces, and would leave the Run with a candidate it can neither dispatch
+    nor retire.
+    """
+
+    def __init__(self, *, stale_refs: Sequence[int], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._stale_refs = set(stale_refs)
+        self._observed_stale: set[int] = set()
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        issue = super().issue_view(number)
+        if number not in self._stale_refs:
+            return issue
+        self._observed_stale.add(number)
+        return replace(issue, state="CLOSED")
+
+    def issue_list(
+        self, label: str, state: str = "open"
+    ) -> list[gh_module.Issue]:
+        return [
+            issue
+            for issue in super().issue_list(label, state)
+            if issue.number not in self._observed_stale
+        ]
+
+    def issue_list_membership(
+        self, label: str, state: str = "open"
+    ) -> gh_module.IssueListPage:
+        page = super().issue_list_membership(label, state)
+        return replace(
+            page,
+            issues=tuple(
+                issue
+                for issue in page.issues
+                if issue.number not in self._observed_stale
+            ),
+        )
+
+
+def test_parallel_stale_candidate_never_consumes_a_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A candidate that fails pickup costs no Lane and no iteration unit (#219 §2.10).
+
+    Candidate discovery reads the shallow **Pool** membership cache and pays
+    the authoritative per-issue read only at pickup. Issues 41 and 42 are in
+    that cache carrying ``ready-for-agent`` + ``parallel-safe``, but a human
+    closed them since — so pickup rejects both as *stale*. #306's criterion is
+    that such a candidate is dropped "without consuming a Lane": with the whole
+    ``max_iterations`` budget set to exactly one unit, if either stale candidate
+    had consumed it the genuinely eligible issue 43 would never have run at all.
+    It does — one worktree, one Lane session, one closure — and the two stale
+    candidates leave no worktree, no branch, no session, and no closure behind.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _StaleOnPickupGitHubClient(
+        stale_refs=(41, 42),
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
+            for n in (41, 42, 43)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=3,
+        # Exactly one unit for the whole Run: a stale candidate that consumed
+        # one would strand issue 43 entirely.
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    # Both stale candidates were re-read authoritatively before any Lane was
+    # committed to them -- membership alone never dispatched them.
+    assert 41 in fake_gh.issue_view_calls
+    assert 42 in fake_gh.issue_view_calls
+
+    # ...and neither cost a Lane: exactly one worktree + branch exists, and it
+    # belongs to the one candidate that actually validated.
+    adds = fake_git.worktree_adds
+    assert len(adds) == 1, f"a stale candidate consumed a Lane: {adds}"
+    (_path, lane_branch, _base) = adds[0]
+    assert lane_branch.endswith("/issue-43")
+
+    # ...nor an iteration unit: the single unit reached issue 43's session.
+    working_dirs = [c["working_directory"] for c in fake_client.create_calls]
+    assert len(working_dirs) == 1, f"expected one session, got {working_dirs}"
+    assert str(working_dirs[0]).endswith("issue-43")
+
+    # The runner closed only the issue it actually worked.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
+
+
+def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
+    tmp_path, monkeypatch
+) -> None:
+    """Uncommitted Lane work is Checkpointed on the Lane's own branch (ADR-0004).
+
+    #306 preserves the per-Lane **Checkpoint**: a Lane whose agent leaves the
+    tree dirty gets its work captured before the worktree is torn down, in
+    *that Lane's* worktree and attributed to *that Lane's* issue -- never on the
+    shared main worktree, where it would mix two Lanes' work into one commit.
+    The Checkpoint commit's SHA carries the Lane worktree's own ``wt`` prefix
+    (:class:`~tests.fakes.FakeGitClient` gives each child worktree a distinct
+    one), which is the observable proof of where it was authored.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    class _DirtyingClient(_ParallelFakeClient):
+        """Leaves the Lane's worktree dirty after its agent session."""
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def dirtying_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                result = await real_send_and_wait(prompt, timeout=timeout, **extra)
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None, "Lane worktree must still be live"
+                lane_git.dirty = True
+                return result
+
+            session.send_and_wait = dirtying_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _DirtyingClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    checkpoints = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.checkpoint.recorded"
+    ]
+    assert len(checkpoints) == 1, f"expected one Lane Checkpoint, got {checkpoints}"
+    (checkpoint,) = checkpoints
+    # Attributed to the Lane's issue, on both the Active-issue and the
+    # Lane-attribution channels.
+    assert checkpoint["issue"] == 42
+    assert checkpoint["lane_issue"] == 42
+    # Authored in the Lane's OWN worktree: only a child worktree client mints
+    # ``wt``-prefixed SHAs, and the main worktree wrote no commit at all.
+    assert checkpoint["sha"].startswith("wt")
+    assert fake_git.commit_messages == []
 
 
 def test_parallel_integration_lands_and_closes_both_lanes(
