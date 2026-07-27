@@ -1310,9 +1310,9 @@ class _ParallelLoop:
     never strands eligible work.
 
     Composes a serial :class:`_Loop` (``self._serial``) both for serial
-    Iterations (plain ``ready-for-agent`` work the scheduler's serial-latch /
-    quiescence protocol grants exclusive ownership of base,
-    :meth:`_maybe_request_serial_for_plain_work`) and to share ONE Strike
+    Iterations (serial-required ``ready-for-agent`` work the scheduler's
+    serial-latch / quiescence protocol grants exclusive ownership of base,
+    :meth:`_service_serial_required_work`) and to share ONE Strike
     machine, event emitter, summary, and Checkpoint policy — so a Lane
     contribution finalizing and a serial Iteration tick the same Strike
     machine and write one consistent event / counter stream. The serial path
@@ -1559,25 +1559,30 @@ class _ParallelLoop:
         (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`) and
         spawn one lifecycle task per reservation (:meth:`_run_lane_lifecycle`)
         FIRST — so a single freshly eligible ``parallel-safe`` issue is never
-        made to wait behind co-occurring plain work (#219 §1.4, criterion #9)
-        — no barrier: a finished Lane's slot refills the instant its
-        contribution is admitted or terminates, while every other Lane's
+        made to wait behind co-occurring **serial-required** work (#219 §1.4,
+        criterion #9) — no barrier: a finished Lane's slot refills the instant
+        its contribution is admitted or terminates, while every other Lane's
         worktree setup and session continue unblocked. THEN latch serial
-        demand for any plain (non-``parallel-safe``) ``ready-for-agent`` work
-        (:meth:`_maybe_request_serial_for_plain_work` — a no-op once already
-        latched): this only ever withholds *new* reservations
+        demand for any serial-required (non-``parallel-safe``)
+        ``ready-for-agent`` work (:meth:`_service_serial_required_work` —
+        skipped once already latched): this only ever withholds *new*
+        reservations
         (:attr:`~git_loopy.rolling_scheduler.RollingScheduler.refillable`),
         never an already-open Lane, and the scheduler only grants the actual
         serial turn once every open Lane has drained
         (:attr:`~git_loopy.rolling_scheduler.RollingScheduler.quiescent`) — so
-        latching it early (as soon as any plain work is seen) merely stops
-        further refill while in-flight Lanes finish, rather than preempting
-        them. Concurrency never exceeds the scheduler's own
+        latching it early (as soon as any serial-required work is seen) merely
+        stops further refill while in-flight Lanes finish, rather than
+        preempting them. Concurrency never exceeds the scheduler's own
         :attr:`~git_loopy.rolling_scheduler.RollingScheduler.effective_limit`,
         since ``reserve`` is the only place a Lane is ever claimed. Drains to
         completion via
         :attr:`~git_loopy.rolling_scheduler.RollingScheduler.quiescent` and
-        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.confirm_empty`.
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.confirm_empty` —
+        the latter authoritative about the **Parallel-safe** half of the Pool
+        only, which is why the ``empty_pool`` claim also requires
+        :meth:`_service_serial_required_work` to have seen the whole other half
+        this turn (#219 §2.13, criteria #5/#6).
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
@@ -1600,29 +1605,47 @@ class _ParallelLoop:
                     )
                     self._pending.add(task)
 
-                self._maybe_request_serial_for_plain_work()
+                serial_pool_seen = self._service_serial_required_work()
 
-                # `serial_turn()` itself has no `max_iterations` awareness (it
-                # only gates on the serial latch + full quiescence, #219
-                # §5.5-5.6) — unlike `reserve()`, whose `refillable` already
-                # folds `remaining_units` in. So the driver pre-checks the
-                # budget itself, mirroring serial mode's own pre-check
-                # (`_drive_serial_only`): once the cap is spent, a newly
-                # latched serial demand (e.g. a REASON_SERIAL_FALLBACK from an
-                # unpublished Lane) is left latched but un-run, and the very
-                # next idle-check below reports `iteration_cap` instead.
+                # `serial_turn()` itself has neither `max_iterations` nor abort
+                # awareness (it only gates on the serial latch + full
+                # quiescence, #219 §5.5-5.6) — unlike `reserve()`, whose
+                # `refillable` already folds both in. So the driver pre-checks
+                # them itself, mirroring serial mode's own pre-check
+                # (`_drive_serial_only`): once the cap is spent or §7.7's
+                # drain-confirmed abort is latched, a newly latched serial
+                # demand (e.g. a REASON_SERIAL_FALLBACK from an unpublished
+                # Lane) is left latched but un-run — a serial Iteration is NEW
+                # work, and a drain finishes started work rather than starting
+                # more — and the very next idle-check below reports
+                # `iteration_cap` / `stuck` instead.
                 if (
                     scheduler.remaining_units != 0
+                    and not scheduler.abort_latched
                     and scheduler.serial_turn()
                 ):
                     self._report_serial_fallback(scheduler)
-                    await self._serial._run_one_iteration(self._alloc_iter_num())
+                    outcome, _commits, _closures = (
+                        await self._serial._run_one_iteration(self._alloc_iter_num())
+                    )
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
                     # `start_session` (Lane sessions), so a serial
                     # Iteration's unit is folded in here rather than tracked
                     # by a second, divergeable counter.
                     scheduler._units_spent += 1
+                    if outcome == "aborted":
+                        # §7.4, §7.7: the Strike machine is shared, so a serial
+                        # Iteration reaching its limit latches the same
+                        # drain-confirmed abort a finalized Lane contribution
+                        # does (`_apply_strike_reaction`). Discarding it here
+                        # let a Parallel-mode Run emit the abort Event and then
+                        # grant itself serial Iterations forever.
+                        scheduler.strike_limit_reached()
+                    # An `empty_pool` outcome is deliberately NOT terminal here:
+                    # it is one Iteration's view of the Pool, and #219 §2.14
+                    # ends a Run only on the final authoritative refresh the
+                    # idle-check below performs.
                     scheduler.serial_finished()
                     continue
 
@@ -1645,11 +1668,20 @@ class _ParallelLoop:
                         exit_code_for("iteration_cap"),
                         scheduler._units_spent,
                     )
-                if scheduler.confirm_empty():
+                if serial_pool_seen and scheduler.confirm_empty():
                     return (
                         "empty_pool",
                         exit_code_for("empty_pool"),
                         scheduler._units_spent,
+                    )
+                if not serial_pool_seen:
+                    # #219 §2.13: the **serial-required** half of the Pool was
+                    # not fully read this turn, so nothing may claim it empty.
+                    # Poll again rather than exit — the Run has no evidence yet,
+                    # which is a different thing from evidence of no work.
+                    self._diag.warning(
+                        "serial-required Pool read was partial; "
+                        "not claiming an empty Pool"
                     )
                 await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
         finally:
@@ -1714,8 +1746,8 @@ class _ParallelLoop:
             lane_cap=self._config.parallel,
         )
 
-    def _maybe_request_serial_for_plain_work(self) -> None:
-        """Latch serial demand for plain (non-``parallel-safe``) ready work.
+    def _service_serial_required_work(self) -> bool:
+        """Latch serial demand for **serial-required** work, and say what was seen.
 
         #219 §1.4 retires the Wave's ">= 2 eligible" threshold for
         ``parallel-safe`` issues entirely (see :meth:`_drive_rolling`) — but a
@@ -1728,23 +1760,42 @@ class _ParallelLoop:
         turn (mirroring how often the retired Wave's own
         ``_collect_pool_safely`` ran) and asks the scheduler to latch serial
         ownership (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`)
-        the moment it finds anything else. A no-op once already latched.
+        the moment it finds anything else.
+
+        Returns:
+            Whether this turn saw the **whole** serial-required half of the
+            Pool. This peek is the only thing that ever can: the **Rolling
+            dispatch** membership cache filters down to Parallel-safe
+            candidates, so
+            :meth:`~git_loopy.rolling_scheduler.RollingScheduler.confirm_empty`
+            is authoritative about one half of a Parallel-mode Pool and silent
+            about the other. #219 §2.13 forbids a partial read from
+            establishing emptiness, so a turn that skipped the peek (demand is
+            already latched) or read it incompletely (a candidate's
+            authoritative read failed) answers ``False`` — unknown, which is
+            not the same as empty.
         """
         assert self._scheduler is not None
         if self._scheduler.serial_latched:
-            return
-        for item in self._collect_pool_safely():
+            # Already latched: the peek would change no decision, and paying a
+            # full `collect_pool` per drain turn to learn that would cost real
+            # API capacity. Nothing was seen, so nothing may be claimed.
+            return False
+        collection = self._collect_pool_safely()
+        for item in collection.items:
             if isinstance(item.ref, int) and LABEL_PARALLEL_SAFE in item.labels:
                 continue
             self._scheduler.request_serial(ref=item.ref, reason="not_parallel_safe")
-            return
+            break
+        return collection.complete
 
-    def _collect_pool_safely(self) -> list[AfkReadyItem]:
-        """Peek the full AFK-ready pool for the plain-work serial-demand check.
+    def _collect_pool_safely(self) -> PoolCollection:
+        """Peek the full AFK-ready pool for the serial-required demand check.
 
-        A source failure degrades to an empty pool (a genuine serial
-        Iteration re-collects the pool itself and owns the real error path),
-        so a transient collection error never crashes the driver loop.
+        A source failure degrades to an **incomplete** empty collection (a
+        genuine serial Iteration re-collects the pool itself and owns the real
+        error path), so a transient collection error never crashes the driver
+        loop — and never passes itself off as an empty **Pool** either.
 
         Deliberately silent about **Pool** exclusions (#303): this is a peek,
         and the serial Iteration this peek may provoke re-collects and reports
@@ -1752,13 +1803,13 @@ class _ParallelLoop:
         candidate.
         """
         try:
-            return list(self._source.collect_pool().items)
+            return self._source.collect_pool()
         except Exception as exc:
             self._diag.warning(
-                "parallel pool peek failed: %s: %s; treating as empty",
+                "parallel pool peek failed: %s: %s; treating as unread",
                 type(exc).__name__, exc,
             )
-            return []
+            return PoolCollection(complete=False)
 
     async def _guarded_lane_lifecycle(
         self, reservation: rolling_scheduler.Reservation

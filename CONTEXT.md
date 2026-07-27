@@ -453,7 +453,9 @@ the agent together in a single prompt; the agent picks one. **Rolling dispatch**
 keeps a continuously refreshed cache of *shallow* Pool membership and re-reads one
 candidate authoritatively immediately before reserving its **Lane** — membership alone is
 never authority to start a **Lane contribution**. An incomplete or failed read leaves the
-Pool's emptiness unknown rather than empty.
+Pool's emptiness unknown rather than empty. A **Parallel mode** Run's Pool has two halves
+— **Parallel-safe** candidates and **serial-required** work — and may be called empty
+only once both have been seen.
 _Avoid_: batch, backlog.
 
 **Pool exclusion**:
@@ -467,7 +469,9 @@ _Avoid_: skipped, filtered, invalid issue.
 **Strike**:
 A recorded no-progress result: a serial **Iteration** made no meaningful progress, or
 a parallel **Lane contribution** terminated unpublished. A fixed number of consecutive
-strikes ends the run. A runner **Checkpoint** does not count as progress.
+strikes ends the run. Both kinds of work tick one shared count, so in **Parallel mode**
+reaching the limit stops refill and grants no further serial Iteration, then ends the run
+once started work has drained. A runner **Checkpoint** does not count as progress.
 _Avoid_: failure, miss.
 
 **Checkpoint**:
@@ -828,6 +832,17 @@ A `ready-for-agent` issue a human has additionally asserted is independent and
 well-scoped enough to be worked in its own **Lane**, concurrently with others.
 Carried as a triage label alongside `ready-for-agent`; the runner never infers it.
 _Avoid_: independent, parallelizable (as the label name).
+
+**Serial-required**:
+Eligible `ready-for-agent` work that is not **Parallel-safe** and therefore can only be
+worked as a serial **Iteration** — the unlabelled issues, pull requests, and
+local-markdown items a **Parallel mode** Run must still drain. It is invisible to
+**Rolling dispatch**, whose **Pool** membership cache only ever surfaces Parallel-safe
+candidates, so the runner discovers it by its own reading of the Pool. Finding any
+latches serial demand: refill stops, started Lane work drains, and one unchanged serial
+Iteration is granted exclusive use of the base worktree before **Rolling dispatch** gets
+one full refill turn back.
+_Avoid_: plain work, non-parallel work, leftover.
 
 **Serial fallback**:
 A serial **Iteration** a **Parallel mode** Run works because **Rolling dispatch** found

@@ -283,6 +283,22 @@ class TestGitHubCollectPool:
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
         assert impl.collect_pool().items == ()
 
+    def test_a_failed_list_is_an_incomplete_collection_not_an_empty_pool(
+        self,
+    ) -> None:
+        """#219 §2.13: a failed read may never establish an empty **Pool**.
+
+        The bare empty collection above is byte-identical to the one a
+        genuinely empty tracker produces, so a caller that terminates a Run on
+        an empty Pool cannot tell "there is no work" from "I could not look" —
+        which is exactly what :attr:`PoolCollection.complete` answers.
+        """
+        gh = FakeGitHubClient(
+            issue_list_error=gh_module.GhError(["gh", "issue", "list"], 1, "boom")
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+        assert impl.collect_pool().complete is False
+
     def test_filters_out_issues_lacking_discriminator(self) -> None:
         good = _make_issue(42)
         bad = _make_issue(43, body="just words, no sections")
@@ -367,6 +383,39 @@ class TestGitHubCollectPool:
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
         items = list(impl.collect_pool().items)
         assert [i.ref for i in items] == [42]
+
+    def test_an_unreadable_candidate_makes_the_collection_incomplete(self) -> None:
+        """A skipped candidate is a *partial* Pool, not a smaller one (#219 §2.13).
+
+        The candidate above is neither an item nor an exclusion — it was never
+        discriminated against — so a caller reading only ``items`` and
+        ``exclusions`` sees a collection that looks whole. It is not: #99 is
+        still open, still ``ready-for-agent``, and still eligible.
+        """
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42), _make_issue(99)],
+            issue_view_errors={99: gh_module.GhError(["gh"], 1, "broken")},
+        )
+
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+        assert impl.collect_pool().complete is False
+
+    def test_a_wholly_readable_pool_is_complete(self) -> None:
+        """Non-vacuity: an excluded candidate is a *decision*, not a gap.
+
+        Only a candidate the source could not read leaves the Pool partial. One
+        the discriminator judged and dropped was seen, so the collection still
+        saw the whole Pool.
+        """
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42), _make_issue(43, body="just words")]
+        )
+
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+        collection = impl.collect_pool()
+
+        assert [e.ref for e in collection.exclusions] == [43]
+        assert collection.complete is True
 
     def test_re_verifies_discriminator_on_full_body(self) -> None:
         """If issue_view returns a different body lacking the discriminator, drop it."""
@@ -933,6 +982,37 @@ class TestPrdsCollectPool:
         impl = PrdsIssueSource(linked.parent, _silent_logger())
 
         assert impl.collect_pool().items == ()
+
+    def test_a_refused_prds_root_is_incomplete_not_an_empty_pool(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``prds/`` the source declined to walk is unseen, not absent.
+
+        Same rule the GitHub backend applies (#219 §2.13): only a Pool the
+        source actually saw may claim to be empty. A missing ``prds/`` really
+        is empty; one it refused to follow is not.
+        """
+        target = tmp_path / "outside-prds"
+        _write_md(target / "feature" / "001-escaped.md", _AFK_BODY)
+        linked = tmp_path / "repo" / "prds"
+        linked.parent.mkdir(parents=True)
+        try:
+            linked.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+        impl = PrdsIssueSource(linked.parent, _silent_logger())
+
+        assert impl.collect_pool().complete is False
+
+    def test_an_absent_prds_directory_is_a_complete_empty_pool(
+        self, tmp_path: Path
+    ) -> None:
+        impl = PrdsIssueSource(tmp_path, _silent_logger())
+        collection = impl.collect_pool()
+
+        assert collection.items == ()
+        assert collection.complete is True
 
     def test_rendered_block_format_matches_bash_collector(
         self, tmp_path: Path

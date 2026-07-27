@@ -59,7 +59,19 @@ the ``parallel-safe`` issues with serial Iterations for every other
 ``ready-for-agent`` issue, in one run, draining all eligible work. Under
 Rolling dispatch the shared Strike machine reacts once per **finalized Lane
 contribution** (not once per round, since there is no round) — see
-:func:`test_parallel_run_drains_lanes_then_serial_in_one_run`.
+:func:`test_parallel_run_drains_lanes_then_serial_in_one_run`. The other
+direction — a **serial-required** issue's latch releasing so held-back
+Parallel-safe work refills a Lane, with the serial Iteration owning base alone
+while it runs — is
+:func:`test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration`.
+
+**Truthful termination (#308, #219 §2.13, §7.7).** A **Pool** the Run could not
+fully read is not an empty Pool, and the serial-required half is only ever
+visible to the driver's own reading of it — see
+:func:`test_parallel_never_ends_empty_on_a_partial_pool_read`. The Strike
+machine is shared with serial Iterations, so a serial Iteration reaching its
+limit latches the same drain-confirmed abort a Lane contribution does — see
+:func:`test_parallel_serial_iteration_strike_abort_stops_the_run_stuck`.
 
 **Per-Lane worktree setup (#65, ADR-0008).** Before a Lane's session starts the
 runner prepares its worktree via the injected
@@ -186,8 +198,12 @@ class _ParallelFakeClient:
 
     Records every ``create_session`` call's ``working_directory`` (the seam
     the loop pins each Lane to its worktree with) and hands back a
-    :class:`_ParallelFakeSession` bound to it.
+    :class:`_ParallelFakeSession` bound to it. Subclasses override
+    :attr:`_session_cls` to change what an agent session *does* without
+    restating this bookkeeping.
     """
+
+    _session_cls: type[_ParallelFakeSession] = _ParallelFakeSession
 
     def __init__(
         self,
@@ -226,7 +242,7 @@ class _ParallelFakeClient:
                 **extra,
             }
         )
-        session = _ParallelFakeSession(
+        session = self._session_cls(
             on_event=on_event,
             working_directory=working_directory,
             fake_git=self._fake_git,
@@ -2798,3 +2814,344 @@ def test_parallel_serial_fallback_separates_already_worked_from_unlabelled(
     assert [f["reason"] for f in fallbacks] == ["all_parallel_safe_worked"]
     assert fallbacks[0]["eligible"] == 0
     assert fallbacks[0]["worked"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Truthful termination (#308)
+# ---------------------------------------------------------------------------
+
+
+class _UnreadableOnceGitHubClient(FakeGitHubClient):
+    """A tracker whose authoritative read of one issue fails exactly once.
+
+    Models the ordinary transient ``gh issue view`` failure (a 502, a dropped
+    connection) that :meth:`~git_loopy.sources.GitHubIssueSource.collect_pool`
+    has always survived by *skipping* the candidate. Self-healing on the second
+    ask is the point: a permanently unreadable issue would only prove the Run
+    hangs, whereas a transient one proves the Run waits for evidence and then
+    acts on it.
+    """
+
+    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._unreadable = unreadable
+        self.refusals = 0
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        if number == self._unreadable and self.refusals == 0:
+            self.refusals += 1
+            self.issue_view_calls.append(number)
+            raise gh_module.GhError(
+                ["gh", "issue", "view", str(number)], 1, "HTTP 502"
+            )
+        return super().issue_view(number)
+
+
+def test_parallel_never_ends_empty_on_a_partial_pool_read(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pool the Run could not fully read is not an empty Pool (#308, #219 §2.13).
+
+    The **Pool** of a Parallel-mode Run has two halves, and only one of them is
+    the **Rolling dispatch** membership cache. Plain (non-``parallel-safe``)
+    serial-required work is invisible to that cache — ``RollingPool`` filters
+    membership down to Parallel-safe candidates — so the driver's own
+    ``collect_pool`` peek is the *only* thing that can see it. When a
+    candidate's authoritative read fails, ``collect_pool`` skips it, and the
+    resulting collection is byte-identical to the one a genuinely empty tracker
+    produces.
+
+    So the Run here holds exactly one eligible issue — plain ``ready-for-agent``
+    #44 — and the very first read of it fails. Nothing is Parallel-safe, so no
+    **Lane** is ever reserved and the driver reaches its terminal check
+    immediately, on that one partial read. Ending there would exit 0 having
+    silently abandoned #44.
+
+    Instead the Run withholds the empty-Pool claim, re-reads, finds #44, and
+    works it serially — then terminates ``empty_pool`` on evidence.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _UnreadableOnceGitHubClient(
+        unreadable=44,
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        # A Run that never re-reads would spin forever rather than terminate
+        # early, so bound it: hanging is a failure, not a pass.
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    # --- Non-vacuity: the read the terminal decision would have rested on
+    #     really did fail.
+    assert fake_gh.refusals == 1, "the partial read never happened"
+
+    # --- #44 was not abandoned. It is the whole Pool, so a Run that treated
+    #     the partial read as empty would have exited 0 with it still open.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [44]
+    assert fake_gh.issue_view(44).state == "CLOSED"
+
+    # --- And the Run still terminates truthfully once it HAS read the Pool.
+    assert exit_code == 0
+    run_end = next(
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.end"
+    )
+    assert run_end["outcome"] == "empty_pool"
+
+
+class _TimelineFakeClient(_ParallelFakeClient):
+    """A client that snapshots the live worktrees as each session is created.
+
+    Under **Rolling dispatch** "a serial **Iteration** ran exclusively" is an
+    absence, and an absence is only assertable against a moment. Session
+    creation is that moment: the runner creates a session immediately before
+    running it, so the worktrees live *then* are the work genuinely overlapping
+    it — Lane worktrees and private **Integration stages** alike.
+    """
+
+    def __init__(self, *, fake_git: FakeGitClient, **kwargs: Any) -> None:
+        super().__init__(fake_git=fake_git, **kwargs)
+        self._git = fake_git
+        self.live_worktrees: list[tuple[str | None, tuple[str, ...]]] = []
+
+    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+        live = {path for (path, _b, _base) in self._git.worktree_adds}
+        live -= set(self._git.worktree_removes)
+        self.live_worktrees.append(
+            (kwargs.get("working_directory"), tuple(sorted(str(p) for p in live)))
+        )
+        return await super().create_session(**kwargs)
+
+
+
+
+def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
+    tmp_path, monkeypatch
+) -> None:
+    """Neither class of work starves, and the serial turn owns base alone (#308).
+
+    The existing drain-everything test proves the Lanes-then-serial direction.
+    This pins the other one, which is where starvation would actually live: a
+    latched serial demand stops **Rolling dispatch** refilling
+    (:attr:`RollingScheduler.refillable`), so if the latch never released, every
+    **Parallel-safe** issue behind the ones already in flight would sit eligible
+    and unworked for the rest of the Run.
+
+    The Pool is #41 (serial-required) plus #42, #43 and #44 (all
+    ``parallel-safe``) with a **Lane cap** of 2 — so #44 has no Lane to start
+    in when the latch goes on, and is *forced* behind the serial Iteration
+    rather than merely happening to follow it. The sequence the Run must
+    produce is Lane(#42) + Lane(#43) -> serial(#41) -> Lane(#44):
+
+    * #44's Lane exists at all, which is #219 §5.9's granted refill turn — the
+      thing that makes the serial latch a handoff rather than a stop.
+    * The serial Iteration ran with **no** worktree live: no Lane, no private
+      **Integration stage**. §5.5 grants ownership only at full Parallel
+      quiescence, because that Iteration owns the base worktree.
+    * The serial Iteration re-collected and rendered its *own* authoritative
+      Pool — including #44, which Rolling dispatch had not yet dispatched — and
+      chose its own Active issue from it, exactly as a serial Run does (§5.6).
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    # `serial_closes` picks the LOWEST issue its prompt offers, so numbering the
+    # serial-required issue #41 is what makes the serial turn work #41 rather
+    # than reaching past Rolling dispatch for the still-undispatched #44.
+    fake_client = _TimelineFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+        serial_closes=True,
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,  # two Lanes: #44 has nowhere to start before the latch
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    assert asyncio.run(_bounded()) == 0
+
+    # --- Lane(#42) + Lane(#43), serial, Lane(#44): the Run refilled a Lane
+    #     AFTER the interleaved serial Iteration, so neither class starved.
+    def _issue_of(working_directory: str | None) -> int | None:
+        if working_directory is None:
+            return None
+        return int(Path(working_directory).name.removeprefix("issue-"))
+
+    order = [_issue_of(wd) for (wd, _live) in fake_client.live_worktrees]
+    assert order == [42, 43, None, 44], (
+        f"expected Lanes -> serial -> a refilled Lane, got {order}"
+    )
+
+    # --- The serial Iteration owned base alone: nothing was live beside it.
+    #     Non-vacuous — the same snapshot sees each Lane's own worktree live
+    #     during that Lane's own session, so an empty one is a genuine teardown
+    #     rather than an instrument that never observes anything.
+    (_serial_wd, live_during_serial) = fake_client.live_worktrees[2]
+    assert live_during_serial == (), (
+        f"serial Iteration overlapped live worktrees: {live_during_serial}"
+    )
+    for issue, live in (
+        (issue, live)
+        for issue, (_wd, live) in zip(order, fake_client.live_worktrees)
+        if issue is not None
+    ):
+        assert any(f"issue-{issue}" in path for path in live), (
+            f"expected #{issue}'s own Lane worktree live during its session, "
+            f"got {live}"
+        )
+
+    # --- It rendered its OWN authoritative Pool and chose from it: #44 was
+    #     still eligible and undispatched, so a serial Run would have offered
+    #     it, and this one does too.
+    serial_prompt, _timeout = fake_client.created[2].send_and_wait_calls[0]
+    assert "=== Issue #41:" in serial_prompt
+    assert "=== Issue #44:" in serial_prompt
+    assert "=== Issue #42:" not in serial_prompt, "#42 was closed by its Lane"
+
+    # --- Nothing stranded, and the Run ended on a drained Pool.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [41, 42, 43, 44]
+    run_end = next(
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.end"
+    )
+    assert run_end["outcome"] == "empty_pool"
+
+
+class _NoProgressFakeSession(_ParallelFakeSession):
+    """An agent session that ends without committing or closing anything.
+
+    The **Strike** machine's whole input is progress, so a fake that always
+    commits can never drive one. This one returns its scripted usage and
+    nothing else — the "agent thought about it and stopped" shape.
+    """
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        self.send_and_wait_calls.append((prompt, timeout))
+        last: SessionEvent | None = None
+        for evt in self._scripted_events:
+            if self._on_event is not None:
+                self._on_event(evt)
+            last = evt
+        return last
+
+
+class _NoProgressFakeClient(_ParallelFakeClient):
+    _session_cls = _NoProgressFakeSession
+
+
+def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
+    tmp_path, monkeypatch
+) -> None:
+    """A serial Iteration's **Strike** abort ends a Parallel Run stuck (#308).
+
+    #219 §7.4 shares ONE Strike machine between **Lane contributions** and
+    serial **Iterations**, and §7.7 makes reaching its limit latch a
+    drain-confirmed abort: refill stops, started work drains, and the Run exits
+    ``stuck``. A finalized Lane contribution already latches that abort
+    (``_apply_strike_reaction``) — but a serial Iteration ticks the very same
+    machine, and the rolling driver used to discard the outcome it returned. So
+    a Parallel-mode Run whose serial work made no progress accumulated Strikes,
+    emitted the abort **Event**, and then just kept granting itself serial
+    Iterations forever.
+
+    The Pool here is one serial-required issue and an agent that never commits
+    or closes, with ``max_nmt_strikes=2``. The Run must reach its limit and stop
+    on the Wrapper contract's ``stuck`` exit rather than the ``empty_pool``
+    exit or no exit at all.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _NoProgressFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unbounded: only the Strike limit can stop this Run
+        max_nmt_strikes=2,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    events = _logged_events(tmp_path)
+    strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    assert [s["outcome"] for s in strikes] == ["warn", "abort"], (
+        f"expected one warn then the abort, got {strikes}"
+    )
+
+    # --- The abort ends the Run, and no further serial Iteration is granted
+    #     after it: §7.7 drains started work, it does not start new work.
+    starts = [e for e in events if e["type"] == "wrapper.iteration.start"]
+    assert len(starts) == 2, f"expected exactly two Iterations, got {len(starts)}"
+
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "stuck"
+    assert exit_code == loop_module.exit_code_for("stuck")

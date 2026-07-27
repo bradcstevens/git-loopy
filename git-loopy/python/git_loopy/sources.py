@@ -276,10 +276,19 @@ class PoolCollection:
         exclusions: Candidates dropped by the AFK-ready discriminator, in the
             same source order. A candidate the source could not *read* is not
             an exclusion — it was never discriminated against.
+        complete: ``True`` only when this collection saw the whole Pool: the
+            listing succeeded and every listed candidate was authoritatively
+            read. The same claim :attr:`MembershipSnapshot.complete` makes
+            about the *other* Pool read, and for the same reason (#219 §2.13,
+            ADR-0020) — an incomplete collection is byte-identical to a
+            genuinely empty one, so without this a caller cannot tell "there is
+            no work" from "I could not look", and a Run that terminates on an
+            empty Pool would abandon work it simply failed to read.
     """
 
     items: tuple[AfkReadyItem, ...] = ()
     exclusions: tuple[PoolExclusion, ...] = ()
+    complete: bool = True
 
     @property
     def excluded_only(self) -> bool:
@@ -572,7 +581,7 @@ class GitHubIssueSource:
             candidates = self._gh.issue_list("ready-for-agent")
         except gh_module.GhError as exc:
             self._diag.error("gh issue list failed: %s", exc)
-            return PoolCollection()
+            return PoolCollection(complete=False)
 
         exclusions: list[PoolExclusion] = []
         ready_candidates = []
@@ -586,6 +595,7 @@ class GitHubIssueSource:
                 )
 
         items: list[AfkReadyItem] = []
+        unread = False
         for issue in ready_candidates:
             try:
                 full = self._gh.issue_view(issue.number)
@@ -597,7 +607,10 @@ class GitHubIssueSource:
                 )
                 # Deliberately NOT an exclusion: an unreadable candidate was
                 # never discriminated against, and telling the operator to fix
-                # its headings would be a false accusation.
+                # its headings would be a false accusation. It does leave this
+                # collection *partial* though — the candidate is still open,
+                # still eligible, and simply unseen (#219 §2.13).
+                unread = True
                 continue
             # Re-verify against the authoritative body — and report *its*
             # reason, not the cheaper list body's, since this is the read the
@@ -619,7 +632,11 @@ class GitHubIssueSource:
 
         if self._include_prs:
             items.extend(self._collect_afk_ready_prs())
-        return PoolCollection(items=tuple(items), exclusions=tuple(exclusions))
+        return PoolCollection(
+            items=tuple(items),
+            exclusions=tuple(exclusions),
+            complete=not unread,
+        )
 
     def shallow_membership(self) -> MembershipSnapshot:
         """Read AFK-shaped ``ready-for-agent`` membership with no enrichment.
@@ -1048,17 +1065,18 @@ class PrdsIssueSource:
         """
         prds_dir = self._repo_root / "prds"
         if not prds_dir.is_dir():
+            # Genuinely empty, not unseen: there is no Pool to read.
             return PoolCollection()
         try:
             resolved_prds_dir = prds_dir.resolve(strict=True)
             expected_prds_dir = self._repo_root.resolve(strict=True) / "prds"
         except (OSError, RuntimeError):
-            return PoolCollection()
+            return PoolCollection(complete=False)
         if resolved_prds_dir != expected_prds_dir:
             self._diag.warning(
                 "prds: linked root is not allowed: %s; skipping", prds_dir
             )
-            return PoolCollection()
+            return PoolCollection(complete=False)
 
         items: list[tuple[str, AfkReadyItem]] = []
         exclusions: list[tuple[str, PoolExclusion]] = []
