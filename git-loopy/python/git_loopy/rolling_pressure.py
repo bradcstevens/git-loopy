@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
+from git_loopy.gh import RateLimitReporting
 from git_loopy.pricing import Pricing, estimate_cost
 from git_loopy.rolling_concurrency import (
     OBSERVATION_WINDOW,
@@ -70,10 +71,10 @@ __all__ = [
     "PressureObserver",
     "PressureReading",
     "PressureTelemetry",
-    "RateLimitMeter",
     "RunCostMeter",
     "RunPressureTelemetry",
     "adaptive_controller",
+    "rate_limit_reader",
 ]
 
 _USAGE_TOKENS = "usage.tokens"
@@ -143,29 +144,21 @@ class PressureObserver(Protocol):
         ...
 
 
-@dataclass
-class RateLimitMeter:
-    """A Run-to-date count of rate-limited GitHub reads (#219 §6).
+def rate_limit_reader(source: object) -> Callable[[], int | None]:
+    """The 429 **Pressure signal** for a Run working ``source`` (#219 §6).
 
-    Mutable and deliberately tiny: it is handed to whatever performs the reads
-    and read back by :class:`RunPressureTelemetry`, so the 429 signal needs no
-    return-value plumbing through every call site that might hit one.
+    The Rolling-dispatch driver holds an
+    :class:`~git_loopy.sources.IssueSource`, and only the ``gh`` seam behind a
+    GitHub one ever sees a throttled read — so this is where the two meet.
+
+    A source that cannot report throttling (the ``prds`` backend has no GitHub
+    at all) reads *unknown* rather than zero, which is #219 §11's rule and not
+    merely tidiness: an observed ``0`` is evidence of calm, and would let a
+    blind Run climb its **Lane** count on the absence of bad news.
     """
-
-    _count: int = 0
-
-    @property
-    def count(self) -> int:
-        """How many rate-limited reads this Run has seen."""
-        return self._count
-
-    def record(self) -> None:
-        """Record one rate-limited read."""
-        self._count += 1
-
-    def __call__(self) -> int:
-        return self._count
-
+    if isinstance(source, RateLimitReporting):
+        return source.rate_limited_reads
+    return lambda: None
 
 @dataclass(frozen=True)
 class PressureBudgets:
@@ -436,7 +429,7 @@ class PressureMonitor:
         if now - self._last_at < self.interval:
             return None
 
-        reading = self.telemetry.read()
+        reading = self._read()
         change = observer.observe_pressure(
             rate_limits=_delta_int(self._rate_base, reading.rate_limited_calls),
             credit_burn=_delta_float(self._credit_base, reading.credit_spent_usd),
@@ -454,6 +447,33 @@ class PressureMonitor:
             )
         return change
 
+    def _read(self) -> PressureReading:
+        """Read the telemetry, reporting a failed read as fully unknown.
+
+        Adaptation is an optimization on top of a Run that already works, so a
+        signal source that raises may cost the Run its adaptation and nothing
+        else — #219 §6's "required signal/config unavailable" row is a *level*
+        to hold at, not a reason to abandon Parallel mode.
+
+        Reported unknown rather than as an observed calm because a failed read
+        is the definition of "did not look" (#219 §11), and because unknown is
+        the conservative direction: it can neither fire a contraction nor prove
+        the health an expansion needs. The ``None`` bases it leaves behind also
+        force the *next* successful read to re-seed, so a Run never charges a
+        whole blind spell to the one observation that ended it.
+        """
+        try:
+            return self.telemetry.read()
+        except Exception as exc:  # noqa: BLE001 - any signal source may fail
+            if self.diag is not None:
+                self.diag.warning(
+                    "pressure telemetry unavailable, holding the effective "
+                    "Lane limit at %d: %s",
+                    self.controller.effective_limit,
+                    exc,
+                )
+            return PressureReading()
+
     def _seed(self, now: float) -> None:
         """Record the baseline the first real observation subtracts from.
 
@@ -461,7 +481,7 @@ class PressureMonitor:
         starting point rather than a sample; reporting it as one would charge
         everything the Run had already spent to a single observation.
         """
-        reading = self.telemetry.read()
+        reading = self._read()
         self._last_at = now
         self._rate_base = reading.rate_limited_calls
         self._credit_base = reading.credit_spent_usd

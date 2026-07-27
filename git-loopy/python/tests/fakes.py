@@ -12,10 +12,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, NoReturn, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
-from git_loopy.gh import GhError, Issue, IssueListPage, PullRequest, Repo
+from git_loopy.gh import (
+    GhError,
+    Issue,
+    IssueListPage,
+    PullRequest,
+    RateLimitCounter,
+    Repo,
+)
 from git_loopy.git import Commit, GitError
 
 
@@ -506,23 +513,45 @@ class FakeGitHubClient:
         self.issue_comment_calls: list[tuple[int, str]] = []
         self.pr_list_calls: list[tuple[str, str]] = []
         self.pr_view_calls: list[int] = []
+        # The 429 **Pressure signal** (#309, #219 §6), counted by the same
+        # `gh.RateLimitCounter` production uses. Injecting a `GhError` whose
+        # stderr carries GitHub's real throttling wording is therefore all a
+        # test needs to model a rate-limited Run end to end.
+        self._rate_limited = RateLimitCounter()
+
+    def rate_limited_reads(self) -> int:
+        """How many injected failures were GitHub throttling this Run."""
+        return self._rate_limited()
+
+    def _fail(self, error: GhError) -> NoReturn:
+        """Count ``error`` if it is a throttle, then raise it either way.
+
+        Every failure this fake produces funnels through here so the count is
+        a fact about the *classification*, not about which knob a test used.
+
+        Raised ``from None`` because an injected failure has no cause worth
+        reporting: the lookup that happened to notice it is noise in the
+        traceback of whatever the test was really asserting.
+        """
+        self._rate_limited.record(error)
+        raise error from None
 
     # -- GitHubClient mechanics -------------------------------------------
 
     def auth_status(self) -> bool:
         if self.auth_status_error is not None:
-            raise self.auth_status_error
+            self._fail(self.auth_status_error)
         return self.authed
 
     def repo_view(self) -> Repo:
         if self.repo_view_error is not None:
-            raise self.repo_view_error
+            self._fail(self.repo_view_error)
         return self.repo
 
     def issue_list(self, label: str, state: str = "open") -> list[Issue]:
         self.issue_list_calls.append((label, state))
         if self.issue_list_error is not None:
-            raise self.issue_list_error
+            self._fail(self.issue_list_error)
         return [issue for issue in self._issues.values() if _state_matches(issue.state, state)]
 
     def issue_list_membership(
@@ -530,7 +559,7 @@ class FakeGitHubClient:
     ) -> IssueListPage:
         self.issue_list_membership_calls.append((label, state))
         if self.issue_list_membership_error is not None:
-            raise self.issue_list_membership_error
+            self._fail(self.issue_list_membership_error)
         issues = tuple(
             issue
             for issue in self._issues.values()
@@ -542,23 +571,25 @@ class FakeGitHubClient:
         self.issue_view_calls.append(number)
         err = self._issue_view_errors.get(number)
         if err is not None:
-            raise err
+            self._fail(err)
         if number in self._issue_views:
             return self._issue_views[number]
         try:
             return self._issues[number]
         except KeyError:
-            raise GhError(
-                ["gh", "issue", "view", str(number)],
-                1,
-                f"issue #{number} not found",
-            ) from None
+            self._fail(
+                GhError(
+                    ["gh", "issue", "view", str(number)],
+                    1,
+                    f"issue #{number} not found",
+                )
+            )
 
     def issue_close(self, number: int, comment: str) -> None:
         self.issue_close_calls.append((number, comment))
         err = self._issue_close_errors.get(number)
         if err is not None:
-            raise err
+            self._fail(err)
         existing = self._issues.get(number)
         if existing is not None:
             self._issues[number] = replace(existing, state="CLOSED")
@@ -575,27 +606,29 @@ class FakeGitHubClient:
         self.issue_comment_calls.append((number, comment))
         err = self._issue_comment_errors.get(number)
         if err is not None:
-            raise err
+            self._fail(err)
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         self.pr_list_calls.append((label, state))
         if self.pr_list_error is not None:
-            raise self.pr_list_error
+            self._fail(self.pr_list_error)
         return [pr for pr in self._prs.values() if _state_matches(pr.state, state)]
 
     def pr_view(self, number: int) -> PullRequest:
         self.pr_view_calls.append(number)
         err = self._pr_view_errors.get(number)
         if err is not None:
-            raise err
+            self._fail(err)
         try:
             return self._prs[number]
         except KeyError:
-            raise GhError(
-                ["gh", "pr", "view", str(number)],
-                1,
-                f"pr #{number} not found",
-            ) from None
+            self._fail(
+                GhError(
+                    ["gh", "pr", "view", str(number)],
+                    1,
+                    f"pr #{number} not found",
+                )
+            )
 
     # -- test scripting ----------------------------------------------------
 

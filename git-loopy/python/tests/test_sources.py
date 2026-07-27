@@ -1595,3 +1595,62 @@ class TestRollingSourceSplit:
         assert [i.ref for i in pool] == [31, 7]
         assert "serial note" in pool[0].rendered_block
         assert gh.issue_view_calls == [31, 7]
+
+
+# --------------------------------------------------------------------------- #
+# Rate-limit pressure reporting (#309, #219 §6)                                #
+# --------------------------------------------------------------------------- #
+
+
+class TestRateLimitReporting:
+    """The source relays the 429 **Pressure signal** its client observed."""
+
+    def test_the_source_reports_the_throttling_its_client_saw(self) -> None:
+        """#219 §6: the adaptive controller reads 429s through the source.
+
+        The Rolling-dispatch driver holds an :class:`IssueSource`, never a
+        ``gh`` client, so the count has to surface here for the **Effective
+        Lane limit** to react to it at all.
+        """
+        throttled = gh_module.GhError(
+            ["gh", "issue", "view", "42"],
+            1,
+            "HTTP 403: API rate limit exceeded for user ID 1",
+        )
+        client = FakeGitHubClient(issue_view_errors={42: throttled})
+        source = GitHubIssueSource(_silent_logger(), gh=client)
+        assert source.rate_limited_reads() == 0
+
+        for _ in range(2):
+            with pytest.raises(gh_module.GhError):
+                client.issue_view(42)
+
+        assert source.rate_limited_reads() == 2
+
+    def test_an_ordinary_failed_read_is_not_reported_as_throttling(self) -> None:
+        """A missing issue is not back-pressure and must not cost a **Lane**."""
+        client = FakeGitHubClient()
+        source = GitHubIssueSource(_silent_logger(), gh=client)
+
+        with pytest.raises(gh_module.GhError):
+            client.issue_view(999)
+
+        assert source.rate_limited_reads() == 0
+
+    def test_a_client_that_cannot_count_leaves_the_signal_unknown(self) -> None:
+        """#219 §11: an unobservable signal is unknown, never an observed zero.
+
+        A ``gh`` seam that does not meter throttling has seen no evidence of
+        calm — reporting ``0`` would let a blind Run climb its **Lane** count
+        on the absence of bad news.
+        """
+
+        class _UnmeteredClient:
+            """A ``gh`` seam predating the 429 **Pressure signal**."""
+
+        source = GitHubIssueSource(
+            _silent_logger(),
+            gh=_UnmeteredClient(),  # type: ignore[arg-type]
+        )
+
+        assert source.rate_limited_reads() is None

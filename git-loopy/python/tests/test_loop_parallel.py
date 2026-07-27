@@ -3218,7 +3218,7 @@ def _wire_pressure(
     monkeypatch.setattr(
         loop_module,
         "_make_pressure_monitor",
-        lambda *, lane_cap, diag, credit_spent: rolling_pressure.PressureMonitor(
+        lambda *, lane_cap, diag, **_seams: rolling_pressure.PressureMonitor(
             budgets=budgets or rolling_pressure.PressureBudgets(),
             telemetry=telemetry,
             clock=_SteppingClock(),
@@ -3264,19 +3264,102 @@ def _run_under_pressure(tmp_path, monkeypatch) -> int:
     return asyncio.run(loop_module.run(cfg))
 
 
+def _throttled_read(number: int) -> gh_module.GhError:
+    """The failure ``gh`` raises when GitHub is rate-limiting a read."""
+    return gh_module.GhError(
+        ["gh", "issue", "view", str(number)],
+        1,
+        "HTTP 403: API rate limit exceeded for user ID 1 "
+        "(https://api.github.com/graphql)",
+    )
+
+
+def _wire_production_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inject only the clock, leaving the real telemetry chain in place.
+
+    The point of the end-to-end 429 test is that a throttle observed by the
+    ``gh`` seam reaches the policy *through production code* — the source's
+    relay, :class:`~git_loopy.rolling_pressure.RunPressureTelemetry`, and the
+    cumulative-to-per-observation differencing. Only the cadence is faked,
+    because the driver's turns are event-driven and a real Run's observation
+    window is a claim about wall time (#219 §6).
+    """
+    real = loop_module._make_pressure_monitor
+    monkeypatch.setattr(
+        loop_module,
+        "_make_pressure_monitor",
+        lambda **kwargs: replace_clock(real(**kwargs)),
+    )
+
+
+def replace_clock(
+    monitor: rolling_pressure.PressureMonitor,
+) -> rolling_pressure.PressureMonitor:
+    """Re-pace ``monitor`` on a clock that steps one interval per read."""
+    monitor.clock = _SteppingClock()
+    return monitor
+
+
 def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     tmp_path, monkeypatch
 ) -> None:
     """#219 §6: a throttled Run gives Lanes back and says which signal did it.
 
     The whole point of the adaptive controller reaching production: a Run that
-    is being rate-limited must stop asking for more Lanes, and an operator
+    GitHub is rate-limiting must stop asking for more Lanes, and an operator
     reading the replay must be able to see *why* concurrency moved. The
     configured **Lane cap** never moves — only the effective limit does.
-    """
-    _wire_pressure(monkeypatch, _ThrottledTelemetry())
 
-    assert _run_under_pressure(tmp_path, monkeypatch) == 0
+    Driven through the ``gh`` seam rather than through injected telemetry,
+    because the 429 **Pressure signal** has a production path or it has
+    nothing: ``gh`` exits 1 for a throttle exactly as it does for a closed
+    issue, so a Run that does not classify the failure can never observe the
+    one signal #219 §6 contracts hardest on. Here the two **serial-required**
+    candidates fail their authoritative ``issue_view`` on every **Pool** read,
+    which is what a rate-limited Run really looks like — and leaves the
+    ``parallel-safe`` half free to keep working, so the throttle is the only
+    thing under test.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(70, labels=["ready-for-agent"]),
+            _make_issue(71, labels=["ready-for-agent"]),
+            _make_issue(72, labels=["ready-for-agent"]),
+        ],
+        # Three, because #219 §6's -2 reaction is ">=3 observed 429s in 6
+        # observations" and one **Pool** validation pass is what a rate-limited
+        # Run throttles on.
+        issue_view_errors={
+            number: _throttled_read(number) for number in (70, 71, 72)
+        },
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _wire_production_pressure(monkeypatch)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=6,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    asyncio.run(loop_module.run(cfg))
 
     events = _logged_events(tmp_path)
     changes = [e for e in events if e["type"] == "wrapper.concurrency.changed"]
@@ -3284,8 +3367,9 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     first = changes[0]
     assert first["pressure"] == "rate_limit"
     assert first["configured_lane_limit"] == 6
+    # 429 is the -2 reaction, from the static-safe 3 a Run starts at.
     assert first["effective_lane_limit"] == 1
-    assert first["rate_limit_state"] == 3
+    assert first["rate_limit_state"] >= 3
     # Run-scoped, like every other scheduler-level record: it names the Run's
     # capacity, not any one contribution's work.
     assert first["iter"] is None

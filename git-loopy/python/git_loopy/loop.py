@@ -301,6 +301,7 @@ def _make_pressure_monitor(
     lane_cap: int,
     diag: logging.Logger,
     credit_spent: Callable[[], float | None],
+    rate_limits: Callable[[], int | None],
 ) -> rolling_pressure.PressureMonitor:
     """Construct the bounded adaptive Lane-concurrency seam (#219 §6, #309).
 
@@ -314,13 +315,9 @@ def _make_pressure_monitor(
     Production wires the three injected halves the PRD names: budgets from the
     operator's environment (:meth:`~git_loopy.rolling_pressure.PressureBudgets.from_env`,
     where an unconfigured budget leaves its signal *unknown* rather than
-    inventing a threshold), the process run queue for host/setup pressure, and
-    this Run's own priced Consumption for AI-credit burn.
-
-    **429s are not metered yet.** Counting them needs the ``gh`` seam to report
-    a rate-limited read, which no Pool read currently distinguishes from any
-    other failure — so the signal stays honestly unknown rather than being
-    reported as an observed zero (#219 §11).
+    inventing a threshold), the process run queue for host/setup pressure, this
+    Run's own priced Consumption for AI-credit burn, and the ``gh`` seam's
+    count of the reads GitHub throttled for the 429 **Pressure signal**.
     """
     return rolling_pressure.PressureMonitor.for_run(
         budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
@@ -328,6 +325,7 @@ def _make_pressure_monitor(
         telemetry=rolling_pressure.RunPressureTelemetry(
             budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
             credit_spent=credit_spent,
+            rate_limits=rate_limits,
         ),
         clock=time.monotonic,
         diag=diag,
@@ -1458,6 +1456,7 @@ class _ParallelLoop:
             lane_cap=config.parallel,
             diag=diag,
             credit_spent=self._cost_meter,
+            rate_limits=rolling_pressure.rate_limit_reader(source),
         )
         if isinstance(source, RollingIssueSource):
             self._pool = RollingPool(diag=diag, source=source, clock=time.monotonic)

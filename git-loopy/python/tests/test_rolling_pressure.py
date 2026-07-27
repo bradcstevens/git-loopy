@@ -11,18 +11,24 @@ and no live API.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
+import pytest
+
+from git_loopy.gh import GhError
 from git_loopy.rolling_concurrency import STATIC_SAFE_LANE_LIMIT
 from git_loopy.rolling_pressure import (
     OBSERVATION_INTERVAL_SECONDS,
     PressureBudgets,
     PressureMonitor,
     PressureReading,
-    RateLimitMeter,
     RunPressureTelemetry,
     adaptive_controller,
+    rate_limit_reader,
 )
+from git_loopy.sources import GitHubIssueSource, PrdsIssueSource
+from tests.fakes import FakeGitHubClient
 
 
 class Clock:
@@ -299,15 +305,42 @@ def test_a_platform_without_a_run_queue_reports_host_pressure_unknown() -> None:
     assert telemetry.read().host_pressure is None
 
 
-def test_rate_limited_reads_are_counted_for_the_whole_run() -> None:
-    """The 429 signal #219 §6 contracts hardest on, as a Run-to-date total."""
-    meter = RateLimitMeter()
-    telemetry = RunPressureTelemetry(budgets=PressureBudgets(), rate_limits=meter)
+def test_rate_limited_reads_are_read_off_the_source(tmp_path) -> None:
+    """The 429 signal #219 §6 contracts hardest on, as a Run-to-date total.
+
+    Read through the source rather than a counter of this module's own, because
+    only the ``gh`` seam behind a GitHub source ever sees a throttled read.
+    """
+    throttled = GhError(
+        ["gh", "issue", "view", "42"], 1, "HTTP 429: Too Many Requests"
+    )
+    client = FakeGitHubClient(issue_view_errors={42: throttled})
+    source = GitHubIssueSource(logging.getLogger("rolling_pressure_test"), gh=client)
+    telemetry = RunPressureTelemetry(
+        budgets=PressureBudgets(), rate_limits=rate_limit_reader(source)
+    )
 
     assert telemetry.read().rate_limited_calls == 0
-    meter.record()
-    meter.record()
+    for _ in range(2):
+        with pytest.raises(GhError):
+            client.issue_view(42)
+
     assert telemetry.read().rate_limited_calls == 2
+
+
+def test_a_source_that_cannot_see_throttling_reports_it_unknown(tmp_path) -> None:
+    """#219 §11: the ``prds`` backend has no GitHub, so it has no 429 signal.
+
+    ``None`` rather than ``0``, because an observed zero is evidence of calm
+    and would let a blind Run climb its **Lane** count on the absence of bad
+    news.
+    """
+    source = PrdsIssueSource(tmp_path, logging.getLogger("rolling_pressure_test"))
+    telemetry = RunPressureTelemetry(
+        budgets=PressureBudgets(), rate_limits=rate_limit_reader(source)
+    )
+
+    assert telemetry.read().rate_limited_calls is None
 
 
 def test_credit_spend_is_unknown_until_a_run_can_price_itself() -> None:
@@ -321,3 +354,105 @@ def test_credit_spend_is_unknown_until_a_run_can_price_itself() -> None:
     )
 
     assert telemetry.read().credit_spent_usd is None
+
+
+# --------------------------------------------------------------------------- #
+# Telemetry that fails — fall back, never fail the Run                         #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class BrokenTelemetry:
+    """Telemetry whose reads raise, the way a real signal source can."""
+
+    working: ScriptedTelemetry = field(default_factory=ScriptedTelemetry)
+    broken: bool = True
+
+    def read(self) -> PressureReading:
+        if self.broken:
+            raise RuntimeError("load average unavailable")
+        return self.working.read()
+
+
+def test_a_failed_seeding_read_does_not_take_the_run_down() -> None:
+    """#219 §6: unavailable telemetry is static **Lane cap** behaviour.
+
+    Adaptation is an optimization on top of a Run that already works, so a
+    signal source that raises must cost the Run its adaptation and nothing
+    else. The very first read is the riskiest one — it happens before any Lane
+    has started — and an exception there would abort Parallel mode outright.
+    """
+    monitor = PressureMonitor.for_run(
+        budgets=PressureBudgets(),
+        lane_cap=6,
+        telemetry=BrokenTelemetry(),
+        clock=Clock(),
+    )
+
+    assert monitor.observe(RecordingObserver()) is None
+    assert monitor.controller.effective_limit == STATIC_SAFE_LANE_LIMIT
+
+
+def test_a_failed_observation_is_reported_unknown_not_estimated() -> None:
+    """#219 §11: a read the Run could not make is unknown, never a zero.
+
+    A failed read is the definition of "did not look". Reporting it as an
+    observed calm would be an estimate — and the one estimate that can *widen*
+    concurrency, which is the expensive direction to be wrong in.
+    """
+    clock, telemetry = Clock(), BrokenTelemetry(broken=False)
+    monitor = PressureMonitor.for_run(
+        budgets=PressureBudgets(),
+        lane_cap=6,
+        telemetry=telemetry,
+        clock=clock,
+    )
+    monitor.observe(RecordingObserver())
+
+    telemetry.broken = True
+    clock.tick(OBSERVATION_INTERVAL_SECONDS)
+    observer = RecordingObserver()
+
+    assert monitor.observe(observer) is None
+    assert observer.seen == [(None, None, None)]
+
+
+def test_a_run_resumes_observing_once_its_telemetry_comes_back() -> None:
+    """A blind spot is a gap in the evidence, not the end of adaptation.
+
+    The counters are cumulative, so the first read after an outage re-seeds
+    rather than charging the whole gap to one observation — which would fire a
+    contraction on pressure that accumulated while nothing was watching.
+    """
+    clock = Clock()
+    telemetry = BrokenTelemetry(
+        working=ScriptedTelemetry(rate_limited_calls=0), broken=False
+    )
+    monitor = PressureMonitor.for_run(
+        budgets=PressureBudgets(),
+        lane_cap=6,
+        telemetry=telemetry,
+        clock=clock,
+    )
+    monitor.observe(RecordingObserver())
+
+    telemetry.broken = True
+    clock.tick(OBSERVATION_INTERVAL_SECONDS)
+    monitor.observe(RecordingObserver())
+
+    telemetry.broken = False
+    telemetry.working.rate_limited_calls = 40
+    clock.tick(OBSERVATION_INTERVAL_SECONDS)
+    reseed = RecordingObserver()
+    monitor.observe(reseed)
+    # Host pressure is instantaneous, so one good read restores it outright;
+    # only the two cumulative counters need a baseline before they mean
+    # anything again.
+    assert reseed.seen == [(None, None, 0.5)]
+
+    telemetry.working.rate_limited_calls = 42
+    clock.tick(OBSERVATION_INTERVAL_SECONDS)
+    resumed = RecordingObserver()
+    monitor.observe(resumed)
+
+    assert resumed.seen == [(2, 0.0, 0.5)]

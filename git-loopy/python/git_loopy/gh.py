@@ -73,7 +73,14 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Protocol, Sequence, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Final,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
     from git_loopy.labels import LabelSpec
@@ -115,6 +122,14 @@ _LABEL_PAGE_SIZE: Final[int] = 100
 _MEMBERSHIP_PAGE_LIMIT: Final[int] = 100
 _MEMBERSHIP_MAX_LIMIT: Final[int] = 1600
 
+# The stderr phrasings GitHub throttles with, lowercased. See
+# :attr:`GhError.rate_limited` for why the set is exactly this wide.
+_RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
+    "rate limit",
+    "too many requests",
+    "abuse detection",
+)
+
 
 class GhError(RuntimeError):
     """Raised when a ``gh`` invocation fails or returns an unparseable shape.
@@ -141,6 +156,68 @@ class GhError(RuntimeError):
             f"gh subprocess failed: {' '.join(self.command)!r} "
             f"(exit {returncode}): {stderr_tail}"
         )
+
+    @property
+    def rate_limited(self) -> bool:
+        """Whether GitHub throttled this read (#219 §6, ADR-0020).
+
+        The **Pressure signal** the adaptive **Effective Lane limit** reacts to
+        most sharply is *observed* 429s, and this is the only place a Run can
+        observe one: ``gh`` exits 1 for a throttle exactly as it does for a
+        closed issue or a broken remote, so the wording is the whole signal.
+        Four phrasings because GitHub throttles four ways — the primary REST
+        limit (HTTP 403), the secondary limit, abuse detection, and a plain
+        HTTP 429 — and a Run that recognised only one would under-count the
+        very pressure it is meant to relieve.
+
+        Deliberately narrow in the other direction too. #219 §11 forbids
+        estimating a pressure input, and mis-classifying is not symmetric:
+        under-counting only leaves a Lane in use, while over-counting spends
+        Lanes on a throttle that never happened. So a shape failure
+        (``returncode`` 0 — this runner's own parser giving up) and a missing
+        binary (127) are excluded whatever their text says.
+        """
+        if self.returncode in (0, 127):
+            return False
+        text = self.stderr_tail.lower()
+        return any(marker in text for marker in _RATE_LIMIT_MARKERS)
+
+
+@runtime_checkable
+class RateLimitReporting(Protocol):
+    """Anything that can report the GitHub reads it saw throttled (#219 §6).
+
+    Deliberately *not* folded into :class:`GitHubClient`. The 429 **Pressure
+    signal** is optional by design — #219 §11's "never estimate" means a seam
+    that cannot count throttling must report *unknown*, which a separate
+    protocol expresses and a required method would not.
+    """
+
+    def rate_limited_reads(self) -> int | None:
+        """How many reads GitHub has throttled this Run, or ``None`` if unknown."""
+        ...
+
+
+@dataclass
+class RateLimitCounter:
+    """Run-to-date count of throttled GitHub reads (#219 §6, ADR-0020).
+
+    One implementation of the classification, shared by the ``gh`` adapter and
+    the in-memory test double, so a test that throttles a Run exercises the
+    same :attr:`GhError.rate_limited` judgement production does. Cumulative and
+    monotonic: :class:`~git_loopy.rolling_pressure.PressureMonitor` differences
+    it into per-observation values, so this only has to count.
+    """
+
+    _count: int = 0
+
+    def __call__(self) -> int:
+        return self._count
+
+    def record(self, error: GhError) -> None:
+        """Count ``error`` if — and only if — GitHub was throttling."""
+        if error.rate_limited:
+            self._count += 1
 
 
 @dataclass(frozen=True)
@@ -1170,15 +1247,54 @@ class SubprocessContinuationGitHubClient:
 
 
 class SubprocessGitHubClient:
-    """Stateless :class:`GitHubClient` shelling out to the real ``gh`` CLI.
+    """:class:`GitHubClient` shelling out to the real ``gh`` CLI.
 
-    Holds no state — ``gh`` runs in the process cwd, so unlike
+    Holds no *binding* — ``gh`` runs in the process cwd, so unlike
     :class:`git_loopy.git.SubprocessGitClient` there is nothing to bind at
-    construction (``SubprocessGitHubClient()`` takes no arguments). Every method
-    funnels through the module-level :func:`_run` so the error semantics are
-    uniform, and the user's ``gh auth`` stays the single source of truth (no
-    ``httpx`` / ``requests`` / ``PyGithub``).
+    construction (``SubprocessGitHubClient()`` still takes no arguments). Every
+    method funnels through :meth:`_checked` and so through the module-level
+    :func:`_run`, which is what keeps the error semantics uniform and lets the
+    user's ``gh auth`` stay the single source of truth (no ``httpx`` /
+    ``requests`` / ``PyGithub``).
+
+    The one piece of state it does carry is a Run-to-date count of the reads
+    GitHub throttled (:meth:`rate_limited_reads`). That belongs here because
+    this adapter is the only thing in the runner that ever sees a 429, and
+    #219 §6 contracts the **Effective Lane limit** on *observed* throttling —
+    a **Pressure signal** nothing else in the process is positioned to report.
     """
+
+    def __init__(self) -> None:
+        self._rate_limited = RateLimitCounter()
+
+    def rate_limited_reads(self) -> int:
+        """How many reads GitHub has throttled this Run (#219 §6).
+
+        Cumulative and monotonic:
+        :class:`~git_loopy.rolling_pressure.PressureMonitor` differences it
+        into per-observation values, so this only has to be a counter.
+        """
+        return self._rate_limited()
+
+    def _checked(
+        self,
+        args: Sequence[str],
+        *,
+        check: bool = True,
+        input_text: str | None = None,
+    ) -> str:
+        """Run ``gh`` and count the failure if GitHub was throttling.
+
+        Counts and re-raises rather than recovering: throttling is still a
+        failed read to whoever asked for it, and #219 §2's Pool rules already
+        say what a failed read means (quarantine the candidate, never claim an
+        empty **Pool**). This adds the observation, not a second policy.
+        """
+        try:
+            return _run(args, check=check, input_text=input_text)
+        except GhError as error:
+            self._rate_limited.record(error)
+            raise
 
     def auth_status(self) -> bool:
         """Return ``True`` if ``gh`` is signed in, ``False`` otherwise.
@@ -1211,7 +1327,7 @@ class SubprocessGitHubClient:
                 or returns a payload the parser cannot understand.
         """
         cmd = ["repo", "view", "--json", "owner,name,defaultBranchRef"]
-        raw = _run(cmd)
+        raw = self._checked(cmd)
         data = _parse_json(raw, [_GH_BIN, *cmd])
         if not isinstance(data, dict):
             raise GhError(
@@ -1260,7 +1376,7 @@ class SubprocessGitHubClient:
             "--json",
             "number,title,body,labels,state,url",
         ]
-        raw = _run(cmd)
+        raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         if not isinstance(parsed, list):
             raise GhError(
@@ -1312,7 +1428,7 @@ class SubprocessGitHubClient:
                 "--json",
                 "number,title,body,labels,state,url",
             ]
-            raw = _run(cmd)
+            raw = self._checked(cmd)
             parsed = _parse_json(raw, [_GH_BIN, *cmd])
             if not isinstance(parsed, list):
                 raise GhError(
@@ -1347,7 +1463,7 @@ class SubprocessGitHubClient:
             "--json",
             "number,title,body,labels,state,url,comments",
         ]
-        raw = _run(cmd)
+        raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         return _parse_issue(parsed, [_GH_BIN, *cmd])
 
@@ -1375,8 +1491,8 @@ class SubprocessGitHubClient:
                 or the post-close state is not ``CLOSED``.
         """
         close_cmd = ["issue", "close", str(number), "--comment", comment]
-        _run(close_cmd)
-        verify_state = _issue_state(number)
+        self._checked(close_cmd)
+        verify_state = _issue_state(number, self._checked)
         if verify_state != "CLOSED":
             verify_cmd = [_GH_BIN, "issue", "view", str(number), "--json", "state"]
             raise GhError(
@@ -1396,7 +1512,7 @@ class SubprocessGitHubClient:
         Raises:
             GhError: If the comment subprocess fails.
         """
-        _run(["issue", "comment", str(number), "--body", comment])
+        self._checked(["issue", "comment", str(number), "--body", comment])
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         """List pull requests filtered by label and state.
@@ -1430,7 +1546,7 @@ class SubprocessGitHubClient:
             "--json",
             "number,title,body,labels,state,url,headRefOid,headRefName",
         ]
-        raw = _run(cmd)
+        raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         if not isinstance(parsed, list):
             raise GhError(
@@ -1461,7 +1577,7 @@ class SubprocessGitHubClient:
             "--json",
             "number,title,body,labels,state,url,headRefOid,headRefName,comments",
         ]
-        raw = _run(cmd)
+        raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         return _parse_pr(parsed, [_GH_BIN, *cmd])
 
@@ -1471,10 +1587,15 @@ class SubprocessGitHubClient:
 # --------------------------------------------------------------------------- #
 
 
-def _issue_state(number: int) -> str:
-    """Read just the ``state`` field for an issue. Internal helper for verify."""
+def _issue_state(number: int, run: Callable[[Sequence[str]], str] = _run) -> str:
+    """Read just the ``state`` field for an issue. Internal helper for verify.
+
+    ``run`` is injected so :meth:`SubprocessGitHubClient.issue_close` can route
+    the verifying re-read through its own :meth:`~SubprocessGitHubClient._checked`
+    and count a throttle here as readily as on the write (#219 §6).
+    """
     cmd = ["issue", "view", str(number), "--json", "state"]
-    raw = _run(cmd)
+    raw = run(cmd)
     parsed = _parse_json(raw, [_GH_BIN, *cmd])
     if not isinstance(parsed, dict) or "state" not in parsed:
         raise GhError(

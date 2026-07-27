@@ -534,6 +534,23 @@ class GitHubIssueSource:
         self._gh = gh
         self._include_prs = include_prs
 
+    def rate_limited_reads(self) -> int | None:
+        """How many reads GitHub throttled this Run, or ``None`` if unknown.
+
+        The 429 **Pressure signal** #219 §6 contracts the **Effective Lane
+        limit** hardest on. Relayed rather than owned: the ``gh`` client is the
+        only thing that sees a throttle, and the Rolling-dispatch driver holds
+        a source rather than a client, so this is where the two meet.
+
+        ``None`` when the injected seam cannot count throttling at all — #219
+        §11's *unknown*, which may neither fire a contraction nor stand as
+        evidence of health. An observed ``0`` would claim the Run looked, and a
+        seam with no counter never did.
+        """
+        if isinstance(self._gh, gh_module.RateLimitReporting):
+            return self._gh.rate_limited_reads()
+        return None
+
     def preflight(self) -> int | None:
         """Verify ``gh`` is on PATH, authenticated, and resolves a repo.
 

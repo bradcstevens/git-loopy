@@ -807,3 +807,148 @@ def test_parse_pr_non_dict_raises_gh_error() -> None:
     with pytest.raises(GhError) as exc_info:
         gh._parse_pr(["not", "a", "dict"], ["gh", "pr", "view"])
     assert "expected JSON object for pull request" in exc_info.value.stderr_tail
+
+
+# --------------------------------------------------------------------------- #
+# Rate-limit classification and counting (#309, #219 §6)                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        # The primary REST limit, as `gh` relays it.
+        "HTTP 403: API rate limit exceeded for user ID 1234. "
+        "(https://api.github.com/graphql)",
+        # The secondary limit, which `gh` reports with different words.
+        "You have exceeded a secondary rate limit. Please wait a few minutes "
+        "before you try again.",
+        # The abuse-detection wording for requests arriving too fast.
+        "You have triggered an abuse detection mechanism and have been "
+        "temporarily blocked. Please retry your request again later.",
+        "HTTP 429: Too Many Requests (https://api.github.com/graphql)",
+    ],
+)
+def test_a_throttled_read_is_classified_rate_limited(stderr: str) -> None:
+    """#219 §6 contracts on *observed* 429s, so the failure must name itself.
+
+    ``gh`` reports throttling through several different phrasings and two
+    different HTTP statuses, and none of them is distinguishable from any other
+    failed read by exit code alone.
+    """
+    assert GhError(["gh", "issue", "view", "42"], 1, stderr).rate_limited
+
+
+@pytest.mark.parametrize(
+    "returncode,stderr",
+    [
+        (1, "no git remotes found"),
+        (1, "could not resolve to an Issue with the number 42"),
+        (127, "gh not found on PATH"),
+        # A shape failure (returncode 0) is the runner's own parser giving up,
+        # never GitHub throttling — even if the payload quotes the phrase.
+        (0, "unparseable JSON: API rate limit exceeded"),
+    ],
+)
+def test_an_ordinary_failure_is_never_counted_as_throttling(
+    returncode: int, stderr: str
+) -> None:
+    """#219 §11: a signal the Run cannot see stays unknown, never estimated.
+
+    Over-classifying is the expensive direction here — it would contract the
+    **Effective Lane limit** on a closed issue or a broken remote and blame a
+    throttle that never happened.
+    """
+    assert not GhError(["gh", "issue", "view", "42"], returncode, stderr).rate_limited
+
+
+def test_the_client_counts_the_throttled_reads_it_saw(monkeypatch) -> None:
+    """#219 §6: the adapter that sees a 429 is the only thing that can count it.
+
+    Every rolling **Pool** refresh, pickup, and closure funnels through this
+    client, so its Run-to-date count *is* the ``rate_limits`` **Pressure
+    signal**. It counts and re-raises: throttling is still a failed read to
+    whoever asked for it.
+    """
+    client = SubprocessGitHubClient()
+    assert client.rate_limited_reads() == 0
+
+    _install_fake_run(
+        monkeypatch,
+        lambda cmd, **kw: _completed(
+            cmd, code=1, stderr="HTTP 403: API rate limit exceeded for user ID 1"
+        ),
+    )
+    for _ in range(2):
+        with pytest.raises(GhError):
+            client.issue_view(42)
+
+    assert client.rate_limited_reads() == 2
+
+
+def test_an_ordinary_failed_read_leaves_the_throttle_count_alone(monkeypatch) -> None:
+    """A closed issue is not back-pressure, and must not spend a **Lane**."""
+    client = SubprocessGitHubClient()
+    _install_fake_run(
+        monkeypatch,
+        lambda cmd, **kw: _completed(
+            cmd, code=1, stderr="could not resolve to an Issue with the number 42"
+        ),
+    )
+    with pytest.raises(GhError):
+        client.issue_view(42)
+
+    assert client.rate_limited_reads() == 0
+
+
+def test_every_gh_mechanic_reports_the_throttle_it_hit(monkeypatch) -> None:
+    """The count is Run-to-date across the whole seam, not per method.
+
+    A Run under a primary rate limit is throttled on *every* call it makes, so
+    counting only the listing (or only the pickup) would report a fraction of
+    the pressure and contract a window or more late.
+    """
+    client = SubprocessGitHubClient()
+    _install_fake_run(
+        monkeypatch,
+        lambda cmd, **kw: _completed(
+            cmd, code=1, stderr="You have exceeded a secondary rate limit."
+        ),
+    )
+    for call in (
+        lambda: client.repo_view(),
+        lambda: client.issue_list("ready-for-agent"),
+        lambda: client.issue_list_membership("ready-for-agent"),
+        lambda: client.issue_view(42),
+        lambda: client.issue_close(42, "done"),
+        lambda: client.issue_comment(42, "note"),
+        lambda: client.pr_list("ready-for-agent"),
+        lambda: client.pr_view(42),
+    ):
+        with pytest.raises(GhError):
+            call()
+
+    assert client.rate_limited_reads() == 8
+
+
+def test_a_throttled_close_verification_is_counted_too(monkeypatch) -> None:
+    """``issue_close`` reads twice, and either read can be the throttled one.
+
+    Under a primary rate limit the write is often the call that gets through
+    and the verifying re-read the one that does not, so counting only the
+    ``gh issue close`` would report a Run at its calmest moment.
+    """
+    client = SubprocessGitHubClient()
+
+    def fake_run(cmd, **kw):
+        if "close" in cmd:
+            return _completed(cmd)
+        return _completed(
+            cmd, code=1, stderr="HTTP 429: Too Many Requests"
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    with pytest.raises(GhError):
+        client.issue_close(42, "done")
+
+    assert client.rate_limited_reads() == 1
