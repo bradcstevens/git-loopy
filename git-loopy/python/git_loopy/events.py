@@ -100,6 +100,7 @@ __all__ = [
     "WRAPPER_SERIAL_REQUESTED",
     "WRAPPER_PIPELINE_QUIESCENT",
     "WRAPPER_ROLLING_REFILL_TURN",
+    "WRAPPER_PARALLEL_SERIAL_FALLBACK",
     # Rolling-dispatch contribution identity
     "CONTRIBUTION_IDENTITY_KEYS",
     "CONTRIBUTION_SCOPED_EVENT_TYPES",
@@ -205,6 +206,11 @@ WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
 WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
 WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
 WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
+# Emitted once per serial **Iteration** a Parallel-mode Run works because it
+# found no eligible **Parallel-safe** candidate (#304). Scheduler-scoped: it
+# names work that never became a Lane contribution, and the absence of Lane
+# work is a fact about the Run. A serial Run never emits it.
+WRAPPER_PARALLEL_SERIAL_FALLBACK = "wrapper.parallel.serial_fallback"
 
 # The identity a Lane contribution carries on every event of its own: the
 # stable contribution, the issue it owns, and the reusable Lane it *started*

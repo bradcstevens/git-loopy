@@ -595,3 +595,46 @@ class TestModuleStructure:
             "RollingPool",
             "is_parallel_safe",
         }
+
+
+# --------------------------------------------------------------------------- #
+# Read views for Parallel-mode visibility (#304)                               #
+# --------------------------------------------------------------------------- #
+
+
+class TestDispatchabilityCounts:
+    """The two numbers a Run needs to say *why* no Lane started (#304).
+
+    A Run in **Parallel mode** that falls back to a serial **Iteration** has to
+    tell the operator how many eligible **Parallel-safe** candidates it found,
+    and separate "there are none" from "the ones there are could not be read".
+    ``candidate_refs`` alone cannot: it counts a quarantined candidate the same
+    as a dispatchable one.
+    """
+
+    def test_available_count_is_the_dispatchable_candidates(self) -> None:
+        source = ScriptedSource([_snapshot([31, 7])])
+        pool = _pool(source)
+
+        pool.start()
+
+        assert pool.available_count == 2
+        assert pool.unavailable_count == 0
+
+    def test_a_quarantined_candidate_is_cached_but_not_available(self) -> None:
+        """#219 §2.11: an unreadable candidate keeps its FIFO place.
+
+        It still carries ``parallel-safe`` — it is not absent, it is
+        unavailable — so the two counts must disagree.
+        """
+        source = ScriptedSource(
+            [_snapshot([31, 7])], pickups={31: PICKUP_UNAVAILABLE}
+        )
+        pool = _pool(source)
+        pool.start()
+
+        assert pool.take() is not None  # 31 quarantines, 7 validates and leaves
+
+        assert pool.candidate_refs == (31,)
+        assert pool.available_count == 0
+        assert pool.unavailable_count == 1

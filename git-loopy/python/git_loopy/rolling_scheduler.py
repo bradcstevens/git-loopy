@@ -73,8 +73,13 @@ __all__ = [
     "REASON_UNCHANGED_BRANCH",
     "Reservation",
     "RollingScheduler",
+    "SERIAL_FALLBACK_ALL_WORKED",
+    "SERIAL_FALLBACK_NONE_LABELLED",
+    "SERIAL_FALLBACK_REASONS",
+    "SERIAL_FALLBACK_UNAVAILABLE",
     "STRIKE_ADD",
     "STRIKE_RESET",
+    "SerialFallback",
     "TERMINAL",
 ]
 
@@ -111,6 +116,54 @@ PHASE_DRAINING_FOR_SERIAL = "draining_for_serial"
 PHASE_SERIAL_OWNERSHIP = "serial_ownership"
 PHASE_ROLLING_REFILL_TURN = "rolling_refill_turn"
 PHASE_DRAINING_FOR_ABORT = "draining_for_abort"
+
+# #304: why a **Parallel mode** Run is about to work a serial **Iteration**
+# instead of a **Lane**. A closed vocabulary — the operator's next move differs
+# for each, and only the runner can tell them apart.
+#
+# ``no_parallel_safe_candidates``  nothing in the **Pool** carries
+#                                 ``parallel-safe``. Since eligibility is a
+#                                 human assertion the runner never infers, this
+#                                 is the overwhelmingly common cause and the
+#                                 fix is triage.
+# ``all_parallel_safe_worked``    eligible candidates existed, but this Run has
+#                                 already worked every one of them (#219 §1.7's
+#                                 monotonic worked guard). Nothing is wrong.
+# ``parallel_safe_unavailable``   the Pool still holds ``parallel-safe``
+#                                 candidates, but every one is quarantined
+#                                 because its authoritative read failed (#219
+#                                 §2.11). Reporting these as absent would send
+#                                 the operator off to label work already
+#                                 labelled.
+SERIAL_FALLBACK_NONE_LABELLED = "no_parallel_safe_candidates"
+SERIAL_FALLBACK_ALL_WORKED = "all_parallel_safe_worked"
+SERIAL_FALLBACK_UNAVAILABLE = "parallel_safe_unavailable"
+SERIAL_FALLBACK_REASONS: tuple[str, ...] = (
+    SERIAL_FALLBACK_NONE_LABELLED,
+    SERIAL_FALLBACK_ALL_WORKED,
+    SERIAL_FALLBACK_UNAVAILABLE,
+)
+
+
+@dataclass(frozen=True)
+class SerialFallback:
+    """Why **Parallel mode** engaged no **Lane** for this serial turn (#304).
+
+    Attributes:
+        eligible: Eligible **Parallel-safe** candidates the Run found. Always
+            ``0`` — a positive count is interleaving, not a fallback, and the
+            scheduler answers ``None`` for it — but carried explicitly because
+            "it found zero" is the whole point of the report.
+        unavailable: Quarantined ``parallel-safe`` candidates: labelled, but
+            not currently readable.
+        worked: Issues this Run has already worked in a Lane.
+        reason: One of :data:`SERIAL_FALLBACK_REASONS`.
+    """
+
+    eligible: int
+    unavailable: int
+    worked: int
+    reason: str
 
 
 def _ref_sort_key(ref: int | str) -> tuple[int, int, str]:
@@ -337,6 +390,41 @@ class RollingScheduler:
         """
         return not (
             self._lanes_held or self._open or self._admitted or self._parked
+        )
+
+    def serial_fallback(self) -> SerialFallback | None:
+        """Say why **Parallel mode** is engaging no **Lane** right now (#304).
+
+        Requesting Parallel mode used to produce output byte-identical to a
+        serial Run whenever nothing was eligible, so an operator whose tracker
+        carried no ``parallel-safe`` issue reasonably concluded the flag was
+        broken. This is the runner's answer, derived from state it already
+        holds — the **Pool**'s current membership cache and this Run's own
+        worked guard — so asking costs no tracker read and changes no dispatch
+        decision.
+
+        Returns:
+            ``None`` when eligible Lane work remains, because a serial
+            **Iteration** running alongside it is #219 §5's drain-everything
+            interleaving rather than a fallback. Otherwise the counts and the
+            :data:`SERIAL_FALLBACK_REASONS` reason.
+        """
+        eligible = self.pool.available_count
+        if eligible > 0:
+            return None
+        unavailable = self.pool.unavailable_count
+        worked = len(self._worked)
+        if unavailable:
+            reason = SERIAL_FALLBACK_UNAVAILABLE
+        elif worked:
+            reason = SERIAL_FALLBACK_ALL_WORKED
+        else:
+            reason = SERIAL_FALLBACK_NONE_LABELLED
+        return SerialFallback(
+            eligible=eligible,
+            unavailable=unavailable,
+            worked=worked,
+            reason=reason,
         )
 
     def serial_turn(self) -> bool:

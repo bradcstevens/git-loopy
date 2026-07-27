@@ -334,7 +334,8 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.pipeline.quiescent`, and `wrapper.rolling.refill_turn`.
+`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`, and
+`wrapper.parallel.serial_fallback`.
 
 - **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
   and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
@@ -360,6 +361,16 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
   observation.
 - **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
   They remain readable and MUST NOT be reinterpreted as contributions.
+- **A Run that requested Parallel mode says so.** An Orchestrator that implements Parallel mode
+  SHOULD carry `parallel_mode`, `lane_cap`, and `effective_lane_limit` on `wrapper.run.start`, and
+  MUST emit `wrapper.parallel.serial_fallback` once per serial **Iteration** it works because it
+  found no eligible **Parallel-safe** candidate — with the eligible count and a `reason` from the
+  closed vocabulary `no_parallel_safe_candidates`, `all_parallel_safe_worked`,
+  `parallel_safe_unavailable`. Eligibility is a human assertion the runner never infers, so the
+  reason MUST reach the operator's own output and not only the Event stream; otherwise a Run whose
+  tracker carries no `parallel-safe` issue is byte-identical to a serial Run and reads as a broken
+  flag. A serial turn granted while eligible Lane work remains is interleaving, not a fallback, and
+  emits nothing. A Run that did not request Parallel mode emits none of these.
 
 The `contribution_identity` and `payload_contracts` sections of
 [`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, and the

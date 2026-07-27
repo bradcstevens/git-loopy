@@ -23,6 +23,7 @@ from git_loopy.sources import (
     MembershipSnapshot,
     Pickup,
     PoolCandidate,
+    PICKUP_UNAVAILABLE,
     PICKUP_VALIDATED,
 )
 
@@ -44,11 +45,12 @@ def _candidate(ref: int) -> PoolCandidate:
 class ScriptedSource:
     """A :class:`RollingIssueSource` whose membership is a fixed ref list."""
 
-    def __init__(self, refs: list[int]) -> None:
+    def __init__(self, refs: list[int], *, unavailable: set[int] | None = None) -> None:
         self.refs = list(refs)
         self.complete = True
         self.membership_calls = 0
         self.pickup_calls: list[int | str] = []
+        self.unavailable = set(unavailable or ())
 
     def shallow_membership(self) -> MembershipSnapshot:
         self.membership_calls += 1
@@ -58,6 +60,8 @@ class ScriptedSource:
 
     def pickup(self, ref: int | str) -> Pickup:
         self.pickup_calls.append(ref)
+        if ref in self.unavailable:
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
         return Pickup(
             outcome=PICKUP_VALIDATED,
             item=AfkReadyItem(
@@ -83,19 +87,30 @@ class Clock:
 
 
 def _scheduler(
-    refs: list[int], *, lane_cap: int = 3, max_iterations: int = 0
+    refs: list[int],
+    *,
+    lane_cap: int = 3,
+    max_iterations: int = 0,
+    unavailable: set[int] | None = None,
 ) -> tuple[RollingScheduler, ScriptedSource]:
     scheduler, source, _clock = _scheduler_with_clock(
-        refs, lane_cap=lane_cap, max_iterations=max_iterations
+        refs,
+        lane_cap=lane_cap,
+        max_iterations=max_iterations,
+        unavailable=unavailable,
     )
     return scheduler, source
 
 
 def _scheduler_with_clock(
-    refs: list[int], *, lane_cap: int = 3, max_iterations: int = 0
+    refs: list[int],
+    *,
+    lane_cap: int = 3,
+    max_iterations: int = 0,
+    unavailable: set[int] | None = None,
 ) -> tuple[RollingScheduler, ScriptedSource, Clock]:
     diag = _silent_logger()
-    source = ScriptedSource(refs)
+    source = ScriptedSource(refs, unavailable=unavailable)
     clock = Clock()
     pool = RollingPool(diag=diag, source=source, clock=clock, jitter=lambda i: i)
     scheduler = RollingScheduler(
@@ -649,3 +664,85 @@ def test_no_membership_read_while_draining_for_abort() -> None:
     scheduler.reserve()
 
     assert source.membership_calls == reads
+
+
+# --------------------------------------------------------------------------- #
+# #304 — why Parallel mode is not engaging right now                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_no_serial_fallback_while_eligible_lane_work_remains() -> None:
+    """Eligible Parallel-safe work left is not a fallback, it is interleaving.
+
+    A serial **Iteration** that runs alongside remaining Lane work is #219
+    §5's drain-everything design, not Parallel mode failing to engage — so the
+    scheduler answers "nothing to report".
+    """
+    scheduler, _source = _scheduler([11, 12], lane_cap=3)
+    scheduler.start()
+
+    assert scheduler.serial_fallback() is None
+
+
+def test_serial_fallback_reports_no_parallel_safe_candidates() -> None:
+    """The overwhelmingly common cause: nobody applied the label (#304).
+
+    ``parallel-safe`` is a human assertion the runner never infers, so an empty
+    **Pool** of eligible candidates with nothing worked yet means no
+    ``ready-for-agent`` issue carries it.
+    """
+    scheduler, _source = _scheduler([], lane_cap=3)
+    scheduler.start()
+
+    fallback = scheduler.serial_fallback()
+
+    assert fallback is not None
+    assert fallback.reason == "no_parallel_safe_candidates"
+    assert (fallback.eligible, fallback.unavailable, fallback.worked) == (0, 0, 0)
+
+
+def test_serial_fallback_distinguishes_already_worked_candidates() -> None:
+    """Eligible candidates existed — this Run already worked all of them (#304).
+
+    A different operator situation from "label some issues": the Run-scoped
+    worked guard (#219 §1.7) latches at agent-session start and never releases,
+    so the same issue can never take a second Lane in this Run.
+    """
+    scheduler, _source = _scheduler([11], lane_cap=3)
+    scheduler.start()
+    (reservation,) = scheduler.reserve()
+    scheduler.start_session(reservation)
+
+    fallback = scheduler.serial_fallback()
+
+    assert fallback is not None
+    assert fallback.reason == "all_parallel_safe_worked"
+    assert (fallback.eligible, fallback.unavailable, fallback.worked) == (0, 0, 1)
+
+
+def test_serial_fallback_reports_unreadable_candidates_as_unavailable() -> None:
+    """A quarantined candidate is labelled but unreadable (#219 §2.11, #304).
+
+    Reporting it as "no candidate carries parallel-safe" would send the
+    operator off to label work that is already labelled.
+    """
+    scheduler, _source = _scheduler([11], lane_cap=3, unavailable={11})
+    scheduler.start()
+    scheduler.reserve()
+
+    fallback = scheduler.serial_fallback()
+
+    assert fallback is not None
+    assert fallback.reason == "parallel_safe_unavailable"
+    assert (fallback.eligible, fallback.unavailable, fallback.worked) == (0, 1, 0)
+
+
+def test_every_serial_fallback_reason_is_in_the_declared_vocabulary() -> None:
+    """The reason is a closed vocabulary the conformance fixture pins."""
+    from git_loopy import rolling_scheduler as module
+
+    assert module.SERIAL_FALLBACK_REASONS == (
+        "no_parallel_safe_candidates",
+        "all_parallel_safe_worked",
+        "parallel_safe_unavailable",
+    )

@@ -226,6 +226,24 @@
     },
     "wrapper.rolling.refill_turn": {
       "required_when_present": ["reservations", "effective_lane_limit"]
+    },
+    "wrapper.parallel.serial_fallback": {
+      "required_when_present": [
+        "eligible",
+        "unavailable",
+        "worked",
+        "reason",
+        "lane_cap"
+      ],
+      "reason_values": [
+        "no_parallel_safe_candidates",
+        "all_parallel_safe_worked",
+        "parallel_safe_unavailable"
+      ],
+      "emitted": "Once per serial Iteration a Parallel-mode Run works because it found no eligible Parallel-safe candidate, immediately before the Iteration it explains. A serial turn granted while eligible Lane work remains is interleaving, not a fallback, and emits nothing. A Run that did not request Parallel mode never emits it.",
+      "scope": "Run-scoped, not contribution-scoped. It names the absence of Lane work, so it carries no contribution identity.",
+      "reported": "The reason MUST reach the operator's own output, not only the Event stream: the operator is the only one who can apply parallel-safe.",
+      "eligible": "Always 0 when emitted. Carried explicitly because 'it found zero eligible Parallel-safe issues' is the report."
     }
   },
   "contribution_identity": {
@@ -260,7 +278,8 @@
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
-      "wrapper.rolling.refill_turn"
+      "wrapper.rolling.refill_turn",
+      "wrapper.parallel.serial_fallback"
     ],
     "forbidden_types": ["wrapper.iteration.start", "wrapper.iteration.end"],
     "lane_id": "The reusable Lane the contribution started in. It never changes, even after that Lane is refilled, so replay never needs a mutable Lane-to-issue lookup.",
@@ -311,6 +330,7 @@
     "WRAPPER_SERIAL_REQUESTED": "wrapper.serial.requested",
     "WRAPPER_PIPELINE_QUIESCENT": "wrapper.pipeline.quiescent",
     "WRAPPER_ROLLING_REFILL_TURN": "wrapper.rolling.refill_turn",
+    "WRAPPER_PARALLEL_SERIAL_FALLBACK": "wrapper.parallel.serial_fallback",
     "SESSION_CREATED": "session.created",
     "SESSION_IDLE": "session.idle",
     "SESSION_DELETED": "session.deleted",

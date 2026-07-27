@@ -1436,6 +1436,15 @@ class _ParallelLoop:
             insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            # #304: only a Parallel-mode Run carries these, so a serial Run's
+            # `wrapper.run.start` is byte-identical to what it always was.
+            parallel_mode=True,
+            lane_cap=self._config.parallel,
+            effective_lane_limit=(
+                self._scheduler.effective_limit
+                if self._scheduler is not None
+                else None
+            ),
         )
 
         outcome_label = "iteration_cap"
@@ -1558,6 +1567,7 @@ class _ParallelLoop:
                     scheduler.remaining_units != 0
                     and scheduler.serial_turn()
                 ):
+                    self._report_serial_fallback(scheduler)
                     await self._serial._run_one_iteration(self._alloc_iter_num())
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
@@ -1603,6 +1613,35 @@ class _ParallelLoop:
                     task.cancel()
                 await asyncio.gather(*self._pending, return_exceptions=True)
                 self._pending.clear()
+
+    def _report_serial_fallback(
+        self, scheduler: rolling_scheduler.RollingScheduler
+    ) -> None:
+        """Say why this serial **Iteration** is running instead of a **Lane** (#304).
+
+        Emitted immediately before the serial Iteration it explains, so a
+        replay — and the operator's own output, which the renderer builds from
+        this Event — reads the reason and then the Iteration. A serial turn
+        granted while eligible Parallel-safe work remains is #219 §5's
+        drain-everything interleaving rather than a fallback, and the scheduler
+        answers ``None`` for it, so nothing is emitted.
+
+        Costs no tracker read: the counts come off the **Pool** membership
+        cache and the Run-scoped worked guard the scheduler already holds, so
+        this slice adds visibility and changes no dispatch decision.
+        """
+        fallback = scheduler.serial_fallback()
+        if fallback is None:
+            return
+        self._serial._emit(
+            events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK,
+            iter_num=None,
+            eligible=fallback.eligible,
+            unavailable=fallback.unavailable,
+            worked=fallback.worked,
+            reason=fallback.reason,
+            lane_cap=self._config.parallel,
+        )
 
     def _maybe_request_serial_for_plain_work(self) -> None:
         """Latch serial demand for plain (non-``parallel-safe``) ready work.

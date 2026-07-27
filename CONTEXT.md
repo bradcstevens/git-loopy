@@ -810,6 +810,17 @@ well-scoped enough to be worked in its own **Lane**, concurrently with others.
 Carried as a triage label alongside `ready-for-agent`; the runner never infers it.
 _Avoid_: independent, parallelizable (as the label name).
 
+**Serial fallback**:
+A serial **Iteration** a **Parallel mode** Run works because **Rolling dispatch** found
+no eligible **Parallel-safe** candidate. Because eligibility is a human assertion, the
+usual cause is that nothing carries the label — indistinguishable, from the operator's
+seat, from the flag being broken. So every fallback is named to the operator and carried
+as a `wrapper.parallel.serial_fallback` **Event** with the eligible count and a reason
+that separates "nothing carries `parallel-safe`", "this Run already worked them all",
+and "the ones there are could not be read". A serial Iteration running *alongside*
+remaining eligible Lane work is interleaving, not a fallback.
+_Avoid_: degraded mode, serial mode.
+
 ## Relationships
 
 - A **Workflow** can be traversed by many **Workstreams**. Each Workstream has

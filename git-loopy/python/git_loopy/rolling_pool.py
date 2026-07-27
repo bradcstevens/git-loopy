@@ -157,6 +157,32 @@ class RollingPool:
         """The cached candidate refs in stable FIFO order."""
         return tuple(entry.candidate.ref for entry in self._entries)
 
+    @property
+    def available_count(self) -> int:
+        """How many cached candidates could currently be handed to a **Lane**.
+
+        The scheduler's demand signal (:meth:`service`) and its emptiness
+        question (:meth:`confirm_empty`) both read this, and so does #304's
+        serial-fallback report — "how many eligible **Parallel-safe** issues
+        did this Run find" is exactly this number.
+        """
+        return sum(
+            1
+            for entry in self._entries
+            if not entry.quarantined and self.eligible(entry.candidate)
+        )
+
+    @property
+    def unavailable_count(self) -> int:
+        """How many cached candidates are quarantined (#219 §2.11).
+
+        Distinct from :attr:`available_count`'s complement: a quarantined
+        candidate *is* an eligible **Parallel-safe** issue whose authoritative
+        read failed, so a Run that reported it as absent would send the
+        operator off to label work that is already labelled.
+        """
+        return sum(1 for entry in self._entries if entry.quarantined)
+
     def candidate(self, ref: int | str) -> PoolCandidate:
         """Return the cached shallow record for ``ref``.
 
@@ -184,7 +210,7 @@ class RollingPool:
                 demand, and no demand means no refresh — that single number is
                 how #219 §2.6-2.7 are enforced.
         """
-        unmet = refillable > self._available_count()
+        unmet = refillable > self.available_count
         if not unmet:
             # Demand met (or absent). Forget the wait: if demand reappears it is
             # new evidence, not a continuation of the old unanswered question.
@@ -200,14 +226,6 @@ class RollingPool:
         if self.clock() < self._next_refresh_at:
             return
         self._refresh()
-
-    def _available_count(self) -> int:
-        """How many cached candidates could currently be handed to a **Lane**."""
-        return sum(
-            1
-            for entry in self._entries
-            if not entry.quarantined and self.eligible(entry.candidate)
-        )
 
     # -- reservation -------------------------------------------------------- #
 
@@ -281,7 +299,7 @@ class RollingPool:
                 ),
             )
             return False
-        return self._available_count() == 0
+        return self.available_count == 0
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""

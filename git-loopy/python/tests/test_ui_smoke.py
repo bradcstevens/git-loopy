@@ -43,6 +43,7 @@ from git_loopy.events import (
     USAGE_TOKENS,
     WRAPPER_AFK_READY_COLLECTED,
     WRAPPER_ASK_USER_ATTEMPTED,
+    WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_AUTO_CLOSE,
     WRAPPER_CHECKPOINT_RECORDED,
     WRAPPER_COMMIT_RECORDED,
@@ -1877,3 +1878,97 @@ def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens() 
     table = summary.build_run_table()
     assert table.columns[4].footer == "—"
     assert table.columns[5].footer == "—"
+
+
+# ---------------------------------------------------------------------------
+# Parallel-mode visibility (#304) — the operator's own output
+# ---------------------------------------------------------------------------
+
+
+def test_run_start_announces_parallel_mode_and_lane_cap() -> None:
+    """Parallel mode is invisible unless the Run start line says it is on (#304)."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_RUN_START,
+            "run_id": "01HXR0000000000000000000A3",
+            "parallel_mode": True,
+            "lane_cap": 5,
+            "effective_lane_limit": 3,
+        }
+    )
+    out = buf.getvalue()
+    assert "Parallel mode" in out
+    assert "Lane cap 5" in out
+    assert "3" in out
+
+
+def test_run_start_of_a_serial_run_says_nothing_about_parallel_mode() -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A4"}
+    )
+    assert "Parallel" not in buf.getvalue()
+
+
+def test_run_start_reports_a_source_that_cannot_supply_lane_work() -> None:
+    """A null effective limit means the issue source has no Parallel-safe concept.
+
+    Parallel mode degrades entirely to the serial path there, which is the one
+    case where the operator's flag genuinely does nothing — so it must not read
+    as an active Parallel-mode Run.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_RUN_START,
+            "run_id": "01HXR0000000000000000000A5",
+            "parallel_mode": True,
+            "lane_cap": 4,
+            "effective_lane_limit": None,
+        }
+    )
+    out = buf.getvalue()
+    assert "Parallel mode" in out
+    assert "no Lane work" in out
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("no_parallel_safe_candidates", "no ready-for-agent issue carries"),
+        ("all_parallel_safe_worked", "already worked"),
+        ("parallel_safe_unavailable", "could not be read"),
+    ],
+)
+def test_serial_fallback_renders_its_reason(reason: str, expected: str) -> None:
+    """Every reason in the closed vocabulary reaches the operator in words (#304)."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_PARALLEL_SERIAL_FALLBACK,
+            "eligible": 0,
+            "unavailable": 1 if reason == "parallel_safe_unavailable" else 0,
+            "worked": 2 if reason == "all_parallel_safe_worked" else 0,
+            "reason": reason,
+            "lane_cap": 3,
+        }
+    )
+    out = buf.getvalue()
+    assert "serial" in out.lower()
+    assert expected in out
+
+
+def test_serial_fallback_reports_the_eligible_count() -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_PARALLEL_SERIAL_FALLBACK,
+            "eligible": 0,
+            "unavailable": 0,
+            "worked": 0,
+            "reason": "no_parallel_safe_candidates",
+            "lane_cap": 3,
+        }
+    )
+    assert "0 eligible" in buf.getvalue()

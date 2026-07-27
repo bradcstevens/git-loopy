@@ -28,6 +28,7 @@ from git_loopy.config import (
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy.pricing import Pricing
+from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.skill_exposure import SkillExposure
 from git_loopy.skill_policy import (
@@ -404,6 +405,39 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
     assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
     assert end["strike_reaction_values"] == ["reset", "+1"]
     assert "strike_reaction" in end["summary_required"]
+
+
+def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
+    """#304: the fallback report's reason vocabulary is one closed set.
+
+    The runner derives the reason, the fixture pins it, and the operator's
+    output is rendered from it — so a reason the fixture has never heard of
+    would render as an unexplained fallback in every Orchestrator that replays
+    the log. Pinned as a *relationship* against the production constant, the
+    way the contribution dispositions are: two data files agreeing with each
+    other proves nothing.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK
+    ]
+    assert contract["required_when_present"] == [
+        "eligible",
+        "unavailable",
+        "worked",
+        "reason",
+        "lane_cap",
+    ]
+    assert tuple(contract["reason_values"]) == (
+        rolling_scheduler_module.SERIAL_FALLBACK_REASONS
+    )
+    # Run-scoped, like wrapper.pool.excluded: it names work that never became a
+    # Lane contribution, so it carries no contribution identity.
+    assert events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK in (
+        _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    )
+    assert events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK not in (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:

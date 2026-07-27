@@ -45,6 +45,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_SERIAL_REQUESTED]="wrapper.serial.requested"
   [WRAPPER_PIPELINE_QUIESCENT]="wrapper.pipeline.quiescent"
   [WRAPPER_ROLLING_REFILL_TURN]="wrapper.rolling.refill_turn"
+  [WRAPPER_PARALLEL_SERIAL_FALLBACK]="wrapper.parallel.serial_fallback"
   [AGENT_OUTPUT]="agent.output"
   [SESSION_CREATED]="session.created"
   [SESSION_IDLE]="session.idle"

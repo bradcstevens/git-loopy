@@ -92,7 +92,7 @@ delivered in later phases, sequenced value-first
   shell and PowerShell ports honour CLI flag > env var > built-in default).
 - **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
   Orchestrators (the Python member offers it today via its `otel` extra).
-- **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Waves** /
+- **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Rolling dispatch** /
   **Integration** across the family.
 
 The rest of this page documents the Python reference member in depth; its

@@ -1950,3 +1950,229 @@ def test_make_worktree_setup_blank_env_treated_as_unset(tmp_path, monkeypatch) -
     setup = loop_module._make_worktree_setup()
 
     assert setup.run(tmp_path).command is None
+
+
+# ---------------------------------------------------------------------------
+# Parallel-mode visibility (#304): saying that Parallel mode is on, and saying
+# when it fell back to a serial Iteration for want of eligible Parallel-safe
+# work.
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_run_start_reports_parallel_mode_and_lane_cap(
+    tmp_path, monkeypatch
+) -> None:
+    """A Parallel-mode Run says so at Run start, with the resolved Lane cap (#304).
+
+    Requesting Parallel mode used to produce output byte-identical to a serial
+    Run, so an operator whose tracker carried no ``parallel-safe`` issue
+    reasonably concluded the flag was broken. ``wrapper.run.start`` now carries
+    the configured **Lane cap** and the effective Lane limit the Run actually
+    resolved (#219 §6 starts at ``min(cap, 3)``), which is what the operator's
+    own output is rendered from.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=5,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    run_start = next(
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.start"
+    )
+    assert run_start["parallel_mode"] is True
+    assert run_start["lane_cap"] == 5
+    assert run_start["effective_lane_limit"] == 3
+
+
+def test_serial_run_start_carries_no_parallel_mode_report(
+    tmp_path, monkeypatch
+) -> None:
+    """A serial Run says nothing about Parallel mode (#304).
+
+    The visibility slice is additive: a Run that did not request Parallel mode
+    keeps the ``wrapper.run.start`` payload it always had, so nothing on the
+    default path changed.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=1,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    events = _logged_events(tmp_path)
+    run_start = next(e for e in events if e["type"] == "wrapper.run.start")
+    assert "parallel_mode" not in run_start
+    assert "lane_cap" not in run_start
+    assert "effective_lane_limit" not in run_start
+    assert [
+        e for e in events if e["type"] == "wrapper.parallel.serial_fallback"
+    ] == []
+
+
+def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
+    tmp_path, monkeypatch
+) -> None:
+    """Parallel mode requested, nothing eligible: the Run says so and why (#304).
+
+    The whole pool is plain ``ready-for-agent`` work, so every round falls back
+    to a serial **Iteration**. That used to be byte-identical to a serial Run.
+    Now the Run names the fallback, the eligible count it found, and the cause
+    an operator can act on — nobody applied ``parallel-safe``.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(43, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=3,
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    fallbacks = [
+        e for e in events if e["type"] == "wrapper.parallel.serial_fallback"
+    ]
+    assert len(fallbacks) == 1, f"expected one fallback report, got {fallbacks}"
+    (fallback,) = fallbacks
+    assert fallback["reason"] == "no_parallel_safe_candidates"
+    assert fallback["eligible"] == 0
+    assert fallback["unavailable"] == 0
+    assert fallback["worked"] == 0
+    # Run-scoped, not contribution-scoped: it names work that never became a
+    # Lane contribution, so it carries no contribution identity.
+    assert "contribution_id" not in fallback
+    assert "lane_id" not in fallback
+    # It precedes the serial Iteration it explains.
+    types = [e["type"] for e in events]
+    assert types.index("wrapper.parallel.serial_fallback") < types.index(
+        "wrapper.iteration.start"
+    )
+    # Dispatch is unchanged: the plain issue was still worked and closed.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
+
+
+def test_parallel_serial_fallback_separates_already_worked_from_unlabelled(
+    tmp_path, monkeypatch
+) -> None:
+    """"Already worked this Run" is a different situation from "none labelled".
+
+    #304's second distinction. Issue 42 carries ``parallel-safe`` and IS worked
+    in a Lane; by the time the plain issue 43 gets its serial Iteration the
+    eligible count is zero again — but because the Run already worked it, not
+    because nobody triaged one. Telling the operator to go label something
+    would be wrong.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=3,
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    fallbacks = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.parallel.serial_fallback"
+    ]
+    assert [f["reason"] for f in fallbacks] == ["all_parallel_safe_worked"]
+    assert fallbacks[0]["eligible"] == 0
+    assert fallbacks[0]["worked"] == 1

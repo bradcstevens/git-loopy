@@ -59,6 +59,7 @@ from git_loopy.events import (
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
@@ -206,6 +207,73 @@ class Renderer:
         text.append("git-loopy run started", style=STYLES["panel_title"])
         if run_id:
             text.append(f"  (run_id: {run_id})", style=STYLES["meta"])
+        self.console.print(text)
+        self._print_parallel_mode(event)
+
+    def _print_parallel_mode(self, event: dict[str, Any]) -> None:
+        """Say that Parallel mode is on and what Lane cap resolved (#304).
+
+        Requesting Parallel mode used to produce output byte-identical to a
+        serial Run, so an operator whose tracker carried no ``parallel-safe``
+        issue reasonably concluded the flag was broken. A serial Run carries
+        none of these keys and this prints nothing.
+        """
+        if not event.get("parallel_mode"):
+            return
+        lane_cap = event.get("lane_cap")
+        effective = event.get("effective_lane_limit")
+        text = Text()
+        text.append("⇉ ", style=STYLES["meta"])
+        text.append("Parallel mode", style=STYLES["panel_title"])
+        if effective is None:
+            # Only a source with a `parallel-safe` label concept can supply
+            # Lane work; anything else degrades entirely to the serial path,
+            # which is the one case where the flag genuinely does nothing.
+            text.append(
+                "  (this issue source supplies no Lane work — running serially)",
+                style=STYLES["meta"],
+            )
+            self.console.print(text)
+            return
+        text.append(f"  Lane cap {lane_cap}", style=STYLES["meta"])
+        if effective != lane_cap:
+            text.append(f", starting at {effective}", style=STYLES["meta"])
+        text.append(
+            "  •  only issues labelled parallel-safe take a Lane",
+            style=STYLES["meta"],
+        )
+        self.console.print(text)
+
+    def _on_parallel_serial_fallback(self, event: dict[str, Any]) -> None:
+        """Name a serial Iteration a Parallel-mode Run fell back to (#304).
+
+        Parallel-safe is a human assertion the runner never infers, so the
+        overwhelmingly common cause is that nothing carries the label — and the
+        operator is the only one who can fix that. Each reason gets its own
+        sentence because the operator's next move differs for each.
+        """
+        eligible = event.get("eligible", 0)
+        reason = event.get("reason", "")
+        explanation = {
+            "no_parallel_safe_candidates": (
+                "no ready-for-agent issue carries parallel-safe"
+            ),
+            "all_parallel_safe_worked": (
+                f"the {event.get('worked', 0)} parallel-safe "
+                "issue(s) found were already worked this run"
+            ),
+            "parallel_safe_unavailable": (
+                f"{event.get('unavailable', 0)} parallel-safe candidate(s) "
+                "could not be read"
+            ),
+        }.get(reason, str(reason).replace("_", " "))
+        text = Text()
+        text.append("⇉ ", style=STYLES["meta"])
+        text.append("serial iteration", style=STYLES["meta"])
+        text.append(
+            f"  ({eligible} eligible parallel-safe issues — {explanation})",
+            style=STYLES["meta"],
+        )
         self.console.print(text)
 
     def _on_run_end(self, event: dict[str, Any]) -> None:
@@ -585,6 +653,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
+    WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
     WRAPPER_PUSH_RECORDED: Renderer._on_push_recorded,
