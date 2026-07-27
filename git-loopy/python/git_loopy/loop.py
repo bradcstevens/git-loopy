@@ -124,6 +124,7 @@ from git_loopy import events as events_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
@@ -293,6 +294,44 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     raw = os.environ.get("GIT_LOOPY_WORKTREE_SETUP")
     command = raw.strip() if raw else None
     return worktree_module.CommandWorktreeSetup(command=command or None)
+
+
+def _make_pressure_monitor(
+    *,
+    lane_cap: int,
+    diag: logging.Logger,
+    credit_spent: Callable[[], float | None],
+) -> rolling_pressure.PressureMonitor:
+    """Construct the bounded adaptive Lane-concurrency seam (#219 §6, #309).
+
+    Factored to its own module-level function — mirroring
+    :func:`_make_gate_runner` / :func:`_make_worktree_setup` — so tests
+    monkeypatch it
+    (``monkeypatch.setattr("git_loopy.loop._make_pressure_monitor", ...)``) and
+    drive the reaction table with an injected clock and scripted telemetry
+    instead of real time and a live API, which #219 §6 requires.
+
+    Production wires the three injected halves the PRD names: budgets from the
+    operator's environment (:meth:`~git_loopy.rolling_pressure.PressureBudgets.from_env`,
+    where an unconfigured budget leaves its signal *unknown* rather than
+    inventing a threshold), the process run queue for host/setup pressure, and
+    this Run's own priced Consumption for AI-credit burn.
+
+    **429s are not metered yet.** Counting them needs the ``gh`` seam to report
+    a rate-limited read, which no Pool read currently distinguishes from any
+    other failure — so the signal stays honestly unknown rather than being
+    reported as an observed zero (#219 §11).
+    """
+    return rolling_pressure.PressureMonitor.for_run(
+        budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+        lane_cap=lane_cap,
+        telemetry=rolling_pressure.RunPressureTelemetry(
+            budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+            credit_spent=credit_spent,
+        ),
+        clock=time.monotonic,
+        diag=diag,
+    )
 
 
 def _make_issue_source(
@@ -481,6 +520,33 @@ def _integration_worktree_path(
     )
 
 
+class _EventObserver(Protocol):
+    """Anything that folds raw Events into its own accounting."""
+
+    def observe(self, event: Mapping[str, Any]) -> object:
+        """Fold one raw, unscrubbed Event."""
+        ...
+
+
+@dataclass(frozen=True)
+class _ChainedObserver:
+    """Fan one raw Event out to several accumulators, in order.
+
+    An :class:`~git_loopy.session.IterationSession` takes a single observer,
+    and two different questions now need the same stream: the per-**Iteration**
+    rollup that builds the Summary, and the Run-scoped Consumption meter
+    AI-credit pressure is measured against (#309). Composing beats widening the
+    session's seam to a list, which every other caller would then have to
+    satisfy.
+    """
+
+    observers: tuple[_EventObserver, ...]
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        for observer in self.observers:
+            observer.observe(event)
+
+
 class _Loop:
     """Stateful orchestrator for one ``git-loopy`` invocation.
 
@@ -507,6 +573,7 @@ class _Loop:
         source: IssueSource,
         diag: logging.Logger,
         include_prs: bool = False,
+        usage_observer: _EventObserver | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -521,6 +588,15 @@ class _Loop:
         self._diag = diag
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(pricing=pricing)
+        # An extra, Run-scoped Consumption observer (#309). The rollup owns one
+        # *current Iteration* slot, so it cannot answer "what has this whole
+        # Run spent" — which is what AI-credit pressure is measured against.
+        # Chained rather than replacing, so the serial Summary is untouched.
+        self._session_observer: _EventObserver = (
+            self._rollup
+            if usage_observer is None
+            else _ChainedObserver((self._rollup, usage_observer))
+        )
         # Base branch to restore to after a PR iteration (captured in
         # ``drive`` only when PRs are in scope). ``None`` = unknown / detached
         # HEAD, which disables the defensive restore.
@@ -773,7 +849,7 @@ class _Loop:
                         reasoning_effort=self._config.reasoning_effort,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
-                        event_observer=self._rollup,
+                        event_observer=self._session_observer,
                     ) as sdk_session:
                         try:
                             await sdk_session.send_and_wait(
@@ -1370,6 +1446,19 @@ class _ParallelLoop:
         # Parallel mode degrades entirely to the serial path (`drive`).
         self._pool: RollingPool | None = None
         self._scheduler: rolling_scheduler.RollingScheduler | None = None
+        # Bounded adaptive Lane concurrency (#219 §6, #309). The **Lane cap**
+        # is a safety ceiling, not a utilization promise: under sustained
+        # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
+        # running at the cap wastes capacity and money. The monitor owns the
+        # observation cadence and the operator's budgets; the policy it builds
+        # is handed to the scheduler, which supplies the pipeline half of every
+        # observation from its own state.
+        self._cost_meter = rolling_pressure.RunCostMeter(pricing=pricing)
+        self._pressure = _make_pressure_monitor(
+            lane_cap=config.parallel,
+            diag=diag,
+            credit_spent=self._cost_meter,
+        )
         if isinstance(source, RollingIssueSource):
             self._pool = RollingPool(diag=diag, source=source, clock=time.monotonic)
             self._scheduler = rolling_scheduler.RollingScheduler(
@@ -1377,6 +1466,7 @@ class _ParallelLoop:
                 pool=self._pool,
                 lane_cap=config.parallel,
                 max_iterations=config.max_iterations,
+                concurrency=self._pressure.controller,
             )
         self._rolling_capable = self._scheduler is not None
 
@@ -1441,6 +1531,7 @@ class _ParallelLoop:
             source=source,
             diag=diag,
             include_prs=include_prs,
+            usage_observer=self._cost_meter,
         )
 
     def _alloc_iter_num(self) -> int:
@@ -1599,6 +1690,13 @@ class _ParallelLoop:
                 # its own turn.
                 self._capacity_freed.clear()
 
+                # Observe pressure BEFORE reserving, so a contraction this turn
+                # bounds this turn's refill rather than the next one's. Paced
+                # by the monitor's own clock, not by how often the driver wakes
+                # (#219 §6) — driver turns are event-driven and would otherwise
+                # pack a six-observation window into a fraction of a second.
+                self._report_concurrency_change()
+
                 for reservation in scheduler.reserve():
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
@@ -1690,6 +1788,28 @@ class _ParallelLoop:
                     task.cancel()
                 await asyncio.gather(*self._pending, return_exceptions=True)
                 self._pending.clear()
+
+    def _report_concurrency_change(self) -> None:
+        """Announce an effective-Lane-limit transition, if this turn caused one.
+
+        #219 §6 emits ``wrapper.concurrency.changed`` "only for authoritative
+        state transitions, not every sample", which is precisely the monitor's
+        ``None``/:class:`~git_loopy.rolling_concurrency.LimitChange` answer — a
+        turn that was not due, a Run with adaptation disabled, and a sampled
+        turn with nothing to announce all read the same way here.
+
+        The payload is the change's own, so the wire shape the Wrapper contract
+        pins for all three runner families has exactly one author.
+        """
+        assert self._scheduler is not None
+        change = self._pressure.observe(self._scheduler)
+        if change is None:
+            return
+        self._serial._emit(
+            events_module.WRAPPER_CONCURRENCY_CHANGED,
+            iter_num=None,
+            **change.payload,
+        )
 
     async def _await_capacity(self) -> None:
         """Block until Rolling dispatch could reserve differently (#219 §4.4).
@@ -2025,6 +2145,12 @@ class _ParallelLoop:
             # (`wrapper.commit.recorded`, `wrapper.auto_close`,
             # `wrapper.strike` via `_apply_strike_reaction`) -- only the
             # summary-table cost/token rollup is not.
+            #
+            # The Run-scoped `_cost_meter` IS safe here and does go on (#309):
+            # it holds no per-Iteration slot to corrupt, only a running total,
+            # which is exactly the quantity AI-credit pressure is judged
+            # against. Without it a Parallel Run could never price itself and
+            # credit pressure would stay permanently unknown.
             async with IterationSession(
                 self._client,
                 config=self._config,
@@ -2037,6 +2163,7 @@ class _ParallelLoop:
                 working_directory=str(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
+                event_observer=self._cost_meter,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(

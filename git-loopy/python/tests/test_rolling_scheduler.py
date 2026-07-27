@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from git_loopy.rolling_concurrency import ConcurrencyController
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rolling_scheduler import RollingScheduler
 from git_loopy.sources import (
@@ -778,3 +779,89 @@ def test_every_serial_fallback_reason_is_in_the_declared_vocabulary() -> None:
         "all_parallel_safe_worked",
         "parallel_safe_unavailable",
     )
+
+
+# --------------------------------------------------------------------------- #
+# §6 — bounded adaptive Lane concurrency                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_pressure_narrows_how_many_lanes_may_be_refilled() -> None:
+    """#219 §6: the *effective* limit bounds refill; the configured cap never moves."""
+    scheduler, _source = _scheduler([11, 12, 13, 14, 15, 16], lane_cap=6)
+    scheduler.start()
+
+    for _ in range(3):
+        scheduler.observe_pressure(rate_limits=1)
+
+    assert scheduler.lane_cap == 6
+    assert scheduler.effective_limit == 1
+    assert scheduler.refillable == 1
+    assert [r.item.ref for r in scheduler.reserve()] == [11]
+
+
+def test_the_scheduler_supplies_the_pipeline_half_of_an_observation() -> None:
+    """#219 §6: the caller reports only telemetry it alone can see.
+
+    H-full, parked work, **Lane** occupancy, and remaining demand are the
+    scheduler's own state — asking an orchestrator to restate them would let
+    the two disagree about the pipeline the policy is reacting to.
+    """
+    scheduler, _source = _scheduler([11, 12, 13, 14], lane_cap=3)
+    scheduler.start()
+    for reservation in scheduler.reserve():
+        contribution = scheduler.start_session(reservation)
+        scheduler.finish_work(contribution, changed=True)
+
+    assert len(scheduler.admitted) == 2
+    assert len(scheduler.parked) == 1
+
+    changes = [
+        scheduler.observe_pressure(rate_limits=0, credit_burn=1.0, host_pressure=0.5)
+        for _ in range(6)
+    ]
+    fired = [c for c in changes if c is not None]
+    assert [c.pressure for c in fired] == ["integration_backlog"]
+    assert scheduler.effective_limit == 2
+
+
+def _budgeted_scheduler(refs: list[int]) -> RollingScheduler:
+    """A scheduler whose controller has every operator budget configured."""
+    diag = _silent_logger()
+    pool = RollingPool(
+        diag=diag, source=ScriptedSource(refs), clock=Clock(), jitter=lambda i: i
+    )
+    scheduler = RollingScheduler(
+        diag=diag,
+        pool=pool,
+        lane_cap=6,
+        concurrency=ConcurrencyController(configured_lane_cap=6, credit_target=10.0),
+    )
+    scheduler.start()
+    for _ in range(3):
+        scheduler.observe_pressure(rate_limits=1)
+    assert scheduler.effective_limit == 1
+    return scheduler
+
+
+def test_only_a_pool_with_work_left_earns_a_lane_back() -> None:
+    """#219 §6: "remaining eligible demand" is the scheduler's own **Pool**.
+
+    A Run that has run out of work looks perfectly healthy on every external
+    signal, so demand is what stops it buying Lane slots for issues that do not
+    exist. The two halves are asserted together because either one alone would
+    pass for the wrong reason.
+    """
+    calm = {"rate_limits": 0, "credit_burn": 1.0, "host_pressure": 0.5}
+
+    drained = _budgeted_scheduler([])
+    assert [
+        c for _ in range(30) if (c := drained.observe_pressure(**calm)) is not None
+    ] == []
+    assert drained.effective_limit == 1
+
+    busy = _budgeted_scheduler([11, 12, 13, 14, 15, 16])
+    changes = [
+        c for _ in range(30) if (c := busy.observe_pressure(**calm)) is not None
+    ]
+    assert [c.effective_lane_limit for c in changes] == [2, 3, 4]

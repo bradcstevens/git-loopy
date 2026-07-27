@@ -57,6 +57,7 @@ from git_loopy.events import (
     WRAPPER_AUTO_CLOSE,
     WRAPPER_CHECKPOINT_RECORDED,
     WRAPPER_COMMIT_RECORDED,
+    WRAPPER_CONCURRENCY_CHANGED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
@@ -273,6 +274,35 @@ class Renderer:
         text.append(
             f"  ({eligible} eligible parallel-safe issues — {explanation})",
             style=STYLES["meta"],
+        )
+        self.console.print(text)
+
+    def _on_concurrency_changed(self, event: dict[str, Any]) -> None:
+        """Name the signal that moved the effective **Lane** limit (#219 §6, #309).
+
+        The configured **Lane cap** is a safety ceiling, not a utilization
+        promise, so a Run narrowing itself is correct behaviour — but a Run
+        that narrows *silently* is indistinguishable from Parallel mode being
+        broken, which is the same reporting failure #304 fixed for a Run that
+        never engaged a Lane at all. Each pressure gets its own words because
+        the operator's next move differs: wait out a throttle, unblock
+        Integration, raise a budget, or free the machine.
+        """
+        effective = event.get("effective_lane_limit")
+        configured = event.get("configured_lane_limit")
+        pressure = event.get("pressure")
+        cause = {
+            "rate_limit": "API rate limiting",
+            "integration_backlog": "integration backlog",
+            "credit": "AI-credit burn",
+            "host": "host/setup pressure",
+            None: "pressure cleared",
+        }.get(pressure, str(pressure).replace("_", " "))
+        text = Text()
+        text.append("⇉ ", style=STYLES["meta"])
+        text.append("Lane concurrency", style=STYLES["meta"])
+        text.append(
+            f"  {effective} of {configured}  ({cause})", style=STYLES["meta"]
         )
         self.console.print(text)
 
@@ -656,6 +686,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
+    WRAPPER_CONCURRENCY_CHANGED: Renderer._on_concurrency_changed,
     WRAPPER_PUSH_RECORDED: Renderer._on_push_recorded,
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
     WRAPPER_PR_ADVANCED: Renderer._on_pr_advanced,

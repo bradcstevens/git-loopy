@@ -47,6 +47,7 @@ from git_loopy.events import (
     WRAPPER_AUTO_CLOSE,
     WRAPPER_CHECKPOINT_RECORDED,
     WRAPPER_COMMIT_RECORDED,
+    WRAPPER_CONCURRENCY_CHANGED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_PUSH_RECORDED,
@@ -1972,3 +1973,57 @@ def test_serial_fallback_reports_the_eligible_count() -> None:
         }
     )
     assert "0 eligible" in buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    "pressure,expected",
+    [
+        ("rate_limit", "API rate limiting"),
+        ("integration_backlog", "integration backlog"),
+        ("credit", "AI-credit burn"),
+        ("host", "host/setup pressure"),
+        (None, "pressure cleared"),
+    ],
+)
+def test_concurrency_change_names_the_governing_signal(
+    pressure: str | None, expected: str
+) -> None:
+    """#219 §6/§8: the operator is told which signal moved their Lanes (#309).
+
+    A Run silently narrowing itself from 3 Lanes to 1 looks like Parallel mode
+    failing, exactly as an unengaged Parallel Run did before #304. Naming the
+    governing pressure is the difference between "this is broken" and "this is
+    the throttling I asked it to respect".
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_CONCURRENCY_CHANGED,
+            "configured_lane_limit": 6,
+            "effective_lane_limit": 1,
+            "pressure": pressure,
+            "rate_limit_state": 3,
+            "credit_state": None,
+            "host_state": None,
+        }
+    )
+    out = buf.getvalue()
+    assert "1" in out
+    assert expected in out
+
+
+def test_concurrency_change_shows_the_cap_it_may_never_exceed() -> None:
+    """The configured **Lane cap** is immutable; only the effective limit moved."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_CONCURRENCY_CHANGED,
+            "configured_lane_limit": 6,
+            "effective_lane_limit": 2,
+            "pressure": "host",
+            "rate_limit_state": 0,
+            "credit_state": None,
+            "host_state": 1.4,
+        }
+    )
+    assert "2 of 6" in buf.getvalue()

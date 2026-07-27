@@ -73,6 +73,15 @@ machine is shared with serial Iterations, so a serial Iteration reaching its
 limit latches the same drain-confirmed abort a Lane contribution does — see
 :func:`test_parallel_serial_iteration_strike_abort_stops_the_run_stuck`.
 
+**Bounded adaptive Lane concurrency (#309, #219 §6).** The configured **Lane
+cap** is a safety ceiling, not a utilization promise: under sustained
+**Integration** backpressure, API rate limiting, AI-credit burn, or host/setup
+pressure the Run narrows its own **Effective Lane limit** and says which signal
+governed, and an operator who turns adaptation off keeps the static-safe
+``min(cap, 3)`` however hard the same telemetry is throttled. See
+:func:`test_parallel_narrows_lane_concurrency_under_sustained_rate_limits` and
+:func:`test_parallel_with_adaptation_disabled_never_moves_the_lane_limit`.
+
 **Per-Lane worktree setup (#65, ADR-0008).** Before a Lane's session starts the
 runner prepares its worktree via the injected
 :class:`~git_loopy.worktree.WorktreeSetup` (``GIT_LOOPY_WORKTREE_SETUP`` or a
@@ -87,7 +96,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -103,6 +112,7 @@ from copilot.generated.session_events import (
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
+from git_loopy import rolling_pressure
 from git_loopy.config import RunConfig
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.worktree import SetupResult
@@ -3155,3 +3165,183 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "stuck"
     assert exit_code == loop_module.exit_code_for("stuck")
+
+
+# ---------------------------------------------------------------------------
+# #309 — bounded adaptive Lane concurrency, end to end
+# ---------------------------------------------------------------------------
+
+
+class _SteppingClock:
+    """A monotonic clock that advances one observation interval per read.
+
+    The driver's turns are event-driven, so a real Run's observation cadence is
+    a fact about wall time. Making every read land in a new interval turns each
+    driver turn into exactly one observation, which is what lets a test pin the
+    reaction table's arithmetic without sleeping.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += rolling_pressure.OBSERVATION_INTERVAL_SECONDS
+        return self.now
+
+
+@dataclass
+class _ThrottledTelemetry:
+    """Telemetry for a Run GitHub is rate-limiting hard."""
+
+    rate_limited_calls: int = 0
+    burst: int = 3
+
+    def read(self) -> rolling_pressure.PressureReading:
+        seen = self.rate_limited_calls
+        # Every read after the baseline reports a fresh burst, so the window
+        # carries the ">=3 observed 429s" the -2 reaction is stated over.
+        self.rate_limited_calls += self.burst
+        return rolling_pressure.PressureReading(
+            rate_limited_calls=seen,
+            credit_spent_usd=1.0,
+            host_pressure=0.5,
+        )
+
+
+def _wire_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+    telemetry: object,
+    *,
+    budgets: rolling_pressure.PressureBudgets | None = None,
+) -> None:
+    """Inject a deterministic clock + telemetry into the Run's monitor."""
+    monkeypatch.setattr(
+        loop_module,
+        "_make_pressure_monitor",
+        lambda *, lane_cap, diag, credit_spent: rolling_pressure.PressureMonitor(
+            budgets=budgets or rolling_pressure.PressureBudgets(),
+            telemetry=telemetry,
+            clock=_SteppingClock(),
+            controller=rolling_pressure.adaptive_controller(
+                budgets or rolling_pressure.PressureBudgets(), lane_cap=lane_cap
+            ),
+            diag=diag,
+        ),
+    )
+
+
+def _run_under_pressure(tmp_path, monkeypatch) -> int:
+    """One two-issue Parallel Run, with every seam but pressure left alone."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=6,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    return asyncio.run(loop_module.run(cfg))
+
+
+def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
+    tmp_path, monkeypatch
+) -> None:
+    """#219 §6: a throttled Run gives Lanes back and says which signal did it.
+
+    The whole point of the adaptive controller reaching production: a Run that
+    is being rate-limited must stop asking for more Lanes, and an operator
+    reading the replay must be able to see *why* concurrency moved. The
+    configured **Lane cap** never moves — only the effective limit does.
+    """
+    _wire_pressure(monkeypatch, _ThrottledTelemetry())
+
+    assert _run_under_pressure(tmp_path, monkeypatch) == 0
+
+    events = _logged_events(tmp_path)
+    changes = [e for e in events if e["type"] == "wrapper.concurrency.changed"]
+    assert changes, "expected the throttled Run to narrow its Lane concurrency"
+    first = changes[0]
+    assert first["pressure"] == "rate_limit"
+    assert first["configured_lane_limit"] == 6
+    assert first["effective_lane_limit"] == 1
+    assert first["rate_limit_state"] == 3
+    # Run-scoped, like every other scheduler-level record: it names the Run's
+    # capacity, not any one contribution's work.
+    assert first["iter"] is None
+    assert "contribution_id" not in first
+
+
+def test_parallel_concurrency_change_matches_the_pinned_wire_shape(
+    tmp_path, monkeypatch
+) -> None:
+    """#219 §8: the emitted payload is exactly what the Wrapper contract pins.
+
+    Read off ``event-schema.json`` rather than restated here, so a contract the
+    two ported runner families also honour cannot drift away from what this
+    runner actually writes.
+    """
+    _wire_pressure(monkeypatch, _ThrottledTelemetry())
+    _run_under_pressure(tmp_path, monkeypatch)
+
+    contract = json.loads(
+        (
+            Path(__file__).parents[2] / "conformance" / "event-schema.json"
+        ).read_text(encoding="utf-8")
+    )["payload_contracts"]["wrapper.concurrency.changed"]
+    (change, *_rest) = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.concurrency.changed"
+    ]
+
+    for key in contract["required_when_present"]:
+        assert key in change, f"{key} missing from {change}"
+    assert change["pressure"] in contract["pressure_values"]
+
+
+def test_parallel_with_adaptation_disabled_never_moves_the_lane_limit(
+    tmp_path, monkeypatch
+) -> None:
+    """#219 §6: adaptation off is static **Lane cap** behaviour, not a failure.
+
+    An operator who turns the controller off keeps exactly the Run they had
+    before it existed — the static-safe ``min(cap, 3)`` and no concurrency
+    Events at all — however hard the same telemetry is being throttled.
+    """
+    telemetry = _ThrottledTelemetry()
+    _wire_pressure(
+        monkeypatch,
+        telemetry,
+        budgets=rolling_pressure.PressureBudgets(adaptive=False),
+    )
+
+    assert _run_under_pressure(tmp_path, monkeypatch) == 0
+
+    events = _logged_events(tmp_path)
+    assert [e for e in events if e["type"] == "wrapper.concurrency.changed"] == []
+    run_start = next(e for e in events if e["type"] == "wrapper.run.start")
+    assert run_start["effective_lane_limit"] == 3
+    # Disabled costs no telemetry read either: an unobserved controller cannot
+    # move, so there is nothing to read *for*.
+    assert telemetry.rate_limited_calls == 0
