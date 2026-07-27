@@ -160,6 +160,10 @@ First-run setup: `git-loopy init` is an interactive wizard that writes a
 git-loopy's packaged **workflow skill catalog**) into a **global** or
 **project** scope, then exits without running the loop. Its completion summary
 computes the catalog count from the packaged contents (currently **27 skills**).
+Run inside a repository it also ensures the tracker carries the **label
+vocabulary** the loop reads — the five triage roles plus `parallel-safe` —
+creating only what is absent and leaving existing labels untouched; an
+unreachable tracker skips the step rather than failing setup.
 You rarely run it by hand: the **first** bare `git-loopy` with no Config in
 either scope auto-runs it on a TTY, then continues into the loop; with no TTY
 (or `GIT_LOOPY_INTERACTIVE=0`) it is skipped and the run falls back to the

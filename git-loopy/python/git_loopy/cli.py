@@ -82,7 +82,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -102,6 +102,9 @@ from git_loopy.skill_policy import (
     SkillPolicyStartupState,
     classify_skill_policy_startup,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
+    from git_loopy.labels import LabelBootstrapClient
 
 __all__ = [
     "main",
@@ -714,6 +717,18 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _make_label_client() -> LabelBootstrapClient:
+    """Build the real ``gh`` adapter ``init`` ensures the label vocabulary through.
+
+    A named factory rather than an inline construction so the production seam is
+    patchable: the wizard itself never builds a live backend (see
+    :mod:`git_loopy.init`), and no test may shell out to a real tracker.
+    """
+    from git_loopy import gh as _gh
+
+    return _gh.SubprocessLabelClient()
+
+
 def _run_init(args: argparse.Namespace) -> int:
     """Dispatch ``git-loopy init`` to the first-run wizard.
 
@@ -733,6 +748,9 @@ def _run_init(args: argparse.Namespace) -> int:
         assume_yes=bool(args.assume_yes),
         repo_root=repo_root,
         env=os.environ,
+        # Labels live in a repository's tracker, so there is nothing to ensure
+        # when setup is not running inside one.
+        label_client=_make_label_client() if repo_root is not None else None,
     )
 
 
@@ -1659,6 +1677,7 @@ def main(argv: list[str] | None = None) -> int:
             assume_yes=False,
             repo_root=repo_root,
             env=os.environ,
+            label_client=_make_label_client() if repo_root is not None else None,
         )
         if init_rc != 0:
             return init_rc

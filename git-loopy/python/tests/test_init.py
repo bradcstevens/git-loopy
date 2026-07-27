@@ -1614,3 +1614,158 @@ def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(
     assert rc == 0
     written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert written["enabled_skills"] == ["tdd"]
+
+
+# ---------------------------------------------------------------------------
+# Tracker label bootstrap (#305)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLabelClient:
+    """A tracker holding ``existing`` labels; records the creates it is asked for."""
+
+    def __init__(self, *existing: str, fail: Exception | None = None) -> None:
+        self.existing = list(existing)
+        self.created: list[str] = []
+        self._fail = fail
+
+    def label_list(self) -> list[str]:
+        if self._fail is not None:
+            raise self._fail
+        return list(self.existing)
+
+    def label_create(self, spec: Any) -> None:
+        self.created.append(spec.name)
+        self.existing.append(spec.name)
+
+
+def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> None:
+    """A fresh repository leaves init able to run the loop *and* engage Parallel mode."""
+    client = _FakeLabelClient()
+    out = _Output()
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=out,
+        fetch_choices=lambda: [],
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    assert client.created == [
+        "needs-triage",
+        "needs-info",
+        "ready-for-agent",
+        "ready-for-human",
+        "wontfix",
+        "parallel-safe",
+    ]
+    assert "parallel-safe" in out.text
+
+
+def test_run_init_reports_created_and_pre_existing_labels(tmp_path: Path) -> None:
+    """The operator is told which labels init made and which were already there."""
+    client = _FakeLabelClient("ready-for-agent", "wontfix")
+    out = _Output()
+
+    init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=out,
+        fetch_choices=lambda: [],
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert "needs-triage" in out.text
+    assert "parallel-safe" in out.text
+    assert "already" in out.text.lower()
+    assert "ready-for-agent" in out.text
+
+
+def test_run_init_label_bootstrap_is_idempotent(tmp_path: Path) -> None:
+    """Re-running init creates nothing the second time."""
+    client = _FakeLabelClient()
+    kwargs: dict[str, Any] = dict(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [],
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert init_module.run_init(**kwargs) == 0
+    client.created.clear()
+    assert init_module.run_init(**kwargs) == 0
+
+    assert client.created == []
+
+
+def test_run_init_skips_label_bootstrap_when_the_tracker_is_unreachable(
+    tmp_path: Path,
+) -> None:
+    """An unreachable tracker is a skipped step, not a failed setup."""
+    client = _FakeLabelClient(fail=RuntimeError("gh: HTTP 401 Bad credentials"))
+    warnings: list[str] = []
+    out = _Output()
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=out,
+        fetch_choices=lambda: [],
+        warn=warnings.append,
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    assert settings.project_config_path(tmp_path).is_file()
+    assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
+    assert any("HTTP 401 Bad credentials" in w for w in warnings)
+    assert any("label" in w.lower() for w in warnings)
+
+
+def test_run_init_follows_the_documented_mapping_when_bootstrapping(
+    tmp_path: Path,
+) -> None:
+    """Renaming a role in the mapping doc renames what init creates."""
+    doc = tmp_path / "docs" / "agents"
+    doc.mkdir(parents=True, exist_ok=True)
+    (doc / "triage-labels.md").write_text(
+        "| Canonical label | Label in our tracker | Meaning |\n"
+        "| --- | --- | --- |\n"
+        "| `needs-triage` | `bug:triage` | m |\n",
+        encoding="utf-8",
+    )
+    client = _FakeLabelClient()
+
+    init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [],
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert "bug:triage" in client.created
+    assert "needs-triage" not in client.created

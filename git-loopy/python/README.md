@@ -132,6 +132,36 @@ The wizard:
 - **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
   runs nothing, and exits non-zero.
 
+### Tracker labels the wizard ensures
+
+Run inside a repository, `init` also **ensures the label vocabulary the loop
+reads exists in that repository's tracker**. Without it a fresh clone has no
+`ready-for-agent`, so every **Pool** is empty, and no `parallel-safe`, so
+**Parallel mode** can never engage — and nothing in a Run says why.
+
+| Label | Role |
+| ----- | ---- |
+| `needs-triage` | Maintainer needs to evaluate this issue. |
+| `needs-info` | Waiting on the reporter for more information. |
+| `ready-for-agent` | Fully specified, ready for autonomous execution — this is what fills the **Pool**. |
+| `ready-for-human` | Requires human implementation. |
+| `wontfix` | Will not be actioned. |
+| `parallel-safe` | Human assertion, applied *alongside* `ready-for-agent`, that the issue may be worked concurrently in its own **Lane**. Never inferred. |
+
+- The five triage roles are read from this repository's own
+  [`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md) mapping,
+  so a tracker that renamed a role gets *its* label strings rather than the
+  canonical defaults. With no such file the canonical defaults are used.
+  `parallel-safe` is not one of the five roles and always uses its own name.
+- **Only absent labels are created.** A label that already exists keeps its
+  colour and description exactly as they are, and a re-run creates nothing.
+- `init` reports which labels it created and which already existed.
+- If the tracker is unreachable or the credential may not create labels, the
+  step is **skipped with a message naming the labels still missing**, and the
+  rest of setup still succeeds.
+- Outside a git repository (`init --global` with no repo) there is no tracker to
+  write to, so the step does not run.
+
 Hand-editing `config.toml` directly stays fully supported — `init` is a
 convenience over it, not a replacement. To inspect or change persisted settings
 afterwards without hand-finding the file, use the

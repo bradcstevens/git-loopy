@@ -435,6 +435,17 @@ new Iteration, including a context-cutover continuation pinned to the same
 **Active issue**.
 _Avoid_: round, pass, tick; session as a separate accounting unit.
 
+**Label vocabulary**:
+The labels a repository's tracker must carry before a Run can do anything: the five
+canonical triage roles a human triages with, plus **Parallel-safe**. `git-loopy init`
+ensures it exists, creating only what is absent and never altering a label that is
+already there. The five roles take whatever strings the repository's documented
+triage-label mapping gives them; **Parallel-safe** takes the one string the runner
+reads. A tracker with no `ready-for-agent` yields an empty **Pool** forever, and one
+with no `parallel-safe` can never engage **Parallel mode**.
+_Avoid_: tags; triage vocabulary as the name for the whole set — **Parallel-safe** is
+not a triage role.
+
 **Pool**:
 The candidate `ready-for-agent` work discovered from the source. A serial **Iteration**
 collects its own full authoritative Pool at the start of the Iteration and offers it to

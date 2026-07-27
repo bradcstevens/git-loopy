@@ -47,7 +47,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from git_loopy import settings
+from git_loopy import labels, settings
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
     RECOMMENDED_ROUTING,
@@ -672,6 +672,7 @@ def run_init(
     git: Any = None,
     required_skills: Sequence[str] | None = None,
     verify_continuation: Callable[[], ContinuationVerification] | None = None,
+    label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
@@ -855,8 +856,72 @@ def run_init(
         else:  # pragma: no cover - the wheel always ships skills
             warn(f"packaged skills not found at {skills_source}; skipped.")
 
+    _bootstrap_tracker_labels(
+        repo_root=repo_root,
+        label_client=label_client,
+        output_fn=output_fn,
+        warn=warn,
+    )
+
     output_fn(
         f"git-loopy is configured ({resolved_scope} scope). "
         "Run `git-loopy` to start the loop."
     )
     return 0
+
+
+def _bootstrap_tracker_labels(
+    *,
+    repo_root: Path | None,
+    label_client: Any,
+    output_fn: Callable[[str], None],
+    warn: Callable[[str], None],
+) -> None:
+    """Ensure the tracker carries the label vocabulary a Run reads, and report it.
+
+    A repository whose tracker has no ``ready-for-agent`` yields an empty **Pool**
+    forever, and one with no ``parallel-safe`` can never engage **Parallel mode** —
+    and nothing in a Run says so. Setup is the one place that can fix it.
+
+    ``label_client`` is injected rather than constructed here, following this
+    module's rule that the wizard never builds a live backend for itself; the CLI
+    supplies the real ``gh`` adapter. Passing ``None`` (or running without a
+    repository) skips the step silently — there is no tracker to write to.
+    """
+    if label_client is None or repo_root is None:
+        return
+
+    vocabulary = labels.read_tracker_vocabulary(repo_root)
+    result = labels.bootstrap_labels(vocabulary, label_client)
+
+    if result.created:
+        output_fn(
+            f"Created {len(result.created)} tracker "
+            f"{_plural('label', len(result.created))}: {', '.join(result.created)}"
+        )
+    if result.existing:
+        output_fn(
+            f"{len(result.existing)} tracker "
+            f"{_plural('label', len(result.existing))} already existed: "
+            f"{', '.join(result.existing)}"
+        )
+    if result.unavailable is not None:
+        warn(
+            f"could not ensure the tracker's labels ({result.unavailable}); "
+            f"create them by hand or re-run `git-loopy init` once the tracker is "
+            f"reachable. Missing labels: "
+            f"{', '.join(_missing(vocabulary, result))}."
+        )
+
+
+def _plural(word: str, count: int) -> str:
+    """Return ``word`` pluralised for ``count`` (the vocabulary is all regular)."""
+    return word if count == 1 else f"{word}s"
+
+
+def _missing(
+    vocabulary: Sequence[labels.LabelSpec], result: labels.LabelBootstrap
+) -> list[str]:
+    """Names the bootstrap neither found nor created, in vocabulary order."""
+    accounted = {*result.created, *result.existing}
+    return [spec.name for spec in vocabulary if spec.name not in accounted]

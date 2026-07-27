@@ -73,7 +73,10 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
-from typing import Final, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, Sequence, runtime_checkable
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
+    from git_loopy.labels import LabelSpec
 
 __all__ = [
     "GhError",
@@ -84,6 +87,7 @@ __all__ = [
     "PullRequest",
     "GitHubClient",
     "SubprocessGitHubClient",
+    "SubprocessLabelClient",
     "ContinuationComment",
     "ContinuationCarrier",
     "ContinuationArtifact",
@@ -98,6 +102,10 @@ __all__ = [
 
 _GH_BIN: Final[str] = "gh"
 _STDERR_TAIL_LIMIT: Final[int] = 400
+
+#: Page size for the label listing. ``gh api --paginate`` merges every page's
+#: JSON array into one, so this bounds each request, not the result.
+_LABEL_PAGE_SIZE: Final[int] = 100
 
 # Shallow-membership pagination bounds (#219 §2.8). The first read asks for
 # ``_MEMBERSHIP_PAGE_LIMIT``; each ambiguous full page doubles the ask until a
@@ -1475,3 +1483,73 @@ def _issue_state(number: int) -> str:
             f"gh issue view #{number} state JSON malformed: {parsed!r}",
         )
     return str(parsed["state"])
+
+
+# --------------------------------------------------------------------------- #
+# Label bootstrap adapter (#305)                                              #
+# --------------------------------------------------------------------------- #
+
+
+class SubprocessLabelClient:
+    """Stateless adapter for the label operations ``git-loopy init`` needs.
+
+    Kept apart from :class:`SubprocessGitHubClient` because the two answer to
+    different seams: the loop reads issues, setup writes vocabulary. Satisfies
+    :class:`git_loopy.labels.LabelBootstrapClient` structurally, which is why
+    nothing here imports :mod:`git_loopy.labels` (that module imports
+    :mod:`git_loopy.sources`, which imports this one).
+    """
+
+    def label_list(self) -> list[str]:
+        """Return every existing label name in the repository the cwd resolves to.
+
+        Paginated to exhaustion rather than capped: a canonical label past a
+        truncation point looks absent, so the bootstrap would try to create a
+        duplicate, fail, and report a perfectly healthy tracker as unavailable.
+
+        Read as JSON rather than ``gh label list``'s human table so a label whose
+        name contains a comma or whitespace survives intact.
+
+        Raises:
+            GhError: If the listing fails or returns an unreadable payload.
+        """
+        cmd = [
+            "api",
+            f"repos/{{owner}}/{{repo}}/labels?per_page={_LABEL_PAGE_SIZE}",
+            "--paginate",
+        ]
+        raw = _run(cmd)
+        parsed = _parse_json(raw, [_GH_BIN, *cmd])
+        if not isinstance(parsed, list):
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"expected JSON array for the label listing, got {type(parsed).__name__}",
+            )
+        names: list[str] = []
+        for entry in parsed:
+            if not isinstance(entry, dict) or "name" not in entry:
+                raise GhError(
+                    [_GH_BIN, *cmd], 0, f"gh label listing entry malformed: {entry!r}"
+                )
+            names.append(str(entry["name"]))
+        return names
+
+    def label_create(self, spec: LabelSpec) -> None:
+        """Create the label described by ``spec`` (a ``LabelSpec``).
+
+        Raises:
+            GhError: If ``gh label create`` fails — including when the credential
+                lacks permission. The caller decides whether that is fatal.
+        """
+        _run(
+            [
+                "label",
+                "create",
+                spec.name,
+                "--color",
+                spec.color,
+                "--description",
+                spec.description,
+            ]
+        )

@@ -394,6 +394,9 @@ def test_main_init_yes_project_writes_config_and_scaffolds(
 ) -> None:
     """``git-loopy init --yes --project`` writes Config + assets and never runs."""
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    # Setup now ensures the tracker's label vocabulary; no test may reach a real
+    # tracker, so the production factory is replaced with an inert stand-in.
+    monkeypatch.setattr(cli_module, "_make_label_client", _RecordingLabelClient)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
@@ -521,3 +524,50 @@ def test_skills_outside_a_repository_defers_scope_resolution_to_the_handler(
     assert cli_module._run_skills(parser.parse_args(["skills", "edit"])) == 0
     assert cli_module._run_skills(parser.parse_args(["skills", "list"])) == 0
     assert seen == [(None, None), ("list", None)]
+
+
+# ---------------------------------------------------------------------------
+# Tracker label bootstrap through the real handler (#305)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLabelClient:
+    """Stands in for the real ``gh`` label adapter; records what init ensures."""
+
+    def __init__(self) -> None:
+        self.created: list[str] = []
+
+    def label_list(self) -> list[str]:
+        return []
+
+    def label_create(self, spec: Any) -> None:
+        self.created.append(spec.name)
+
+
+def test_main_init_ensures_the_tracker_label_vocabulary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``git-loopy init`` in a repo bootstraps the labels a Run reads.
+
+    Proves the wiring, not just the wizard: the CLI is what supplies the real
+    ``gh`` adapter, so a wizard that supports the seam but a CLI that never
+    passes one would leave a fresh clone exactly as broken as before.
+    """
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    client = _RecordingLabelClient()
+    monkeypatch.setattr(cli_module, "_make_label_client", lambda: client)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    rc = cli_module.main(["init", "--yes", "--project"])
+
+    assert rc == 0
+    assert "ready-for-agent" in client.created
+    assert "parallel-safe" in client.created
+
+
+def test_make_label_client_is_the_real_gh_adapter() -> None:
+    """The production factory hands the wizard the real ``gh`` boundary."""
+    from git_loopy import gh as gh_module
+
+    assert isinstance(cli_module._make_label_client(), gh_module.SubprocessLabelClient)
