@@ -882,17 +882,20 @@ _git_loopy_continuation_authorize_producer() {
 
 _git_loopy_continuation_validate_completion_request() {
   local request="$1"
-  # Reading a discovered record is not the same as authoring one. This
-  # distribution does not advertise `prospective_projection`, so it refuses to
-  # author retirement receipts it cannot validate -- but it must still read
-  # every record valid under a contract version it advertises, or a Producer
-  # that does project receipts would be quarantined as unparseable and its
-  # retired predecessor would resurface as live guidance.
-  local reading="${2:-false}"
+  # One schema serves both authoring and reading, and `retirements` is optional
+  # in it for both. Authoring may omit receipts because a Producer revision that
+  # retires nothing is legitimate, not degraded. Reading must accept them
+  # because acceptance is owed to the contract version, not to this
+  # distribution's own capabilities: a record is readable if it is valid under a
+  # version listed in `continuation_contract_versions`, whatever the reader
+  # would itself have chosen to author. Narrowing the reading path to what this
+  # distribution projects would quarantine a foreign Producer's record as
+  # unparseable and resurface its retired predecessor as live guidance. That
+  # obligation predates shell advertising `prospective_projection: true` and
+  # survives it, which is why no reader-only widening is needed here.
   local validation
   validation="$(
     jq -cn --argjson request "$request" \
-      --argjson reading "$reading" \
       --argjson supported_contract_versions \
       "$GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS" '
       def fail($message): error($message);
@@ -1398,7 +1401,7 @@ _git_loopy_continuation_validate_completion_request() {
           [
             "carrier", "actions", "outcome", "no_guidance", "retirements",
             "advisory_extensions"
-          ] + (if $reading then ["retirements"] else [] end)
+          ]
         )
         and (if ($request.completion | has("retirements")) then
                [
@@ -2282,7 +2285,7 @@ _git_loopy_continuation_parse_revision_record() {
         completion:$completion
       }'
   )"
-  if ! _git_loopy_continuation_validate_completion_request "$validation_request" true; then
+  if ! _git_loopy_continuation_validate_completion_request "$validation_request"; then
     return 1
   fi
   if ! jq -e '
@@ -3118,6 +3121,87 @@ _git_loopy_continuation_apply_handoff() {
       )' <<<"$actions"
   )"
   GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS="[]"
+}
+
+# Apply the two Consumer-supplied refresh inputs both Reconciliation paths take.
+#
+# `previous_actions` and `handoff` are the only request fields that change what
+# a Consumer is shown, so both are validated before they are allowed to, and a
+# malformed one fails the operation rather than being quietly dropped: a Handoff
+# silently ignored reads as "no context exists" when the truth is "the request
+# was wrong". Revision-protocol and label-indexed discovery must shape the
+# frontier identically here -- a delta or a Handoff that meant one thing under
+# one discovery mode and another under the other would make the guidance depend
+# on how records happened to be found rather than on what they say.
+#
+# Sets GIT_LOOPY_CONTINUATION_REFRESH_DELTA,
+# GIT_LOOPY_CONTINUATION_REFRESH_ACTIONS and
+# GIT_LOOPY_CONTINUATION_REFRESH_DIAGNOSTICS.
+_git_loopy_continuation_apply_refresh_inputs() {
+  local request="$1"
+  local actions="$2"
+  local diagnostics="$3"
+  local delta="null"
+  if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_previous_actions \
+      "$(jq -c '.previous_actions' <<<"$request")" \
+      "previous_actions"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    delta="$(
+      _git_loopy_continuation_actions_delta \
+        "$actions" \
+        "$GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS"
+    )"
+  fi
+  if jq -e 'has("handoff")' <<<"$request" >/dev/null; then
+    if ! _git_loopy_continuation_validate_handoff \
+      "$(jq -c '.handoff' <<<"$request")" \
+      "handoff"; then
+      _git_loopy_continuation_error \
+        "reconcile" \
+        "invalid_request" \
+        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
+      return 1
+    fi
+    _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
+    actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
+    diagnostics="$(
+      jq -cn \
+        --argjson current "$diagnostics" \
+        --argjson handoff_diagnostics \
+          "$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS" \
+        '$current + $handoff_diagnostics'
+    )"
+  fi
+  GIT_LOOPY_CONTINUATION_REFRESH_DELTA="$delta"
+  GIT_LOOPY_CONTINUATION_REFRESH_ACTIONS="$actions"
+  GIT_LOOPY_CONTINUATION_REFRESH_DIAGNOSTICS="$diagnostics"
+}
+
+# Bind a projection to the exact comment bytes it was read from.
+#
+# The Automation layer's validators let a Consumer prove the guidance it acts on
+# still matches what was observed, so the digest must cover the comment body as
+# published rather than the record parsed out of it. Ordering by comment id
+# keeps the list byte-stable across observations that discovered the same
+# comments in a different order.
+_git_loopy_continuation_comment_validators() {
+  local entries="$1"
+  while IFS= read -r entry; do
+    jq -cn \
+      --argjson comment_id "$(jq '.comment.id' <<<"$entry")" \
+      --arg sha256 "$(
+        printf '%s' "$(jq -r '.comment.body' <<<"$entry")" |
+          _git_loopy_continuation_sha256
+      )" \
+      '{comment_id:$comment_id,sha256:$sha256}'
+  done < <(jq -c 'sort_by(.comment.id)[]' <<<"$entries") |
+    jq -sc .
 }
 
 _git_loopy_continuation_action_identity_from_parts() {
@@ -5351,18 +5435,7 @@ _git_loopy_continuation_reconcile_revision_protocol() {
       workstream_anchor:.record.workstream.anchor
     }]' <<<"$live_entries"
   )"
-  validators="$(
-    while IFS= read -r entry; do
-      jq -cn \
-        --argjson comment_id "$(jq '.comment.id' <<<"$entry")" \
-        --arg sha256 "$(
-          printf '%s' "$(jq -r '.comment.body' <<<"$entry")" |
-            _git_loopy_continuation_sha256
-        )" \
-        '{comment_id:$comment_id,sha256:$sha256}'
-    done < <(jq -c 'sort_by(.comment.id)[]' <<<"$entries") |
-      jq -sc .
-  )"
+  validators="$(_git_loopy_continuation_comment_validators "$entries")"
   _git_loopy_continuation_derive_actions "$guidance_entries" "$repository"
   actions="$GIT_LOOPY_CONTINUATION_ACTIONS"
   diagnostics="$(
@@ -5393,43 +5466,13 @@ _git_loopy_continuation_reconcile_revision_protocol() {
   )"
   status="$(jq -r '.status' <<<"$guidance")"
   outcomes="$(jq -c '.outcomes' <<<"$guidance")"
-  delta="null"
-  if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
-    if ! _git_loopy_continuation_validate_previous_actions \
-      "$(jq -c '.previous_actions' <<<"$request")" \
-      "previous_actions"; then
-      _git_loopy_continuation_error \
-        "reconcile" \
-        "invalid_request" \
-        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
-      return 1
-    fi
-    delta="$(
-      _git_loopy_continuation_actions_delta \
-        "$actions" \
-        "$GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS"
-    )"
+  if ! _git_loopy_continuation_apply_refresh_inputs \
+    "$request" "$actions" "$diagnostics"; then
+    return 1
   fi
-  if jq -e 'has("handoff")' <<<"$request" >/dev/null; then
-    if ! _git_loopy_continuation_validate_handoff \
-      "$(jq -c '.handoff' <<<"$request")" \
-      "handoff"; then
-      _git_loopy_continuation_error \
-        "reconcile" \
-        "invalid_request" \
-        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
-      return 1
-    fi
-    _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
-    actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
-    diagnostics="$(
-      jq -cn \
-        --argjson current "$diagnostics" \
-        --argjson handoff_diagnostics \
-          "$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS" \
-        '$current + $handoff_diagnostics'
-    )"
-  fi
+  delta="$GIT_LOOPY_CONTINUATION_REFRESH_DELTA"
+  actions="$GIT_LOOPY_CONTINUATION_REFRESH_ACTIONS"
+  diagnostics="$GIT_LOOPY_CONTINUATION_REFRESH_DIAGNOSTICS"
   result="$(
     jq -cn \
       --arg repository "$repository" \
@@ -5522,7 +5565,8 @@ _git_loopy_continuation_reconcile() {
   fi
 
   local repository carriers actions revision_count delta diagnostics
-  local gated_retirements guidance_entries outcomes
+  local gated_retirements guidance_entries outcomes comment
+  local dispatch_evidence validators status result guidance
   repository="$(jq -r '.repository' <<<"$request")"
   if ! carriers="$(
     gh issue list \
@@ -5549,8 +5593,6 @@ _git_loopy_continuation_reconcile() {
       "decoding indexed carriers"
     return 1
   fi
-  local guidance_entries revision_count actions diagnostics comment
-  local dispatch_evidence validators gated_retirements
   guidance_entries="[]"
   dispatch_evidence="[]"
   revision_count=0
@@ -5622,44 +5664,13 @@ _git_loopy_continuation_reconcile() {
       '$derived + $quarantines'
   )"
 
-  local status result guidance delta
-  delta="null"
-  if jq -e 'has("previous_actions")' <<<"$request" >/dev/null; then
-    if ! _git_loopy_continuation_validate_previous_actions \
-      "$(jq -c '.previous_actions' <<<"$request")" \
-      "previous_actions"; then
-      _git_loopy_continuation_error \
-        "reconcile" \
-        "invalid_request" \
-        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
-      return 1
-    fi
-    delta="$(
-      _git_loopy_continuation_actions_delta \
-        "$actions" \
-        "$GIT_LOOPY_CONTINUATION_PREVIOUS_ACTIONS"
-    )"
+  if ! _git_loopy_continuation_apply_refresh_inputs \
+    "$request" "$actions" "$diagnostics"; then
+    return 1
   fi
-  if jq -e 'has("handoff")' <<<"$request" >/dev/null; then
-    if ! _git_loopy_continuation_validate_handoff \
-      "$(jq -c '.handoff' <<<"$request")" \
-      "handoff"; then
-      _git_loopy_continuation_error \
-        "reconcile" \
-        "invalid_request" \
-        "$GIT_LOOPY_CONTINUATION_VALIDATION_ERROR"
-      return 1
-    fi
-    _git_loopy_continuation_apply_handoff "$actions" "$GIT_LOOPY_CONTINUATION_HANDOFF"
-    actions="$GIT_LOOPY_CONTINUATION_HANDOFF_ACTIONS"
-    diagnostics="$(
-      jq -cn \
-        --argjson current "$diagnostics" \
-        --argjson handoff_diagnostics \
-          "$GIT_LOOPY_CONTINUATION_HANDOFF_DIAGNOSTICS" \
-        '$current + $handoff_diagnostics'
-    )"
-  fi
+  delta="$GIT_LOOPY_CONTINUATION_REFRESH_DELTA"
+  actions="$GIT_LOOPY_CONTINUATION_REFRESH_ACTIONS"
+  diagnostics="$GIT_LOOPY_CONTINUATION_REFRESH_DIAGNOSTICS"
   if [[ "$(jq 'length' <<<"$gated_retirements")" != "0" ]]; then
     diagnostics="$(
       jq -c \
@@ -5675,7 +5686,6 @@ _git_loopy_continuation_reconcile() {
       "$guidance_entries" "$actions" "$diagnostics" "false"
   )"
   status="$(jq -r '.status' <<<"$guidance")"
-  local outcomes
   outcomes="$(jq -c '.outcomes' <<<"$guidance")"
   result="$(
     jq -cn \
@@ -5711,18 +5721,7 @@ _git_loopy_continuation_reconcile() {
   )"
 
   if jq -e 'has("automation")' <<<"$request" >/dev/null; then
-    validators="$(
-      while IFS= read -r entry; do
-        jq -cn \
-          --argjson comment_id "$(jq '.comment.id' <<<"$entry")" \
-          --arg sha256 "$(
-            printf '%s' "$(jq -r '.comment.body' <<<"$entry")" |
-              _git_loopy_continuation_sha256
-          )" \
-          '{comment_id:$comment_id,sha256:$sha256}'
-      done < <(jq -c 'sort_by(.comment.id)[]' <<<"$guidance_entries") |
-        jq -sc .
-    )"
+    validators="$(_git_loopy_continuation_comment_validators "$guidance_entries")"
     if ! _git_loopy_continuation_automation_projection \
       "$request" "$actions" "$diagnostics" "$status" "$validators" "$outcomes"; then
       _git_loopy_continuation_error \
