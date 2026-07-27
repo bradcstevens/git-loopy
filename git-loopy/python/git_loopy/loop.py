@@ -460,15 +460,17 @@ _AUTO_RESOLUTION_FALLBACK_COMMENT = (
 def _integration_worktree_path(
     repo_root: Path, run_id: str, issue_number: int | str
 ) -> Path:
-    """Compute an auto-resolution integration worktree path (#63, ADR-0009).
+    """Compute a private **Integration stage** worktree path (#307, ADR-0020).
 
-    Integration recovery for a red / conflicting Lane runs its dedicated
-    auto-resolution agent in ``<repo_root>.worktrees/<run_id>/integrate/issue-<N>``
-    — a sibling of the Lane worktrees under the same per-run directory but in an
-    ``integrate/`` subgroup, so it never collides with the Lane's own
-    ``issue-<N>`` worktree. The leaf stays ``issue-<N>`` (matching
+    *Every* Lane contribution is merged and gated in
+    ``<repo_root>.worktrees/<run_id>/integrate/issue-<N>`` before anything
+    reaches base — a sibling of the Lane worktrees under the same per-run
+    directory but in an ``integrate/`` subgroup, so it never collides with the
+    Lane's own ``issue-<N>`` worktree. The leaf stays ``issue-<N>`` (matching
     :func:`_lane_worktree_path`) so the worktree still addresses exactly one
-    issue.
+    issue. Bounded auto-resolution for a red / conflicting contribution reuses
+    the stage that contribution was already staged in, so recovery costs no
+    extra worktree.
     """
     return (
         repo_root.parent
@@ -1218,6 +1220,33 @@ class _LaneWork:
     pre_sha: str | None = None
 
 
+@dataclass
+class _IntegrationStage:
+    """The **private** worktree one Lane contribution is integrated in.
+
+    #219 §4.7-4.8 / ADR-0020: a candidate is "prepared and fully gated in
+    private Integration state based on the latest published green base", and
+    base advances "only after the candidate passes the full relevant feedback
+    loop". That is what supersedes ADR-0009's publish-then-revert: base is never
+    made to carry an unverified merge, so a Lane reserved mid-Integration
+    branches from either the prior green base or the newly published green base
+    and never from something in between.
+
+    The same worktree carries the whole recovery arc — the initial merge, the
+    gate, and every bounded auto-resolution attempt — so a resolution agent sees
+    the exact tree that failed rather than a fresh one.
+
+    Attributes:
+        branch: The throwaway Integration branch, reaped on every path.
+        path: Where that branch is checked out.
+        git: A :class:`~git_loopy.git.GitClient` bound to :attr:`path`.
+    """
+
+    branch: str
+    path: Path
+    git: git_module.GitClient
+
+
 _ROLLING_EMPTY_POLL_INTERVAL = 1.0
 """Seconds between idle ``confirm_empty`` retries under Rolling dispatch.
 
@@ -1256,14 +1285,16 @@ class _ParallelLoop:
     An issue whose agent session has started may never take a second Lane in
     this Run (the scheduler's own ``_worked`` guard, #219 §1.7).
 
-    **Integration (#62, #63, ADR-0009)** is unchanged in mechanism — merge,
-    re-gate from the runner side via the injected
-    :class:`~git_loopy.gate.GateRunner`, close on green (the same
-    runner-driven closure as serial mode), or revert / abort and hand a red
-    Lane to bounded auto-resolution (:meth:`_auto_resolve_lane`) before
-    falling back to a serial Iteration. It is serialized against every other
-    contribution's Integration via ``self._integration_lock`` so the shared
-    main worktree never sees two concurrent merges, but it runs *inline*
+    **Integration (#62, #63, #307, ADR-0020)** merges the Lane branch into a
+    private **Integration stage** worktree, re-gates *that stage* from the
+    runner side via the injected :class:`~git_loopy.gate.GateRunner`, and
+    publishes the verified stage to base and closes on green (the same
+    runner-driven closure as serial mode); a red or conflicting stage never
+    reaches base and is handed to bounded auto-resolution in the same stage
+    (:meth:`_auto_resolve_lane`) before falling back to a serial Iteration. It
+    is serialized against every other contribution's Integration via
+    ``self._integration_lock`` so the shared main worktree never sees two
+    concurrent publishes, but it runs *inline*
     inside whichever Lane's lifecycle task got admitted
     (:meth:`_integrate_contribution`) rather than behind a barrier, so other
     Lanes' setup and sessions are never blocked on it. Because a contribution
@@ -2105,45 +2136,131 @@ class _ParallelLoop:
     ) -> bool:
         """Integrate one admitted Lane contribution; return whether it landed green.
 
-        The happy path (#62, adapted for #219/ADR-0020): merge -> gate -> on
-        green :meth:`_land_lane`. On a conflicting merge, or a clean merge
-        whose gate goes red / cannot run, the merge is undone so base stays
-        green and the contribution is handed to :meth:`_auto_resolve_lane`
-        (#63).
+        **Private until green** (#219 §4.7-4.8, ADR-0020, criterion #5). The
+        Lane branch is merged and gated inside a dedicated
+        :class:`_IntegrationStage` worktree cut from the latest published green
+        base; base is published only once that gate passes, by merging the
+        *verified* Integration branch. This is what ADR-0020 supersedes
+        ADR-0009's "publish an unverified merge, then revert it" for: a Lane
+        reserved while this runs branches from either the prior green base or
+        the newly published green base, never from an unverified merge — so
+        there is nothing to revert on a red gate, and base cannot be observed
+        red even transiently.
+
+        A conflicting merge, a red gate, or a gate that cannot run all hand the
+        same stage to bounded auto-resolution (:meth:`_auto_resolve_lane`, #63),
+        which reuses this worktree so the resolution agent sees the exact tree
+        that failed. The stage is reaped on every path.
+        """
+        ref = contribution.ref
+        stage = self._open_integration_stage(ref)
+        if stage is None:
+            self._fallback_lane_to_serial(lane_work)
+            return False
+
+        try:
+            try:
+                stage.git.merge(lane_work.branch)
+            except git_module.GitError as exc:
+                # A conflicting merge, unwound inside the private stage — base
+                # was never touched, so there is nothing to undo there.
+                self._diag.warning(
+                    "integration #%s: private merge of %s conflicted: %s; "
+                    "aborting and auto-resolving",
+                    ref, lane_work.branch, exc,
+                )
+                self._abort_stage_merge_safely(stage, ref)
+                return await self._auto_resolve_lane(
+                    contribution, lane_work, stage, conflicted=True
+                )
+
+            if self._gate_green(ref, "post-merge", stage.path):
+                return self._publish_stage(contribution, lane_work, stage)
+
+            # A red / un-runnable gate on the private result: base still has
+            # not moved, so recovery simply continues in the same stage.
+            return await self._auto_resolve_lane(
+                contribution, lane_work, stage, conflicted=False
+            )
+        finally:
+            self._reap_integration_stage(stage, ref)
+
+    def _open_integration_stage(self, ref: int | str) -> _IntegrationStage | None:
+        """Cut a private Integration worktree from the published green base.
+
+        Returns ``None`` when the worktree cannot be created — the contribution
+        then has no private place to be verified in, and #219 §4.14's terminal
+        unpublished serial handoff is the honest outcome rather than falling
+        back to gating on the shared base.
+        """
+        if not isinstance(ref, int):
+            # The stage's worktree and branch names derive from the issue
+            # number; a non-int ref cannot be staged (or recovered).
+            return None
+        branch = git_module.integration_branch_name(self._run_id, ref)
+        path = _integration_worktree_path(self._repo_root, self._run_id, ref)
+        try:
+            git = self._git.add_worktree(
+                path, branch=branch, base=self._resolve_base_ref()
+            )
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "integration #%s: could not create private integration "
+                "worktree: %s; falling back to serial",
+                ref, exc,
+            )
+            return None
+        return _IntegrationStage(branch=branch, path=path, git=git)
+
+    def _reap_integration_stage(
+        self, stage: _IntegrationStage, ref: int | str
+    ) -> None:
+        """Tear down the private stage on every path (#219 §4.16, criterion #9)."""
+        try:
+            self._git.remove_worktree(stage.path, force=True)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "integration #%s: integration worktree remove failed: %s",
+                ref, exc,
+            )
+        self._delete_branch_safely(ref, stage.branch)
+
+    def _publish_stage(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        stage: _IntegrationStage,
+    ) -> bool:
+        """Publish a verified-green stage onto base, then close its issue.
+
+        The only place base advances under Parallel mode, and it advances by
+        merging the Integration branch the gate just passed on — never the raw
+        Lane branch (#219 §4.8). **Integration** is serialized by
+        ``self._integration_lock``, so base cannot have moved since the stage
+        was cut and this merge is the verified result exactly.
         """
         ref = contribution.ref
         try:
             pre_base = self._git.head_sha()
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: base head_sha failed: %s; skipping", ref, exc
+                "integration #%s: base head_sha failed: %s; not publishing",
+                ref, exc,
             )
             return False
-
-        # 1) Attempt the clean landing.
         try:
-            self._git.merge(lane_work.branch)
+            self._git.merge(stage.branch)
         except git_module.GitError as exc:
-            # A conflicting merge: unwind it (base untouched) and auto-resolve.
             self._diag.warning(
-                "integration #%s: merge of %s conflicted: %s; aborting and "
-                "auto-resolving",
-                ref, lane_work.branch, exc,
+                "integration #%s: publish of verified %s failed: %s; not "
+                "publishing",
+                ref, stage.branch, exc,
             )
-            self._abort_merge_safely(ref)
-            return await self._auto_resolve_lane(contribution, lane_work)
-
-        # 2) Merge landed cleanly — gate it from the runner side.
-        if self._gate_green(ref, "post-merge"):
-            if not self._base_advanced(pre_base, ref):
-                return False
-            self._land_lane(contribution, lane_work, pre_base)
-            return True
-
-        # 3) Clean merge but a red / un-runnable gate: revert so base stays
-        #    green, then auto-resolve.
-        self._revert_merge_safely(ref)
-        return await self._auto_resolve_lane(contribution, lane_work)
+            return False
+        if not self._base_advanced(pre_base, ref):
+            return False
+        self._land_lane(contribution, lane_work, pre_base)
+        return True
 
     def _base_advanced(self, pre_base: str, ref: int | str) -> bool:
         """Return whether Integration published a new base head."""
@@ -2171,8 +2288,9 @@ class _ParallelLoop:
         """Run the injected gate on ``worktree`` (default repo root); ``True`` == green.
 
         A **red** gate or a :exc:`~git_loopy.gate.GateError` (cannot gate at all)
-        both return ``False`` — Integration then reverts / aborts and drives
-        auto-resolution; the ``phase`` label enriches the diagnostic.
+        both return ``False`` — the contribution stays unpublished in its private
+        **Integration stage** and drives auto-resolution there; the ``phase``
+        label enriches the diagnostic.
         """
         target = worktree if worktree is not None else self._repo_root
         try:
@@ -2192,28 +2310,20 @@ class _ParallelLoop:
             return False
         return True
 
-    def _abort_merge_safely(self, ref: int | str) -> None:
-        """``git merge --abort`` a conflicted merge; a failure only warns."""
-        try:
-            self._git.abort_merge()
-        except git_module.GitError as exc:
-            self._diag.warning(
-                "integration #%s: merge --abort failed: %s", ref, exc
-            )
+    def _abort_stage_merge_safely(
+        self, stage: _IntegrationStage, ref: int | str
+    ) -> None:
+        """``git merge --abort`` a conflicted **private** merge; failure only warns.
 
-    def _revert_merge_safely(self, ref: int | str) -> None:
-        """``git revert`` a clean-but-red landing so base stays green.
-
-        A failed revert is escalated to ``error`` — base may be left carrying a
-        red merge, which the operator needs to see.
+        Runs inside the :class:`_IntegrationStage`, never on base: under
+        ADR-0020 base never attempts the Lane merge at all, so there is no
+        conflicted base state to unwind.
         """
         try:
-            self._git.revert_merge()
+            stage.git.abort_merge()
         except git_module.GitError as exc:
-            self._diag.error(
-                "integration #%s: revert of red merge failed: %s; base may "
-                "carry a red commit",
-                ref, exc,
+            self._diag.warning(
+                "integration #%s: private merge --abort failed: %s", ref, exc
             )
 
     def _land_lane(
@@ -2269,113 +2379,69 @@ class _ParallelLoop:
         self,
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
+        stage: _IntegrationStage,
+        *,
+        conflicted: bool,
     ) -> bool:
-        """Bounded auto-resolution for a reverted / aborted contribution (#63, ADR-0009).
+        """Bounded auto-resolution inside the private stage (#63, ADR-0009/0020).
 
-        Creates ONE dedicated integration worktree on base and, up to
-        K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times, runs a fresh resolution
-        agent session pinned to it (:meth:`_run_resolution_session`) and
-        re-gates that worktree. The first **green** attempt merges the
-        integration branch onto base, closes the issue, deletes both the
-        integration branch and the (now-landed) Lane branch, and returns
-        ``True``. If all K attempts stay red the contribution falls back to
-        a serial Iteration (:meth:`_fallback_lane_to_serial`) and returns
-        ``False``. The integration worktree and branch are always reaped; the
-        Lane branch is kept only on failure (a breadcrumb).
+        Up to K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times, runs a fresh
+        resolution agent session pinned to the same
+        :class:`_IntegrationStage` the failed merge/gate happened in
+        (:meth:`_run_resolution_session`) and re-gates it. The first **green**
+        attempt publishes that verified stage onto base
+        (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
+        Lane branch, and returns ``True``. If all K attempts stay red the
+        contribution falls back to a serial Iteration
+        (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
+        Lane branch as a breadcrumb.
+
+        Recovery costs no **Lane cap** capacity (#219 §4.11, criterion #8): it
+        runs inside the admitted contribution's own task and never reserves a
+        Lane. The stage itself is owned and reaped by :meth:`_integrate_lane`.
+
+        Args:
+            conflicted: Whether the Lane branch failed to merge at all (as
+                opposed to merging cleanly and gating red) — the two states
+                leave very different trees, so the brief must say which.
         """
         ref = contribution.ref
-        if not isinstance(ref, int):
-            # Auto-resolution addresses one integer issue (its worktree /
-            # branch names derive from the number); a non-int ref cannot be
-            # recovered.
-            self._fallback_lane_to_serial(lane_work)
-            return False
-
-        base = self._resolve_base_ref()
-        int_branch = git_module.integration_branch_name(self._run_id, ref)
-        int_path = _integration_worktree_path(self._repo_root, self._run_id, ref)
-        try:
-            int_git = self._git.add_worktree(
-                int_path, branch=int_branch, base=base
+        for attempt in range(1, _AUTO_RESOLUTION_MAX_ATTEMPTS + 1):
+            await self._run_resolution_session(
+                contribution, lane_work, stage, attempt, conflicted=conflicted
             )
-        except git_module.GitError as exc:
-            self._diag.warning(
-                "integration #%s: could not create integration worktree: %s; "
-                "falling back to serial",
-                ref, exc,
-            )
-            self._fallback_lane_to_serial(lane_work)
-            return False
-
-        landed = False
-        try:
-            for attempt in range(1, _AUTO_RESOLUTION_MAX_ATTEMPTS + 1):
-                try:
-                    pre_base = self._git.head_sha()
-                except git_module.GitError as exc:
-                    self._diag.warning(
-                        "integration #%s: base head_sha failed before "
-                        "auto-resolution attempt %s: %s",
-                        ref, attempt, exc,
-                    )
-                    break
-                await self._run_resolution_session(
-                    contribution, lane_work, int_git, attempt
-                )
-                if not self._gate_green(
-                    ref, f"auto-resolution attempt {attempt}", int_path
-                ):
-                    continue
-                # Green: land the resolved integration branch on base.
-                try:
-                    self._git.merge(int_branch)
-                except git_module.GitError as exc:
-                    self._diag.warning(
-                        "integration #%s: merge of resolved %s failed: %s; "
-                        "retrying",
-                        ref, int_branch, exc,
-                    )
-                    continue
-                if not self._base_advanced(pre_base, ref):
-                    continue
-                self._close_landed(lane_work.item, pre_base)
-                self._delete_branch_safely(ref, lane_work.branch)
-                landed = True
-                break
-        finally:
-            try:
-                self._git.remove_worktree(int_path, force=True)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "integration #%s: integration worktree remove failed: %s",
-                    ref, exc,
-                )
-            self._delete_branch_safely(ref, int_branch)
-
-        if not landed:
-            self._fallback_lane_to_serial(lane_work)
-            return False
-        return True
+            if not self._gate_green(
+                ref, f"auto-resolution attempt {attempt}", stage.path
+            ):
+                continue
+            if self._publish_stage(contribution, lane_work, stage):
+                return True
+        self._fallback_lane_to_serial(lane_work)
+        return False
 
     async def _run_resolution_session(
         self,
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
-        int_git: git_module.GitClient,
+        stage: _IntegrationStage,
         attempt: int,
+        *,
+        conflicted: bool,
     ) -> None:
-        """Run one auto-resolution agent session in the integration worktree (#63).
+        """Run one auto-resolution agent session in the private stage (#63).
 
-        A fresh :class:`IterationSession` pinned to the dedicated integration
-        worktree, tasked to merge the Lane branch, resolve conflicts, make the
-        feedback loops pass, and commit. Runs on the SAME ``(model, effort)``
+        A fresh :class:`IterationSession` pinned to the same
+        :class:`_IntegrationStage` worktree the merge/gate failed in, tasked to
+        get that tree green and commit. Runs on the SAME ``(model, effort)``
         the contribution resolved once at pickup (#148), so a Lane's route is
         bound once and reused for its work and its recovery sessions alike.
         Bulletproof like :meth:`_run_lane_session` — a timeout or error is
         logged and swallowed so the attempt just reads as still-red and the
         bound advances.
         """
-        prompt = self._resolution_prompt(contribution, lane_work, attempt)
+        prompt = self._resolution_prompt(
+            contribution, lane_work, attempt, conflicted=conflicted
+        )
         send_timeout = self._config.send_timeout_seconds
         try:
             async with IterationSession(
@@ -2387,7 +2453,7 @@ class _ParallelLoop:
                 iter_num=self._alloc_iter_num(),
                 model=contribution.model,
                 reasoning_effort=contribution.reasoning_effort,
-                working_directory=str(int_git.root),
+                working_directory=str(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
             ) as sdk_session:
@@ -2417,21 +2483,38 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         attempt: int,
+        *,
+        conflicted: bool,
     ) -> str:
         """The dedicated auto-resolution brief (#63).
 
         Unlike a Lane / serial prompt this is not issue-collection work: it
-        asks the agent to merge the Lane branch into the integration
-        worktree's base, fix any conflicts, make the feedback loops green,
-        and commit — driving a clean Integration the runner can then land.
+        asks the agent to get the private Integration worktree green and commit
+        — driving a clean Integration the runner can then publish.
+
+        The brief states which of the two failure states the tree is actually
+        in, because they need different work and a brief that misdescribes the
+        tree wastes one of only K=3 attempts: a **conflicted** stage has had its
+        merge aborted and still needs the Lane branch merged, while a **red**
+        stage already carries the merge and needs the feedback loops fixed.
         """
+        if conflicted:
+            situation = (
+                f"Branch {lane_work.branch} could not be merged into this "
+                "integration worktree (the conflicting merge was aborted). "
+                "Merge it, resolve every conflict, "
+            )
+        else:
+            situation = (
+                f"Branch {lane_work.branch} is already merged into this "
+                "integration worktree, but its feedback loops are red. Fix "
+                "them, "
+            )
         return (
             f"Auto-resolution attempt {attempt} of "
             f"{_AUTO_RESOLUTION_MAX_ATTEMPTS} for issue #{contribution.ref}. "
-            f"Merge branch {lane_work.branch} into this integration "
-            "worktree's base branch, resolve any merge conflicts, make all "
-            f"feedback loops in AGENTS.md pass, and commit the result. "
-            f"{self._prompt_text}"
+            f"{situation}make all feedback loops in AGENTS.md pass, and commit "
+            f"the result. {self._prompt_text}"
         )
 
     def _fallback_lane_to_serial(self, lane_work: _LaneWork) -> None:

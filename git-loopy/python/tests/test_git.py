@@ -963,24 +963,6 @@ def _tree_sha(repo: Path, rev: str) -> str:
     return completed.stdout.strip()
 
 
-def test_revert_merge_undoes_a_landing_keeping_base_green(tmp_path: Path) -> None:
-    """``revert_merge`` reverts the ``HEAD`` merge, restoring the pre-merge tree (#63)."""
-    repo, branch, client = _committed_lane_branch(tmp_path, issue=7)
-    base_head = client.head_sha()
-    client.merge(branch)
-    merged_head = client.head_sha()
-    assert merged_head != base_head  # the --no-ff merge advanced base
-
-    client.revert_merge()
-
-    # A revert commit is appended (append-only: HEAD advances again, never a
-    # destructive reset), but the Lane's change is undone — the tree matches the
-    # pre-merge base, so the base branch is green again.
-    reverted_head = client.head_sha()
-    assert reverted_head != merged_head
-    assert _tree_sha(repo, "HEAD") == _tree_sha(repo, base_head)
-
-
 def test_abort_merge_undoes_an_in_progress_conflicted_merge(tmp_path: Path) -> None:
     """``abort_merge`` restores base after a conflicting merge left it mid-merge (#63)."""
     repo, branch, client = _committed_lane_branch(

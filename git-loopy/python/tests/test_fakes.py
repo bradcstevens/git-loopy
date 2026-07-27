@@ -261,35 +261,8 @@ def test_fake_delete_branch_raises_for_unknown_branch(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# FakeGitClient — Integration recovery: revert / abort / conflict (#63)
+# FakeGitClient — Integration recovery: abort / conflict (#63)
 # ---------------------------------------------------------------------------
-
-
-def test_fake_revert_merge_undoes_the_last_landing_keeping_base_green(
-    tmp_path: Path,
-) -> None:
-    """revert_merge pops the last merge's commits — base returns to pre-merge."""
-    parent = FakeGitClient(tmp_path, commits=[Commit(sha="base", subject="r", body="")])
-    base_head = parent.head_sha()
-    branch = "git-loopy/R/issue-7"
-    lane = parent.add_worktree(tmp_path.parent / "wt-7", branch=branch, base="main")
-    lane.simulate_agent_commit(subject="feat: lane", body="Closes #7", sha="lane7")
-    parent.merge(branch)
-    assert parent.head_sha() == "lane7"  # landed
-
-    parent.revert_merge()
-
-    # Base is green again (back to its pre-merge head) and the revert is recorded.
-    assert parent.head_sha() == base_head
-    assert parent.commits_between(base_head, parent.head_sha()) == []
-    assert parent.reverts == [branch]
-
-
-def test_fake_revert_merge_raises_when_head_is_not_a_merge(tmp_path: Path) -> None:
-    """revert_merge with no landing to undo is a typed error (nothing to revert)."""
-    parent = FakeGitClient(tmp_path)
-    with pytest.raises(GitError):
-        parent.revert_merge()
 
 
 def test_fake_merge_conflict_raises_and_leaves_base_untouched(tmp_path: Path) -> None:

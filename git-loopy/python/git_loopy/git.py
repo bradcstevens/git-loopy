@@ -358,12 +358,13 @@ class GitClient(Protocol):
         ...
 
     def merge(self, branch: str) -> None:
-        """Merge ``branch`` into the checked-out base branch at the Wave barrier.
+        """Merge ``branch`` into the checked-out branch of this worktree.
 
-        The Integration primitive (ADR-0009): with the base branch checked out in
-        the main worktree, land a finished Lane branch onto it. Deterministic and
-        revertable — a merge commit is always created (no fast-forward) so #63's
-        auto-resolution can revert a bad landing cleanly.
+        The Integration primitive (ADR-0020): a finished Lane branch is merged
+        into a **private Integration stage** worktree and gated there, and only
+        the verified stage branch is then merged onto base. A merge commit is
+        always created (no fast-forward), so Integration history names every
+        landing explicitly rather than fast-forwarding it away.
 
         Raises:
             GitError: If the merge conflicts (or ``git`` is otherwise unhappy).
@@ -380,23 +381,6 @@ class GitClient(Protocol):
 
         Raises:
             GitError: If the branch does not exist or ``git`` refuses to delete it.
-        """
-        ...
-
-    def revert_merge(self) -> None:
-        """Revert the merge commit at ``HEAD`` so the base branch stays green.
-
-        Integration recovery (#63, ADR-0009): when a Lane merged cleanly but the
-        feedback loops then went red, undo that landing. Because :meth:`merge`
-        always creates a ``--no-ff`` merge commit, ``HEAD`` is that merge, so a
-        single ``git revert -m 1 --no-edit HEAD`` reverts it against the first
-        parent (the base side) — restoring the pre-merge tree while keeping
-        history append-only (never a destructive reset of a possibly-pushed
-        base).
-
-        Raises:
-            GitError: If ``git`` is not on PATH or ``HEAD`` is not a revertable
-                merge commit.
         """
         ...
 
@@ -791,11 +775,12 @@ class SubprocessGitClient:
     def merge(self, branch: str) -> None:
         """Merge ``branch`` into the current branch via ``git merge --no-ff``.
 
-        Run from the repo root with the base branch checked out. ``--no-ff`` forces
-        a merge commit even when the base has not diverged, so Integration history
-        is uniform and a landing is revertable by a single ``git revert -m 1`` (the
-        seam #63 builds on); ``--no-edit`` takes git's default merge message
-        non-interactively.
+        Run from the worktree whose checked-out branch should receive ``branch``
+        — a private **Integration stage** for a Lane branch, or the repo root
+        with the base branch checked out for an already-verified stage branch.
+        ``--no-ff`` forces a merge commit even when the receiving branch has not
+        diverged, so Integration history is uniform and every landing is named;
+        ``--no-edit`` takes git's default merge message non-interactively.
 
         Args:
             branch: The Lane branch to land (see :func:`lane_branch_name`).
@@ -823,18 +808,6 @@ class SubprocessGitClient:
             GitError: If ``git`` is not on PATH or ``branch`` does not exist.
         """
         _run(["branch", "-D", branch], cwd=self._root)
-
-    def revert_merge(self) -> None:
-        """Revert the ``HEAD`` merge via ``git revert -m 1 --no-edit HEAD``.
-
-        Run from the repo root right after a clean :meth:`merge` whose gate then
-        went red. ``-m 1`` reverts against the merge's first parent (the base
-        side) so the Lane's change is undone and the pre-merge tree restored;
-        ``--no-edit`` takes git's default revert message non-interactively. The
-        base branch stays green **and** append-only (see :meth:`GitClient.
-        revert_merge`).
-        """
-        _run(["revert", "-m", "1", "--no-edit", "HEAD"], cwd=self._root)
 
     def abort_merge(self) -> None:
         """Abort an in-progress merge via ``git merge --abort``.

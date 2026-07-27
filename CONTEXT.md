@@ -792,16 +792,35 @@ _Avoid_: worker count, target concurrency.
 
 **Integration backlog**:
 The bounded set of finished Lane branches admitted to **Integration** but not yet
-landed. Its high-water mark applies backpressure to **Rolling dispatch**, preventing
-unbounded branch staleness and wasted API capacity.
+published. Admission is FIFO and its high-water mark is two — one contribution
+integrating plus one waiter; a third finisher parks. A full backlog applies
+**Integration backpressure**, preventing unbounded branch staleness and wasted API
+capacity.
 _Avoid_: Queue (the per-Run issue ledger), merge queue.
 
+**Integration backpressure**:
+The rule that a full **Integration backlog** stops **Rolling dispatch** from starting new
+Lane work. It is a refill bound, not a pause: Lanes already running finish normally, and
+the moment a backlog slot frees, refill resumes. It is why the **Lane cap** is a ceiling
+rather than a utilization promise.
+_Avoid_: throttling, pausing, draining.
+
+**Integration stage**:
+The private worktree a **Lane contribution** is merged into and gated in before anything
+reaches the base branch. Each contribution gets its own stage, and bounded
+auto-resolution reuses the stage its contribution is already in. Because the stage is
+private, a red or conflicting result is never observable on base and there is nothing to
+undo.
+_Avoid_: integration branch, staging area, merge queue entry.
+
 **Integration**:
-The serialized **Parallel mode** stage that consumes the **Integration backlog**, brings
-each finished Lane branch into the base branch one at a time, re-runs the feedback loops,
-and closes the issue on success. A conflicting or loop-failing branch triggers a
-runner-driven auto-resolution attempt; persistent failure falls back to a serial
-**Iteration**. Runner-owned — it never waits on a human.
+The serialized **Parallel mode** stage that consumes the **Integration backlog** one
+contribution at a time. It merges each finished Lane branch into a private **Integration
+stage**, re-runs the feedback loops *there*, and only then publishes the verified result
+to the base branch and closes the issue — the issue is closed only after its contribution
+is verifiably published green. A conflicting or loop-failing contribution triggers a
+runner-driven auto-resolution attempt in that same stage; persistent failure falls back
+to a serial **Iteration**. Runner-owned — it never waits on a human.
 _Avoid_: merge (as the name for this step), landing.
 
 **Parallel-safe**:
@@ -953,12 +972,16 @@ _Avoid_: degraded mode, serial mode.
   grouping them into barrier-synchronized rounds.
 - A **Lane contribution** belongs to one **Active issue** and may outlive the reusable
   **Lane** that began it while it parks, integrates, or recovers.
-- The **Lane cap** is an upper bound; **Integration** backpressure may intentionally
+- The **Lane cap** is an upper bound; **Integration backpressure** may intentionally
   leave Lane capacity idle.
 - A **Lane** works exactly one **Parallel-safe** issue at a time. Once its finished
-  branch enters the bounded **Integration backlog**, the Lane can take another issue.
-- **Integration** consumes that backlog serially, brings each branch to base, and closes
-  the issue, so the **Queue** reaches **closed** the same way it does in serial mode.
+  branch enters the bounded **Integration backlog**, the Lane can take another issue —
+  unless that admission filled the backlog, in which case refill waits.
+- **Integration** consumes that backlog serially, verifies each contribution in its own
+  private **Integration stage**, then publishes it to base and closes the issue, so the
+  **Queue** reaches **closed** the same way it does in serial mode.
+- A contribution that never goes green is never published, so base only ever carries
+  verified results and the base branch is never observed red.
 - In **Parallel mode** the **Sandbox** is per-**Lane**: each Lane's agent runs in its own
   **Sandbox** scoped to that Lane's worktree — the parallel analogue of the per-**Iteration**
   Sandbox.

@@ -339,17 +339,49 @@ def test_h_is_exactly_two_and_the_third_finisher_parks() -> None:
     assert scheduler.parked == (contributions[2],)
 
 
-def test_a_parked_contribution_retains_its_lane() -> None:
-    """#219 §4.3 / §1.5: a parked finisher still owns its Lane slot."""
-    scheduler, source = _scheduler([11, 12, 13], lane_cap=3)
+def test_a_full_integration_backlog_stops_new_lane_work() -> None:
+    """#219 §1.3, §4.1: a full **Integration backlog** is refill backpressure.
+
+    Free Lane slots are not permission to start more work. Once H = 2
+    admitted-but-not-landed contributions are in the backlog, **Integration** is
+    the governing serialized resource and configured Lane capacity is
+    deliberately idle (ADR-0020) — otherwise finished branches pile up, drift
+    from base, conflict more often, and burn API and AI-credit capacity on
+    recovery without increasing throughput.
+
+    This bound subsumes the throttle §4.3 described as "a parked contribution
+    retains its Lane slot": parking is only ever reachable *because* H is full,
+    so retention can no longer change a refill outcome on its own. It survives
+    as effective-concurrency accounting ("parked contributions consume their
+    Lane slots", ADR-0020's reaction table), which is #309's.
+    """
+    scheduler, source = _scheduler([11, 12, 13, 14], lane_cap=3)
     scheduler.start()
-    contributions = [scheduler.start_session(r) for r in scheduler.reserve()]
-    for c in contributions:
-        scheduler.finish_work(c, changed=True)
+    a, b, _c = (scheduler.start_session(r) for r in scheduler.reserve())
+    scheduler.finish_work(a, changed=True)
+    scheduler.finish_work(b, changed=True)
 
-    source.refs = [14, 15]
+    # Both Lanes freed on admission, and #14 is still eligible.
+    assert scheduler.admitted == (a, b)
+    reads = source.membership_calls
 
-    assert [r.item.ref for r in scheduler.reserve()] == [14, 15]
+    assert scheduler.refillable == 0
+    assert scheduler.reserve() == ()
+    # §2.6: no membership poll while Integration backpressure has stopped refill.
+    assert source.membership_calls == reads
+
+
+def test_backpressure_lifts_the_moment_an_h_slot_frees() -> None:
+    """#219 §4.4: landing one contribution re-opens Rolling dispatch."""
+    scheduler, _source = _scheduler([11, 12, 13, 14], lane_cap=3)
+    scheduler.start()
+    a, b, _c = (scheduler.start_session(r) for r in scheduler.reserve())
+    scheduler.finish_work(a, changed=True)
+    scheduler.finish_work(b, changed=True)
+
+    scheduler.finalize(a, published=True)
+
+    assert [r.item.ref for r in scheduler.reserve()] == [14]
 
 
 # --------------------------------------------------------------------------- #
@@ -402,15 +434,15 @@ def test_freeing_an_h_slot_admits_the_parked_fifo_head() -> None:
 
 def test_a_newly_finished_lower_number_cannot_overtake_older_admitted_work() -> None:
     """#219 §4.4: the admitted backlog drains FIFO, not by issue number."""
-    scheduler, source = _scheduler([21, 22], lane_cap=2)
+    scheduler, _source = _scheduler([21, 22, 11], lane_cap=2)
     scheduler.start()
     older, second = (scheduler.start_session(r) for r in scheduler.reserve())
+    # Admitting #21 frees its Lane while the backlog still has capacity, so the
+    # lower-numbered #11 starts *after* both of the older contributions.
     scheduler.finish_work(older, changed=True)
-    scheduler.finish_work(second, changed=True)
-
-    source.refs = [11]
     (late,) = scheduler.reserve()
     late_contribution = scheduler.start_session(late)
+    scheduler.finish_work(second, changed=True)
     assert scheduler.finish_work(late_contribution, changed=True) == "parked"
 
     assert scheduler.finalize(older, published=True) == (late_contribution,)
@@ -419,15 +451,15 @@ def test_a_newly_finished_lower_number_cannot_overtake_older_admitted_work() -> 
 
 def test_contributions_parked_in_one_turn_admit_by_ascending_issue_number() -> None:
     """#219 §4.3: same-turn ties use ascending issue number, not finish order."""
-    scheduler, source = _scheduler([11, 12, 44], lane_cap=3)
+    scheduler, _source = _scheduler([11, 12, 44, 22], lane_cap=3)
     scheduler.start()
     first, second, high = (scheduler.start_session(r) for r in scheduler.reserve())
+    # #11 lands an admission and frees its Lane, which #22 refills before the
+    # backlog reaches H — so four contributions are live with H = 2.
     scheduler.finish_work(first, changed=True)
+    low = scheduler.start_session(scheduler.reserve()[0])
     scheduler.finish_work(second, changed=True)
 
-    source.refs = [22]
-    (late,) = scheduler.reserve()
-    low = scheduler.start_session(late)
     # H is full, so both park without any admission decision in between —
     # one scheduler turn, and 44 finished first.
     assert scheduler.finish_work(high, changed=True) == "parked"

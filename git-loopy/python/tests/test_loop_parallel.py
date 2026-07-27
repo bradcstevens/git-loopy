@@ -13,12 +13,14 @@ The fakes here (unlike the serial ``test_iteration_end_to_end`` client) record
 the per-session ``working_directory`` and route each Lane's simulated agent
 commit to the *right* worktree's child :class:`~tests.fakes.FakeGitClient`, so
 the test can prove per-Lane isolation. As each Lane contribution finishes,
-**Integration** (#62) lands its branch on base in ascending issue-number
-order (serialized across concurrently-admitted contributions via an internal
-lock, never blocking any OTHER Lane's setup or session), gates it via the
-injected :class:`~git_loopy.gate.GateRunner`, and closes the issue with the
-serial closure semantics; a red gate reverts/aborts the Lane and hands it to
-bounded auto-resolution before falling back to a serial Iteration.
+**Integration** (#62, #307) merges its branch in a **private Integration
+stage** worktree in ascending issue-number order (serialized across
+concurrently-admitted contributions via an internal lock, never blocking any
+OTHER Lane's setup or session), gates it *there* via the injected
+:class:`~git_loopy.gate.GateRunner`, and only a green stage is published to
+base and its issue closed with the serial closure semantics (ADR-0020); a red
+or conflicting stage never touches base and is handed to bounded
+auto-resolution before falling back to a serial Iteration.
 
 **A single eligible ``parallel-safe`` issue starts a Lane immediately**
 (#219 §1.4) — the retired Wave's ">= 2 eligible" threshold is gone; see
@@ -296,6 +298,33 @@ def _run_id(tmp_path: Path) -> str:
     return _logged_events(tmp_path)[0]["run_id"]
 
 
+def _lane_worktree_adds(fake_git: FakeGitClient) -> list[tuple[Path, str, str]]:
+    """The **Lane** worktree adds only, dropping private Integration stages.
+
+    Under ADR-0020 every admitted **Lane contribution** also opens a private
+    ``_IntegrationStage`` worktree (``.../integrate/issue-<N>``) to merge and
+    gate in before base is published, so raw ``worktree_adds`` no longer counts
+    Lanes. Filtering on the branch keeps these assertions about dispatch rather
+    than about Integration's internals.
+    """
+    return [add for add in fake_git.worktree_adds if "/integrate/" not in add[1]]
+
+
+def _lane_worktree_removes(fake_git: FakeGitClient) -> list[Path]:
+    """The **Lane** worktree teardowns only (see :func:`_lane_worktree_adds`)."""
+    return [p for p in fake_git.worktree_removes if "integrate" not in p.parts]
+
+
+def _lane_branch_deletes(fake_git: FakeGitClient) -> list[str]:
+    """The **Lane** branch deletions only (see :func:`_lane_worktree_adds`).
+
+    Every contribution's throwaway private Integration branch is reaped on every
+    path, so a Lane branch's fate -- deleted on publication, kept as a
+    breadcrumb otherwise -- is only readable with those filtered out.
+    """
+    return [b for b in fake_git.branch_deletes if "/integrate/" not in b]
+
+
 def _wire_repo(
     tmp_path: Path, *, merge_conflicts: Sequence[int] = ()
 ) -> FakeGitClient:
@@ -383,7 +412,7 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
 
     # One worktree + branch per Lane, created in a sibling ``.worktrees`` dir
     # OUTSIDE the repo, one directory per issue.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     assert len(adds) == 2, f"expected two Lane worktrees, got {adds}"
     add_paths = {p for (p, _b, _base) in adds}
     branches = sorted(b for (_p, b, _base) in adds)
@@ -414,8 +443,8 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
 
     # Each Lane's worktree is torn down once its OWN contribution finishes
     # (no barrier — see `_run_lane_lifecycle`), and none are left live.
-    assert len(fake_git.worktree_removes) == 2
-    assert set(fake_git.worktree_removes) == add_paths
+    assert len(_lane_worktree_removes(fake_git)) == 2
+    assert set(_lane_worktree_removes(fake_git)) == add_paths
     assert fake_git.active_worktrees == []
 
     # Integration (#62) landed both green Lanes on base — base advanced past the
@@ -426,8 +455,9 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     # One wrapper.auto_close event per landed + closed Lane, same order.
     auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
     assert [e["issue"] for e in auto_closes] == [42, 43]
-    # Both integrated Lane branches deleted (breadcrumbs are for failures only).
-    assert sorted(fake_git.branch_deletes) == sorted(branches)
+    # Both integrated Lane branches deleted (breadcrumbs are for failures only),
+    # alongside the throwaway private Integration branch each one was gated on.
+    assert sorted(_lane_branch_deletes(fake_git)) == sorted(branches)
 
 
 def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
@@ -501,8 +531,8 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
     """A Lane's auto-resolution session reuses that Lane's routed pair (#148).
 
     Issue 42 (``task-type:docs`` -> ``gpt-5-mini @ medium``) goes red on its
-    initial landing, so Integration reverts and runs a bounded auto-resolution
-    agent for it; that attempt is green and lands. Asserts the auto-resolution
+    private Integration gate, so Integration runs a bounded auto-resolution
+    agent for it in that same stage; that attempt is green and publishes. Asserts the auto-resolution
     session opened in 42's dedicated integration worktree used the SAME resolved
     ``(model, effort)`` the Lane resolved once at pickup — not the global
     default — so a Lane resolves its route exactly once.
@@ -779,7 +809,7 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
 
     # Exactly one Lane: the single eligible parallel-safe issue (42) started
     # working immediately, in its own worktree + branch.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     assert len(adds) == 1, f"expected exactly one Lane worktree, got {adds}"
     (lane_path, lane_branch, _base) = adds[0]
     assert lane_branch.endswith("/issue-42")
@@ -910,7 +940,7 @@ def test_parallel_lane_refills_without_waiting_for_sibling(
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
     assert sorted(str(p) for p in setup_calls) == sorted(
-        str(p) for (p, _b, _base) in fake_git.worktree_adds
+        str(p) for (p, _b, _base) in _lane_worktree_adds(fake_git)
     )
     assert len(fake_client.created) == 2, "both Lane sessions still dispatched"
 
@@ -1064,7 +1094,7 @@ def test_parallel_lane_cap_never_exceeded_under_bursty_refill(
     assert high_water_mark <= 2
     # All four eligible issues got a Lane -- refill drained the whole pool,
     # nothing stranded behind the cap.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     lane_issues = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
     assert lane_issues == [42, 43, 44, 45]
     events = _logged_events(tmp_path)
@@ -1127,7 +1157,7 @@ def test_parallel_contribution_survives_lane_reuse(
     # Only two Lane worktrees ever live concurrently (the cap), but all three
     # issues eventually got their own Lane -- 44's reused a slot freed by
     # whichever of 42/43 checkpointed first.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     assert len(adds) == 3
     laned = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
     assert laned == [42, 43, 44]
@@ -1258,7 +1288,7 @@ def test_parallel_stale_candidate_never_consumes_a_lane(
 
     # ...and neither cost a Lane: exactly one worktree + branch exists, and it
     # belongs to the one candidate that actually validated.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     assert len(adds) == 1, f"a stale candidate consumed a Lane: {adds}"
     (_path, lane_branch, _base) = adds[0]
     assert lane_branch.endswith("/issue-43")
@@ -1424,13 +1454,99 @@ def test_parallel_integration_lands_and_closes_both_lanes(
     # Both green Lanes landed on base (base advanced past the prior commit) and
     # both integrated branches were deleted.
     assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
-    deleted = sorted(fake_git.branch_deletes)
+    deleted = sorted(_lane_branch_deletes(fake_git))
     assert len(deleted) == 2
     assert deleted[0].endswith("/issue-42")
     assert deleted[1].endswith("/issue-43")
 
     # No worktrees left live once Integration has processed every contribution.
     assert fake_git.active_worktrees == []
+
+
+class _BaseWatchingGateRunner(FakeGateRunner):
+    """A gate that records the **base** head SHA at the moment it runs.
+
+    #219 §4.7 / ADR-0020 require each candidate to be "prepared and fully gated
+    in private Integration state based on the latest published green base", and
+    the base to advance "only after the candidate passes the full relevant
+    feedback loop". That is an assertion about *when* base moves relative to the
+    gate, which no after-the-fact inspection of base can make — so the gate
+    itself samples base as it runs.
+    """
+
+    def __init__(self, base: FakeGitClient, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._base = base
+        self.base_heads: list[str] = []
+
+    def run(self, worktree: Path):  # type: ignore[no-untyped-def]
+        self.base_heads.append(self._base.head_sha())
+        return super().run(worktree)
+
+
+def test_parallel_integration_gates_privately_before_publishing(
+    tmp_path, monkeypatch
+) -> None:
+    """Base never carries an ungated merge (#219 §4.7-4.8, ADR-0020).
+
+    ADR-0020 supersedes ADR-0009 precisely for "publishing an unverified merge
+    before reverting it": a Lane branch is merged and gated in a **private**
+    Integration worktree cut from the latest published green base, and base
+    advances only once that gate is green. The load-bearing evidence is the base
+    head *sampled by the gate itself* — it must still be the pre-run base — plus
+    the worktree the gate was handed, which is the private Integration worktree
+    and never the shared repository root that concurrent Lanes branch from.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    gate = _BaseWatchingGateRunner(fake_git)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: gate)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # The gate ran once, in the private Integration worktree -- never in the
+    # shared repository root a concurrent Lane would branch from.
+    int_path = loop_module._integration_worktree_path(
+        Path(tmp_path), _run_id(tmp_path), 42
+    )
+    assert gate.calls == [int_path]
+    # ...and base had not moved when it ran.
+    assert gate.base_heads == ["0000000000000000000000000000000000000001"]
+
+    # Only after green does base advance and the issue close.
+    assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42]
+    # Base received exactly one merge: the verified private Integration result,
+    # never the raw Lane branch.
+    assert [b for b in fake_git.merge_calls if "/integrate/" not in b] == []
 
 
 def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions(
@@ -1520,21 +1636,23 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
 def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     tmp_path, monkeypatch
 ) -> None:
-    """Red-throughout Integration: revert keeps base green, falls back to serial.
+    """Red-throughout Integration: base is never touched, falls back to serial.
 
-    Evolves the #62 happy-path contract deliberately (#63, ADR-0009). With every
-    Lane's gate red *and* every auto-resolution attempt red, each Lane: merges
-    cleanly, gates red, is **reverted** so base stays green, runs the bounded
-    K=3 auto-resolution agent (all red), then falls back to a serial Iteration
-    with **exactly one** breadcrumb comment — its Lane branch **kept** (only the
-    throwaway integration branch is deleted). Nothing lands, so each
-    no-progress contribution's ``finalize`` records its own warn strike
-    (#219 §7.9: the scheduler records the reaction per-contribution, not once
-    per round) — two Lanes, two strikes. Both Lanes already spent their
-    ``max_iterations`` unit at pickup, so — even though each fallback latches a
-    serial request — the cap is already exhausted and the run ends via
-    ``iteration_cap`` without a further serial Iteration ever running.
-    Assertions are on observable effects only.
+    Evolves the #62/#63 contract deliberately (#219, ADR-0020, criterion #5).
+    With every Lane's gate red *and* every auto-resolution attempt red, each
+    Lane: merges and gates **privately**, stays red, runs the bounded K=3
+    auto-resolution agent in that same private stage (all red), then falls back
+    to a serial Iteration with **exactly one** breadcrumb comment — its Lane
+    branch **kept** (only the throwaway Integration branch is deleted). Because
+    nothing unverified is ever published, base is not merged and there is no
+    revert to make — which is precisely what ADR-0020 supersedes ADR-0009's
+    publish-then-revert for. Nothing lands, so each no-progress contribution's
+    ``finalize`` records its own warn strike (#219 §7.9: the scheduler records
+    the reaction per-contribution, not once per round) — two Lanes, two strikes.
+    Both Lanes already spent their ``max_iterations`` unit at pickup, so — even
+    though each fallback latches a serial request — the cap is already exhausted
+    and the run ends via ``iteration_cap`` without a further serial Iteration
+    ever running. Assertions are on observable effects only.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1580,8 +1698,11 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     assert fake_gh.issue_view(42).state == "OPEN"
     assert fake_gh.issue_view(43).state == "OPEN"
 
-    # Base stayed green: each clean-but-red landing was reverted (one per Lane).
-    assert len(fake_git.reverts) == 2
+    # Base was never made to carry an unverified merge, so it never needed
+    # unwinding: no merge reached base at all, and its head is still the
+    # pre-run commit.
+    assert fake_git.merge_calls == []
+    assert fake_git.head_sha() == "0000000000000000000000000000000000000001"
 
     # Both Lane branches are KEPT as breadcrumbs; only the two throwaway
     # integration branches are deleted (a fallback deletes no Lane branch).
@@ -1612,17 +1733,18 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
 def test_parallel_integration_auto_resolves_red_lane_then_lands(
     tmp_path, monkeypatch
 ) -> None:
-    """A red Lane is reverted, auto-resolved on a later attempt, and lands (#63).
+    """A red Lane is auto-resolved on a later attempt and lands (#63, ADR-0020).
 
-    Issue 42's Lane merges cleanly but its gate goes red on the initial landing
-    AND on the first auto-resolution attempt, then passes on the second attempt;
-    issue 43 is green throughout. The scripted gate is a global call-ordered
-    queue ``[42-postmerge=red, 42-att1=red, 42-att2=green]`` with the default
-    (green) covering 43. Asserts (observable effects only): base is reverted
-    once (stays green), the K-bounded auto-resolution agent runs exactly twice
-    for 42 in its dedicated integration worktree, both issues end CLOSED with one
-    ``auto_close`` each, no breadcrumb is posted, and — because two Integrations
-    landed — the round records no strike.
+    Issue 42's Lane merges cleanly into its **private** Integration stage but
+    gates red there AND on the first auto-resolution attempt, then passes on the
+    second; issue 43 is green throughout. The scripted gate is a global
+    call-ordered queue ``[42-postmerge=red, 42-att1=red, 42-att2=green]`` with
+    the default (green) covering 43. Asserts (observable effects only): base is
+    never reverted -- it never carried the red result in the first place -- the
+    K-bounded auto-resolution agent runs exactly twice for 42 in that same
+    private stage, both issues end CLOSED with one ``auto_close`` each, no
+    breadcrumb is posted, and -- because two Integrations landed -- no strike is
+    recorded.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1662,9 +1784,10 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
     exit_code = asyncio.run(loop_module.run(cfg))
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # Base stayed green: the clean-but-red landing of 42 was reverted exactly
-    # once (43 was green on its first landing, so it was never reverted).
-    assert fake_git.reverts == [git_module.lane_branch_name(_run_id(tmp_path), 42)]
+    # Base stayed green without any unwinding: 42's red result lived and died in
+    # its private stage, so base only ever received the two verified Integration
+    # branches.
+    assert all("/integrate/" in b for b in fake_git.merge_calls)
 
     # The K-bounded auto-resolution agent ran exactly twice for 42, each session
     # pinned to 42's dedicated integration worktree (never 43's).
@@ -1694,14 +1817,16 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
 def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     tmp_path, monkeypatch
 ) -> None:
-    """A conflicting Lane merge is aborted (not reverted), then auto-resolved (#63).
+    """A conflicting Lane merge is aborted *privately*, then auto-resolved (#63).
 
     Issue 42's Lane branch is scripted to *conflict* on merge; issue 43 merges
-    cleanly. A conflict leaves no merge to revert, so recovery must
-    ``git merge --abort`` (not ``git revert``) to keep base green, then run the
-    auto-resolution agent — which passes on its first attempt here (all-green
-    gate) and lands 42. Asserts the abort fired exactly once, no revert
-    happened, both issues closed, and the round made progress (no strike).
+    cleanly. Under ADR-0020 the conflicting merge is attempted in 42's private
+    Integration stage, never on base — so the ``git merge --abort`` that unwinds
+    it fires **in that stage**, base is never left mid-merge, and there is
+    nothing to ``git revert``. Recovery then runs the auto-resolution agent in
+    the same stage, which passes on its first attempt here (all-green gate) and
+    publishes 42. Asserts where the abort happened, that base recorded none of
+    it, that both issues closed, and that the Run made progress (no strike).
     """
     fake_git = _wire_repo(tmp_path, merge_conflicts=[42])
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1739,9 +1864,13 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     exit_code = asyncio.run(loop_module.run(cfg))
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # The conflict path aborts (base stays green) and never reverts.
-    assert fake_git.merge_aborts == 1
-    assert fake_git.reverts == []
+    # The conflict was aborted inside 42's private Integration stage -- base
+    # never attempted the Lane merge, so it recorded no abort of its own.
+    int_path = loop_module._integration_worktree_path(
+        tmp_path, _run_id(tmp_path), 42
+    )
+    assert fake_git.repo_merge_aborts == [int_path]
+    assert fake_git.merge_aborts == 0
 
     # 42 was recovered by exactly one auto-resolution attempt in its dedicated
     # integration worktree; 43 landed via the happy path.
@@ -1776,10 +1905,11 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     attempts (four reds), so it terminally fails Integration; issue 43 is green.
     With ``max_iterations=0`` and ``serial_closes`` the run then drains: the Lane
     lands 43, 42 falls back to a serial Iteration, and a later serial round works
-    42 to closure. Asserts base stayed green (reverted), the auto-resolution
-    agent ran exactly K=3 times, exactly ONE breadcrumb comment was posted on 42,
-    42's Lane branch was KEPT (only its throwaway integration branch deleted),
-    and the run drained the pool (both issues CLOSED, ``empty_pool``).
+    42 to closure. Asserts base was never published red (nothing to revert), the
+    auto-resolution agent ran exactly K=3 times, exactly ONE breadcrumb comment
+    was posted on 42, 42's Lane branch was KEPT (only its throwaway private
+    Integration branch deleted), and the run drained the pool (both issues
+    CLOSED, ``empty_pool``).
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1828,8 +1958,11 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     exit_code = asyncio.run(loop_module.run(cfg))
     assert exit_code == 0, f"expected a clean drain (exit 0), got {exit_code}"
 
-    # Base stayed green: 42's clean-but-red landing was reverted.
-    assert git_module.lane_branch_name(_run_id(tmp_path), 42) in fake_git.reverts
+    # Base stayed green with nothing to unwind: 42's red result never left its
+    # private Integration stage, so base never merged the Lane branch.
+    assert git_module.lane_branch_name(_run_id(tmp_path), 42) not in (
+        fake_git.merge_calls
+    )
 
     # The auto-resolution agent ran exactly K=3 times for 42 (the bound holds),
     # each session pinned to 42's dedicated integration worktree.
@@ -1936,7 +2069,7 @@ def test_parallel_run_drains_lanes_then_serial_in_one_run(
     # --- Only the two parallel-safe issues became Lanes, each with its own
     #     worktree + branch. The plain issue 44 never did — eligibility is a
     #     human assertion, never inferred.
-    adds = fake_git.worktree_adds
+    adds = _lane_worktree_adds(fake_git)
     assert len(adds) == 2, f"expected exactly two Lane worktrees (42,43), got {adds}"
     laned = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
     assert laned == [42, 43], "only the parallel-safe issues become Lanes"
@@ -2091,7 +2224,7 @@ def test_parallel_lane_runs_worktree_setup_before_own_session(
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
     # Setup ran exactly once per Lane worktree (once per Lane creation)...
-    add_paths = {p for (p, _b, _base) in fake_git.worktree_adds}
+    add_paths = {p for (p, _b, _base) in _lane_worktree_adds(fake_git)}
     assert len(add_paths) == 2
     setup_paths = [wt for (wt, _n) in spy.calls]
     assert sorted(setup_paths) == sorted(add_paths)
@@ -2137,7 +2270,7 @@ def test_parallel_lane_surfaces_worktree_setup_failure_and_continues(
     # ...but the Run still dispatched both Lanes (setup failure is non-fatal).
     assert len(failing.calls) == 2
     assert len(fake_client.created) == 2
-    assert len(fake_git.worktree_adds) == 2
+    assert len(_lane_worktree_adds(fake_git)) == 2
 
 
 

@@ -360,6 +360,14 @@ class RollingScheduler:
         if self._abort_latched:
             # §7.7: drain-confirmed abort stops refill but cancels nothing.
             return 0
+        if len(self._admitted) >= INTEGRATION_HIGH_WATER:
+            # §1.3, §4.1: a full **Integration backlog** is backpressure, not
+            # merely a queue depth. Integration is the governing serialized
+            # resource, so free Lane slots stay deliberately idle rather than
+            # deepening a backlog that would only park — which is what stops
+            # finished branches drifting from base and burning recovery
+            # capacity without increasing throughput (ADR-0020).
+            return 0
         free_lanes = self.effective_limit - len(self._lanes_held)
         remaining = self.remaining_units
         if remaining is not None:

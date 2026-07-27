@@ -53,10 +53,13 @@ class FakeGitClient:
     :attr:`worktree_adds` / :attr:`worktree_removes` are spies and
     :attr:`active_worktrees` lists the live ones, for orchestrator assertions.
 
-    **Integration (#62 / ADR-0009).** :meth:`merge` lands a Lane branch's own
-    commits onto this (base) log and :meth:`delete_branch` drops an integrated
-    branch; the branch registry outlives worktree teardown so both work at the
-    Wave barrier. :attr:`merge_calls` / :attr:`branch_deletes` are spies.
+    **Integration (#62 / ADR-0009, #219 / ADR-0020).** :meth:`merge` lands a Lane
+    branch's own commits onto this log and :meth:`delete_branch` drops an
+    integrated branch; the branch registry is **repo-wide** (shared with every
+    worktree child, as real git shares refs) and outlives worktree teardown, so a
+    private Integration worktree can merge a Lane branch it did not create and
+    still merge it after that Lane's worktree is gone. :attr:`merge_calls` /
+    :attr:`branch_deletes` are spies.
     """
 
     def __init__(
@@ -72,6 +75,8 @@ class FakeGitClient:
         sha_prefix: str = "face",
         merge_conflicts: Sequence[int] | None = None,
         tracked_paths: Iterable[Path | str] = (),
+        _branch_registry: dict[str, FakeGitClient] | None = None,
+        _abort_spy: list[Path] | None = None,
     ) -> None:
         self._root = Path(root)
         self._sha_counter = 0
@@ -113,23 +118,32 @@ class FakeGitClient:
         # name, populated on add_worktree and — unlike _worktrees — **kept** past
         # remove_worktree (a branch outlives its worktree as a breadcrumb), so
         # merge/delete_branch can land or drop a Lane branch after teardown.
-        self._branches: dict[str, FakeGitClient] = {}
+        # The registry is **repo-wide**, not per-worktree: real git keeps refs in
+        # the shared repository, so every worktree of one repo sees every branch.
+        # A child created by :meth:`add_worktree` therefore shares this exact
+        # dict, which is what lets the private Integration worktree #219 §4.7
+        # requires merge a Lane branch it did not create.
+        self._branches: dict[str, FakeGitClient] = (
+            {} if _branch_registry is None else _branch_registry
+        )
         self.merge_calls: list[str] = []
         self.branch_deletes: list[str] = []
-        # Integration recovery (#63 / ADR-0009). ``merge_conflicts`` scripts the
+        # Integration recovery (#63 / ADR-0020). ``merge_conflicts`` scripts the
         # issue numbers whose **Lane** branch raises on :meth:`merge` (models a
         # conflicting landing) so a test drives the abort + auto-resolution path.
         # Matched on the Lane branch shape (``.../issue-<N>``) and NOT on the
-        # auto-resolution *integration* branch (``.../integrate/issue-<N>``), so
-        # the resolved branch still merges cleanly. A stack of per-merge deltas
-        # (branch + the SHAs that landing appended) lets :meth:`revert_merge` pop
-        # the last landing and restore the pre-merge base — the net effect of
-        # ``git revert -m 1`` in this linear-log model. :attr:`reverts` /
-        # :attr:`merge_aborts` are spies.
+        # private Integration branch (``.../integrate/issue-<N>``), so the
+        # resolved branch still merges cleanly. :attr:`merge_aborts` is a spy.
         self._merge_conflict_issues: set[int] = set(merge_conflicts or ())
-        self._merge_deltas: list[tuple[str, list[str]]] = []
-        self.reverts: list[str] = []
         self.merge_aborts: int = 0
+        # Repo-wide abort spy, shared with every worktree child exactly as
+        # :attr:`_branches` is. ``git merge --abort`` is per-worktree, so the
+        # per-client counter above cannot answer "where did the abort happen?"
+        # — which is the whole question once ADR-0020 moves the conflicting
+        # merge off base and into a private Integration worktree.
+        self.repo_merge_aborts: list[Path] = (
+            [] if _abort_spy is None else _abort_spy
+        )
 
     @property
     def root(self) -> Path:
@@ -239,7 +253,10 @@ class FakeGitClient:
         **own** per-worktree log independently — a commit in one Lane never
         appears in another or in the main worktree. The child carries a distinct
         ``sha_prefix`` (``wt1``, ``wt2``, ...) so auto-generated SHAs never collide
-        across worktrees.
+        across worktrees, shares this client's repo-wide branch registry (so it can
+        :meth:`merge` a sibling's branch, as the private Integration worktree of
+        #219 §4.7 must), and inherits the scripted ``merge_conflicts`` (so a
+        conflicting Lane branch conflicts wherever it is merged).
         """
         wt_path = Path(path)
         self.worktree_adds.append((wt_path, branch, base))
@@ -249,7 +266,10 @@ class FakeGitClient:
             commits=list(self._log),
             branch=branch,
             sha_prefix=f"wt{self._worktree_seq}",
+            merge_conflicts=sorted(self._merge_conflict_issues),
             tracked_paths=self._tracked_paths,
+            _branch_registry=self._branches,
+            _abort_spy=self.repo_merge_aborts,
         )
         self._worktrees[wt_path] = child
         self._branches[branch] = child
@@ -323,44 +343,21 @@ class FakeGitClient:
             )
         self.merge_calls.append(branch)
         known = {commit.sha for commit in self._log}
-        appended: list[str] = []
         for commit in child._log:
             if commit.sha not in known:
                 self._log.append(commit)
-                appended.append(commit.sha)
-        self._merge_deltas.append((branch, appended))
-
-    def revert_merge(self) -> None:
-        """Model ``git revert -m 1 --no-edit HEAD`` — undo the last landing (#63).
-
-        Pops the most recent :meth:`merge` delta and removes those commits from
-        this base log, so ``head_sha`` returns to the pre-merge base (green) — the
-        net effect of a real ``git revert -m 1`` in this linear-log model, without
-        modelling the extra inverse commit git would append. Records the reverted
-        branch in :attr:`reverts`.
-
-        Raises:
-            GitError: If there is no landing to revert (``HEAD`` is not a merge).
-        """
-        if not self._merge_deltas:
-            raise GitError(
-                ["git", "revert", "-m", "1", "--no-edit", "HEAD"],
-                1,
-                "no merge to revert",
-            )
-        branch, appended = self._merge_deltas.pop()
-        removed = set(appended)
-        self._log = [c for c in self._log if c.sha not in removed]
-        self.reverts.append(branch)
 
     def abort_merge(self) -> None:
         """Model ``git merge --abort`` — unwind a conflicted merge (#63).
 
-        A conflicting :meth:`merge` appended nothing to the base log (it raised),
-        so the base is already at its pre-merge state; this only records the
-        abort in :attr:`merge_aborts` for assertions.
+        A conflicting :meth:`merge` appended nothing to the log (it raised), so
+        the worktree is already at its pre-merge state; this only records the
+        abort in :attr:`merge_aborts` (this worktree) and
+        :attr:`repo_merge_aborts` (repo-wide, with the worktree root) for
+        assertions.
         """
         self.merge_aborts += 1
+        self.repo_merge_aborts.append(self._root)
 
     def delete_branch(self, branch: str) -> None:
         """Model ``git branch -D <branch>`` — drop an integrated Lane branch.
