@@ -980,6 +980,9 @@ _Avoid_: degraded mode, serial mode.
 - **Integration** consumes that backlog serially, verifies each contribution in its own
   private **Integration stage**, then publishes it to base and closes the issue, so the
   **Queue** reaches **closed** the same way it does in serial mode.
+- An **Integration** auto-resolution attempt occupies no **Lane**: its contribution
+  released its Lane at admission, so that slot refills while recovery is still running.
+  Recovery costs **Integration backlog** capacity, never **Lane cap** capacity.
 - A contribution that never goes green is never published, so base only ever carries
   verified results and the base branch is never observed red.
 - In **Parallel mode** the **Sandbox** is per-**Lane**: each Lane's agent runs in its own

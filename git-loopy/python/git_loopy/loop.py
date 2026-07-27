@@ -1395,6 +1395,18 @@ class _ParallelLoop:
         # the continuously-refilling replacement for the Wave's
         # `asyncio.gather`-then-proceed barrier.
         self._pending: set[asyncio.Task[None]] = set()
+        # Raised whenever a Lane lifecycle task frees Rolling-dispatch capacity
+        # **without returning** — admission to Integration releases the
+        # contribution's Lane slot (§3.9) and a `finalize` frees an
+        # **Integration backlog** slot (§4.4), both from inside a task that then
+        # carries on through the rest of its Integration cascade. Waiting only
+        # on task completion would therefore hold a freed Lane idle for the
+        # whole cascade, which is up to K bounded auto-resolution *agent
+        # sessions* long — exactly the "auto-resolution capacity does not
+        # consume the **Lane cap**" rule (#219 §4.11) inverted. The driver
+        # clears it immediately before each `reserve()`, so a signal raised
+        # after that decision always earns another one.
+        self._capacity_freed = asyncio.Event()
         # Run-wide monotonic sequence for `IterationSession.iter_num` tagging
         # (raw JSONL / OTel tagging only — Lane contribution accounting is
         # keyed by `contribution_id`, per #219 §7, never by this number).
@@ -1577,6 +1589,11 @@ class _ParallelLoop:
                 if self._crash is not None:
                     raise self._crash
 
+                # Cleared before the decision it feeds, never after: a slot
+                # freed after `reserve()` has read the bounds must still earn
+                # its own turn.
+                self._capacity_freed.clear()
+
                 for reservation in scheduler.reserve():
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
@@ -1610,10 +1627,7 @@ class _ParallelLoop:
                     continue
 
                 if self._pending:
-                    done, _pending = await asyncio.wait(
-                        self._pending, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    self._pending -= done
+                    await self._await_capacity()
                     continue
 
                 # Fully idle: nothing pending, nothing just reserved, no
@@ -1644,6 +1658,32 @@ class _ParallelLoop:
                     task.cancel()
                 await asyncio.gather(*self._pending, return_exceptions=True)
                 self._pending.clear()
+
+    async def _await_capacity(self) -> None:
+        """Block until Rolling dispatch could reserve differently (#219 §4.4).
+
+        Two distinct things can change the refill decision, and waiting on only
+        one of them starves the other. A Lane lifecycle task **returning** frees
+        its Lane, which is what the retired Wave's ``gather`` barrier
+        approximated. But a task also frees capacity *mid-flight* — admission
+        releases the contribution's Lane slot while that same task carries on
+        into Integration, and a ``finalize`` frees an **Integration backlog**
+        slot, lifting backpressure — and that half can be several bounded
+        auto-resolution agent sessions from returning. This waits on both, so
+        recovery never quietly occupies the capacity it released.
+
+        Completed lifecycle tasks are retired from :attr:`_pending` here, which
+        keeps "``_pending`` is empty" a safe stand-in for full scheduler
+        quiescence in :meth:`_drive_rolling`'s terminal checks.
+        """
+        freed = asyncio.ensure_future(self._capacity_freed.wait())
+        try:
+            done, _still_pending = await asyncio.wait(
+                {*self._pending, freed}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            freed.cancel()
+        self._pending -= done
 
     def _report_serial_fallback(
         self, scheduler: rolling_scheduler.RollingScheduler
@@ -1856,6 +1896,9 @@ class _ParallelLoop:
             self._apply_strike_reaction(contribution)
             return
         if disposition == rolling_scheduler.ADMITTED:
+            # §3.9: the Lane slot is free again *now*, while this task carries
+            # on through Integration (and possibly K auto-resolution sessions).
+            self._capacity_freed.set()
             await self._integrate_contribution(contribution)
             return
         # PARKED (§3.9, §4.1): the H=2 Integration backlog is full, so this
@@ -2093,6 +2136,10 @@ class _ParallelLoop:
                 contribution, published=published
             )
             self._apply_strike_reaction(contribution)
+        # §4.4: this finalize freed an **Integration backlog** slot, lifting
+        # backpressure, and each contribution it admitted from the parked FIFO
+        # released the Lane that contribution had been retaining (§4.3).
+        self._capacity_freed.set()
         for admitted in newly_admitted:
             await self._integrate_contribution(admitted)
 

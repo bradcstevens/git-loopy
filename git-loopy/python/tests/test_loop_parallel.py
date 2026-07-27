@@ -33,6 +33,16 @@ worktree setup may freely overlap another Lane's agent session. See
 :func:`test_parallel_lane_refills_without_waiting_for_sibling` and
 :func:`test_parallel_lane_cap_never_exceeded_under_bursty_refill`.
 
+**Integration is serialized and costs no Lane (#219 §4.11, #307 criteria
+#4/#8).** At most one contribution is ever being integrated — a private
+**Integration stage** is cut from base and published back to it on the strength
+of base not moving in between, so a second concurrent Integration would publish
+a result verified against a base that no longer exists. Recovery, meanwhile,
+occupies no **Lane**: a contribution's Lane frees at admission and refills while
+its bounded auto-resolution sessions are still in flight. See
+:func:`test_parallel_integration_never_overlaps_another_contribution` and
+:func:`test_parallel_auto_resolution_does_not_consume_the_lane_cap`.
+
 **Membership is never authority (#219 §2.10).** Candidate discovery reads the
 cheap **Pool** membership cache and pays the authoritative per-issue read only
 at pickup; a candidate that fails that read costs no **Lane** and no
@@ -1812,6 +1822,268 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
     ] == [42, 43]
     # Two Integrations landed = progress, so the round records no strike.
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
+
+
+def test_parallel_auto_resolution_does_not_consume_the_lane_cap(
+    tmp_path, monkeypatch
+) -> None:
+    """Recovery never occupies a **Lane** slot (#219 §4.11, criterion #8).
+
+    A contribution's Lane frees the instant it is admitted to **Integration**
+    (§3.9), and its Integration cascade — up to K=3 bounded auto-resolution
+    *agent sessions* — then runs without a Lane. So a freed slot must refill
+    while recovery is still in flight; if it could not, recovery would silently
+    consume the **Lane cap** it is defined not to, and a single red
+    contribution would idle a Lane for three whole agent sessions.
+
+    The scenario makes the freed slot the *only* thing that can start #44. Lane
+    cap is 2, so #42 and #44 cannot both be dispatched up front; #43 holds the
+    other Lane with a session this test gates shut, so no other Lane lifecycle
+    can end and wake the driver. #42's private stage gates red once, parking it
+    in auto-resolution, which this test also gates shut. From outside the run,
+    the test then waits for #44's *worktree setup* — which only runs after the
+    scheduler reserved a Lane for it — while both the resolution session and
+    #43's session are provably still mid-flight.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    hold_43 = asyncio.Event()
+    hold_resolution = asyncio.Event()
+    resolution_started = asyncio.Event()
+
+    class _GatedClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = str(kwargs.get("working_directory") or "")
+            if working_directory.endswith("issue-43"):
+                gate_on, announce = hold_43, None
+            elif "/integrate/" in working_directory:
+                gate_on, announce = hold_resolution, resolution_started
+            else:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def gated_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                if announce is not None:
+                    announce.set()
+                await gate_on.wait()
+                return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _GatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        # #42's private stage gates red once, which is what puts it into bounded
+        # auto-resolution; every other stage (including #42's recovery attempt)
+        # is green.
+        lambda: FakeGateRunner(by_issue={42: [False]}),
+    )
+
+    setup_44_started = asyncio.Event()
+
+    class _SignalingSetup:
+        def run(self, worktree: Path) -> SetupResult:
+            if str(worktree).endswith("issue-44"):
+                setup_44_started.set()
+            return SetupResult(command="echo prepared")
+
+    monkeypatch.setattr(
+        loop_module, "_make_worktree_setup", lambda: _SignalingSetup()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unbounded: drive until the pool drains
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(resolution_started.wait(), timeout=5)
+        # The load-bearing wait: #44 can only be here because #42's admission
+        # freed its Lane, since #43's Lane is held and #42's own lifecycle task
+        # has not returned.
+        await asyncio.wait_for(setup_44_started.wait(), timeout=5)
+        assert not run_task.done(), (
+            "the run must still be in flight -- #42's recovery session and "
+            "#43's Lane session are both gated shut"
+        )
+        hold_resolution.set()
+        hold_43.set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    # All three took a Lane, and the cap was still a cap: only two Lane
+    # worktrees ever existed at once (see the bursty-refill test), which is
+    # what makes "#44 started in #42's freed slot" the only reading.
+    assert sorted(
+        int(Path(p).name.removeprefix("issue-"))
+        for (p, _b, _base) in _lane_worktree_adds(fake_git)
+    ) == [42, 43, 44]
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert fake_gh.issue_view(43).state == "CLOSED"
+    assert fake_gh.issue_view(44).state == "CLOSED"
+
+
+def test_parallel_integration_never_overlaps_another_contribution(
+    tmp_path, monkeypatch
+) -> None:
+    """At most one contribution is being integrated at a time (criterion #4).
+
+    Serialization is load-bearing well beyond "no two merges at once": a
+    private **Integration stage** is cut from base and published back to it on
+    the strength of base *not having moved in between* (:meth:`_publish_stage`),
+    so a second concurrent Integration would publish a result verified against a
+    base that no longer exists.
+
+    Nothing pinned it before, because the green Integration path holds
+    ``_integration_lock`` across only synchronous work and so cannot interleave
+    even without the lock. Bounded auto-resolution is what makes the window
+    real: it awaits *agent sessions* inside the lock. So #42's private stage
+    gates red once and its recovery session is gated shut by this test, and #43
+    is released to finish its whole Lane arc — worktree torn down, contribution
+    admitted — while #42 still holds Integration. The timeline then reads the
+    ordering directly: #43 was ready to integrate before #42's stage was reaped,
+    yet #43's stage was not cut until after.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    timeline: list[tuple[str, str]] = []
+    lane_43_finished = asyncio.Event()
+    real_add_worktree = fake_git.add_worktree
+    real_remove_worktree = fake_git.remove_worktree
+
+    def _kind(path: Path) -> str:
+        return "stage" if "integrate" in Path(path).parts else "lane"
+
+    def tracked_add_worktree(path: Path, *, branch: str, base: str):
+        timeline.append((f"{_kind(path)}-add", Path(path).name))
+        return real_add_worktree(path, branch=branch, base=base)
+
+    def tracked_remove_worktree(path: Path, *, force: bool = False) -> None:
+        real_remove_worktree(path, force=force)
+        timeline.append((f"{_kind(path)}-remove", Path(path).name))
+        if _kind(path) == "lane" and Path(path).name == "issue-43":
+            lane_43_finished.set()
+
+    monkeypatch.setattr(fake_git, "add_worktree", tracked_add_worktree)
+    monkeypatch.setattr(fake_git, "remove_worktree", tracked_remove_worktree)
+
+    hold_43 = asyncio.Event()
+    hold_resolution = asyncio.Event()
+    resolution_started = asyncio.Event()
+
+    class _GatedClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = str(kwargs.get("working_directory") or "")
+            if working_directory.endswith("issue-43"):
+                gate_on, announce = hold_43, None
+            elif "/integrate/" in working_directory:
+                gate_on, announce = hold_resolution, resolution_started
+            else:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def gated_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                if announce is not None:
+                    announce.set()
+                await gate_on.wait()
+                return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _GatedClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: FakeGateRunner(by_issue={42: [False]}),
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(resolution_started.wait(), timeout=5)
+        hold_43.set()
+        # #43's whole Lane arc completes while #42 still owns Integration, so
+        # its own Integration is genuinely contending — not merely late.
+        await asyncio.wait_for(lane_43_finished.wait(), timeout=5)
+        hold_resolution.set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    stages = [entry for entry in timeline if entry[0].startswith("stage-")]
+    assert stages == [
+        ("stage-add", "issue-42"),
+        ("stage-remove", "issue-42"),
+        ("stage-add", "issue-43"),
+        ("stage-remove", "issue-43"),
+    ], f"Integration stages overlapped: {timeline}"
+    # Non-vacuity: #43 was finished and waiting well before #42 let go.
+    assert timeline.index(("lane-remove", "issue-43")) < timeline.index(
+        ("stage-remove", "issue-42")
+    ), f"#43 was not contending for Integration: {timeline}"
+
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert fake_gh.issue_view(43).state == "CLOSED"
 
 
 def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(

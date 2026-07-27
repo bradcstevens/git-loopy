@@ -625,8 +625,16 @@ class FakeGateRunner:
     1. a **per-worktree** queue (``by_worktree={path: [True, False, ...]}``) — models
        repeated Integration attempts on the *same* worktree (e.g. the dedicated
        integration worktree the auto-resolution agent reuses: red-then-green);
-    2. the **global call-ordered** queue (``outcomes=[...]``), popped once per call;
-    3. the ``default`` (green unless overridden).
+    2. a **per-issue** queue (``by_issue={42: [False, True]}``) — the same thing keyed
+       on the **Lane contribution** the worktree belongs to rather than its exact
+       path. Under Rolling dispatch a private **Integration stage** lives at
+       ``.../<run_id>/integrate/issue-<N>``, so its path is not knowable before the
+       run mints its ULID, and once Lanes genuinely overlap the *call order* is not
+       the test's to predict either. Keying on the issue is stable under both. Gate
+       runs only ever happen in a contribution's private Integration stage, so the
+       ``issue-<N>`` leaf identifies the contribution unambiguously;
+    3. the **global call-ordered** queue (``outcomes=[...]``), popped once per call;
+    4. the ``default`` (green unless overridden).
 
     Every worktree passed to :meth:`run` is recorded in :attr:`calls` for assertions.
     Red results carry ``failure`` (a shared :class:`~git_loopy.gate.LoopFailure`) so a
@@ -639,12 +647,16 @@ class FakeGateRunner:
         *,
         outcomes: Sequence[bool] | None = None,
         by_worktree: Mapping[Path, Sequence[bool]] | None = None,
+        by_issue: Mapping[int | str, Sequence[bool]] | None = None,
         default: bool = True,
         failure: LoopFailure | None = None,
     ) -> None:
         self._outcomes: list[bool] = list(outcomes) if outcomes else []
         self._by_worktree: dict[Path, list[bool]] = {
             Path(key): list(value) for key, value in (by_worktree or {}).items()
+        }
+        self._by_issue: dict[str, list[bool]] = {
+            f"issue-{key}": list(value) for key, value in (by_issue or {}).items()
         }
         self._default = default
         self._failure = failure or LoopFailure(
@@ -658,7 +670,7 @@ class FakeGateRunner:
     def run(self, worktree: Path) -> GateResult:
         worktree = Path(worktree)
         self.calls.append(worktree)
-        queue = self._by_worktree.get(worktree)
+        queue = self._by_worktree.get(worktree) or self._by_issue.get(worktree.name)
         if queue:
             passed = queue.pop(0)
         elif self._outcomes:
