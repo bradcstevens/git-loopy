@@ -58,6 +58,8 @@ from git_loopy.events import (
     WRAPPER_CHECKPOINT_RECORDED,
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_CONCURRENCY_CHANGED,
+    WRAPPER_CONTRIBUTION_END,
+    WRAPPER_CONTRIBUTION_START,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
@@ -335,6 +337,30 @@ class Renderer:
 
     def _on_iteration_end(self, event: dict[str, Any]) -> None:
         snap = self.summary.on_iteration_end(event)
+        if snap is None:
+            return
+        self.console.print(self.summary.build_iteration_panel(snap))
+
+    def _on_contribution_start(self, event: dict[str, Any]) -> None:
+        """Announce one **Lane contribution** opening (#310).
+
+        The Rolling-dispatch counterpart of the Iteration rule: a contribution
+        is not an Iteration, so it gets its own banner naming the issue and the
+        **Lane** it started in — a Lane slot is reused many times per Run, so
+        the pair is what tells two occupancies apart.
+        """
+        snap = self.summary.on_contribution_start(event)
+        if snap is None:
+            return
+        text = Text()
+        text.append("── ", style=STYLES["panel_rule"])
+        text.append(f"Contribution #{event.get('issue')}", style=STYLES["panel_title"])
+        text.append(f"  •  Lane {event.get('lane_id')}", style=STYLES["meta"])
+        text.append(" ──", style=STYLES["panel_rule"])
+        self.console.print(text)
+
+    def _on_contribution_end(self, event: dict[str, Any]) -> None:
+        snap = self.summary.on_contribution_end(event)
         if snap is None:
             return
         self.console.print(self.summary.build_iteration_panel(snap))
@@ -681,6 +707,8 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_RUN_END: Renderer._on_run_end,
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
+    WRAPPER_CONTRIBUTION_START: Renderer._on_contribution_start,
+    WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,

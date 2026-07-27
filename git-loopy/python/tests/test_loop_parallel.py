@@ -82,6 +82,21 @@ governed, and an operator who turns adaptation off keeps the static-safe
 :func:`test_parallel_narrows_lane_concurrency_under_sustained_rate_limits` and
 :func:`test_parallel_with_adaptation_disabled_never_moves_the_lane_limit`.
 
+**Contribution-centric accounting (#310, #219 §7).** Rolling dispatch has no
+round, so the accounting unit is the **Lane contribution**: each opens and
+closes its own ``wrapper.contribution.start``/``.end`` pair — never the serial
+Iteration pair, which a contribution's null ``iter`` and identity triple
+deliberately exclude it from — and its **Consumption**, timing, and durable
+Run-summary row are its own however many times its **Lane** slot is refilled
+underneath it. See
+:func:`test_parallel_accounts_consumption_per_contribution_end_to_end`. The row
+is cut only at finalization, so work still parked, integrating, or recovering
+has no partial row — see
+:func:`test_parallel_summary_carries_no_row_for_an_in_flight_contribution` — and
+the record carries everything the Dashboard shows, so replaying it rebuilds the
+same Dashboard: see
+:func:`test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard`.
+
 **Per-Lane worktree setup (#65, ADR-0008).** Before a Lane's session starts the
 runner prepares its worktree via the injected
 :class:`~git_loopy.worktree.WorktreeSetup` (``GIT_LOOPY_WORKTREE_SETUP`` or a
@@ -705,10 +720,11 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     This pins that end-to-end — every per-Lane event names its issue.
 
     Under Rolling dispatch (#219, ADR-0020) a Lane contribution has no
-    "round", so it never emits ``wrapper.iteration.start``/``.end`` (that
-    would corrupt the single-slot rollup accumulator if two Lanes were
-    in flight at once) — a known, deliberate scope limitation of #306; this
-    test also pins that gap so a future rollup slice has a clear before/after.
+    "round", so it never emits ``wrapper.iteration.start``/``.end`` — those and
+    their positive ``iter`` belong to serial work. Its accounting boundary is
+    its own ``wrapper.contribution.start``/``.end`` pair, carrying the identity
+    triple and a null ``iter`` so replay never needs a mutable Lane-to-issue
+    lookup (#310).
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -785,11 +801,27 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "skill_consultation": True,
         "cost": True,
     }
-    # No "round" exists under Rolling dispatch, so a Lane contribution never
-    # emits `wrapper.iteration.start`/`.end` (see this test's docstring).
+    # No "round" exists under Rolling dispatch, so the Iteration pair is never
+    # emitted; each contribution opens and closes its own instead (#310), and
+    # every one of those carries the whole identity triple and a null `iter`.
     assert [
-        e for e in events if e["type"] in ("wrapper.iteration.start", "wrapper.iteration.end")
+        e for e in events
+        if e["type"] in ("wrapper.iteration.start", "wrapper.iteration.end")
     ] == []
+    boundaries = [
+        (e["type"], e["issue"], e["lane_id"], e["iter"])
+        for e in events
+        if e["type"].startswith("wrapper.contribution.")
+    ]
+    assert boundaries == [
+        ("wrapper.contribution.start", 42, "L1", None),
+        ("wrapper.contribution.end", 42, "L1", None),
+        ("wrapper.contribution.start", 43, "L2", None),
+        ("wrapper.contribution.end", 43, "L2", None),
+    ]
+    for event in events:
+        if event["type"].startswith("wrapper.contribution."):
+            assert event["contribution_id"]
 
 
 def test_parallel_single_eligible_issue_starts_lane_immediately(
@@ -1759,8 +1791,18 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
     # No serial Iteration ever ran: both Lane sessions already spent the
     # `max_iterations=2` budget, so the run ends via `iteration_cap` before
-    # either fallback's latched serial request could be granted.
+    # either fallback's latched serial request could be granted. The only rows
+    # cut are the two terminal, unpublished Lane contributions' own (#310) —
+    # honestly no-progress, because a Lane's commits are not progress until
+    # Integration publishes them.
     assert [e for e in events if e["type"] == "wrapper.iteration.end"] == []
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert [e["issue"] for e in ends] == [42, 43]
+    assert [e["published"] for e in ends] == [False, False]
+    assert [e["summary"]["closure_outcome"] for e in ends] == [
+        "no_progress", "no_progress"
+    ]
+    assert [e["summary"]["strike_reaction"] for e in ends] == ["+1", "+1"]
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "iteration_cap"
     assert run_end["iterations_run"] == 2
@@ -3429,3 +3471,288 @@ def test_parallel_with_adaptation_disabled_never_moves_the_lane_limit(
     # Disabled costs no telemetry read either: an unobserved controller cannot
     # move, so there is nothing to read *for*.
     assert telemetry.rate_limited_calls == 0
+
+
+def _run_summary(tmp_path: Path) -> dict[str, Any]:
+    """The durable per-Run accounting record (``.git-loopy/runs/*.json``)."""
+    runs_dir = tmp_path / ".git-loopy" / "runs"
+    return json.loads(
+        next(runs_dir.glob("*.json")).read_text(encoding="utf-8")
+    )
+
+
+def test_parallel_accounts_consumption_per_contribution_end_to_end(
+    tmp_path, monkeypatch
+) -> None:
+    """Every **Lane contribution** carries its own Consumption to the record (#310).
+
+    A **Lane** slot is reused many times per Run while a Lane contribution
+    outlives the slot that started it, so accounting keyed by the slot -- or by
+    a single Run-wide "current Iteration" slot -- attributes a contribution's
+    tokens to whichever issue happens to occupy that slot when the numbers are
+    read. Asserts the contribution-centric shape end to end at the two durable
+    seams a replaying reader has: one ``wrapper.iteration.end`` per finalized
+    contribution in the replay JSONL, each naming its own issue and carrying
+    only its own **Consumption**, and the same one row per contribution in the
+    Run summary JSON. Three issues over a cap of two force at least one slot
+    reuse, so a slot-keyed accumulator cannot pass by accident.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=3,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert [e["issue"] for e in ends] == [42, 43, 44], (
+        "one finalized row per Lane contribution, named by its own issue"
+    )
+    lanes = [e["lane_id"] for e in ends]
+    assert len(set(lanes)) < len(lanes), (
+        "non-vacuity: a Lane slot really was reused, so slot-keyed accounting "
+        "could not have passed by accident"
+    )
+    for end in ends:
+        assert [row["issue"] for row in end["issues"]] == [end["issue"]], (
+            "a contribution accounts for its own issue and no sibling's"
+        )
+        assert end["issues"][0]["consumption"] == {
+            "model": "claude-opus-4.8-max",
+            "tokens_in": 100,
+            "tokens_out": 50,
+        }
+        assert end["issues"][0]["status"] == "closed"
+        assert end["summary"]["tokens_in"] == 100
+        assert end["summary"]["commits"] == 1
+        assert end["summary"]["closure_outcome"] == "closed"
+        assert end["published"] is True
+        assert end["reason"] == "published"
+
+    summary = _run_summary(tmp_path)
+    assert [
+        row["issues"][0]["issue"] for row in summary["iterations"]
+    ] == [42, 43, 44]
+    assert [row["tokens_in"] for row in summary["iterations"]] == [100, 100, 100]
+
+
+def test_parallel_summary_carries_no_row_for_an_in_flight_contribution(
+    tmp_path, monkeypatch
+) -> None:
+    """The Summary reports finalized contributions only (#310).
+
+    A contribution's row is cut at the one seam where it is finalized -- the
+    shared Strike reaction -- so a contribution still parked, integrating, or
+    recovering has no partial row to be read as finished. Gating #43's
+    **Integration** open while #42 publishes proves the distinction: at the
+    moment #42's row exists, #43 has started, consumed tokens, and committed,
+    and still contributes no row.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    gate_open = asyncio.Event()
+    rows_when_43_gated: list[Any] = []
+    fake_gate = FakeGateRunner()
+    inner_run = fake_gate.run
+
+    def gated_run(cwd: Path, *args: Any, **kwargs: Any):
+        if cwd.name == "issue-43":
+            rows_when_43_gated.extend(
+                _logged_events(tmp_path)
+            )
+        return inner_run(cwd, *args, **kwargs)
+
+    fake_gate.run = gated_run  # type: ignore[method-assign]
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: fake_gate)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert gate_open is not None
+
+    mid_run_ends = [
+        e for e in rows_when_43_gated if e["type"] == "wrapper.contribution.end"
+    ]
+    assert [e["issue"] for e in mid_run_ends] == [42], (
+        "#43 is mid-Integration and has no Summary row yet, though its session "
+        "has already run, consumed tokens, and committed"
+    )
+    assert any(
+        e["type"] == "wrapper.commit.recorded" and e.get("lane_issue") == 43
+        for e in rows_when_43_gated
+    ), "non-vacuity: #43 really was in flight, not merely un-started"
+
+
+# ---------------------------------------------------------------------------
+# The durable record replays to the same Dashboard (#310)
+# ---------------------------------------------------------------------------
+
+
+class _ObservingDriver:
+    """Attaches a real :class:`LiveRunState` as the Run's sink, then drives.
+
+    The interactive seam (ADR-0001) with the Textual half removed: enough to
+    capture the **Dashboard** a live operator would have watched, so it can be
+    compared against the one a reader rebuilds from the durable record alone.
+    """
+
+    def __init__(self, state: Any) -> None:
+        self.state = state
+
+    def attach_panes(self, *, summary: Any, log_source: Any) -> None:
+        return None
+
+    def attach_detach(self, *, sinks: Any, line_printer: Any, console: Any) -> None:
+        return None
+
+    async def run(self, drive: Callable[[], Any]) -> int:
+        return await drive()
+
+
+def _dashboard_projection(state: Any) -> dict[str, Any]:
+    """The issue-centric Dashboard facts a reader must be able to rebuild."""
+    from git_loopy.interactive.state import issue_detail, queue_rows
+
+    rows = queue_rows(state, now=10_000.0)
+    return {
+        "queue": [
+            (
+                row.ref,
+                row.status,
+                row.active_seconds,
+                row.started_wall,
+                row.closed_wall,
+                row.usage.model,
+                row.usage.tokens_in,
+                row.usage.tokens_out,
+                row.usage_observed,
+                row.iteration_count,
+                row.cost_usd,
+            )
+            for row in rows
+        ],
+        "contributions": {
+            row.ref: [
+                (c.kind, c.lane, c.iteration, c.status, c.outcome, c.active_seconds)
+                for c in issue_detail(state, row.ref).contributions
+            ]
+            for row in rows
+        },
+        "logs": {
+            row.ref: [line.text for line in state.log(row.ref)] for row in rows
+        },
+    }
+
+
+def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
+    tmp_path, monkeypatch
+) -> None:
+    """Persistence round-trips a rolling Run (#310).
+
+    The replay JSONL is the durable record, and a **Lane contribution** is only
+    reconstructible from it if every fact the Dashboard shows about that
+    contribution -- its issue, status, timing, **Consumption**, Cost, and Log --
+    is carried *in the record*, attributed to the contribution rather than to
+    the reusable **Lane** slot. Drives a real rolling Run with a live
+    ``LiveRunState`` attached, then rebuilds a second one from the written log
+    alone and asserts the two agree.
+    """
+    from git_loopy.interactive.state import LiveRunState
+
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    live = LiveRunState()
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=3,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg, driver=_ObservingDriver(live))) == 0
+
+    replayed = LiveRunState()
+    for event in _logged_events(tmp_path):
+        replayed.render(event)
+
+    live_view = _dashboard_projection(live)
+    assert [ref for (ref, *_rest) in live_view["queue"]] == [42, 43, 44]
+    assert all(row[1] == "closed" for row in live_view["queue"])
+    assert [
+        (c[0], c[1], c[2], c[3], c[4])
+        for c in live_view["contributions"][42]
+    ] == [("lane", 42, None, "closed", "closed")]
+    assert _dashboard_projection(replayed) == live_view

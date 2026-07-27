@@ -113,6 +113,13 @@ _CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 _AUTO_CLOSE = "wrapper.auto_close"
 _PR_ADVANCED = "wrapper.pr.advanced"
 _ITERATION_END = "wrapper.iteration.end"
+#: A **Lane contribution**'s own accounting boundary under **Rolling dispatch**
+#: (issue #310). A contribution is not an Iteration — there is no barrier round
+#: — and it outlives the reusable **Lane** slot it started in, so it opens and
+#: closes its own scope rather than sharing the round's. Both carry the
+#: contribution identity triple and a null ``iter``.
+_CONTRIBUTION_START = "wrapper.contribution.start"
+_CONTRIBUTION_END = "wrapper.contribution.end"
 # The agent's final assistant message — a fallback marker source for when
 # streaming deltas are unavailable (the live path taps ``stream_message``).
 _ASSISTANT_MESSAGE = "assistant.message"
@@ -445,6 +452,15 @@ class LiveRunState:
         #: at Wave end uses its *own* progress, not the serial single-active
         #: counter. Reset per Wave.
         self._lane_commits: dict[int | str, int] = {}
+        #: **Lane contributions** with an accounting scope currently open
+        #: (issue #310), keyed by issue ref. Under **Rolling dispatch** a
+        #: contribution owns its own ``wrapper.contribution.start``/``.end``
+        #: pair because it outlives the reusable **Lane** slot it started in, so
+        #: another contribution's boundary — or an interleaved serial
+        #: Iteration's — must never reconcile or reset it. Empty for a serial
+        #: Run and for a replayed Wave-era log, where the round owned the only
+        #: boundary, so both paths are unchanged.
+        self._open_contributions: set[int | str] = set()
 
     # -- EventSink protocol -------------------------------------------------
 
@@ -505,6 +521,26 @@ class LiveRunState:
             return
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
+            return
+        # Contribution-scoped accounting boundaries (issue #310). Under
+        # **Rolling dispatch** there is no round: each **Lane contribution**
+        # opens and closes its own pair, so these must touch that
+        # contribution's scratch and no sibling's. The serial Iteration's
+        # `wrapper.iteration.*` pair — and a Wave-era round's — is handled
+        # below, unchanged.
+        if etype == _CONTRIBUTION_START:
+            issue = event.get("issue")
+            if issue is None:
+                return
+            self._mark_started()
+            self.status = _STATUS_RUNNING
+            self._begin_contribution(self._normalize_ref(issue), now)
+            return
+        if etype == _CONTRIBUTION_END:
+            issue = event.get("issue")
+            if issue is None:
+                return
+            self._finalize_contribution(self._normalize_ref(issue), event, now)
             return
         if etype == _RUN_START:
             self._mark_started()
@@ -1161,6 +1197,64 @@ class LiveRunState:
         self._lane_commits = {}
         self._iter_lane_refs = set()
 
+    def _begin_contribution(self, key: int | str, now: float) -> None:
+        """Open one **Lane contribution**'s scope on the Dashboard (#310).
+
+        The contribution-scoped counterpart of :meth:`_begin_iteration`. Under
+        **Rolling dispatch** a **Lane** slot is reused many times per Run, so
+        an arriving contribution's boundary lands while earlier ones are still
+        working: it may only clear *its own* streaming and commit scratch, and
+        may never park an active issue or reset the serial per-Iteration
+        counters the way a round boundary does. It also opens the contribution
+        on the **Queue** immediately, so work is visible from the moment it
+        starts rather than from its first piece of output.
+        """
+        self._open_contributions.add(key)
+        self._lane_streams.pop(key, None)
+        self._lane_commits.pop(key, None)
+        self._lane_touch(key, now)
+
+    def _finalize_contribution(
+        self, key: int | str, event: Mapping[str, Any], now: float
+    ) -> None:
+        """Reconcile one **Lane contribution** at its own end (#310).
+
+        The contribution-scoped counterpart of :meth:`_finalize_iteration`,
+        narrowed to the one issue that finished: a sibling contribution still
+        running keeps its timer, its status, and its open streamed line, and a
+        **Lane** slot that has already been refilled by a later contribution is
+        never touched at all.
+
+        ``wrapper.contribution.end`` is the authoritative finalized row, so its
+        payload — not the Dashboard's own live tally — is what the contribution
+        is recorded as having consumed and achieved. Reading it through the
+        same :meth:`_record_normalized_contributions` a serial Iteration's end
+        uses is deliberate (ADR-0019): two readings of one normalized row are
+        how two answers to one question start to drift. Recording it only here
+        is what keeps the **Summary** finalized-only — a contribution still
+        working, parked, integrating or recovering has emitted no end, so it
+        contributes no row.
+        """
+        self._open_contributions.discard(key)
+        lane_stream = self._lane_streams.get(key)
+        if lane_stream is not None:
+            self._flush(lane_stream, self._lane_provider(key))
+        entry = self.ledger.get(key)
+        if entry is not None and entry.active_since is not None:
+            entry.active_duration += max(0.0, now - entry.active_since)
+            entry.active_since = None
+        summary = event.get("summary")
+        summary = summary if isinstance(summary, Mapping) else {}
+        self._record_normalized_contributions(
+            {
+                "iter": None,
+                "outcome": summary.get("closure_outcome"),
+                "duration_seconds": summary.get("lifecycle_seconds"),
+                "issues": event.get("issues"),
+            },
+            lane_keys={key},
+        )
+
     def _record_pool(self, issues: Any, now: float) -> None:
         """Fold one ``afk_ready.collected`` pool into the ledger.
 
@@ -1325,6 +1419,11 @@ class LiveRunState:
         for key, entry in list(self.ledger.items()):
             if entry.status != STATUS_ACTIVE or entry.active_since is None:
                 continue
+            if key in self._open_contributions:
+                # Rolling dispatch (#310): this **Lane contribution** owns its
+                # own boundary and has not reached it. A round's — or an
+                # interleaved serial Iteration's — end is not its end.
+                continue
             lane_stream = self._lane_streams.get(key)
             if lane_stream is not None:
                 self._flush(lane_stream, self._lane_provider(key))
@@ -1339,8 +1438,19 @@ class LiveRunState:
         self._iter_commits = 0
         self._iter_strike = False
 
-    def _record_normalized_contributions(self, event: Mapping[str, Any]) -> None:
-        """Project authoritative finalized issue rows from Iteration end."""
+    def _record_normalized_contributions(
+        self,
+        event: Mapping[str, Any],
+        *,
+        lane_keys: set[int | str] | None = None,
+    ) -> None:
+        """Project authoritative finalized issue rows from a scope's end.
+
+        ``lane_keys`` names the refs this row is known to be a **Lane
+        contribution** for (#310). A serial Iteration's end leaves it ``None``
+        and falls back to the per-Iteration Lane refs a Wave-era round
+        accumulated, so historical logs still read their Lanes as Lanes.
+        """
         issues = event.get("issues")
         if not isinstance(issues, list):
             return
@@ -1385,7 +1495,11 @@ class LiveRunState:
                     )
             cost = payload.get("cost_usd")
             cost_usd = float(cost) if isinstance(cost, (int, float)) else None
-            is_lane = key in self._iter_lane_refs
+            is_lane = (
+                key in lane_keys
+                if lane_keys is not None
+                else key in self._iter_lane_refs
+            )
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
                 iteration=None if is_lane else iter_num,

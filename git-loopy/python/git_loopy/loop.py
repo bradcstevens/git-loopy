@@ -126,6 +126,7 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
+from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, resolve_iteration_model
@@ -1295,6 +1296,36 @@ class _LaneWork:
 
 
 @dataclass
+class _ContributionAccounting:
+    """One open **Lane contribution**'s accounting scope (#310).
+
+    Keyed by ``contribution_id`` — never ``lane_id`` — for the same reason
+    :class:`_LaneWork` is: a contribution outlives the reusable **Lane** slot
+    it started in, so a slot-keyed row would be handed to whichever issue
+    refilled that slot. Held here rather than on :class:`_LaneWork` because
+    Lane state is released the moment the contribution is admitted to
+    **Integration**, while its accounting stays open until the contribution
+    finalizes and its Summary row is cut.
+
+    Attributes:
+        iter_num: The scope number the Lane's agent session and the durable
+            Run summary row share.
+        started_monotonic: When the contribution opened — the base for
+            ``lifecycle_seconds``.
+        agent_seconds: Time spent in the Lane's own agent session, which is a
+            different quantity from the whole lifecycle: a contribution can
+            wait behind the single Integrator long after its agent is done.
+        recovery_attempts: Bounded auto-resolution **agent sessions** this
+            contribution consumed during Integration.
+    """
+
+    iter_num: int
+    started_monotonic: float
+    agent_seconds: float = 0.0
+    recovery_attempts: int = 0
+
+
+@dataclass
 class _IntegrationStage:
     """The **private** worktree one Lane contribution is integrated in.
 
@@ -1473,6 +1504,12 @@ class _ParallelLoop:
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
         self._lane_work: dict[str, _LaneWork] = {}
+        # The accounting-scope number each open **Lane contribution** was
+        # opened with (#310), keyed the same way and for the same reason: a
+        # contribution's Consumption, timing, and Summary row belong to the
+        # issue that produced them, not to whichever issue its Lane slot went
+        # on to work. Popped when the contribution's row is cut.
+        self._contribution_iter: dict[str, _ContributionAccounting] = {}
         # Serializes Integration (merge / gate / land / auto-resolve) across
         # concurrently-admitted contributions, so the shared main worktree
         # never sees two merges at once — without blocking any OTHER Lane's
@@ -2024,6 +2061,7 @@ class _ParallelLoop:
             reservation, model=model, reasoning_effort=reasoning_effort
         )
         self._lane_work[contribution.contribution_id] = lane_work
+        self._open_contribution_accounting(contribution)
 
         lane_binding = self._serial._new_active_issue_binding(
             None, allowed_refs=(ref,), lane_issue=ref
@@ -2063,7 +2101,7 @@ class _ParallelLoop:
         )
         if disposition == rolling_scheduler.TERMINAL:
             self._lane_work.pop(contribution.contribution_id, None)
-            self._apply_strike_reaction(contribution)
+            self._finalize_contribution(contribution, published=False)
             return
         if disposition == rolling_scheduler.ADMITTED:
             # §3.9: the Lane slot is free again *now*, while this task carries
@@ -2131,24 +2169,22 @@ class _ParallelLoop:
             f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
         )
         send_timeout = self._config.send_timeout_seconds
+        scope = self._contribution_iter.get(contribution.contribution_id)
+        agent_started = time.monotonic()
         try:
-            # Deliberately no `event_observer=self._rollup`: unlike the serial
-            # `_Loop` (which feeds every `IterationSession` into the single
-            # `IterationRollupAccumulator` "current iteration" slot), Lane
-            # sessions run concurrently and would corrupt that single slot.
-            # Known, documented gap (#219/#306): Lane-derived token/cost usage
-            # never reaches the Run summary's per-iteration rollup or a
-            # `wrapper.iteration.end` event -- Lane contributions never emit
-            # `wrapper.iteration.start`/`.end` at all. Commits, auto-closures,
-            # and Strike accounting for Lane work are still fully tracked
-            # (`wrapper.commit.recorded`, `wrapper.auto_close`,
-            # `wrapper.strike` via `_apply_strike_reaction`) -- only the
-            # summary-table cost/token rollup is not.
+            # `self._serial._session_observer` chains the rollup with the
+            # Run-scoped `_cost_meter`. Feeding the rollup used to be unsafe
+            # here — it held ONE "current Iteration" slot that concurrent Lane
+            # sessions would have corrupted, so Lane Consumption reached
+            # neither the Summary nor the durable Run summary (#219/#306). It
+            # now holds one scope per **Lane contribution**, keyed by the
+            # `lane_issue` every event this session records is stamped with
+            # (#310), so each Lane's tokens land in its own contribution's row
+            # however many other Lanes are running.
             #
-            # The Run-scoped `_cost_meter` IS safe here and does go on (#309):
-            # it holds no per-Iteration slot to corrupt, only a running total,
-            # which is exactly the quantity AI-credit pressure is judged
-            # against. Without it a Parallel Run could never price itself and
+            # The Run-scoped `_cost_meter` half is what AI-credit pressure is
+            # judged against (#309): it holds no per-scope slot, only a running
+            # total, so without it a Parallel Run could never price itself and
             # credit pressure would stay permanently unknown.
             async with IterationSession(
                 self._client,
@@ -2156,13 +2192,13 @@ class _ParallelLoop:
                 event_log=self._writers.event_log,
                 sinks=self._sinks,
                 run_id=self._run_id,
-                iter_num=self._alloc_iter_num(),
+                iter_num=scope.iter_num if scope is not None else 0,
                 model=contribution.model,
                 reasoning_effort=contribution.reasoning_effort,
                 working_directory=str(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
-                event_observer=self._cost_meter,
+                event_observer=self._serial._session_observer,
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
@@ -2185,6 +2221,8 @@ class _ParallelLoop:
                 "lane #%s IterationSession lifecycle failed: %s: %s",
                 lane_work.item.ref, type(exc).__name__, exc,
             )
+        if scope is not None:
+            scope.agent_seconds += max(0.0, time.monotonic() - agent_started)
 
     def _account_lane(
         self,
@@ -2312,13 +2350,136 @@ class _ParallelLoop:
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
-            self._apply_strike_reaction(contribution)
+            self._finalize_contribution(contribution, published=published)
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
         # released the Lane that contribution had been retaining (§4.3).
         self._capacity_freed.set()
         for admitted in newly_admitted:
             await self._integrate_contribution(admitted)
+
+    def _open_contribution_accounting(
+        self, contribution: rolling_scheduler.Contribution
+    ) -> None:
+        """Open one **Lane contribution**'s own accounting scope (#310).
+
+        Rolling dispatch has no round, so there is no round boundary to hang
+        accounting off: several contributions are open at once and each
+        outlives the reusable **Lane** slot it started in. Each therefore opens
+        its own scope, announced by a ``wrapper.contribution.start`` carrying
+        the identity triple, so the rollup, the Dashboard, and a replaying
+        reader all attribute this contribution's **Consumption** and timing to
+        the issue that produced them rather than to whichever issue occupies
+        that slot by the time the row is cut.
+
+        Deliberately *not* a ``wrapper.iteration.start``: a contribution is not
+        an Iteration (no barrier round), and the Wrapper contract reserves the
+        Iteration pair — and its positive ``iter`` — for serial work.
+        """
+        self._contribution_iter[contribution.contribution_id] = (
+            _ContributionAccounting(
+                iter_num=self._alloc_iter_num(),
+                started_monotonic=time.monotonic(),
+            )
+        )
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_CONTRIBUTION_START
+        )
+
+    def _emit_contribution_event(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        event_type: str,
+        **payload: Any,
+    ) -> None:
+        """Dispatch one contribution-scoped lifecycle Event.
+
+        Routed through
+        :func:`~git_loopy.events.make_contribution_event`, which is the only
+        way a Parallel-mode record acquires its identity: it stamps the whole
+        triple and forces ``iter`` to ``null``, so replay never needs a mutable
+        Lane-to-issue lookup and never mistakes a contribution for an
+        Iteration.
+        """
+        self._serial._emitter.dispatch(
+            events_module.make_contribution_event(
+                event_type,
+                self._run_id,
+                contribution_id=contribution.contribution_id,
+                issue=contribution.ref,
+                lane_id=contribution.lane_id,
+                **payload,
+            )
+        )
+
+    def _finalize_contribution(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        *,
+        published: bool,
+    ) -> None:
+        """Close one finalized **Lane contribution**: Strike reaction + row.
+
+        The single seam a contribution finishes at, whether that is a
+        ``TERMINAL`` disposition straight out of
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work` or a
+        post-Integration
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finalize`. Cutting
+        the **Summary** row here — and only here — is what keeps the Summary
+        finalized-contributions-only (#310): a contribution still parked,
+        integrating, or in bounded auto-resolution has no partial row for a
+        reader to mistake for a finished one, and the recovery sessions it may
+        still run are folded into the row when it does finish.
+
+        ``published`` is the contribution's own progress test. A Lane's commits
+        sit on a Lane branch until **Integration** publishes them, so an
+        unpublished contribution is honestly *no-progress* however much it
+        committed; only a published one is progress (``advanced``, or
+        ``closed`` once its ``wrapper.auto_close`` lands).
+        """
+        self._apply_strike_reaction(contribution)
+        scope = self._contribution_iter.pop(contribution.contribution_id, None)
+        if scope is None:  # pragma: no cover - defensive
+            return
+        try:
+            rollup = self._serial._rollup.finish(
+                iter_num=scope.iter_num,
+                strikes=self._serial._strike_machine.strikes,
+                advanced_issues=(contribution.ref,) if published else (),
+                lane_issue=contribution.ref,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self._diag.warning(
+                "contribution #%s accounting rollup failed: %s",
+                contribution.ref, exc,
+            )
+            return
+        self._emit_contribution_event(
+            contribution,
+            events_module.WRAPPER_CONTRIBUTION_END,
+            **rollup_module.contribution_end_payload(
+                rollup,
+                published=published,
+                reason=contribution.reason or rolling_scheduler.REASON_UNCHANGED_BRANCH,
+                strike_reaction=(
+                    contribution.strike_reaction or rolling_scheduler.STRIKE_ADD
+                ),
+                reasoning_effort=contribution.reasoning_effort,
+                recovery_attempts=scope.recovery_attempts,
+                agent_seconds=scope.agent_seconds,
+            ),
+        )
+        try:
+            self._serial._writers.run_summary.record(
+                IterationCounters.from_rollup(
+                    iter_num=scope.iter_num, payload=rollup
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self._diag.warning(
+                "RunSummaryWriter.record failed for contribution #%s: %s",
+                contribution.ref, exc,
+            )
 
     def _apply_strike_reaction(
         self, contribution: rolling_scheduler.Contribution
@@ -2631,6 +2792,9 @@ class _ParallelLoop:
         """
         ref = contribution.ref
         for attempt in range(1, _AUTO_RESOLUTION_MAX_ATTEMPTS + 1):
+            scope = self._contribution_iter.get(contribution.contribution_id)
+            if scope is not None:
+                scope.recovery_attempts = attempt
             await self._run_resolution_session(
                 contribution, lane_work, stage, attempt, conflicted=conflicted
             )

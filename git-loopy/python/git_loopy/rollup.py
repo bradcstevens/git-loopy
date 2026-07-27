@@ -9,9 +9,10 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 from git_loopy.pricing import Pricing
 from git_loopy.usage import UsageTally
 
-__all__ = ["IterationRollupAccumulator"]
+__all__ = ["IterationRollupAccumulator", "contribution_end_payload"]
 
 _ITERATION_START = "wrapper.iteration.start"
+_CONTRIBUTION_START = "wrapper.contribution.start"
 _ISSUE_ACTIVATED = "wrapper.issue.activated"
 _USAGE_TOKENS = "usage.tokens"
 _USAGE_CONTEXT_WINDOW = "usage.context_window"
@@ -57,7 +58,23 @@ class _Iteration:
 
 
 class IterationRollupAccumulator:
-    """Fold raw Events into one normalized Iteration-end payload."""
+    """Fold raw Events into one normalized accounting-scope-end payload.
+
+    A **scope** is one accounting unit: a serial **Iteration** (key ``None``,
+    opened by ``wrapper.iteration.start``) or one parallel **Lane
+    contribution** (keyed by its issue ref, opened by
+    ``wrapper.contribution.start``). Under **Rolling dispatch** (#219, #310)
+    several contributions are open at once and a contribution outlives the
+    reusable **Lane** slot that started it, so a single "current Iteration"
+    slot would hand whichever scope closed first the Consumption every other
+    one had spent.
+
+    Wave-era logs still replay: a Lane-stamped event with no scope of its own
+    open falls back to the enclosing serial scope, which is exactly the shape a
+    round-scoped Wave wrote (one ``wrapper.iteration.start`` for the round, then
+    every Lane's events inside it). A historical trace carries ``lane_issue``
+    and no contribution identity, and is never reinterpreted as a contribution.
+    """
 
     def __init__(
         self,
@@ -67,19 +84,28 @@ class IterationRollupAccumulator:
     ) -> None:
         self._pricing = pricing
         self._monotonic = monotonic
-        self._current: _Iteration | None = None
+        self._open: dict[int | str | None, _Iteration] = {}
         self._cumulative_active: dict[int | str, float] = {}
         self._first_started: dict[int | str, tuple[str, float]] = {}
 
     def observe(self, event: Mapping[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == _ITERATION_START:
-            self._current = _Iteration(
+            self._open[None] = _Iteration(
                 iter_num=int(event.get("iter", 0) or 0),
                 started_monotonic=self._monotonic(),
             )
             return
-        current = self._current
+        if event_type == _CONTRIBUTION_START:
+            issue = event.get("issue")
+            if issue is None:
+                return
+            self._open[issue] = _Iteration(
+                iter_num=0,
+                started_monotonic=self._monotonic(),
+            )
+            return
+        current = self._scope(event)
         if current is None:
             return
         if event_type == _ISSUE_ACTIVATED:
@@ -116,7 +142,7 @@ class IterationRollupAccumulator:
             current.pending_peak_context_window = None
             current.active_issue = issue
             return
-        contribution = self._attributed_contribution(event)
+        contribution = self._attributed_contribution(current, event)
         if event_type == _TOOL_CALL:
             tool_name = str(event.get("tool_name") or "")
             current.tool_count += 1
@@ -180,9 +206,18 @@ class IterationRollupAccumulator:
         strikes: int,
         outcome: str | None = None,
         advanced_issues: Iterable[int | str] = (),
+        lane_issue: int | str | None = None,
     ) -> dict[str, Any]:
-        current = self._current
-        if current is None or current.iter_num != iter_num:
+        """Close one accounting scope and return its normalized payload.
+
+        ``lane_issue`` names the **Lane contribution**'s scope to close; the
+        default ``None`` closes the serial **Iteration**'s. A contribution
+        carries no Iteration number (``iter`` is ``null`` on every
+        contribution-scoped Event), so only the serial scope is checked
+        against ``iter_num``.
+        """
+        current = self._open.get(lane_issue)
+        if current is None or (lane_issue is None and current.iter_num != iter_num):
             raise ValueError(f"no active Iteration {iter_num}")
         for issue in advanced_issues:
             contribution = current.contributions.get(issue)
@@ -232,15 +267,25 @@ class IterationRollupAccumulator:
             },
             "issues": issues,
         }
-        self._current = None
+        del self._open[lane_issue]
         return payload
 
+    def _scope(self, event: Mapping[str, Any]) -> _Iteration | None:
+        """Resolve the accounting scope one raw Event belongs to.
+
+        A Lane-stamped Event belongs to its own **Lane contribution**'s scope
+        when one is open. When none is, it falls back to the enclosing serial
+        scope — the shape a round-scoped Wave-era log has, where the round
+        opened the only scope and every Lane folded into it.
+        """
+        lane_issue = event.get("lane_issue")
+        if lane_issue is not None and lane_issue in self._open:
+            return self._open[lane_issue]
+        return self._open.get(None)
+
     def _attributed_contribution(
-        self, event: Mapping[str, Any]
+        self, current: _Iteration, event: Mapping[str, Any]
     ) -> _IssueContribution | None:
-        current = self._current
-        if current is None:
-            return None
         issue = event.get("lane_issue", current.active_issue)
         return current.contributions.get(issue)
 
@@ -293,6 +338,70 @@ class IterationRollupAccumulator:
             "cost_usd": _cost_value(contribution.usage, self._pricing),
             "peak_context_window": contribution.peak_context_window,
         }
+
+
+def contribution_end_payload(
+    rollup: Mapping[str, Any],
+    *,
+    published: bool,
+    reason: str,
+    strike_reaction: str,
+    reasoning_effort: str | None,
+    recovery_attempts: int,
+    agent_seconds: float,
+) -> dict[str, Any]:
+    """Project one closed contribution scope into its ``wrapper.contribution.end``.
+
+    The authoritative finalized Parallel row (#219 §7, ADR-0020): the same
+    normalized scope the durable Run summary records, restated in the
+    contribution vocabulary the Wrapper contract pins — ``published`` and its
+    ``reason`` from the scheduler's terminal disposition, the **Strike**
+    transition it caused, and one ``summary`` whose Consumption, commits and
+    closures are the contribution's own.
+
+    ``lifecycle_seconds`` is the whole contribution — dispatch through
+    **Integration** and any bounded auto-resolution — while ``agent_seconds``
+    is only the Lane's own agent session, so an operator can tell a slow agent
+    from a long queue behind the Integrator.
+    """
+    summary = rollup.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    return {
+        "published": published,
+        "reason": reason,
+        "summary": {
+            "model": summary.get("model"),
+            "effort": reasoning_effort,
+            "tokens_in": _nonnegative_int(summary.get("tokens_in")),
+            "tokens_out": _nonnegative_int(summary.get("tokens_out")),
+            "observed_tokens": _nonnegative_int(summary.get("observed_tokens")),
+            "cost_usd": summary.get("cost_usd"),
+            "commits": _nonnegative_int(summary.get("commits")),
+            "closures": _nonnegative_int(summary.get("auto_closures")),
+            "closure_outcome": rollup.get("outcome"),
+            "recovery_attempts": _nonnegative_int(recovery_attempts),
+            "agent_seconds": max(0.0, float(agent_seconds)),
+            "lifecycle_seconds": max(
+                0.0, float(rollup.get("duration_seconds") or 0.0)
+            ),
+            "peak_context_window": summary.get("peak_context_window"),
+            "strike_reaction": strike_reaction,
+            # Beyond the contract's required set, and deliberately: the
+            # **Summary**'s skill-adoption line and tool tally are per-scope
+            # facts the serial Iteration row already carries, and a Parallel
+            # Run that dropped them would report adoption as zero rather than
+            # as unmeasured.
+            "tool_count": _nonnegative_int(summary.get("tool_count")),
+            "skill_call_count": _nonnegative_int(summary.get("skill_call_count")),
+            "skills_consulted": list(summary.get("skills_consulted") or ()),
+        },
+        # The issue-lifecycle half of the row, in the same normalized shape a
+        # serial ``wrapper.iteration.end`` carries: ``summary`` says what this
+        # contribution cost, ``issues`` says what happened to the issue it
+        # owns — when it was first started, whether and when it closed, and
+        # how much active time it has accumulated across the whole Run.
+        "issues": [dict(row) for row in (rollup.get("issues") or ())],
+    }
 
 
 def _nonnegative_int(value: Any) -> int:

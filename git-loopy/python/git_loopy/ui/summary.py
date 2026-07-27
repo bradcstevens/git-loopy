@@ -329,8 +329,130 @@ class RunSummary:
     pricing_date: Optional[str] = None
     current: Optional[IterationSnapshot] = None
     completed: list[IterationSnapshot] = field(default_factory=list)
+    #: Open **Lane contribution** snapshots, keyed by ``contribution_id``
+    #: (issue #310). Under **Rolling dispatch** several are open at once and
+    #: each outlives the reusable **Lane** slot it started in, so a single
+    #: :attr:`current` slot would hand whichever contribution finished first
+    #: every other one's row. Empty for a serial Run.
+    open_contributions: dict[str, IterationSnapshot] = field(default_factory=dict)
 
     # -- iteration lifecycle ------------------------------------------------
+
+    def on_contribution_start(
+        self, event: Mapping[str, Any]
+    ) -> Optional[IterationSnapshot]:
+        """Open one **Lane contribution**'s snapshot (#310).
+
+        Keyed by ``contribution_id`` and kept out of :attr:`current`, which
+        stays the serial Iteration's: a Parallel-mode Run interleaves serial
+        Iterations with Lane work, and neither may reap the other's row.
+        """
+        contribution_id = event.get("contribution_id")
+        if not isinstance(contribution_id, str) or not contribution_id:
+            return None
+        issue = event.get("issue")
+        snap = IterationSnapshot(
+            # A contribution is not an Iteration and carries a null ``iter``,
+            # so the Summary numbers its rows in the order work started. The
+            # row is identified by its issue; the ordinal only keeps a mixed
+            # Run's rows in a stable, readable order.
+            iter_num=len(self.completed) + len(self.open_contributions) + 1,
+            issue_num=issue if isinstance(issue, int) else None,
+            started_at=datetime.now(timezone.utc),
+        )
+        self.open_contributions[contribution_id] = snap
+        return snap
+
+    def on_contribution_end(
+        self, event: Mapping[str, Any]
+    ) -> Optional[IterationSnapshot]:
+        """Close one finalized **Lane contribution** into :attr:`completed`.
+
+        ``wrapper.contribution.end`` is the authoritative finalized Parallel
+        row, so a contribution reaches the Summary here and only here — one
+        still working, parked, integrating or recovering has emitted no end and
+        therefore has no partial row. Returns ``None`` for an end whose start
+        was never seen (a mid-Run attach), which must not crash the render.
+        """
+        contribution_id = event.get("contribution_id")
+        snap = (
+            self.open_contributions.pop(contribution_id, None)
+            if isinstance(contribution_id, str)
+            else None
+        )
+        if snap is None:
+            return None
+        self._apply_contribution(snap, event)
+        snap.ended_at = datetime.now(timezone.utc)
+        self.completed.append(snap)
+        return snap
+
+    @staticmethod
+    def _apply_contribution(
+        snap: IterationSnapshot, event: Mapping[str, Any]
+    ) -> None:
+        """Project a contribution's authoritative row onto its snapshot.
+
+        The contribution vocabulary and the Iteration vocabulary name the same
+        quantities differently — ``closures`` for ``auto_closures``,
+        ``lifecycle_seconds`` for ``duration_seconds``, ``closure_outcome`` for
+        ``outcome`` — because a contribution's row answers "what did this piece
+        of work cost and achieve", not "what happened this round".
+        """
+        summary = event.get("summary")
+        if not isinstance(summary, Mapping):
+            return
+        unavailable = frozenset(
+            key
+            for key in (
+                "model",
+                "tokens_in",
+                "tokens_out",
+                "observed_tokens",
+                "cost_usd",
+                "tool_count",
+                "skill_call_count",
+                "skills_consulted",
+                "peak_context_window",
+            )
+            if summary.get(key, 0) is None
+        )
+        snap.unavailable_measurements = unavailable
+        model = summary.get("model")
+        snap.usage = UsageTally(
+            model=model if isinstance(model, str) else None,
+            tokens_in=_rollup_int(summary.get("tokens_in")),
+            tokens_out=_rollup_int(summary.get("tokens_out")),
+        )
+        snap.normalized_duration_seconds = _rollup_float(
+            summary.get("lifecycle_seconds")
+        )
+        observed_tokens = summary.get("observed_tokens")
+        snap.normalized_observed_tokens = (
+            None if observed_tokens is None else _rollup_int(observed_tokens)
+        )
+        cost = summary.get("cost_usd")
+        snap.normalized_cost_usd = (
+            Decimal(str(cost)) if cost is not None else None
+        )
+        snap.has_normalized_rollup = True
+        snap.tool_count = _rollup_int(summary.get("tool_count"))
+        snap.skill_count = _rollup_int(summary.get("skill_call_count"))
+        snap.skills_consulted = {
+            str(skill) for skill in (summary.get("skills_consulted") or ())
+        }
+        snap.commits = _rollup_int(summary.get("commits"))
+        snap.auto_closures = _rollup_int(summary.get("closures"))
+        outcome = summary.get("closure_outcome")
+        snap.outcome = str(outcome) if isinstance(outcome, str) else "no_progress"
+        peak = summary.get("peak_context_window")
+        snap.peak_context_window = (
+            dict(peak) if isinstance(peak, Mapping) else None
+        )
+        issue = event.get("issue")
+        snap.issues = (
+            {"issue": issue, "status": snap.outcome},
+        ) if issue is not None else ()
 
     def on_iteration_start(
         self, *, iter_num: int, issue_num: Optional[int] = None
