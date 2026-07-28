@@ -1016,6 +1016,57 @@ function Assert-GitLoopySkillPolicySupported {
     return $false
 }
 
+function Assert-GitLoopyParallelSupported {
+    <#
+    .SYNOPSIS
+    Refuse a Lane cap this distribution cannot honour.
+
+    .DESCRIPTION
+    A silently ignored cap is indistinguishable from a Run whose tracker
+    carries no `parallel-safe` issue, so the operator learns nothing from
+    either. The manifest in GitLoopy.Events.psm1 is the single source of the
+    answer, so flipping a capability there flips this refusal with it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Environment
+    )
+
+    $Requested = [string]$Environment["GIT_LOOPY_MAX_PARALLEL"]
+    if ([string]::IsNullOrEmpty($Requested)) {
+        return $true
+    }
+    [int]$LaneCap = 0
+    if (-not [int]::TryParse($Requested, [ref]$LaneCap) -or $LaneCap -lt 0) {
+        [Console]::Error.WriteLine(
+            "git-loopy: GIT_LOOPY_MAX_PARALLEL must be a non-negative " +
+            "integer (got '$Requested')."
+        )
+        return $false
+    }
+    if ($LaneCap -le 1) {
+        return $true
+    }
+    if ((Get-GitLoopyParallelCapabilities)["parallel_mode"]) {
+        return $true
+    }
+    [Console]::Error.WriteLine(
+        "git-loopy: a Lane cap of $LaneCap was requested, but the PowerShell " +
+        "Orchestrator declares parallel_mode unsupported."
+    )
+    [Console]::Error.WriteLine(
+        "git-loopy: this distribution has no Rolling dispatch scheduler, so " +
+        "it cannot fill a second Lane."
+    )
+    [Console]::Error.WriteLine(
+        "git-loopy: unset GIT_LOOPY_MAX_PARALLEL or set it to 1 to run " +
+        "serially, or use a distribution whose " +
+        "parallel_capabilities.parallel_mode is true."
+    )
+    return $false
+}
+
 function Invoke-GitLoopyPreflight {
     [CmdletBinding()]
     param(
@@ -1063,6 +1114,10 @@ function Invoke-GitLoopyPreflight {
         [Console]::Error.WriteLine(
             "git-loopy: copilot is required on PATH."
         )
+        return $null
+    }
+
+    if (-not (Assert-GitLoopyParallelSupported -Environment $Environment)) {
         return $null
     }
 
@@ -2840,6 +2895,7 @@ function Invoke-GitLoopyDiscoveryLoop {
             max_iterations = $Config.MaxIterations
             max_nmt_strikes = $Config.MaxNmtStrikes
             model = $Config.Model
+            parallel_capabilities = Get-GitLoopyParallelCapabilities
             prompt_path = $Preflight.PromptPath
             release_version = $ReleaseVersion
             reasoning_effort = $Config.ReasoningEffort
@@ -3212,6 +3268,7 @@ Export-ModuleMember -Function @(
     "Test-GitLoopyConfigDeclaresEnabledSkills",
     "Get-GitLoopySkillPolicySurfaces",
     "Assert-GitLoopySkillPolicySupported",
+    "Assert-GitLoopyParallelSupported",
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyAfkReadyExclusion",
     "Get-GitLoopyExitCode",

@@ -45,6 +45,78 @@ jq -e \
     and .insight_capabilities.orchestrators.shell == $capabilities
   ' "$fixture" >/dev/null ||
   fail "shell Insight capability manifest drifted from event-schema.json"
+
+# #311 AC3: Parallel mode is declared, never inferred from silence. This port
+# has no scheduler, so `parallel_mode` is false -- and a port that cannot fill a
+# second Lane cannot honour refill, backlog, adaptation, or the contribution
+# stream either, so the whole manifest must be false with it.
+jq -e \
+  --argjson capabilities "$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON" \
+  '
+    .parallel_capabilities.orchestrators.shell == $capabilities
+    and ($capabilities | keys_unsorted) == .parallel_capabilities.names
+    and all($capabilities[]; type == "boolean")
+    and (
+      $capabilities.parallel_mode
+      or all($capabilities[]; . == false)
+    )
+  ' "$fixture" >/dev/null ||
+  fail "shell parallel capability manifest drifted from event-schema.json"
+
+# The manifest is a claim about this port's own code, so read the code. A
+# distribution declaring `contribution_events: false` must name no producer for
+# the Lane-contribution lifecycle literals: advertising a stream no replay can
+# contain is exactly the drift the fixture cannot catch by itself.
+if [[ "$(jq -r '.contribution_events' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON")" == "false" ]]; then
+  while IFS= read -r lifecycle_key; do
+    if grep -rqE "GIT_LOOPY_EVENT_TYPES\[$lifecycle_key\]" "$port_dir/lib" "$port_dir/git-loopy.sh"; then
+      fail "contribution_events is declared false but $lifecycle_key has a producer"
+    fi
+  done < <(
+    jq -r '
+      .contribution_identity.lifecycle_types[] as $literal
+      | (.event_types | to_entries[] | select(.value == $literal) | .key)
+    ' "$fixture"
+  )
+fi
+
+# A refusal an operator can act on, instead of a Lane cap accepted and ignored.
+# Without this the flag is a silent no-op: the Run is byte-identical to a serial
+# Run, so "Parallel mode is unimplemented here" and "nothing carries
+# parallel-safe" look the same from the operator's seat.
+(
+  GIT_LOOPY_MAX_PARALLEL=3
+  refusal="$(git_loopy_assert_parallel_supported 2>&1)" && {
+    printf 'FAIL: a Lane cap above 1 must be refused, not accepted\n' >&2
+    exit 1
+  }
+  [[ "$refusal" == *"parallel_mode"* && "$refusal" == *"shell"* ]] || {
+    printf 'FAIL: refusal must name the capability and the distribution\n' >&2
+    printf 'actual: %s\n' "$refusal" >&2
+    exit 1
+  }
+) || exit 1
+# A cap that bash arithmetic would misread must still be refused: a
+# leading-zero literal is octal to `(( ))`, and a value wider than 64 bits
+# wraps. Either would turn an arithmetic error into an accepted cap.
+for refused in 2 08 010 "18446744073709551617"; do
+  (
+    GIT_LOOPY_MAX_PARALLEL="$refused"
+    ! git_loopy_assert_parallel_supported 2>/dev/null
+  ) || fail "a Lane cap of '$refused' must be refused"
+done
+for accepted in "" 0 1 00 01; do
+  (
+    GIT_LOOPY_MAX_PARALLEL="$accepted"
+    git_loopy_assert_parallel_supported
+  ) || fail "a Lane cap of '${accepted:-unset}' is serial and must be accepted"
+done
+for rejected in "-1" "1.5" "two" " 2"; do
+  (
+    GIT_LOOPY_MAX_PARALLEL="$rejected"
+    ! git_loopy_assert_parallel_supported 2>/dev/null
+  ) || fail "a malformed Lane cap of '$rejected' must be rejected"
+done
 jq -e \
   --arg release_version "$(jq -r '.expected_release_version' "$release_fixture")" \
   '
@@ -62,6 +134,31 @@ while IFS= read -r case_json; do
   actual="$(git_loopy_to_jsonl_line "$event_json")"
   assert_equal "$expected" "$actual" "serialization fixture: $case_id"
 done < <(jq -c '.serialization_cases[]' "$fixture")
+
+# #311 AC2: the rolling Event stream, driven through this port's own
+# serializer. This port schedules no Lane, but it is still a family member that
+# has to read and write the same bytes -- a drifted literal or a re-sorted
+# payload key would make its replay logs unreadable to every other member the
+# day Parallel mode does arrive here.
+rolling_records=0
+while IFS= read -r record_json; do
+  case_id="$(jq -r '.case_id' <<<"$record_json")"
+  event_json="$(jq -c '.event' <<<"$record_json")"
+  expected="$(jq -r '.jsonl' <<<"$record_json")"
+  actual="$(git_loopy_to_jsonl_line "$event_json")"
+  assert_equal "$expected" "$actual" "rolling stream: $case_id"
+  rolling_records=$((rolling_records + 1))
+done < <(
+  jq -c '
+    .rolling_stream_cases[]
+    | select(.distributions | index("shell"))
+    | . as $case
+    | range(0; $case.events | length)
+    | {case_id: $case.id, event: $case.events[.], jsonl: $case.jsonl[.]}
+  ' "$fixture"
+)
+((rolling_records > 0)) ||
+  fail "no rolling stream case names the shell distribution"
 
 apply_rollup_input() {
   # Drive the production rollup builder from one fixture `input` object.

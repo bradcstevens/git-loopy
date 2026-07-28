@@ -93,7 +93,11 @@ delivered in later phases, sequenced value-first
 - **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
   Orchestrators (the Python member offers it today via its `otel` extra).
 - **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Rolling dispatch** /
-  **Integration** across the family.
+  **Integration** across the family. The Python member schedules Lanes today;
+  the shell and PowerShell Orchestrators declare `parallel_mode` unsupported in
+  their capability manifest and refuse a **Lane cap** above 1 rather than
+  accepting it and running serially. See
+  [`docs/parallel-mode.md`](parallel-mode.md).
 
 The rest of this page documents the Python reference member in depth; its
 per-Iteration flow, exit conditions, and skill routing below are the shared

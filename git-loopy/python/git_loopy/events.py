@@ -65,6 +65,8 @@ __all__ = [
     "EVENT_SCHEMA_VERSION",
     "INSIGHT_CAPABILITY_NAMES",
     "PYTHON_INSIGHT_CAPABILITIES",
+    "PARALLEL_CAPABILITY_NAMES",
+    "PYTHON_PARALLEL_CAPABILITIES",
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
@@ -145,6 +147,31 @@ PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "context_window": True,
     "skill_consultation": True,
     "cost": True,
+}
+
+# What an Orchestrator can *schedule*, as opposed to what it can observe.
+# `insight_capabilities` above answers "can this port see token usage?";
+# these answer "can this port fill a second **Lane** at all?" (ADR-0020).
+# Parallel mode is opt-in and family-wide only as a contract: a distribution
+# with no scheduler must say so here rather than accept a **Lane cap** and
+# quietly run serially, because a silent serial Run is indistinguishable from
+# a Run whose tracker simply carries no `parallel-safe` issue.
+PARALLEL_CAPABILITY_NAMES: tuple[str, ...] = (
+    "parallel_mode",
+    "rolling_dispatch",
+    "integration_backlog",
+    "adaptive_lane_limit",
+    "contribution_events",
+)
+PYTHON_PARALLEL_CAPABILITIES: dict[str, bool] = {
+    "parallel_mode": True,
+    "rolling_dispatch": True,
+    "integration_backlog": True,
+    "adaptive_lane_limit": True,
+    # The Lane-contribution lifecycle literals below are reserved but have no
+    # producer yet: a Parallel Run still records legacy Wave-shaped rows. `true`
+    # here would advertise a stream no replay contains.
+    "contribution_events": False,
 }
 
 _DEFAULT_CONTEXT_TARGET_TOKENS = 100_000

@@ -68,6 +68,18 @@ declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
   "skill_consultation": false,
   "cost": false
 }'
+# What this port can *schedule*, as opposed to what it can observe. The shell
+# Orchestrator has no rolling scheduler, no **Integration** stage, and no
+# **Lane**, so every parallel capability is false. Declaring it is what turns
+# "unimplemented" from a silent serial Run into something an operator can read
+# off `wrapper.run.start` (ADR-0020, Wrapper contract 12).
+declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
+  "parallel_mode": false,
+  "rolling_dispatch": false,
+  "integration_backlog": false,
+  "adaptive_lane_limit": false,
+  "contribution_events": false
+}'
 
 GIT_LOOPY_RUN_ID=""
 GIT_LOOPY_STARTED_AT=""

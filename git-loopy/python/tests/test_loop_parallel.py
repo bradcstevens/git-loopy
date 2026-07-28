@@ -785,6 +785,17 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "skill_consultation": True,
         "cost": True,
     }
+    # #311 AC3: what this Orchestrator can *schedule*, declared alongside what
+    # it can observe. `contribution_events` is false because the Lane rows
+    # above are still legacy Wave-shaped -- exactly the honesty the manifest
+    # exists for.
+    assert run_start["parallel_capabilities"] == {
+        "parallel_mode": True,
+        "rolling_dispatch": True,
+        "integration_backlog": True,
+        "adaptive_lane_limit": True,
+        "contribution_events": False,
+    }
     # No "round" exists under Rolling dispatch, so a Lane contribution never
     # emits `wrapper.iteration.start`/`.end` (see this test's docstring).
     assert [

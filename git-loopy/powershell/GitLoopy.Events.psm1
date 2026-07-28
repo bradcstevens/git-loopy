@@ -57,6 +57,18 @@ $script:InsightCapabilities = [ordered]@{
     skill_consultation = $false
     cost = $false
 }
+# What this port can *schedule*, as opposed to what it can observe. The
+# PowerShell Orchestrator has no rolling scheduler, no **Integration** stage,
+# and no **Lane**, so every parallel capability is false. Declaring it is what
+# turns "unimplemented" from a silent serial Run into something an operator can
+# read off `wrapper.run.start` (ADR-0020, Wrapper contract 12).
+$script:ParallelCapabilities = [ordered]@{
+    parallel_mode = $false
+    rolling_dispatch = $false
+    integration_backlog = $false
+    adaptive_lane_limit = $false
+    contribution_events = $false
+}
 
 $script:EnvelopeKeys = @("ts", "run_id", "iter", "type")
 $script:CrockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -96,6 +108,17 @@ function Get-GitLoopyInsightCapabilities {
     $Copy = [ordered]@{}
     foreach ($Name in $script:InsightCapabilities.Keys) {
         $Copy[$Name] = $script:InsightCapabilities[$Name]
+    }
+    return $Copy
+}
+
+function Get-GitLoopyParallelCapabilities {
+    [CmdletBinding()]
+    param()
+
+    $Copy = [ordered]@{}
+    foreach ($Name in $script:ParallelCapabilities.Keys) {
+        $Copy[$Name] = $script:ParallelCapabilities[$Name]
     }
     return $Copy
 }
@@ -387,6 +410,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyEventTypes",
     "Get-GitLoopyEventSchemaVersion",
     "Get-GitLoopyInsightCapabilities",
+    "Get-GitLoopyParallelCapabilities",
     "Get-GitLoopyIsoTimestamp",
     "New-GitLoopyRunId",
     "New-GitLoopyEventContext",

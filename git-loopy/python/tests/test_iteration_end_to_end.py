@@ -473,6 +473,16 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "skill_consultation": True,
         "cost": True,
     }
+    # #311 AC3: a serial Run declares its scheduling capabilities too. The
+    # manifest describes the distribution, not the Run: an operator reading a
+    # serial trace still learns whether asking for Lanes would have worked.
+    assert run_start["parallel_capabilities"] == {
+        "parallel_mode": True,
+        "rolling_dispatch": True,
+        "integration_backlog": True,
+        "adaptive_lane_limit": True,
+        "contribution_events": False,
+    }
     iteration_end = next(
         event
         for event in events_seen

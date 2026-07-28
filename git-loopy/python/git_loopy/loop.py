@@ -1213,6 +1213,7 @@ class _Loop:
             release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
             insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
         )
@@ -1567,6 +1568,7 @@ class _ParallelLoop:
             release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
             insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
             # #304: only a Parallel-mode Run carries these, so a serial Run's

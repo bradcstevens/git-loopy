@@ -282,6 +282,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "release_version",
                 "schema_version",
                 "insight_capabilities",
+                "parallel_capabilities",
             ],
         },
         "wrapper.issue.activated": {
@@ -438,6 +439,372 @@ def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
     assert events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK not in (
         events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
     )
+
+
+def _parallel_capability_producers() -> dict[str, bool]:
+    """Which rolling capabilities this distribution *actually* has a producer for.
+
+    Read from the package source rather than declared, so the manifest cannot
+    stay optimistic after a producer is removed or stay stale after one lands.
+    """
+    package = Path(events_module.__file__).parent
+    sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(package.rglob("*.py"))
+        if path.name != "events.py"
+    )
+    lifecycle_constants = [
+        name
+        for name in events_module.__all__
+        if isinstance(value := getattr(events_module, name), str)
+        and value in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    ]
+    return {
+        "parallel_mode": (package / "rolling_scheduler.py").exists(),
+        "rolling_dispatch": "RollingScheduler" in sources,
+        "integration_backlog": "integration_backlog" in sources,
+        "adaptive_lane_limit": "ConcurrencyController" in sources,
+        "contribution_events": any(
+            re.search(rf"\b{constant}\b", sources) for constant in lifecycle_constants
+        ),
+    }
+
+
+def test_event_fixture_pins_the_parallel_capability_manifest() -> None:
+    """#311 AC3: Parallel mode is advertised, never inferred from silence.
+
+    ``insight_capabilities`` says what an Orchestrator can *observe*; this says
+    what it can *schedule*. Without it, a distribution with no scheduler is
+    byte-identical to one that simply found no eligible work, and an operator
+    who asked for Lanes has no way to tell a serial Run apart from a broken
+    flag. Pinned as a relationship against the production constant, so the
+    fixture and the manifest cannot drift into agreeing with themselves.
+    """
+    capabilities = _EVENT_SCHEMA["parallel_capabilities"]
+    assert capabilities["names"] == list(events_module.PARALLEL_CAPABILITY_NAMES)
+    assert set(capabilities["orchestrators"]) == {"python", "shell", "powershell"}
+    for orchestrator, manifest in capabilities["orchestrators"].items():
+        assert list(manifest) == list(
+            events_module.PARALLEL_CAPABILITY_NAMES
+        ), orchestrator
+        assert all(isinstance(value, bool) for value in manifest.values()), orchestrator
+    assert (
+        capabilities["orchestrators"]["python"]
+        == events_module.PYTHON_PARALLEL_CAPABILITIES
+    )
+
+    # A distribution that cannot fill a second Lane cannot honour any of the
+    # rest: refill, backlog, adaptation, and the contribution stream all
+    # presuppose Parallel mode. So `parallel_mode: false` is not one false among
+    # five -- it is the whole manifest false, and nothing may be advertised
+    # above it.
+    for orchestrator, manifest in capabilities["orchestrators"].items():
+        if not manifest["parallel_mode"]:
+            assert not any(manifest.values()), orchestrator
+
+
+def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
+    """A declared capability is a claim about this distribution's own code.
+
+    ``contribution_events`` is the one that matters today: the Lane-contribution
+    lifecycle literals are reserved in :mod:`git_loopy.events` but no module
+    emits them, so declaring them available would advertise a stream no replay
+    will ever contain. Derived from the source, this fails the moment the
+    declaration and the producers disagree in either direction.
+    """
+    assert events_module.PYTHON_PARALLEL_CAPABILITIES == (
+        _parallel_capability_producers()
+    )
+
+
+_ROLLING_SCHEDULER_SCOPED = tuple(
+    literal
+    for literal in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    # `wrapper.pool.excluded` is Run-scoped for every mode, not a rolling
+    # addition, so it is not part of the rolling stream this pins.
+    if literal != "wrapper.pool.excluded"
+)
+
+
+def test_rolling_stream_fixture_covers_every_rolling_event() -> None:
+    """#311 AC2: the rolling Event *stream* is pinned, not just its literals.
+
+    ``contribution_identity`` and ``payload_contracts`` pin each record in
+    isolation, which cannot catch the mistakes that only exist between records:
+    an ``integration.started`` with no admission, a ``contribution.end`` for a
+    publication that never happened, a Lane whose reuse silently rewrites the
+    earlier contribution's ``lane_id``. So the fixture carries whole ordered
+    streams, and every rolling literal has to appear in one.
+    """
+    cases = _EVENT_SCHEMA["rolling_stream_cases"]
+    assert cases, "no rolling stream is pinned"
+    seen = {event["type"] for case in cases for event in case["events"]}
+    assert set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]) <= seen
+    assert set(_ROLLING_SCHEDULER_SCOPED) <= seen
+    for case in cases:
+        assert case["events"], case["id"]
+        for event in case["events"]:
+            assert event["type"] not in (
+                _EVENT_SCHEMA["contribution_identity"]["forbidden_types"]
+            ), case["id"]
+
+
+def test_rolling_stream_records_carry_the_scope_they_claim() -> None:
+    """Identity is a property of the whole stream, not of one record.
+
+    A Lane is refillable the moment its contribution is admitted, so the only
+    thing that keeps a record attributable is the triple it was stamped with
+    when it started. The stream proves that: one ``lane_id`` carries more than
+    one ``contribution_id``, and the retired contribution's later records —
+    Integration, recovery, publication — keep naming the Lane they *started*
+    in rather than the one that issue is in now.
+    """
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    contracts = _EVENT_SCHEMA["payload_contracts"]
+    reused_lanes = 0
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        lane_contributions: dict[str, set[str]] = {}
+        for event in case["events"]:
+            type_name = event["type"]
+            if type_name in identity["scheduler_scoped_types"]:
+                assert "contribution_id" not in event, (case["id"], type_name)
+                assert "lane_id" not in event, (case["id"], type_name)
+            if type_name in identity["lifecycle_types"] or type_name in (
+                identity["stamped_types"]
+            ):
+                assert event["iter"] is None, (case["id"], type_name)
+                for key in identity["keys"]:
+                    assert event.get(key), (case["id"], type_name, key)
+                lane_contributions.setdefault(event["lane_id"], set()).add(
+                    event["contribution_id"]
+                )
+            for key in contracts.get(type_name, {}).get("required_when_present", []):
+                assert key in event, (case["id"], type_name, key)
+        reused_lanes += sum(
+            1 for holders in lane_contributions.values() if len(holders) > 1
+        )
+    assert reused_lanes, (
+        "no pinned stream refills a Lane, so nothing proves a record stays "
+        "attributable after its Lane moves on"
+    )
+
+
+def test_rolling_stream_orders_each_contribution_lifecycle() -> None:
+    """Rolling dispatch has no barrier, so ordering is per contribution.
+
+    Two contributions interleave freely in the stream; what may not happen is a
+    contribution reaching Integration before it started, being admitted after
+    it was integrated, or ending before its publication verified.
+    """
+    ordered_cases = 0
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        positions: dict[str, dict[str, int]] = {}
+        for index, event in enumerate(case["events"]):
+            if "contribution_id" in event:
+                positions.setdefault(event["contribution_id"], {})[
+                    event["type"]
+                ] = index
+        if not positions:
+            # A Run that requested Parallel mode and never engaged is a real
+            # rolling stream with no contribution in it: scheduler-scoped
+            # records only, and no lifecycle record to order.
+            assert not any(
+                event["type"]
+                in _EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]
+                for event in case["events"]
+            ), case["id"]
+            continue
+        ordered_cases += 1
+        for contribution_id, seen in positions.items():
+            where = (case["id"], contribution_id)
+            assert events_module.WRAPPER_CONTRIBUTION_START in seen, where
+            assert seen[events_module.WRAPPER_CONTRIBUTION_START] == min(
+                seen.values()
+            ), where
+            for earlier, later in (
+                (
+                    events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED,
+                    events_module.WRAPPER_INTEGRATION_ADMITTED,
+                ),
+                (
+                    events_module.WRAPPER_INTEGRATION_PARKED,
+                    events_module.WRAPPER_INTEGRATION_ADMITTED,
+                ),
+                (
+                    events_module.WRAPPER_INTEGRATION_ADMITTED,
+                    events_module.WRAPPER_INTEGRATION_STARTED,
+                ),
+                (
+                    events_module.WRAPPER_INTEGRATION_STARTED,
+                    events_module.WRAPPER_INTEGRATION_PUBLISHED,
+                ),
+                (
+                    events_module.WRAPPER_INTEGRATION_PUBLISHED,
+                    events_module.WRAPPER_CONTRIBUTION_END,
+                ),
+            ):
+                if earlier in seen and later in seen:
+                    assert seen[earlier] < seen[later], (where, earlier, later)
+            if events_module.WRAPPER_CONTRIBUTION_END in seen:
+                assert seen[events_module.WRAPPER_CONTRIBUTION_END] == max(
+                    seen.values()
+                ), where
+    assert ordered_cases, "no pinned stream contains a Lane contribution"
+
+
+def test_rolling_stream_respects_the_bounded_integration_backlog() -> None:
+    """A pinned stream must be *reachable*, not merely well-ordered.
+
+    Ordering alone accepts a contribution parking against an empty backlog or
+    two contributions integrating at once -- states the scheduler cannot
+    produce, pinned as if it could. So replay the backlog: admission fills it,
+    finalization frees a slot, it never exceeds the H=2 high-water, parking only
+    happens while it is full, and Integration only ever holds one contribution.
+    """
+    high_water = 2
+    checked = 0
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        admitted: list[str] = []
+        integrating: str | None = None
+        for event in case["events"]:
+            type_name = event["type"]
+            where = (case["id"], event.get("contribution_id"), type_name)
+            if type_name == events_module.WRAPPER_INTEGRATION_PARKED:
+                assert len(admitted) == high_water, where
+            elif type_name == events_module.WRAPPER_INTEGRATION_ADMITTED:
+                assert event["contribution_id"] not in admitted, where
+                admitted.append(event["contribution_id"])
+                assert len(admitted) <= high_water, where
+                checked += 1
+            elif type_name == events_module.WRAPPER_INTEGRATION_STARTED:
+                # FIFO: Integration takes the oldest admission, and only one
+                # contribution occupies the serialized stage at a time.
+                assert integrating is None, where
+                assert admitted[0] == event["contribution_id"], where
+                integrating = event["contribution_id"]
+            elif type_name in (
+                events_module.WRAPPER_INTEGRATION_BRANCH_OBSERVED,
+                events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
+                events_module.WRAPPER_INTEGRATION_PUBLISHED,
+            ):
+                assert integrating == event["contribution_id"], where
+            elif type_name == events_module.WRAPPER_CONTRIBUTION_END:
+                assert event["contribution_id"] in admitted, where
+                admitted.remove(event["contribution_id"])
+                if integrating == event["contribution_id"]:
+                    integrating = None
+        assert not admitted, (case["id"], "backlog never drained")
+        assert integrating is None, (case["id"], "Integration never released")
+    assert checked, "no pinned stream admits anything to the backlog"
+
+
+def test_rolling_stream_reports_only_pressure_it_could_have_observed() -> None:
+    """`integration_backlog` pressure is a claim about this Run's own state.
+
+    It is the one Pressure signal a Run always sees, precisely because it is
+    the Run's own backlog -- which also means a stream that never admitted
+    anything cannot have been narrowed by it.
+    """
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        admissions = sum(
+            1
+            for event in case["events"]
+            if event["type"] == events_module.WRAPPER_INTEGRATION_ADMITTED
+        )
+        for event in case["events"]:
+            if event["type"] != events_module.WRAPPER_CONCURRENCY_CHANGED:
+                continue
+            assert event["pressure"] in (
+                _EVENT_SCHEMA["payload_contracts"][
+                    events_module.WRAPPER_CONCURRENCY_CHANGED
+                ]["pressure_values"]
+            ), case["id"]
+            if event["pressure"] == "integration_backlog":
+                assert admissions, case["id"]
+
+
+def test_rolling_stream_serializes_through_the_production_seam() -> None:
+    """Every member reproduces these bytes with its own serializer.
+
+    Python additionally rebuilds each contribution-scoped record through
+    :func:`make_contribution_event`, the only constructor that may stamp the
+    triple — so the fixture pins the *constructor's* output, not a hand-written
+    shape that happens to look like it.
+    """
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        for event, expected in zip(case["events"], case["jsonl"], strict=True):
+            assert events_module.to_jsonl_line(event) == expected, case["id"]
+            if event["type"] in identity["lifecycle_types"]:
+                payload = {
+                    key: value
+                    for key, value in event.items()
+                    if key not in ("ts", "run_id", "iter", "type", *identity["keys"])
+                }
+                rebuilt = events_module.make_contribution_event(
+                    event["type"],
+                    event["run_id"],
+                    contribution_id=event["contribution_id"],
+                    issue=event["issue"],
+                    lane_id=event["lane_id"],
+                    ts=datetime.fromisoformat(event["ts"].replace("Z", "+00:00")),
+                    **payload,
+                )
+                assert events_module.to_jsonl_line(rebuilt) == expected, case["id"]
+
+
+def _pinned_run_start_events() -> list[tuple[str, dict[str, Any]]]:
+    """Every ``wrapper.run.start`` any conformance fixture pins, with its source."""
+    found: list[tuple[str, dict[str, Any]]] = []
+    for name, fixture in (
+        ("event-schema.json", _EVENT_SCHEMA),
+        ("dashboard-insights.json", _DASHBOARD_INSIGHTS),
+    ):
+        for case in fixture.get("serialization_cases", []):
+            if case["event"].get("type") == events_module.WRAPPER_RUN_START:
+                found.append((f"{name}:{case['id']}", case["event"]))
+        for case in fixture.get("cases", []):
+            for event in case.get("events", []):
+                if event.get("type") == events_module.WRAPPER_RUN_START:
+                    found.append((f"{name}:{case['id']}", event))
+    return found
+
+
+def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
+    """A `required` payload field is a claim about every trace, not just one.
+
+    ``payload_contracts["wrapper.run.start"]`` is the producer contract, but
+    nothing was checking the ``wrapper.run.start`` records the *other* fixtures
+    pin as inputs. That is how a required field arrives in one file and stays
+    absent in the traces every renderer is tested against -- a contract no
+    fixture violates only because no fixture is asked.
+    """
+    required = _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"]["required"]
+    parallel = _EVENT_SCHEMA["parallel_capabilities"]
+    insight = _EVENT_SCHEMA["insight_capabilities"]
+    checked = 0
+    for source, event in _pinned_run_start_events():
+        for key in required:
+            assert key in event, (source, key)
+        assert set(event["parallel_capabilities"]) == set(parallel["names"]), source
+        # An Orchestrator declares one manifest, so a trace may not mix them: a
+        # record claiming a real Orchestrator's Insight manifest must carry that
+        # same Orchestrator's parallel manifest. A serialization probe carrying
+        # a synthetic all-false Insight manifest claims no Orchestrator and is
+        # exempt -- it pins bytes, not a distribution.
+        claimed = {
+            name
+            for name, declared in insight["orchestrators"].items()
+            if declared == event["insight_capabilities"]
+        }
+        if claimed:
+            assert claimed & {
+                name
+                for name, declared in parallel["orchestrators"].items()
+                if declared == event["parallel_capabilities"]
+            }, source
+        checked += 1
+    assert checked, "no pinned wrapper.run.start was found to check"
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:

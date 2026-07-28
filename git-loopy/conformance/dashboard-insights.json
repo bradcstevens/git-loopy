@@ -313,6 +313,13 @@
             "skill_consultation": true,
             "cost": true
           },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": false
+          },
           "max_nmt_strikes": 3
         },
         {
@@ -664,6 +671,13 @@
             "context_window": false,
             "skill_consultation": false,
             "cost": false
+          },
+          "parallel_capabilities": {
+            "parallel_mode": false,
+            "rolling_dispatch": false,
+            "integration_backlog": false,
+            "adaptive_lane_limit": false,
+            "contribution_events": false
           },
           "max_nmt_strikes": 3,
           "observed_monotonic": 0
@@ -1159,6 +1173,13 @@
             "skill_consultation": true,
             "cost": true
           },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": false
+          },
           "max_nmt_strikes": 3
         },
         {
@@ -1597,6 +1618,13 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": false
           },
           "max_nmt_strikes": 3
         },
@@ -2652,6 +2680,13 @@
             "context_window": false,
             "skill_consultation": false,
             "cost": false
+          },
+          "parallel_capabilities": {
+            "parallel_mode": false,
+            "rolling_dispatch": false,
+            "integration_backlog": false,
+            "adaptive_lane_limit": false,
+            "contribution_events": false
           },
           "max_nmt_strikes": 3
         },

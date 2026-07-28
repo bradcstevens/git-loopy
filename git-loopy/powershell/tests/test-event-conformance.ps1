@@ -79,6 +79,100 @@ foreach ($Name in $ExpectedCapabilities.Keys) {
         "Insight capability $Name"
     )
 }
+
+# #311 AC3: Parallel mode is declared, never inferred from silence. This port
+# has no rolling scheduler, so `parallel_mode` is false -- and a port that
+# cannot fill a second Lane cannot honour refill, backlog, adaptation, or the
+# contribution stream either, so the whole manifest is false with it.
+$ExpectedParallel = $Fixture["parallel_capabilities"]["orchestrators"]["powershell"]
+$ActualParallel = Get-GitLoopyParallelCapabilities
+Assert-Equal $ExpectedParallel.Count $ActualParallel.Count (
+    "parallel capability count"
+)
+Assert-Equal (
+    ($Fixture["parallel_capabilities"]["names"] -join ",")
+) (($ActualParallel.Keys -join ",")) "parallel capability names and order"
+foreach ($Name in $ExpectedParallel.Keys) {
+    Assert-True $ActualParallel.Contains($Name) "missing parallel capability $Name"
+    Assert-Equal $ExpectedParallel[$Name] $ActualParallel[$Name] (
+        "parallel capability $Name"
+    )
+    Assert-True ($ActualParallel[$Name] -is [bool]) (
+        "parallel capability $Name must be boolean"
+    )
+}
+if (-not $ActualParallel["parallel_mode"]) {
+    foreach ($Name in $ActualParallel.Keys) {
+        Assert-True (-not $ActualParallel[$Name]) (
+            "parallel_mode is false so $Name cannot be advertised"
+        )
+    }
+}
+
+# The manifest is a claim about this port's own code, so read the code. A
+# distribution declaring `contribution_events: false` must name no producer for
+# the Lane-contribution lifecycle literals.
+if (-not $ActualParallel["contribution_events"]) {
+    $ModuleSource = (
+        Get-ChildItem -LiteralPath $PortDir -Filter "*.psm1" |
+            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
+    ) -join "`n"
+    foreach ($Literal in $Fixture["contribution_identity"]["lifecycle_types"]) {
+        $Key = @(
+            $Fixture["event_types"].GetEnumerator() |
+                Where-Object { $_.Value -ceq $Literal }
+        )[0].Key
+        Assert-True (
+            -not ($ModuleSource -match [regex]::Escape("EventTypes[`"$Key`"]"))
+        ) "contribution_events is declared false but $Key has a producer"
+    }
+}
+
+# A refusal an operator can act on, instead of a Lane cap accepted and ignored.
+$CapturedError = [IO.StringWriter]::new()
+$OriginalError = [Console]::Error
+[Console]::SetError($CapturedError)
+try {
+    $Refusal = Assert-GitLoopyParallelSupported -Environment @{
+        GIT_LOOPY_MAX_PARALLEL = "3"
+    }
+    foreach ($Accepted in @($null, "", "0", "1", "00", "01")) {
+        Assert-True (
+            Assert-GitLoopyParallelSupported -Environment @{
+                GIT_LOOPY_MAX_PARALLEL = $Accepted
+            }
+        ) "a serial Lane cap of '$Accepted' must be accepted"
+    }
+    # A cap this port cannot honour stays refused however it is written, and a
+    # value it cannot even read is a rejection rather than a silent zero.
+    foreach ($Refused in @("2", "08", "010", "18446744073709551617", "-1", "1.5", "two")) {
+        Assert-True (
+            -not (
+                Assert-GitLoopyParallelSupported -Environment @{
+                    GIT_LOOPY_MAX_PARALLEL = $Refused
+                }
+            )
+        ) "a Lane cap of '$Refused' must not be accepted"
+    }
+    # A missing key is an unset cap, not a strict-mode failure.
+    Assert-True (
+        Assert-GitLoopyParallelSupported -Environment @{}
+    ) "an absent GIT_LOOPY_MAX_PARALLEL must be accepted"
+} finally {
+    [Console]::SetError($OriginalError)
+}
+Assert-True (-not $Refusal) "a Lane cap above 1 must be refused, not accepted"
+$RefusalText = $CapturedError.ToString()
+Assert-True ($RefusalText -match "parallel_mode") (
+    "refusal must name the unsupported capability"
+)
+Assert-True ($RefusalText -match "PowerShell") (
+    "refusal must name the distribution that cannot honour the request"
+)
+Assert-True ($RefusalText -match "GIT_LOOPY_MAX_PARALLEL") (
+    "refusal must name the setting the operator can change"
+)
+
 $RunStartCase = @(
     $Fixture["serialization_cases"] |
         Where-Object { $_["id"] -ceq "run-start-insight-capabilities" }
@@ -94,6 +188,31 @@ foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]
     Assert-Equal $Case["jsonl"] $Actual "serialization fixture: $($Case["id"])"
 }
+
+# #311 AC2: the rolling Event stream, driven through this port's own
+# serializer. This port schedules no Lane, but it is still a family member that
+# has to read and write the same bytes -- a drifted literal or a re-sorted
+# payload key would make its replay logs unreadable to every other member the
+# day Parallel mode does arrive here.
+$RollingRecords = 0
+foreach ($Case in $Fixture["rolling_stream_cases"]) {
+    if ($Case["distributions"] -notcontains "powershell") {
+        continue
+    }
+    Assert-Equal $Case["events"].Count $Case["jsonl"].Count (
+        "rolling stream $($Case["id"]) pins one line per record"
+    )
+    for ($Index = 0; $Index -lt $Case["events"].Count; $Index++) {
+        $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["events"][$Index]
+        Assert-Equal $Case["jsonl"][$Index] $Actual (
+            "rolling stream: $($Case["id"]) record $Index"
+        )
+        $RollingRecords++
+    }
+}
+Assert-True ($RollingRecords -gt 0) (
+    "no rolling stream case names the powershell distribution"
+)
 
 function Add-RollupEnvelope {
     param(

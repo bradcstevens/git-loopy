@@ -734,6 +734,42 @@ git_loopy_assert_skill_policy_supported() {
   return 1
 }
 
+# Refuse a **Lane cap** this distribution cannot honour, instead of accepting it
+# and running serially. A silently ignored cap is indistinguishable from a Run
+# whose tracker carries no `parallel-safe` issue, so the operator learns nothing
+# from either. The manifest in `lib/events.sh` is the single source of the
+# answer, so flipping a capability there flips this refusal with it.
+git_loopy_assert_parallel_supported() {
+  local requested="${GIT_LOOPY_MAX_PARALLEL:-}"
+  [[ -n "$requested" ]] || return 0
+  if [[ ! "$requested" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' \
+      "git-loopy: GIT_LOOPY_MAX_PARALLEL must be a non-negative integer (got '$requested')." \
+      >&2
+    return 1
+  fi
+  # Compare as a normalized decimal string rather than with `(( ))`: bash reads
+  # a leading-zero literal as octal and silently wraps a value wider than 64
+  # bits, and either failure would leave an arithmetic error accepting a cap
+  # this port cannot honour.
+  local normalized="${requested#"${requested%%[!0]*}"}"
+  [[ -n "$normalized" ]] || normalized="0"
+  if ((${#normalized} == 1)) && [[ "$normalized" == [01] ]]; then
+    return 0
+  fi
+  local supported
+  supported="$(
+    jq -r '.parallel_mode' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON"
+  )"
+  [[ "$supported" != "true" ]] || return 0
+  printf '%s\n' \
+    "git-loopy: a Lane cap of $normalized was requested, but the shell Orchestrator declares parallel_mode unsupported." \
+    'git-loopy: this distribution has no Rolling dispatch scheduler, so it cannot fill a second Lane.' \
+    'git-loopy: unset GIT_LOOPY_MAX_PARALLEL or set it to 1 to run serially, or use a distribution whose parallel_capabilities.parallel_mode is true.' \
+    >&2
+  return 1
+}
+
 git_loopy_preflight() {
   local packaged_prompt="$1"
 
@@ -765,6 +801,7 @@ git_loopy_preflight() {
     printf 'git-loopy: jq is required by the shell Orchestrator.\n' >&2
     return 1
   }
+  git_loopy_assert_parallel_supported || return 1
   command -v copilot >/dev/null 2>&1 || {
     printf 'git-loopy: copilot is required on PATH.\n' >&2
     return 1
@@ -1940,6 +1977,7 @@ git_loopy_run_discovery() {
       --argjson insight_capabilities "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
       --argjson max_iterations "$GIT_LOOPY_MAX_ITERATIONS" \
       --argjson max_nmt_strikes "$GIT_LOOPY_MAX_NMT_STRIKES" \
+      --argjson parallel_capabilities "$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON" \
       --argjson schema_version "$GIT_LOOPY_EVENT_SCHEMA_VERSION" \
       '{
         deny_skills: $deny_skills,
@@ -1949,6 +1987,7 @@ git_loopy_run_discovery() {
         max_iterations: $max_iterations,
         max_nmt_strikes: $max_nmt_strikes,
         model: $model,
+        parallel_capabilities: $parallel_capabilities,
         prompt_path: $prompt_path,
         release_version: $release_version,
         reasoning_effort: (

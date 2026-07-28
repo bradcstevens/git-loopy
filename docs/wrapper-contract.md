@@ -280,6 +280,40 @@ when that Orchestrator emits the signal truthfully. `false` means unavailable. `
 yet is still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and
 an observed collection with no members is `[]`.
 
+Every `wrapper.run.start` MUST also carry a `parallel_capabilities` object with exactly these
+boolean keys:
+
+```json
+{
+  "parallel_mode": true,
+  "rolling_dispatch": true,
+  "integration_backlog": true,
+  "adaptive_lane_limit": true,
+  "contribution_events": false
+}
+```
+
+`insight_capabilities` says what an Orchestrator can *observe*; `parallel_capabilities` says what it
+can *schedule*. The values above are the Python Orchestrator's current manifest; the shell and
+PowerShell Orchestrators declare every key `false`. `parallel_mode` is whether the Orchestrator can
+fill more than one **Lane** at a time, `rolling_dispatch` whether it refills them continuously
+toward the **Lane cap** rather than behind a barrier, `integration_backlog` whether it admits
+finished Lane branches to the bounded backlog described below, `adaptive_lane_limit` whether its
+**Effective Lane limit** reacts to **Pressure signals**, and `contribution_events` whether it emits
+the **Lane contribution** lifecycle stream. Python declares `contribution_events: false` today
+because those literals are reserved and have no producer: a Parallel Run still records legacy
+**Wave**-shaped rows, and advertising a stream no replay contains would be the same lie as reporting
+an unavailable counter as `0`.
+
+`parallel_mode: false` is not one `false` among five. Refill, the backlog, adaptation, and the
+contribution stream all presuppose Parallel mode, so an Orchestrator that declares `parallel_mode`
+unavailable MUST declare every other parallel capability unavailable with it. It MUST additionally
+**refuse** a requested Lane cap above 1 at preflight, naming the unsupported capability, the
+distribution that cannot honour it, and the setting the operator can change — a refused Run exits
+with the preflight-failure code (§10). Accepting the cap and running serially is forbidden: a
+silently serial Run is byte-identical to a Parallel Run whose tracker carries no `parallel-safe`
+issue, so the operator cannot tell an unimplemented feature from an unlabelled backlog.
+
 The following additive Insight payload shapes are reserved by schema 1. Existing Phase 1 traces,
 including payload-free `wrapper.iteration.end` records, remain valid. When an Orchestrator begins
 emitting or enriching one of these records, it MUST use the pinned shape; the downstream
@@ -361,6 +395,27 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
   observation.
 - **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
   They remain readable and MUST NOT be reinterpreted as contributions.
+- **The backlog is bounded, and the bound is the whole point.** **Integration** is one serialized
+  stage, and the **Integration backlog** it consumes has a high-water mark of exactly **two** — one
+  contribution integrating plus one waiter. A third finisher emits
+  `wrapper.integration.parked`, keeps its **Lane** occupied, and waits; admission is FIFO by
+  finish order, broken by ascending issue number, and a parked contribution enters the backlog on
+  `wrapper.integration.admitted`. That admission — not publication — is what frees the Lane for
+  refill, which is why a record identifies its contribution and not its Lane. A full backlog is
+  **Integration backpressure**: **Rolling dispatch** stops *starting* new Lane work while it holds,
+  and resumes the moment a slot frees. It is a refill bound, never a pause — Lanes already running
+  finish normally and nothing is cancelled. This is what makes the **Lane cap** a ceiling rather
+  than a utilization promise, so a Run that never reaches its cap is not thereby faulty.
+- **Integration is gated privately and recovery is bounded.** Each contribution is merged into its
+  own private **Integration stage** against the latest published green base and re-runs the feedback
+  loops *there*, so a red or conflicting result is never observable on the base branch and there is
+  nothing to undo. `wrapper.integration.branch_observed` reports how many publications landed since
+  that branch was cut, or `null` when the Run cannot observe it. A conflicting or failing
+  contribution gets bounded runner-driven recovery in the same stage: each attempt emits
+  `wrapper.integration.recovery_started` with its `attempt` and the immutable `max_attempts`, and
+  attempts MUST NOT exceed three. Recovery Consumption and commits are counted once, in the
+  originating contribution. Persistent failure ends the contribution unpublished rather than
+  publishing something the loops did not pass.
 - **A Run that requested Parallel mode says so.** An Orchestrator that implements Parallel mode
   SHOULD carry `parallel_mode`, `lane_cap`, and `effective_lane_limit` on `wrapper.run.start`, and
   MUST emit `wrapper.parallel.serial_fallback` once per serial **Iteration** it works because it
@@ -373,11 +428,17 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
   emits nothing. A Run that did not request Parallel mode emits none of these.
 
 The `contribution_identity` and `payload_contracts` sections of
-[`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, and the
-serialization cases pin the wire form. As with the other reserved Insight shapes above, producing
-these records is capability-dependent and the rolling-dispatch Orchestrator tickets own enabling
-the producers; the Event-schema fixture revision advances with the first Orchestrator that emits
-them, since that revision is what a distribution's capability manifest advertises.
+[`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, its
+`rolling_stream_cases` pin whole ordered streams — Lane refill after admission, parking against a
+full backlog, bounded recovery, the serial latch, and a Parallel Run that never engaged — and the
+serialization cases pin the wire form. Every family member drives those streams through its own
+production serializer, including the members that schedule no Lane: an Orchestrator that cannot
+*produce* a rolling record must still read and write the same bytes. Its `parallel_capabilities`
+section pins each Orchestrator's manifest. As with the other reserved Insight shapes above,
+producing these records is capability-dependent and the rolling-dispatch Orchestrator tickets own
+enabling the producers; the Event-schema fixture revision advances with the first Orchestrator that
+emits them, since that revision is what a distribution's capability manifest advertises.
+[`docs/parallel-mode.md`](parallel-mode.md) is the operator-facing companion to this section.
 
 ### Renderer-neutral Dashboard seam
 

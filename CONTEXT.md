@@ -873,6 +873,21 @@ and "the ones there are could not be read". A serial Iteration running *alongsid
 remaining eligible Lane work is interleaving, not a fallback.
 _Avoid_: degraded mode, serial mode.
 
+**Wave** _(historical)_:
+The retired barrier round of the original **Parallel mode** design (ADR-0008): a fixed
+cohort of **Lanes** dispatched together, every Lane waiting at the barrier before
+**Integration** ran and the next cohort started.
+[ADR-0020](docs/adr/0020-rolling-dispatch-with-bounded-green-integration.md) replaced it
+with **Rolling dispatch**, which has no round at all. The term is retained *only* as
+historical vocabulary — for reading ADR-0008 and ADR-0009, for the comments and live-state
+identifiers that still describe per-Wave reset semantics, and for replay logs that carry
+`lane_issue` and no contribution identity. Those legacy traces stay readable and are never
+reinterpreted as **Lane contributions**. Nothing new is described as a Wave: the unit of
+Parallel work is the **Lane contribution**, the concurrency bound is the **Lane cap**, and
+the ordering constraint is the **Integration backlog**.
+_Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
+**Rolling dispatch** instead.
+
 ## Relationships
 
 - A **Workflow** can be traversed by many **Workstreams**. Each Workstream has
@@ -1050,8 +1065,8 @@ _Avoid_: degraded mode, serial mode.
   [ADR-0020](docs/adr/0020-rolling-dispatch-with-bounded-green-integration.md):
   **Rolling dispatch** has no barrier round. An
   **Iteration** remains the serial session/accounting unit; **Lanes** are reusable and
-  **Integration** is a separate serialized stage. **Wave** remains only as the
-  historical ADR-0008 model.
+  **Integration** is a separate serialized stage. **Wave** is retained only as historical
+  vocabulary and now has its own glossary entry saying so.
 - `ralph` / `ralph-afk` / `copiloop` / `git-loopy` were used interchangeably for the tool —
   resolved: **git-loopy** is the framework, CLI, and brand (`git-loopy` as the distribution and
   console command, `git_loopy` as the importable Python package); a **Ralph loop** is the

@@ -38,9 +38,49 @@
       }
     }
   },
+  "parallel_capabilities": {
+    "names": [
+      "parallel_mode",
+      "rolling_dispatch",
+      "integration_backlog",
+      "adaptive_lane_limit",
+      "contribution_events"
+    ],
+    "meaning": {
+      "parallel_mode": "The Orchestrator can fill more than one Lane at a time.",
+      "rolling_dispatch": "It refills Lanes continuously toward the Lane cap instead of grouping them behind a barrier.",
+      "integration_backlog": "It admits finished Lane branches to a bounded Integration backlog and applies Integration backpressure when that backlog is full.",
+      "adaptive_lane_limit": "Its Effective Lane limit contracts and expands against Pressure signals below the immutable Lane cap.",
+      "contribution_events": "It emits the Lane-contribution lifecycle Event stream pinned by contribution_identity and rolling_stream_cases."
+    },
+    "unsupported": "An Orchestrator that declares parallel_mode false MUST declare every other parallel capability false, and MUST refuse a requested Lane cap above 1 at preflight, naming the capability and the distribution. Accepting the request and running serially is the obscure failure this manifest exists to prevent.",
+    "orchestrators": {
+      "python": {
+        "parallel_mode": true,
+        "rolling_dispatch": true,
+        "integration_backlog": true,
+        "adaptive_lane_limit": true,
+        "contribution_events": false
+      },
+      "shell": {
+        "parallel_mode": false,
+        "rolling_dispatch": false,
+        "integration_backlog": false,
+        "adaptive_lane_limit": false,
+        "contribution_events": false
+      },
+      "powershell": {
+        "parallel_mode": false,
+        "rolling_dispatch": false,
+        "integration_backlog": false,
+        "adaptive_lane_limit": false,
+        "contribution_events": false
+      }
+    }
+  },
   "payload_contracts": {
     "wrapper.run.start": {
-      "required": ["release_version", "schema_version", "insight_capabilities"]
+      "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"]
     },
     "wrapper.issue.activated": {
       "required_when_present": ["issue", "activated_at", "binding_source"]
@@ -1079,6 +1119,463 @@
       ]
     }
   ],
+  "rolling_stream_cases": [
+    {
+      "id": "two-lanes-refill-park-recover-and-latch-serial",
+      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, recovers one contribution inside its private stage, and then latches Serial-required work.",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pool.refreshed",
+          "issues": [
+            42,
+            43,
+            44
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.concurrency.changed",
+          "configured_lane_limit": 3,
+          "effective_lane_limit": 2,
+          "pressure": null,
+          "rate_limit_state": "healthy",
+          "credit_state": null,
+          "host_state": "healthy"
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:04.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:05.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.commit.recorded",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1",
+          "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "subject": "feat: 42"
+        },
+        {
+          "ts": "2026-05-16T00:00:06.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:07.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.admitted",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:08.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:09.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.started",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:10.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.branch_observed",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1",
+          "base_publications_since_cut": 0
+        },
+        {
+          "ts": "2026-05-16T00:00:11.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:12.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.admitted",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:13.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:14.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.parked",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:15.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.concurrency.changed",
+          "configured_lane_limit": 3,
+          "effective_lane_limit": 1,
+          "pressure": "integration_backlog",
+          "rate_limit_state": "healthy",
+          "credit_state": null,
+          "host_state": "healthy"
+        },
+        {
+          "ts": "2026-05-16T00:00:16.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.published",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:17.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.auto_close",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1",
+          "issue_ref": 42,
+          "outcome": "closed"
+        },
+        {
+          "ts": "2026-05-16T00:00:18.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0001",
+          "issue": 42,
+          "lane_id": "lane-1",
+          "published": true,
+          "reason": "published",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 1200,
+            "tokens_out": 340,
+            "observed_tokens": 1540,
+            "cost_usd": 0.42,
+            "commits": 1,
+            "closures": 1,
+            "closure_outcome": "closed",
+            "recovery_attempts": 0,
+            "agent_seconds": 61.5,
+            "lifecycle_seconds": 94.25,
+            "peak_context_window": 41000,
+            "strike_reaction": "reset"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:19.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.admitted",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:20.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.started",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:21.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.branch_observed",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2",
+          "base_publications_since_cut": 1
+        },
+        {
+          "ts": "2026-05-16T00:00:22.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.recovery_started",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2",
+          "attempt": 1,
+          "max_attempts": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:23.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.published",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:24.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2",
+          "published": true,
+          "reason": "published",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 1200,
+            "tokens_out": 340,
+            "observed_tokens": 1540,
+            "cost_usd": 0.42,
+            "commits": 2,
+            "closures": 1,
+            "closure_outcome": "closed",
+            "recovery_attempts": 1,
+            "agent_seconds": 61.5,
+            "lifecycle_seconds": 94.25,
+            "peak_context_window": 41000,
+            "strike_reaction": "reset"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:25.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.serial.requested",
+          "issue": 45,
+          "reason": "validated_serial_candidate"
+        },
+        {
+          "ts": "2026-05-16T00:00:26.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pipeline.quiescent",
+          "phase": "draining_for_serial",
+          "reason": "serial_latched"
+        },
+        {
+          "ts": "2026-05-16T00:00:27.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.started",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:28.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.branch_observed",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1",
+          "base_publications_since_cut": 2
+        },
+        {
+          "ts": "2026-05-16T00:00:29.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.published",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:30.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1",
+          "published": true,
+          "reason": "published",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 1200,
+            "tokens_out": 340,
+            "observed_tokens": 1540,
+            "cost_usd": 0.42,
+            "commits": 1,
+            "closures": 1,
+            "closure_outcome": "closed",
+            "recovery_attempts": 0,
+            "agent_seconds": 61.5,
+            "lifecycle_seconds": 94.25,
+            "peak_context_window": 41000,
+            "strike_reaction": "reset"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:31.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pipeline.quiescent",
+          "phase": "serial_ownership",
+          "reason": "serial_granted"
+        },
+        {
+          "ts": "2026-05-16T00:00:32.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.rolling.refill_turn",
+          "reservations": 0,
+          "effective_lane_limit": 2
+        }
+      ],
+      "jsonl": [
+        "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44]}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.commit.recorded\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"sha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"subject\": \"feat: 42\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:06.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.work_finished\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:07.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:08.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:09.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:10.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 0, \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:11.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.work_finished\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:12.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:13.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.work_finished\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:14.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.parked\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:15.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": \"healthy\", \"pressure\": \"integration_backlog\", \"rate_limit_state\": \"healthy\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:16.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:17.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"issue_ref\": 42, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:19.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:20.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:21.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:22.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.recovery_started\", \"attempt\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"max_attempts\": 3}\n",
+        "{\"ts\": \"2026-05-16T00:00:23.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:24.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 1, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.serial.requested\", \"issue\": 45, \"reason\": \"validated_serial_candidate\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"draining_for_serial\", \"reason\": \"serial_latched\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:27.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:28.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 2, \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:29.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:30.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:31.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"serial_ownership\", \"reason\": \"serial_granted\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:32.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.rolling.refill_turn\", \"effective_lane_limit\": 2, \"reservations\": 0}\n"
+      ]
+    },
+    {
+      "id": "parallel-requested-but-never-engaged",
+      "description": "A Parallel-mode Run whose tracker carries no parallel-safe issue. Every serial Iteration is a fallback, the reason is carried explicitly, and a Pressure signal this Run cannot observe stays null rather than being reported as zero.",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pool.refreshed",
+          "issues": []
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.parallel.serial_fallback",
+          "eligible": 0,
+          "unavailable": 0,
+          "worked": 0,
+          "reason": "no_parallel_safe_candidates",
+          "lane_cap": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.concurrency.changed",
+          "configured_lane_limit": 3,
+          "effective_lane_limit": 1,
+          "pressure": "rate_limit",
+          "rate_limit_state": "throttled",
+          "credit_state": null,
+          "host_state": null
+        },
+        {
+          "ts": "2026-05-16T00:00:04.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pipeline.quiescent",
+          "phase": "iteration_cap_drain",
+          "reason": "cap_reached"
+        }
+      ],
+      "jsonl": [
+        "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": []}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.parallel.serial_fallback\", \"eligible\": 0, \"lane_cap\": 3, \"reason\": \"no_parallel_safe_candidates\", \"unavailable\": 0, \"worked\": 0}\n",
+        "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": null, \"pressure\": \"rate_limit\", \"rate_limit_state\": \"throttled\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"iteration_cap_drain\", \"reason\": \"cap_reached\"}\n"
+      ]
+    }
+  ],
   "serialization_cases": [
     {
       "id": "envelope-before-sorted-payload",
@@ -1097,12 +1594,12 @@
       "event": {
         "issues": [79, 80],
         "ts": "2026-05-16T00:00:00.000Z",
-        "type": "wrapper.run.start",
+        "type": "wrapper.afk_ready.collected",
         "run_id": "01HXR0000000000000000000BB",
         "iter": null,
         "count": 2
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000BB\", \"iter\": null, \"type\": \"wrapper.run.start\", \"count\": 2, \"issues\": [79, 80]}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000BB\", \"iter\": null, \"type\": \"wrapper.afk_ready.collected\", \"count\": 2, \"issues\": [79, 80]}\n"
     },
     {
       "id": "run-start-insight-capabilities",
@@ -1120,9 +1617,16 @@
           "context_window": false,
           "skill_consultation": false,
           "cost": false
+        },
+        "parallel_capabilities": {
+          "parallel_mode": false,
+          "rolling_dispatch": false,
+          "integration_backlog": false,
+          "adaptive_lane_limit": false,
+          "contribution_events": false
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"release_version\": \"0.2.0-dev.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false}, \"release_version\": \"0.2.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "authoritative-issue-activation",
