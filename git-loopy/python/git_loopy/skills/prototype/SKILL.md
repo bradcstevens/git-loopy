@@ -24,3 +24,105 @@ The two branches produce very different artifacts — getting this wrong wastes 
 4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
 5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
 6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: commit it to a throwaway branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too — the verdict and the question it settled — in the issue or a commit. The main branch keeps only the validated decision.
+
+## Owning the transition, or not
+
+Most prototypes are **nested**: another skill — `/wayfinder`, `/grill-with-docs`, a tracer bullet
+under `/implement` — needed something concrete before it could decide. A nested prototype owns no
+workflow transition. It publishes nothing; it hands its durable pointers back to the skill that
+asked: the throwaway branch name and head SHA, and the comment recording the verdict. That skill
+publishes once, for the transition it owns.
+
+A prototype owns a transition **only** when it was invoked directly on its own tracker ticket — a
+`wayfinder:prototype` ticket, say — and durably resolves it. Then, and only then:
+
+1. Push the throwaway branch and note its head SHA.
+2. Post the verdict as a resolution comment on the ticket and **close the ticket**. That comment
+   is the transition evidence; capture its comment id.
+3. Publish through the native command. Never write the Continuation record, its
+   `<!-- git-loopy-continuation... -->` marker, or its index label yourself — the command owns the
+   carrier comment, and a hand-written one is not a record.
+
+```bash
+git-loopy continuation publish --input /tmp/publish-prototype.json
+```
+
+The ticket asked one question and the verdict is now durable, so the record is **terminal**: the
+ticket's own Destination is satisfied and it has no successor. `<producer-login>` is the
+authenticated tracker account (`gh api user --jq .login`), `<prototype-branch>` and
+`<prototype-branch-sha>` name the throwaway branch and its 40-character head SHA, and
+`<rfc3339-utc>` is when the ticket closed (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+
+<!-- continuation-request: prototype-ticket-resolved -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "terminal",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<prototype-ticket>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<prototype-ticket>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "prototype",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<prototype-ticket>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<prototype-ticket>"
+    },
+    "outcome": {
+      "kind": "complete",
+      "destination_satisfied": true,
+      "effective_at": "<rfc3339-utc>",
+      "summary": "The prototype answered this ticket's question and the branch that proves it is pushed.",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<prototype-ticket>",
+          "comment_id": "<evidence-comment>"
+        },
+        {
+          "kind": "branch",
+          "repository": "<repository>",
+          "name": "<prototype-branch>",
+          "sha": "<prototype-branch-sha>"
+        }
+      ]
+    }
+  }
+}
+```
+
+The branch is the evidence because the prototype is throwaway by rule 1: the code will not be on
+`main`, so a reference to it is the only durable thing the verdict can stand on.
+
+**If `publish` fails, the work is repair-required, not done.** The branch and the closed ticket
+are already durable, so an exit-`1` result carrying `"code": "repair_required"` means the
+transition happened but its record did not. Say so plainly, quote the message, and stop — do not
+retry blindly, invent a record, or report the session as complete.
