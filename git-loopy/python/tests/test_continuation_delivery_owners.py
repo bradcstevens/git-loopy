@@ -25,9 +25,7 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,8 +42,13 @@ from git_loopy.gh import (
     ContinuationSubIssues,
     GhError,
 )
+from tests.skill_templates import (
+    PROJECT_SKILLS_DIR as SKILLS_DIR,
+    fill as _fill,
+    template as _template,
+    templates as _templates,
+)
 
-SKILLS_DIR = Path(__file__).parents[3] / ".copilot" / "skills"
 REPOSITORY = "octo/example"
 PRODUCER = "builder"
 SPEC_ISSUE = 239
@@ -86,51 +89,6 @@ POINTER_ONLY = (
     "microsoft-docs",
     "handoff",
 )
-
-_TEMPLATE_RE = re.compile(
-    r"<!-- continuation-request: (?P<name>[a-z-]+) -->\s*```json\n(?P<body>.*?)```",
-    re.DOTALL,
-)
-
-
-def _templates(skill: str) -> dict[str, str]:
-    """Return every named request template documented by one Skill."""
-    text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-    return {
-        match.group("name"): match.group("body")
-        for match in _TEMPLATE_RE.finditer(text)
-    }
-
-
-def _template(skill: str, name: str) -> dict[str, Any]:
-    templates = _templates(skill)
-    assert name in templates, (
-        f"{skill}/SKILL.md documents no <!-- continuation-request: {name} --> "
-        f"template; it documents {sorted(templates)}"
-    )
-    return json.loads(templates[name])
-
-
-def _fill(value: Any, bindings: dict[str, Any]) -> Any:
-    """Substitute a template's ``<placeholder>`` values with durable identifiers.
-
-    A whole-string placeholder takes the binding's own type, so
-    ``"<ticket-issue>"`` becomes the integer issue number the contract requires;
-    a placeholder embedded in prose (an Instruction, say) is substituted
-    textually.
-    """
-    if isinstance(value, dict):
-        return {key: _fill(item, bindings) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_fill(item, bindings) for item in value]
-    if isinstance(value, str):
-        for name, binding in bindings.items():
-            if value == f"<{name}>":
-                return binding
-        for name, binding in bindings.items():
-            value = value.replace(f"<{name}>", str(binding))
-        return value
-    return value
 
 
 class _RecordingGitHub:

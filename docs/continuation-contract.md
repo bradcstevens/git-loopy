@@ -102,6 +102,29 @@ without rewriting. A record whose Action carries a `safety_case` **must** declar
 AFK-safe classification is what authorizes unattended Dispatch, so a reader that would silently
 drop the case while keeping the claim must reject the whole record instead.
 
+### Transition-owner coverage gates report mode
+
+Reconciliation projects records; it does not invent them. So the guidance report mode renders is
+only ever as complete as the set of Skills that publish, and advertising `report` while a locked
+Action kind, disposition or coverage area has no recognized Transition owner would present a
+projection built from records nobody in the catalog writes — visibly authoritative and quietly
+partial.
+
+Complete core Transition-owner coverage is therefore a **mandatory precondition** for advertising
+`continuation_modes.report`, not a quality target beside it. Coverage is complete when every locked
+coverage area — planning, specification, decomposition, implementation, review, publication,
+conflict resolution, direct research/prototype ownership, pointer-only helpers, parent cleanup,
+partial decomposition quarantine, exact-head recurrence and repair-required failure — has a
+recognized owner, and the owners between them publish every kind in the closed v1 Action-kind
+registry and all three dispositions, each hard-HITL kind behind an explicit human boundary.
+
+Two properties make that checkable rather than asserted. Each Skill carries its completion request
+as a fenced JSON template behind a `<!-- continuation-request: NAME -->` marker, so what a prompt
+tells a session to publish is executable against the real native command. And the packaged
+distribution mirrors the project sources byte for byte, so the requests an adopter's session
+publishes are the ones the coverage suites executed. The Python distribution enforces both, together
+with the report-mode interlock, in `tests/test_continuation_owner_coverage.py`.
+
 ## 5. Event observations
 
 Event schema 1.1 adds `wrapper.continuation.reconciled`,

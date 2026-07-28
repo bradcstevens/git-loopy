@@ -108,3 +108,91 @@ authenticated tracker account (`gh api user --jq .login`), `<findings-commit>` i
 are already durable, so an exit-`1` result carrying `"code": "repair_required"` means the
 transition happened but its record did not. Say so plainly, quote the message, and stop — do not
 retry blindly, invent a record, or report the session as complete.
+
+### When the question survives the session
+
+Not every directly-owned ticket gets answered. If the reading is done, the partial findings are
+committed and posted, and the question is still open, **leave the ticket open and publish anyway**.
+
+That is a durable transition — the repo and the tracker both changed — with genuinely no successor
+this Producer may name. Re-scoping a question that would not answer belongs to whoever charted it,
+and inventing a next step here would be guidance nobody stands behind. Silence is not an option
+either: the contract will not read a missing record as a result, so a transition with no record is
+indistinguishable from a ticket nobody opened. `no-successor-created` is the positive claim that
+this session looked and found nothing to hand on.
+
+The record is **not** terminal — the Destination is `issue-closed` and the ticket is open — and it
+carries no `outcome` and no Actions. `<findings-commit>` is the commit carrying what *was* learnt,
+so the next session starts from it rather than from scratch.
+
+<!-- continuation-request: research-ticket-unresolved -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "no-guidance",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<research-ticket>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<research-ticket>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "research",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<research-ticket>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<research-ticket>"
+    },
+    "no_guidance": {
+      "reason": "no-successor-created",
+      "summary": "The findings so far are committed, but the question this ticket asked is still open.",
+      "references": [
+        {
+          "kind": "commit",
+          "repository": "<repository>",
+          "sha": "<findings-commit>"
+        }
+      ]
+    }
+  }
+}
+```
+
+Once that record exists, it is the ticket's first word, and the session that finally answers the
+question publishes the **successor** to it — the same `research-ticket-resolved` body above, plus
+two request-level lineage fields. Two roots on one carrier are a `revision_fork` that drops both,
+which would lose the partial finding *and* the answer. So reconcile first:
+
+```bash
+echo '{"repository":"<repository>","trusted_producers":["<producer-login>"],"revision_protocol":true}' \
+  | git-loopy continuation reconcile
+```
+
+Take the whole `result.observation` object verbatim as the request's `observation`, and the
+`revision_id` of every `result.observation.heads` entry whose `carrier` is this ticket as its
+`parents`. Retire nothing: a no-guidance record publishes no Action, so there is no receipt to owe.
+

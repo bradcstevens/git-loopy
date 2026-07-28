@@ -25,9 +25,7 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,8 +42,13 @@ from git_loopy.gh import (
     ContinuationSubIssues,
     GhError,
 )
+from tests.skill_templates import (
+    PROJECT_SKILLS_DIR as SKILLS_DIR,
+    fill as _fill,
+    template as _template,
+    templates as _templates,
+)
 
-SKILLS_DIR = Path(__file__).parents[3] / ".copilot" / "skills"
 REPOSITORY = "octo/example"
 PRODUCER = "planner"
 
@@ -76,51 +79,6 @@ _EVIDENCE_COMMENTS = {
     PROTOTYPE_EVIDENCE_COMMENT: PROTOTYPE_TICKET,
     DESTINATION_EVIDENCE_COMMENT: MAP_ISSUE,
 }
-
-_TEMPLATE_RE = re.compile(
-    r"<!-- continuation-request: (?P<name>[a-z-]+) -->\s*```json\n(?P<body>.*?)```",
-    re.DOTALL,
-)
-
-
-def _templates(skill: str) -> dict[str, str]:
-    """Return every named request template documented by one Skill."""
-    text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-    return {
-        match.group("name"): match.group("body")
-        for match in _TEMPLATE_RE.finditer(text)
-    }
-
-
-def _template(skill: str, name: str) -> dict[str, Any]:
-    templates = _templates(skill)
-    assert name in templates, (
-        f"{skill}/SKILL.md documents no <!-- continuation-request: {name} --> "
-        f"template; it documents {sorted(templates)}"
-    )
-    return json.loads(templates[name])
-
-
-def _fill(value: Any, bindings: dict[str, Any]) -> Any:
-    """Substitute a template's ``<placeholder>`` values with durable identifiers.
-
-    A whole-string placeholder takes the binding's own type, so
-    ``"<map-issue>"`` becomes the integer issue number the contract requires; a
-    placeholder embedded in prose (an Instruction, say) is substituted
-    textually.
-    """
-    if isinstance(value, dict):
-        return {key: _fill(item, bindings) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_fill(item, bindings) for item in value]
-    if isinstance(value, str):
-        for name, binding in bindings.items():
-            if value == f"<{name}>":
-                return binding
-        for name, binding in bindings.items():
-            value = value.replace(f"<{name}>", str(binding))
-        return value
-    return value
 
 
 class _RecordingGitHub:
@@ -748,9 +706,137 @@ def test_research_and_prototype_own_a_transition_only_for_their_own_ticket(
         ("research", "research-ticket-resolved"),
         ("prototype", "prototype-ticket-resolved"),
     ):
-        assert set(_templates(skill)) == {name}
+        assert set(_templates(skill)) == {name, f"{skill}-ticket-unresolved"}
         text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
         assert "publishes nothing" in text
+
+
+def _unresolved_request(skill: str) -> dict[str, Any]:
+    """The request each evidence Skill documents when it did *not* settle it."""
+    return _fill(
+        _template(skill, f"{skill}-ticket-unresolved"),
+        {
+            "repository": REPOSITORY,
+            "producer-login": PRODUCER,
+            "research-ticket": RESEARCH_TICKET,
+            "prototype-ticket": PROTOTYPE_TICKET,
+            "evidence-comment": (
+                RESEARCH_EVIDENCE_COMMENT
+                if skill == "research"
+                else PROTOTYPE_EVIDENCE_COMMENT
+            ),
+            "findings-commit": ADR_COMMIT,
+            "prototype-branch": "prototype/lane-layout",
+            "prototype-branch-sha": BRANCH_SHA,
+        },
+    )
+
+
+def test_evidence_work_that_did_not_settle_its_question_publishes_no_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A durable transition that produced no successor says so, positively.
+
+    A directly-owned evidence ticket is not always settled by one session: the
+    findings are committed and posted, and the question survives them. That is a
+    durable transition — the tracker changed — with genuinely no successor this
+    Producer may publish, because re-scoping the question is the map owner's
+    judgement, not the researcher's.
+
+    The contract refuses to read the absence of a record as a result: missing
+    semantics are an error, never an implicit no-guidance. So `no-guidance` /
+    `no-successor-created` is the only honest record, and it is not `terminal`,
+    because the ticket's Destination has not been reached.
+    """
+    github = _RecordingGitHub()
+
+    for skill in ("research", "prototype"):
+        exit_code, result, stderr = _run(
+            "publish", _unresolved_request(skill), github, monkeypatch, capsys
+        )
+        assert exit_code == 0
+        assert result["receipt"]["status"] == "committed"
+        assert stderr == ""
+        completion = _template(skill, f"{skill}-ticket-unresolved")["completion"]
+        assert completion["disposition"] == "no-guidance"
+        assert completion["no_guidance"]["reason"] == "no-successor-created"
+        # A no-guidance record contributes no Action and claims no outcome.
+        assert "actions" not in completion
+        assert "outcome" not in completion
+
+    exit_code, result, _stderr = _run(
+        "reconcile",
+        _reconcile_request(revision_protocol=True),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["diagnostics"] == []
+    assert result["result"]["actions"] == []
+    # No outcome at all — not an empty one. A no-guidance record makes no claim
+    # about the Workstream's fate, so there is nothing to project.
+    assert "outcomes" not in result["result"]
+    # Not terminal, and not guidance either: an open ticket nobody can act on
+    # from here reads `waiting`, which is the honest answer.
+    assert result["result"]["status"] == "waiting"
+
+
+def test_a_later_session_resolves_an_unresolved_ticket_as_a_successor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The second word on a carrier is a successor, never a second root.
+
+    Both records land on the same carrier under the same Anchor, so publishing
+    the resolution as a root is a `revision_fork` that drops *both* — the
+    partial finding and the answer. There is nothing to retire, because the
+    predecessor published no Action, so lineage is the whole difference between
+    the two requests.
+    """
+    github = _RecordingGitHub()
+    assert (
+        _run("publish", _unresolved_request("research"), github, monkeypatch, capsys)[0]
+        == 0
+    )
+    _code, seen, _stderr = _run(
+        "reconcile",
+        _reconcile_request(revision_protocol=True),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    observation = seen["result"]["observation"]
+
+    github.issues[RESEARCH_TICKET] = "CLOSED"
+    resolved = _research_request()
+    resolved["observation"] = observation
+    resolved["parents"] = [
+        head["revision_id"]
+        for head in observation["heads"]
+        if head["carrier"] == RESEARCH_TICKET
+    ]
+    assert _run("publish", resolved, github, monkeypatch, capsys)[0] == 0
+
+    exit_code, result, _stderr = _run(
+        "reconcile",
+        _reconcile_request(revision_protocol=True),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    assert result["result"]["diagnostics"] == []
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["kind"] == "complete"
+    assert outcome["workstream_anchor"]["number"] == RESEARCH_TICKET
+    assert result["result"]["retirements"] == []
+    # Lineage is request-level, so the record body is the one the Skill
+    # documents either way — there is no second copy of it to drift.
+    assert resolved["completion"] == _research_request()["completion"]
 
 
 def test_a_planning_transition_publishes_only_after_its_evidence_is_durable(
@@ -805,8 +891,8 @@ def test_every_planning_transition_owner_publishes_natively_and_writes_no_carrie
         "triage": {"triage-agent-ready", "triage-needs-info"},
         "wayfinder": {"chart-map", "map-specification-destination", "map-complete"},
         "grill-with-docs": {"resolve-remaining-decision"},
-        "research": {"research-ticket-resolved"},
-        "prototype": {"prototype-ticket-resolved"},
+        "research": {"research-ticket-resolved", "research-ticket-unresolved"},
+        "prototype": {"prototype-ticket-resolved", "prototype-ticket-unresolved"},
     }
     for skill, names in documented.items():
         text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")

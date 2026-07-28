@@ -30,7 +30,6 @@ import io
 import json
 import re
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -47,57 +46,36 @@ from git_loopy.gh import (
     ContinuationSubIssues,
     GhError,
 )
+from tests.skill_templates import (
+    PROJECT_SKILLS_DIR,
+    fill,
+    skill_text,
+    template,
+    templates,
+)
 
-SKILLS_DIR = Path(__file__).parents[3] / ".copilot" / "skills"
 REPOSITORY = "octo/example"
 PRODUCER = "planner"
 INDEX_LABEL = "git-loopy-continuation"
 
-_TEMPLATE_RE = re.compile(
-    r"<!-- continuation-request: (?P<name>[a-z-]+) -->\s*```json\n(?P<body>.*?)```",
-    re.DOTALL,
-)
+# `/next` is the only Consumer here, so its helpers default to it; the extraction
+# itself is shared, because four copies of the marker regexp is four chances for
+# the thing that reads the contract to disagree with the thing that reads it.
+SKILLS_DIR = PROJECT_SKILLS_DIR
+_fill = fill
 
 
 def _skill_text(skill: str = "next") -> str:
-    return (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
+    return skill_text(skill)
 
 
 def _templates(skill: str = "next") -> dict[str, str]:
     """Return every named request template documented by one Skill."""
-    return {
-        match.group("name"): match.group("body")
-        for match in _TEMPLATE_RE.finditer(_skill_text(skill))
-    }
+    return templates(skill)
 
 
 def _template(name: str, skill: str = "next") -> dict[str, Any]:
-    templates = _templates(skill)
-    assert name in templates, (
-        f"{skill}/SKILL.md documents no <!-- continuation-request: {name} --> "
-        f"template; it documents {sorted(templates)}"
-    )
-    return json.loads(templates[name])
-
-
-def _fill(value: Any, bindings: dict[str, Any]) -> Any:
-    """Substitute a template's ``<placeholder>`` values with durable identifiers.
-
-    A whole-string placeholder takes the binding's own type; a placeholder
-    embedded in prose is substituted textually.
-    """
-    if isinstance(value, dict):
-        return {key: _fill(item, bindings) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_fill(item, bindings) for item in value]
-    if isinstance(value, str):
-        for name, binding in bindings.items():
-            if value == f"<{name}>":
-                return binding
-        for name, binding in bindings.items():
-            value = value.replace(f"<{name}>", str(binding))
-        return value
-    return value
+    return template(skill, name)
 
 
 class _RecordingGitHub:
