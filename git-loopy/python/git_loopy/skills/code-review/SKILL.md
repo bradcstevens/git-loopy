@@ -94,4 +94,363 @@ A change can pass one axis and fail the other:
 
 Reporting them separately stops one axis from masking the other.
 
+## Publish the review transition
+
+A review of a durable head is a durable workflow transition, and this skill owns it. Record
+it so the next session — human or agent — reads the same answer you did.
+
+**Only publish after the review's own evidence is durable**, and always about **one exact
+head**:
+
+1. Resolve the reviewed head with `git rev-parse HEAD` and confirm it is durable
+   (`gh api repos/<owner>/<repo>/commits/<candidate-head> --jq .sha`). A head only your
+   worktree can see is not reviewable, and its review is not publishable.
+2. Post the findings as one durable comment on the ticket when the review found anything
+   (`gh issue comment <ticket-issue> --body-file <report>`), and capture its comment id. The
+   HTML report is a session artifact; the findings a later session remediates from must be on
+   the tracker.
+3. Post one short transition-evidence comment recording that this head was reviewed and with
+   what outcome, and capture its comment id too.
+4. Publish exactly one of the two requests below — findings, or clean. Never write the
+   Continuation record, its `<!-- git-loopy-continuation... -->` marker, or its index label
+   yourself; the command owns the carrier comment.
+
+```bash
+git-loopy continuation publish --input /tmp/publish-review.json
+```
+
+The reviewed head is the occurrence discriminator on both sides, so a review never carries
+over: once remediation moves the branch, this record's Actions go **Blocked** and the
+implementation owner publishes a fresh `Review head` at the new head.
+
+### The head has findings
+
+The successor is remediation, based on the durable findings comment. Replace every
+`<placeholder>` with the durable identifier it names:
+
+<!-- continuation-request: review-findings -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue-comment",
+        "repository": "<repository>",
+        "issue": "<ticket-issue>",
+        "comment_id": "<evidence-comment>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<ticket-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "code-review",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<ticket-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<ticket-issue>"
+    },
+    "actions": [
+      {
+        "key": "address-findings",
+        "summary": "Address the review findings on head <candidate-head>",
+        "kind": "Address review findings",
+        "occurrence": "<candidate-head>",
+        "instruction": {
+          "mode": "skill",
+          "value": "/implement Address the review findings in comment <findings-comment> on #<ticket-issue>, then publish the new candidate head."
+        },
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<ticket-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<ticket-issue>",
+            "comment_id": "<findings-comment>"
+          },
+          {
+            "kind": "commit",
+            "repository": "<repository>",
+            "sha": "<candidate-head>"
+          }
+        ],
+        "prerequisites": [
+          {
+            "kind": "branch-head-equals",
+            "target": {
+              "kind": "branch",
+              "repository": "<repository>",
+              "name": "<branch-name>",
+              "sha": "<candidate-head>"
+            }
+          }
+        ],
+        "interaction": {
+          "classification": "AFK-safe",
+          "evidence": {
+            "kind": "transition-owner-attestation",
+            "noninteractive": true,
+            "owner": "code-review"
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<ticket-issue>"
+          }
+        },
+        "safety_case": {
+          "version": "1",
+          "instruction": {
+            "mode": "skill",
+            "value": "/implement Address the review findings in comment <findings-comment> on #<ticket-issue>, then publish the new candidate head."
+          },
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<ticket-issue>"
+          },
+          "completion_condition": {
+            "kind": "issue-closed",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<ticket-issue>"
+            }
+          },
+          "assumptions": [
+            {
+              "kind": "durable-inputs-fixed",
+              "statement": "The findings are a durable comment about one fixed reviewed head, so remediation reads the same input every time."
+            },
+            {
+              "kind": "bounded-effect-scope",
+              "statement": "Remediation changes this repository and this ticket, and answers the recorded findings only."
+            },
+            {
+              "kind": "noninteractive-environment",
+              "statement": "Remediation runs the project's own validation and prompts for nothing."
+            }
+          ],
+          "effects": [
+            {"kind": "repository-write", "scope": "<repository>"},
+            {"kind": "git-write", "scope": "branch:<branch-name>"},
+            {"kind": "tracker-write", "scope": "issue:<repository>#<ticket-issue>"}
+          ],
+          "requirements": [
+            {"kind": "skill", "name": "implement"},
+            {"kind": "access", "name": "tracker-write"}
+          ],
+          "retry": {"kind": "resumable"},
+          "triggers": []
+        }
+      }
+    ]
+  }
+}
+```
+
+Remediation returns to review by construction: `/implement` republishes a `Review head` for
+the head it produces, and this Action's `branch-head-equals` prerequisite retires it as soon
+as that head lands. Do not publish a review of a head that does not exist yet.
+
+### The head is clean
+
+The successor is publication of that exact head. Replace every `<placeholder>` with the
+durable identifier it names:
+
+<!-- continuation-request: review-clean -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue-comment",
+        "repository": "<repository>",
+        "issue": "<ticket-issue>",
+        "comment_id": "<evidence-comment>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<ticket-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "code-review",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<ticket-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<ticket-issue>"
+    },
+    "actions": [
+      {
+        "key": "publish-head",
+        "summary": "Publish reviewed head <candidate-head> of <branch-name>",
+        "kind": "Publish head",
+        "occurrence": "<candidate-head>",
+        "instruction": {
+          "mode": "skill",
+          "value": "/push Publish <branch-name> at reviewed head <candidate-head> for #<ticket-issue> against <default-branch>."
+        },
+        "target": {
+          "kind": "branch",
+          "repository": "<repository>",
+          "name": "<branch-name>",
+          "sha": "<candidate-head>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<ticket-issue>",
+            "comment_id": "<evidence-comment>"
+          },
+          {
+            "kind": "commit",
+            "repository": "<repository>",
+            "sha": "<candidate-head>"
+          }
+        ],
+        "prerequisites": [
+          {
+            "kind": "commit-exists",
+            "target": {
+              "kind": "commit",
+              "repository": "<repository>",
+              "sha": "<candidate-head>"
+            }
+          },
+          {
+            "kind": "branch-head-equals",
+            "target": {
+              "kind": "branch",
+              "repository": "<repository>",
+              "name": "<branch-name>",
+              "sha": "<candidate-head>"
+            }
+          }
+        ],
+        "interaction": {
+          "classification": "AFK-safe",
+          "evidence": {
+            "kind": "transition-owner-attestation",
+            "noninteractive": true,
+            "owner": "code-review"
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<ticket-issue>"
+          }
+        },
+        "safety_case": {
+          "version": "1",
+          "instruction": {
+            "mode": "skill",
+            "value": "/push Publish <branch-name> at reviewed head <candidate-head> for #<ticket-issue> against <default-branch>."
+          },
+          "target": {
+            "kind": "branch",
+            "repository": "<repository>",
+            "name": "<branch-name>",
+            "sha": "<candidate-head>"
+          },
+          "completion_condition": {
+            "kind": "issue-closed",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<ticket-issue>"
+            }
+          },
+          "assumptions": [
+            {
+              "kind": "durable-inputs-fixed",
+              "statement": "The head being published is the exact head this review cleared."
+            },
+            {
+              "kind": "bounded-effect-scope",
+              "statement": "Publication fast-forwards one branch and opens or updates its pull request; it merges nothing."
+            },
+            {
+              "kind": "noninteractive-environment",
+              "statement": "The push and the pull request use already-held credentials and prompt for nothing."
+            }
+          ],
+          "effects": [
+            {"kind": "git-write", "scope": "branch:<branch-name>"},
+            {"kind": "tracker-write", "scope": "issue:<repository>#<ticket-issue>"}
+          ],
+          "requirements": [
+            {"kind": "skill", "name": "push"},
+            {"kind": "access", "name": "repository-write"}
+          ],
+          "retry": {"kind": "idempotent"},
+          "triggers": []
+        }
+      }
+    ]
+  }
+}
+```
+
+A review never merges anything, and it never publishes a `Review and merge PR` Action: the
+human merge boundary belongs to the head that was actually published, and `/push` owns it.
+
+**If `publish` fails, the work is repair-required, not done.** The findings comment and the
+transition-evidence comment are already durable, so an exit-`1` result carrying `"code":
+"repair_required"` means the review happened but its record did not. Say so plainly, quote
+the message, and stop — do not retry blindly, and never hand-write the record the command
+refused to write.
+
 At the conclusion of a `/code-review` session, run the `/next` skill.
