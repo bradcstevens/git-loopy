@@ -12,8 +12,8 @@ if ! declare -F git_loopy_read_release_version >/dev/null 2>&1; then
   source "$_git_loopy_continuation_dir/release-version.sh"
 fi
 
-GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.2"
-GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1","1.2"]'
+GIT_LOOPY_CONTINUATION_CONTRACT_VERSION="1.3"
+GIT_LOOPY_CONTINUATION_SUPPORTED_CONTRACT_VERSIONS='["1.0","1.1","1.2","1.3"]'
 GIT_LOOPY_CONTINUATION_RECORD_FORMAT=1
 GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION="1.5"
 GIT_LOOPY_CONTINUATION_EVENT_SCHEMA_VERSION="1.1"
@@ -180,6 +180,7 @@ Operations:
   reconcile [--input FILE] [--terminal]
   record-dispatch-result [--input FILE]
   repair-index [--input FILE]
+  resolve-authority [--input FILE]
 EOF
 }
 
@@ -188,7 +189,7 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":false,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2","1.3"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"resolve-authority":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":true,"execute-frontier":false}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
 }
@@ -206,10 +207,12 @@ git_loopy_continuation_capabilities() {
 # records the operator's selection without committing a host-specific executable
 # path or a family-member choice.
 
-# The one named requirement set this distribution is judged against. `report` and
-# `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
-# profile nobody implements would let a pass be read as readiness for a mode no
-# distribution supports.
+# The named requirement sets this distribution is judged against. `execute-frontier`
+# is deliberately absent from both: it is #264 vocabulary, and a profile nobody
+# implements would let a pass be read as readiness for a mode no distribution
+# supports. `report` is the second profile (#263): a distribution that cannot
+# resolve an operator authority or does not advertise the mode fails closed here
+# rather than during a Run.
 _GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
   "requirements": [
     "contract-version",
@@ -218,7 +221,7 @@ _GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
     "native-operations",
     "mode-default-off"
   ],
-  "continuation_contract_version": "1.2",
+  "continuation_contract_version": "1.3",
   "record_format": 1,
   "tracker_adapter": "github",
   "tracker_operations": [
@@ -231,13 +234,43 @@ _GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
   "mode_default": "off"
 }'
 
+_GIT_LOOPY_CONTINUATION_REPORT_PROFILE='{
+  "requirements": [
+    "contract-version",
+    "record-format",
+    "tracker-adapter",
+    "native-operations",
+    "mode-default-off",
+    "mode-report"
+  ],
+  "continuation_contract_version": "1.3",
+  "record_format": 1,
+  "tracker_adapter": "github",
+  "tracker_operations": [
+    "publish", "reconcile", "record-dispatch-result", "repair-index"
+  ],
+  "native_operations": [
+    "capabilities", "publish", "reconcile", "record-dispatch-result",
+    "repair-index", "resolve-authority"
+  ],
+  "mode_default": "off",
+  "required_modes": ["report"]
+}'
+
 git_loopy_continuation_profile() {
   local name="${1:-foundation}"
-  if [[ "$name" != "foundation" ]]; then
-    printf 'git-loopy: unknown Continuation capability profile %s\n' "$name" >&2
-    return 1
-  fi
-  jq -c . <<<"$_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE"
+  case "$name" in
+    foundation)
+      jq -c . <<<"$_GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE"
+      ;;
+    report)
+      jq -c . <<<"$_GIT_LOOPY_CONTINUATION_REPORT_PROFILE"
+      ;;
+    *)
+      printf 'git-loopy: unknown Continuation capability profile %s\n' "$name" >&2
+      return 1
+      ;;
+  esac
 }
 
 # Judge one advertised manifest (stdin) against one named profile. The
@@ -270,6 +303,8 @@ git_loopy_evaluate_continuation_capabilities() {
           ($manifest.continuation_modes // {}) as $modes
           | ($modes.default != $profile.mode_default)
             or ($modes[$profile.mode_default] != true)
+        elif $id == "mode-report" then
+          ($manifest.continuation_modes // {}).report != true
         else true
         end;
       [$profile.requirements[] | select(unsatisfied(.))] as $unsatisfied
@@ -638,6 +673,8 @@ _git_loopy_continuation_validate_portable_json() {
         for my $entry (@{$item}) {
           return 0 unless normalized($entry);
         }
+      } elsif (!defined($item)) {
+        return 1;
       } elsif (!ref($item)) {
         return 0 if NFC($item) ne $item;
       }
@@ -5926,6 +5963,292 @@ _git_loopy_continuation_repair_index() {
       }'
 }
 
+# --- Operator-configured Continuation authority (§10 / #263) ---------------
+#
+# `resolve-authority` is read-only computation over the request: it makes no
+# GitHub/tracker call at all, so it lives entirely in one jq program rather than
+# following the gh-calling shape the other operations use. The narrowing order,
+# the closed ceiling vocabularies, and the fail-closed capability check mirror
+# the Python reference (`_resolve_authority` / `_narrow_authority`) exactly;
+# nothing here may widen an authority, only narrow or refuse it.
+# shellcheck disable=SC2016  # jq program text, not shell expansion.
+_GIT_LOOPY_CONTINUATION_RESOLVE_AUTHORITY_JQ='
+def continuation_modes: ["off", "report", "execute-frontier"];
+def mode_rank($m): continuation_modes | index($m);
+def authority_sources_order: ["global", "project", "runtime"];
+def targets_vocabulary:
+  ["issue", "pull-request", "issue-comment", "pull-request-review", "commit", "branch"];
+def action_kinds_vocabulary: [
+  "Address review findings", "Authorize operation", "Chart workstream",
+  "Close parent", "Decompose spec", "Implement ticket",
+  "Perform manual validation", "Prototype evidence", "Provide information",
+  "Publish head", "Publish spec", "Research fact", "Resolve conflict",
+  "Resolve decision", "Review and merge PR", "Review head", "Triage item"
+];
+def instruction_modes_vocabulary: ["command", "manual", "skill"];
+def effect_scopes_vocabulary: [
+  "external-write", "git-read", "git-write", "network-read",
+  "repository-read", "repository-write", "tracker-read", "tracker-write"
+];
+def ceiling_axes: ["repositories", "targets", "action_kinds", "instruction_modes", "effect_scopes"];
+# Set intersection via array difference: `select((other | index(.)) != null)`
+# looks equivalent but is not -- a jq function argument is evaluated with `.`
+# bound to the pipeline input at its own call site, not the loop element that
+# appears to be piped into it, so that shape silently answers a different
+# question (whatever `other` itself resolves to). `-` has no such hazard.
+def intersect($a; $b): $a - ($a - $b);
+def ceiling_vocabulary($axis):
+  if $axis == "targets" then targets_vocabulary
+  elif $axis == "action_kinds" then action_kinds_vocabulary
+  elif $axis == "instruction_modes" then instruction_modes_vocabulary
+  elif $axis == "effect_scopes" then effect_scopes_vocabulary
+  else null
+  end;
+
+def fail_invalid($message): error({code: "invalid_request", message: $message});
+def fail_unsupported($message): error({code: "unsupported_operation", message: $message});
+
+def require_object($name):
+  if (type == "object") then . else fail_invalid($name + " must be an object") end;
+def require_string($name):
+  if (type == "string") then . else fail_invalid($name + " must be a string") end;
+def require_fields($name; $required; $optional):
+  require_object($name)
+  | (keys) as $present
+  | (($required - $present)) as $missing
+  | (($present - ($required + $optional))) as $unknown
+  | if ($missing | length) > 0 then
+      fail_invalid($name + " is missing required fields: " + ($missing | join(", ")))
+    elif ($unknown | length) > 0 then
+      fail_invalid($name + " has unsupported fields: " + ($unknown | join(", ")))
+    else .
+    end;
+
+def authority_set($name; $vocabulary):
+  if (type != "array") then fail_invalid($name + " must be an array")
+  else
+    (map(require_string($name + " item"))) as $entries
+    | if ($entries | length) != ($entries | unique | length) then
+        fail_invalid($name + " must not contain duplicates")
+      elif $vocabulary != null and (($entries - $vocabulary) | length) > 0 then
+        fail_invalid($name + " item is unsupported")
+      else $entries
+      end
+  end;
+
+def authority_ceilings($name):
+  require_fields($name; ceiling_axes; [])
+  | . as $ceilings
+  | reduce ceiling_axes[] as $axis
+      ({}; . + {($axis): ($ceilings[$axis] | authority_set($name + "." + $axis; ceiling_vocabulary($axis)))});
+
+def authority_source($name):
+  require_fields($name;
+    ["source", "mode", "trusted_producers", "ceilings"];
+    ["actor", "maintainers"])
+  | . as $value
+  | ($value.source | require_string($name + ".source")) as $scope
+  | (if (authority_sources_order | index($scope)) == null then
+       fail_invalid($name + ".source is unsupported")
+     else $scope end) as $scope
+  | ($value.mode | require_string($name + ".mode")) as $mode
+  | (if (mode_rank($mode)) == null then
+       fail_invalid($name + ".mode is unsupported")
+     else $mode end) as $mode
+  | {
+      source: $scope,
+      mode: $mode,
+      trusted_producers: ($value.trusted_producers | authority_set($name + ".trusted_producers"; null)),
+      ceilings: ($value.ceilings | authority_ceilings($name + ".ceilings")),
+      maintainers: (($value.maintainers // []) | authority_set($name + ".maintainers"; null)),
+      actor: (if ($value | has("actor")) then ($value.actor | require_string($name + ".actor")) else null end)
+    };
+
+def persisted_authority($name):
+  require_fields($name;
+    ["mode", "trusted_producers", "ceilings"];
+    ["actor", "maintainers"])
+  | . as $value
+  | ($value.mode | require_string($name + ".mode")) as $mode
+  | (if (mode_rank($mode)) == null then
+       fail_invalid($name + ".mode is unsupported")
+     else $mode end) as $mode
+  | {
+      source: $name,
+      mode: $mode,
+      trusted_producers: ($value.trusted_producers | authority_set($name + ".trusted_producers"; null)),
+      maintainers: (($value.maintainers // []) | authority_set($name + ".maintainers"; null)),
+      ceilings: ($value.ceilings | authority_ceilings($name + ".ceilings")),
+      actor: (if ($value.actor // null) == null then null
+              else ($value.actor | require_string($name + ".actor")) end)
+    };
+
+# Intersect one authority (`$state`) with another (`$other`). Nothing here may
+# widen; every axis that actually shrank is recorded once against `$reason`.
+def narrow_authority($state; $other; $reason):
+  (if mode_rank($other.mode) < mode_rank($state.mode) then $other.mode else $state.mode end) as $mode
+  | (intersect($state.trusted_producers; $other.trusted_producers) | unique) as $producers
+  | (intersect($state.maintainers; $other.maintainers) | unique) as $maintainers
+  | (reduce ceiling_axes[] as $axis
+       ({new: {}, narrowed: []};
+         ($state.ceilings[$axis]) as $values
+         | (intersect($values; $other.ceilings[$axis]) | unique) as $narrowed_values
+         | .new[$axis] = $narrowed_values
+         | if ($narrowed_values | sort) != ($values | sort) then
+             .narrowed += [{axis: $axis, reason: $reason}]
+           else . end
+       )) as $ceiling_result
+  | (if $other.actor != null then
+       (if $state.actor != null and $state.actor != $other.actor then
+          fail_invalid("actor is declared twice with different identities")
+        else $other.actor end)
+     else $state.actor end) as $actor
+  | {
+      mode: $mode,
+      trusted_producers: $producers,
+      maintainers: $maintainers,
+      ceilings: $ceiling_result.new,
+      actor: $actor,
+      declared_mode: $state.declared_mode,
+      narrowed: (
+        $state.narrowed
+        + (if $mode != $state.mode then [{axis: "mode", reason: $reason}] else [] end)
+        + (if ($producers | sort) != ($state.trusted_producers | sort)
+           then [{axis: "trusted_producers", reason: $reason}] else [] end)
+        + (if ($maintainers | sort) != ($state.maintainers | sort)
+           then [{axis: "maintainers", reason: $reason}] else [] end)
+        + $ceiling_result.narrowed
+      )
+    };
+
+def assert_mode_supported($mode; $tracker_adapter; $manifest):
+  (($manifest.tracker_adapters // {})[$tracker_adapter]) as $adapter
+  | if $adapter == null then
+      fail_unsupported("tracker adapter " + $tracker_adapter + " is not supported by this distribution")
+    elif (($manifest.continuation_modes // {})[$mode]) != true then
+      fail_unsupported("continuation mode " + $mode + " is not supported by this distribution")
+    else
+      (if $mode == "report" then ["reconcile"] else ["reconcile", "record-dispatch-result"] end) as $required_ops
+      | (($required_ops - ($adapter.operations // [])) | sort) as $missing
+      | if ($missing | length) > 0 then
+          fail_unsupported(
+            "continuation mode " + $mode + " requires the " + $tracker_adapter
+            + " adapter operation " + $missing[0]
+          )
+        else true
+        end
+    end;
+
+def resolve_authority($request; $manifest):
+  ($request
+    | require_fields("request";
+        ["sources"];
+        ["continuation_contract_version", "record_format", "tracker_adapter", "prior"])
+  ) as $request
+  | ($request.sources) as $raw_sources
+  | (if ($raw_sources | type) != "array" then fail_invalid("sources must be an array")
+     elif ($raw_sources | length) == 0 then fail_invalid("sources must not be empty")
+     else $raw_sources end) as $raw_sources
+  | (reduce range(0; $raw_sources | length) as $index
+       ({resolved: [], seen: []};
+         ($raw_sources[$index] | authority_source("sources[" + ($index | tostring) + "]")) as $source
+         | (.seen[-1]) as $previous
+         | (if (.seen | index($source.source)) != null then
+              fail_invalid("sources[" + ($index | tostring) + "].source is declared twice")
+            elif (.seen | length) > 0
+              and (authority_sources_order | index($source.source))
+                  < (authority_sources_order | index($previous)) then
+              fail_invalid("sources[" + ($index | tostring) + "].source is out of order")
+            else .
+            end)
+         | .resolved += [$source]
+         | .seen += [$source.source]
+       )
+  ) as $collected
+  | ($collected.resolved) as $resolved
+  | ($resolved[0]) as $first
+  | (
+      {
+        mode: $first.mode,
+        trusted_producers: $first.trusted_producers,
+        maintainers: $first.maintainers,
+        ceilings: $first.ceilings,
+        actor: $first.actor,
+        declared_mode: $first.mode,
+        narrowed: []
+      }
+      | reduce $resolved[1:][] as $source
+          (.;
+            (if mode_rank($source.mode) > mode_rank(.declared_mode) then $source.mode else .declared_mode end) as $next_declared
+            | narrow_authority(.; $source; "source-ceiling")
+            | .declared_mode = $next_declared
+          )
+    ) as $after_sources
+  | (
+      if ($request | has("prior")) then
+        narrow_authority(
+          $after_sources;
+          ($request.prior | persisted_authority("prior"));
+          "persisted-authority"
+        )
+        | .declared_mode = $after_sources.declared_mode
+      else $after_sources
+      end
+    ) as $after_prior
+  | ($after_prior.mode != "off") as $active
+  | ($active and (($after_prior.ceilings.repositories | length) == 0)) as $coverage_empty
+  | ($active and (($after_prior.trusted_producers | length) == 0)) as $producers_empty
+  | (
+      $after_prior
+      | .mode = (if ($coverage_empty or $producers_empty) then "off" else .mode end)
+      | .narrowed +=
+          (if $coverage_empty then [{axis: "repositories", reason: "coverage-empty"}] else [] end)
+          + (if $producers_empty then [{axis: "trusted_producers", reason: "trusted-producers-empty"}] else [] end)
+    ) as $final
+  | (($request.tracker_adapter // "github") | require_string("tracker_adapter")) as $tracker_adapter
+  | (if $final.mode != "off" then
+       assert_mode_supported($final.mode; $tracker_adapter; $manifest)
+     else true end) as $_
+  | {
+      mode: $final.mode,
+      declared_mode: $final.declared_mode,
+      participates: ($final.mode != "off"),
+      tracker_adapter: $tracker_adapter,
+      actor: $final.actor,
+      maintainers: ($final.maintainers | sort),
+      trusted_producers: ($final.trusted_producers | sort),
+      ceilings: (reduce ceiling_axes[] as $axis ({}; . + {($axis): ($final.ceilings[$axis] | sort)})),
+      narrowed: ($final.narrowed | unique | sort_by([.axis, .reason]))
+    };
+'
+
+_git_loopy_continuation_resolve_authority() {
+  local request="$1"
+  local manifest outcome
+  manifest="$(git_loopy_continuation_capabilities | jq -c '.capabilities')"
+  outcome="$(
+    jq -n -c --argjson request "$request" --argjson manifest "$manifest" \
+      "$_GIT_LOOPY_CONTINUATION_RESOLVE_AUTHORITY_JQ"'
+      try (
+        {ok: true, operation: "resolve-authority", result: resolve_authority($request; $manifest)}
+      ) catch (
+        if (type == "object" and has("code") and has("message"))
+        then {ok: false, operation: "resolve-authority", error: {code: .code, message: .message}}
+        else {ok: false, operation: "resolve-authority", error: {code: "invalid_request", message: (. | tostring)}}
+        end
+      )
+    '
+  )"
+  if [[ "$(jq -r '.ok' <<<"$outcome")" == "true" ]]; then
+    jq -c . <<<"$outcome"
+    return 0
+  fi
+  _git_loopy_continuation_error \
+    "resolve-authority" \
+    "$(jq -r '.error.code' <<<"$outcome")" \
+    "$(jq -r '.error.message' <<<"$outcome")"
+}
+
 git_loopy_continuation_main() {
   local operation="${1:-}"
   [[ -n "$operation" ]] || {
@@ -5944,7 +6267,7 @@ git_loopy_continuation_main() {
   fi
 
   case "$operation" in
-    publish | reconcile | record-dispatch-result | repair-index) ;;
+    publish | reconcile | record-dispatch-result | repair-index | resolve-authority) ;;
     *)
       git_loopy_continuation_usage >&2
       return 2
@@ -6014,6 +6337,9 @@ git_loopy_continuation_main() {
       ;;
     repair-index)
       _git_loopy_continuation_repair_index "$request"
+      ;;
+    resolve-authority)
+      _git_loopy_continuation_resolve_authority "$request"
       ;;
     *)
       _git_loopy_continuation_error \

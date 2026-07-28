@@ -1565,31 +1565,70 @@ function Test-CapabilityVerificationGate {
         [string]$FixtureProfile["mode_default"] -ceq [string]$Declared["mode_default"]
     ) "the PowerShell foundation profile pins the fixture's default mode"
 
+    # The report profile (#263) additionally requires the `resolve-authority`
+    # operation and the `report` mode to be advertised.
+    $FixtureReportProfile = $Verification["profiles"]["report"]
+    $DeclaredReport = Get-GitLoopyContinuationProfile -Name "report"
+    Assert-True (
+        (@($FixtureReportProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($DeclaredReport["requirements"]) -join ",")
+    ) "the PowerShell report profile requires exactly what the fixture pins"
+    Assert-True (
+        [string]$FixtureReportProfile["continuation_contract_version"] -ceq
+            [string]$DeclaredReport["continuation_contract_version"]
+    ) "the PowerShell report profile pins the fixture's contract version"
+    Assert-True (
+        [int]$FixtureReportProfile["record_format"] -eq [int]$DeclaredReport["record_format"]
+    ) "the PowerShell report profile pins the fixture's record format"
+    Assert-True (
+        [string]$FixtureReportProfile["tracker_adapter"] -ceq
+            [string]$DeclaredReport["tracker_adapter"]
+    ) "the PowerShell report profile pins the fixture's tracker Adapter"
+    Assert-True (
+        (@($FixtureReportProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($DeclaredReport["tracker_operations"]) -join ",")
+    ) "the PowerShell report profile pins the fixture's tracker operations"
+    Assert-True (
+        (@($FixtureReportProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($DeclaredReport["native_operations"]) -join ",")
+    ) "the PowerShell report profile pins the fixture's native operations"
+    Assert-True (
+        [string]$FixtureReportProfile["mode_default"] -ceq [string]$DeclaredReport["mode_default"]
+    ) "the PowerShell report profile pins the fixture's default mode"
+    Assert-True (
+        (@($FixtureReportProfile["required_modes"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+            (@($DeclaredReport["required_modes"]) -join ",")
+    ) "the PowerShell report profile pins the fixture's required modes"
+
     # The verdict is taken on the manifest this distribution really advertises, so
     # the chain runs real manifest -> setup verdict with no hand-asserted link.
+    # `verdicts` is nested by profile since #263 added a second named profile.
     $Manifest = Get-GitLoopyCapabilityManifest
-    $Expected = $Verification["verdicts"]["powershell"]
-    $Verdict = Get-GitLoopyContinuationVerification `
-        -Manifest $Manifest -Name "foundation"
+    foreach ($ProfileName in @("foundation", "report")) {
+        $Expected = $Verification["verdicts"][$ProfileName]["powershell"]
+        $Verdict = Get-GitLoopyContinuationVerification `
+            -Manifest $Manifest -Name $ProfileName
 
-    Assert-True (
-        [string]$Verdict["profile"] -ceq [string]$Expected["profile"]
-    ) "the PowerShell verdict names the profile the fixture pins"
-    Assert-True (
-        [bool]$Verdict["satisfied"] -eq [bool]$Expected["satisfied"]
-    ) "the PowerShell verdict on its own manifest matches the fixture"
-    Assert-True (
-        (@($Verdict["unsatisfied_requirements"]) -join ",") -ceq
-            (@($Expected["unsatisfied_requirements"] | ForEach-Object { [string]$_ }) -join ",")
-    ) "the PowerShell verdict leaves nothing unsatisfied the fixture does not pin"
-    Assert-True (
-        (@($Verdict["unsupported_optional_capabilities"]) -join ",") -ceq
-            (@($Expected["unsupported_optional_capabilities"] |
-                ForEach-Object { [string]$_ }) -join ",")
-    ) "the PowerShell verdict names the optional capabilities the fixture pins"
+        Assert-True (
+            [string]$Verdict["profile"] -ceq [string]$Expected["profile"]
+        ) "the PowerShell $ProfileName verdict names the profile the fixture pins"
+        Assert-True (
+            [bool]$Verdict["satisfied"] -eq [bool]$Expected["satisfied"]
+        ) "the PowerShell $ProfileName verdict on its own manifest matches the fixture"
+        Assert-True (
+            (@($Verdict["unsatisfied_requirements"]) -join ",") -ceq
+                (@($Expected["unsatisfied_requirements"] | ForEach-Object { [string]$_ }) -join ",")
+        ) "the PowerShell $ProfileName verdict leaves nothing unsatisfied the fixture does not pin"
+        Assert-True (
+            (@($Verdict["unsupported_optional_capabilities"]) -join ",") -ceq
+                (@($Expected["unsupported_optional_capabilities"] |
+                    ForEach-Object { [string]$_ }) -join ",")
+        ) "the PowerShell $ProfileName verdict names the optional capabilities the fixture pins"
+    }
 
     # A verifier that answered "satisfied" unconditionally would pass both checks
     # above, so every requirement is shown to fail on its own broken manifest.
+    # Each refusal now names the profile it is judged against (#263).
     $Refusals = @($Verification["refusals"])
     Assert-True ($Refusals.Count -gt 0) (
         "the fixture registers at least one capability-verification refusal"
@@ -1605,8 +1644,9 @@ function Test-CapabilityVerificationGate {
             $Broken[$Path[0]].Remove($Path[1])
         }
 
+        $RefusalProfile = [string]$Refusal["profile"]
         $Refused = Get-GitLoopyContinuationVerification `
-            -Manifest $Broken -Name "foundation"
+            -Manifest $Broken -Name $RefusalProfile
         Assert-True (-not [bool]$Refused["satisfied"]) "refusal $Id is refused"
         Assert-True (
             (@($Refused["unsatisfied_requirements"]) -join ",") -ceq
@@ -1615,12 +1655,12 @@ function Test-CapabilityVerificationGate {
         ) "refusal $Id names exactly the requirement the fixture pins"
     }
 
-    # An unknown profile is refused rather than silently widened: `report` and
-    # `execute-frontier` are #263/#264 vocabulary, and answering them would let a
-    # pass be read as readiness for a mode no distribution supports.
+    # An unknown profile is refused rather than silently widened: `execute-frontier`
+    # is #264 vocabulary, and answering it would let a pass be read as readiness
+    # for a mode no distribution supports.
     $Widened = $false
     try {
-        Get-GitLoopyContinuationProfile -Name "report" | Out-Null
+        Get-GitLoopyContinuationProfile -Name "execute-frontier" | Out-Null
         $Widened = $true
     }
     catch {

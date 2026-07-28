@@ -91,6 +91,8 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
+    ContinuationInput,
+    ContinuationInputs,
     EffortGateWarning,
     RunConfig,
     SkillPolicyInput,
@@ -584,14 +586,21 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         dest="continuation_operation",
         required=True,
         metavar=(
-            "{capabilities,publish,reconcile,record-dispatch-result,repair-index}"
+            "{capabilities,resolve-authority,publish,reconcile,"
+            "record-dispatch-result,repair-index}"
         ),
     )
     continuation_sub.add_parser(
         "capabilities",
         help="Print the machine-readable Continuation capability manifest.",
     )
-    for operation in ("publish", "reconcile", "record-dispatch-result", "repair-index"):
+    for operation in (
+        "resolve-authority",
+        "publish",
+        "reconcile",
+        "record-dispatch-result",
+        "repair-index",
+    ):
         command = continuation_sub.add_parser(
             operation,
             help=f"Invoke {operation} through the native Continuation module.",
@@ -1060,6 +1069,84 @@ def _resolve_pricing_file(env: Mapping[str, str]) -> Path | None:
     return Path(raw)
 
 
+#: The axes an operator may cap, keyed by the :class:`ContinuationInput` field
+#: they populate. Config key and environment variable are both mechanical from
+#: the field name, so adding a ceiling to the contract cannot leave the
+#: configuration surface a tier behind.
+_CONTINUATION_LIST_FIELDS = (
+    "trusted_producers",
+    "maintainers",
+    "repositories",
+    "targets",
+    "action_kinds",
+    "instruction_modes",
+    "effect_scopes",
+)
+
+
+def _continuation_input_from_table(
+    table: Mapping[str, object], *, scope: str
+) -> ContinuationInput:
+    """Read one config table's Continuation keys, uncombined.
+
+    No defaulting and no fallback to another tier: this tier says exactly what it
+    said. Combination is `continuation.resolve_authority`'s job, and a resolver
+    that pre-merged would be a second, divergent copy of the narrowing rules.
+    """
+    return ContinuationInput(
+        mode=settings.table_str(table, "continuation_mode", scope=scope),
+        actor=settings.table_str(table, "continuation_actor", scope=scope),
+        **{
+            field: tuple(
+                settings.table_str_list(table, f"continuation_{field}", scope=scope)
+            )
+            for field in _CONTINUATION_LIST_FIELDS
+        },
+    )
+
+
+def _continuation_input_from_env(env: Mapping[str, str]) -> ContinuationInput:
+    """Read the runtime tier from the environment, in the same shape."""
+    return ContinuationInput(
+        mode=_clean_env_str(env.get("GIT_LOOPY_CONTINUATION_MODE")),
+        actor=_clean_env_str(env.get("GIT_LOOPY_CONTINUATION_ACTOR")),
+        **{
+            field: tuple(
+                _parse_csv_env(env.get(f"GIT_LOOPY_CONTINUATION_{field.upper()}"))
+            )
+            for field in _CONTINUATION_LIST_FIELDS
+        },
+    )
+
+
+def _clean_env_str(raw: str | None) -> str | None:
+    """An unset or all-whitespace variable is *absent*, not an empty declaration."""
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def _resolve_continuation(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> ContinuationInputs:
+    """Collect the three Continuation configuration tiers without merging them.
+
+    Deliberately *not* the ADR-0006 precedence chain the other knobs use. The
+    Continuation contract narrows monotonically — mode by lattice minimum, every
+    other axis by intersection — so "the most specific tier wins" would let a
+    project widen a ceiling its global table imposed, which is the one thing the
+    authority model exists to forbid.
+    """
+    return ContinuationInputs(
+        global_=_continuation_input_from_table(global_, scope="global"),
+        project=_continuation_input_from_table(project, scope="project"),
+        runtime=_continuation_input_from_env(env),
+    )
+
+
 def _resolve_send_timeout_seconds(
     env: Mapping[str, str],
     project: Mapping[str, object],
@@ -1439,6 +1526,7 @@ def resolve_config(
     verbosity = min(max(int(args.verbosity), 0), 3)
 
     issue_source = _resolve_issue_source(env, project, global_)
+    continuation = _resolve_continuation(env, project, global_)
     include_prs = _resolve_include_prs_tiered(env, project, global_)
     max_nmt_strikes = _resolve_max_nmt_strikes(env, project, global_)
 
@@ -1459,6 +1547,7 @@ def resolve_config(
     routing = _resolve_routing(args, env, project, global_, warn=warn)
 
     run = RunConfig(
+        continuation=continuation,
         model=model,
         reasoning_effort=reasoning_effort,
         issue_source=issue_source,  # type: ignore[arg-type]

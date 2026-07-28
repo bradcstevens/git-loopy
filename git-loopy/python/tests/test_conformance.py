@@ -1259,7 +1259,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.8"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.9"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -1303,25 +1303,30 @@ def test_continuation_capability_verification_pins_the_foundation_profile() -> N
         verification_module.CONTINUATION_PROFILES
     )
 
-    fixture_profile = verification["profiles"][verification_module.FOUNDATION_PROFILE]
-    declared = verification_module.CONTINUATION_PROFILES[
-        verification_module.FOUNDATION_PROFILE
-    ]
-    assert tuple(fixture_profile["requirements"]) == declared.requirements
-    assert (
-        fixture_profile["continuation_contract_version"]
-        == declared.continuation_contract_version
-        == continuation_module.CONTINUATION_CONTRACT_VERSION
-    )
-    assert (
-        fixture_profile["record_format"]
-        == declared.record_format
-        == continuation_module.RECORD_FORMAT
-    )
-    assert fixture_profile["tracker_adapter"] == declared.tracker_adapter
-    assert tuple(fixture_profile["tracker_operations"]) == declared.tracker_operations
-    assert tuple(fixture_profile["native_operations"]) == declared.native_operations
-    assert fixture_profile["mode_default"] == declared.mode_default
+    for name, declared in verification_module.CONTINUATION_PROFILES.items():
+        fixture_profile = verification["profiles"][name]
+        assert tuple(fixture_profile["requirements"]) == declared.requirements, name
+        assert (
+            fixture_profile["continuation_contract_version"]
+            == declared.continuation_contract_version
+            == continuation_module.CONTINUATION_CONTRACT_VERSION
+        ), name
+        assert (
+            fixture_profile["record_format"]
+            == declared.record_format
+            == continuation_module.RECORD_FORMAT
+        ), name
+        assert fixture_profile["tracker_adapter"] == declared.tracker_adapter, name
+        assert (
+            tuple(fixture_profile["tracker_operations"]) == declared.tracker_operations
+        ), name
+        assert (
+            tuple(fixture_profile["native_operations"]) == declared.native_operations
+        ), name
+        assert fixture_profile["mode_default"] == declared.mode_default, name
+        assert (
+            tuple(fixture_profile.get("required_modes", ())) == declared.required_modes
+        ), name
 
 
 def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
@@ -1350,20 +1355,27 @@ def test_continuation_capability_verification_pins_this_distribution_verdict() -
     """
     verification = _CONTINUATION_SCENARIOS["capability_verification"]
     assert set(verification["verdicts"]) == set(
-        _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+        verification_module.CONTINUATION_PROFILES
     )
 
-    expected = verification["verdicts"]["python"]
-    verdict = verification_module.evaluate_continuation_capabilities(
-        _advertised_manifests()["python"], profile=expected["profile"]
-    )
-    assert verdict.profile == expected["profile"]
-    assert verdict.satisfied is expected["satisfied"]
-    assert list(verdict.unsatisfied_requirements) == expected["unsatisfied_requirements"]
-    assert (
-        list(verdict.unsupported_optional_capabilities)
-        == expected["unsupported_optional_capabilities"]
-    )
+    for profile, verdicts in verification["verdicts"].items():
+        assert set(verdicts) == set(
+            _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+        ), profile
+        expected = verdicts["python"]
+        verdict = verification_module.evaluate_continuation_capabilities(
+            _advertised_manifests()["python"], profile=expected["profile"]
+        )
+        assert verdict.profile == expected["profile"] == profile
+        assert verdict.satisfied is expected["satisfied"], profile
+        assert (
+            list(verdict.unsatisfied_requirements)
+            == expected["unsatisfied_requirements"]
+        ), profile
+        assert (
+            list(verdict.unsupported_optional_capabilities)
+            == expected["unsupported_optional_capabilities"]
+        ), profile
 
 
 def test_continuation_capability_verification_refuses_each_broken_manifest() -> None:
@@ -1372,22 +1384,30 @@ def test_continuation_capability_verification_refuses_each_broken_manifest() -> 
     A verifier that answered "satisfied" unconditionally would pass the verdict pin
     above, so the profile is only a gate if each of its requirements can be shown to
     fail on its own. The refusals are shared data for the same reason the profile is:
-    all three families run the same five broken manifests through their own verifier.
+    all three families run the same broken manifests through their own verifier.
     """
     verification = _CONTINUATION_SCENARIOS["capability_verification"]
     manifest = _advertised_manifests()["python"]
     refusals = verification["refusals"]
 
+    # Every requirement of every profile is defeated by some refusal. Stated over
+    # the union rather than per profile, because `report` inherits five of its six
+    # requirements and a per-profile assertion would demand five duplicate refusals
+    # that prove nothing the foundation ones do not.
     assert {
         requirement
         for refusal in refusals
         for requirement in refusal["unsatisfied_requirements"]
-    } == set(verification_module.FOUNDATION_REQUIREMENT_IDS)
+    } == {
+        requirement
+        for declared in verification_module.CONTINUATION_PROFILES.values()
+        for requirement in declared.requirements
+    }
 
     for refusal in refusals:
         verdict = verification_module.evaluate_continuation_capabilities(
             _manifest_without(manifest, refusal["remove"]),
-            profile=verification_module.FOUNDATION_PROFILE,
+            profile=refusal["profile"],
         )
         assert verdict.satisfied is False, refusal["id"]
         assert (

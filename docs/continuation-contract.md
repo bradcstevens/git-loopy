@@ -31,12 +31,18 @@ git-loopy continuation publish [--input FILE]
 git-loopy continuation reconcile [--input FILE] [--terminal]
 git-loopy continuation record-dispatch-result [--input FILE]
 git-loopy continuation repair-index [--input FILE]
+git-loopy continuation resolve-authority [--input FILE]
 ```
 
 The command surface never performs a Continuation action. `publish` records a Transition owner's
 typed revision, `reconcile` derives current guidance, `record-dispatch-result` records only the
-contract's exceptional Dispatch-evidence classes, and `repair-index` repairs discovery metadata.
-Their semantic request and result records land in later capability-gated revisions.
+contract's exceptional Dispatch-evidence classes, `repair-index` repairs discovery metadata, and
+`resolve-authority` narrows operator configuration into one effective authority (§10). Their
+semantic request and result records land in later capability-gated revisions.
+
+`resolve-authority` is the only operation that contacts no tracker at all: it is pure computation
+over the request, so an operator can ask what a Run would be permitted to do without that question
+itself being an action.
 
 ## 3. Framing and exits
 
@@ -125,12 +131,28 @@ distribution mirrors the project sources byte for byte, so the requests an adopt
 publishes are the ones the coverage suites executed. The Python distribution enforces both, together
 with the report-mode interlock, in `tests/test_continuation_owner_coverage.py`.
 
+Contract 1.3 is the revision that satisfies this precondition and advertises
+`continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
+implication in the direction it was written: coverage gates the advertisement, and the suite fails
+if `report` is advertised while any locked area is unowned. `default` remains `off` — an adopter
+opts in per §10 — and `execute-frontier` remains `false` in every distribution until it can
+actually dispatch one.
+
 ## 5. Event observations
 
 Event schema 1.1 adds `wrapper.continuation.reconciled`,
 `wrapper.continuation_dispatch.started`, `wrapper.continuation_dispatch.ended`, and
 `wrapper.continuation.stopped`. Events are redacted observations only: they never establish
 Producer authority, carry authoritative records, grant Dispatch, or contain runnable Instructions.
+
+Report mode emits `wrapper.continuation.reconciled` once per observation. Its payload is built by
+**naming what survives**, never by removing what must not: `mode`, `phase`, `repository`, `status`,
+`action_identities`, `dispositions`, `kinds`, `reason_codes`, `counts` and `duration_ms`. A field
+the record format grows tomorrow is therefore absent from the Event until someone adds it on
+purpose, rather than leaking until someone notices. Instruction text, summaries, targets, bases,
+Producers, safety cases, completion conditions, Prerequisites and interaction requirements are all
+outside that set, so the Event is an observation that guidance *changed* and never a channel it can
+be acted on through.
 
 ## 6. Native scenario harness
 
@@ -565,3 +587,56 @@ and marks that exact pair `quarantined` — a Transition owner who publishes a r
 moves the fingerprint and the quarantine lifts with it, rather than holding down the correction it
 asked for. The evidence class selects the stop: `safety-case-violation` and `uncertain-effect-state`
 are different problems for the human who reads them, and both are `attention-required`.
+
+## 10. Operator-configured authority
+
+Nothing in §1-§9 says *who is running this and how much are they allowed to do*. Report mode makes
+that question load-bearing: a Run that participates must know its mode, whose records it trusts,
+what identity it speaks as, and which repositories, Targets, Action kinds, Instruction modes and
+effect scopes are in scope. `resolve-authority` answers it from operator configuration alone.
+
+**Three sources, in one locked order: `global`, then `project`, then `runtime`.** Each carries a
+`mode`, a `trusted_producers` list and all five `ceilings` axes, plus an optional `actor` and
+`maintainers`. Absent is not empty. A tier that declared no mode never asked for anything and drops
+out; a tier that declared `off`, or an empty ceiling, asked for *nothing in particular* and narrows
+everything else down to it. A request must name at least one source, in order, without duplicates.
+
+**Narrowing is monotonic. Nothing widens.**
+
+- `mode` is the minimum over the lattice `off < report < execute-frontier`.
+- `trusted_producers`, `maintainers` and every ceiling axis are **set intersection**.
+- `actor` is first-declared-wins; a later source naming a *different* actor is `invalid_request`,
+  because two identities are not a narrowing of one and picking either would be a guess.
+- A persisted `prior` authority narrows last, on the same rules.
+
+This is deliberately *not* the Wrapper's ordinary "most specific tier wins" precedence. Under that
+chain a project could widen a ceiling its global table imposed, which is the one thing an authority
+model exists to forbid. The five ceilings are **positive allowlists**: `repositories` is open
+because a repository name is not enumerable, and `targets`, `action_kinds`, `instruction_modes` and
+`effect_scopes` are checked against the contract's own closed vocabularies, so a typo is a rejection
+rather than a silently unreachable cap.
+
+The result also carries `declared_mode` — the *highest* mode any source asked for, unnarrowed. It is
+never used for authorization; it exists so an operator can see the gap between what they configured
+and what they got, which is otherwise invisible from a Run that simply behaved like `off`.
+
+**Two ways to end up at `off` without asking for it.** After all narrowing, an empty `repositories`
+ceiling or an empty `trusted_producers` set forces `mode: off` with a typed reason
+(`coverage-empty`, `trusted-producers-empty`). A projection over no repository, or over nobody's
+records, is authoritative and empty — indistinguishable from "everything is finished" at exactly the
+moment that is least true.
+
+**Configuration narrows; capability fails closed.** An operator asking for less somewhere is
+recorded in `narrowed` and exits `0`. A *distribution* that cannot serve the effective mode is a
+different thing entirely and exits `1` with `unsupported_operation`: the mode is not advertised in
+`continuation_modes`, the tracker adapter is not supported, or the adapter is missing an operation
+the mode requires (`report` requires `reconcile`; `execute-frontier` also requires
+`record-dispatch-result`). Mode `off` consults the manifest at no point, so a distribution that
+supports nothing can still answer honestly that this Run does nothing.
+
+**One narrowing implementation, two callers.** The native command and the Python Runner's own
+preflight resolve through the same function. The Runner collects its `continuation_*` config keys
+and `GIT_LOOPY_CONTINUATION_*` environment overrides into three *uncombined* sources and hands them
+over; it never pre-merges. A Runner with its own copy of these rules would be projecting a different
+view of the project than the one an operator can ask for by hand — and the copy that drifts is
+always the one nobody runs directly.

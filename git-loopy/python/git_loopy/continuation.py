@@ -20,8 +20,8 @@ from git_loopy.gh import (
 )
 from git_loopy.release_version import read_runtime_release_version
 
-CONTINUATION_CONTRACT_VERSION = "1.2"
-SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1", "1.2")
+CONTINUATION_CONTRACT_VERSION = "1.3"
+SUPPORTED_CONTINUATION_CONTRACT_VERSIONS = ("1.0", "1.1", "1.2", "1.3")
 SAFETY_CASE_CONTRACT_VERSION = "1.2"
 RECORD_FORMAT = 1
 WRAPPER_CONTRACT_VERSION = "1.5"
@@ -44,6 +44,7 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     },
     "operations": {
         "capabilities": True,
+        "resolve-authority": True,
         "publish": True,
         "reconcile": True,
         "record-dispatch-result": True,
@@ -60,10 +61,15 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
         "fixed_frontier_authorization": True,
         "concurrent_dispatch": False,
     },
+    # Contract 1.3. `report` is advertised because §4's mandatory precondition is
+    # met: every locked coverage area has a recognized Transition owner, pinned by
+    # `tests/test_continuation_owner_coverage.py`. `default` stays `off` --- adoption
+    # is the operator's decision, not the distribution's --- and `execute-frontier`
+    # stays unadvertised until #264-#267 implement it.
     "continuation_modes": {
         "default": "off",
         "off": True,
-        "report": False,
+        "report": True,
         "execute-frontier": False,
     },
 }
@@ -369,6 +375,11 @@ class ContinuationError(ValueError):
 
 class PublicationRepairRequired(ContinuationError):
     """A durable transition exists but its Producer revision needs repair."""
+
+
+class CapabilityUnsupported(ContinuationError):
+    """The distribution cannot serve what was asked, so it refuses rather than degrades."""
+
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -4461,6 +4472,310 @@ def _render_terminal(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Operator-configured Continuation authority (§10)
+# ---------------------------------------------------------------------------
+
+#: The mode lattice, weakest first. Narrowing is `min` over this order, which is
+#: what makes authority monotonic: a later configuration source may move a Run
+#: down the lattice and never up it.
+CONTINUATION_MODES: tuple[str, ...] = ("off", "report", "execute-frontier")
+_MODE_RANK = {mode: rank for rank, mode in enumerate(CONTINUATION_MODES)}
+
+#: The ordered configuration sources. The order is the narrowing order, so it is
+#: part of the contract rather than a convenience: "later narrows earlier" has no
+#: meaning without one.
+AUTHORITY_SOURCES: tuple[str, ...] = ("global", "project", "runtime")
+
+#: The five positive ceilings, against the closed vocabulary each one draws from.
+#: `None` means the vocabulary is open (a repository name is not enumerable).
+CEILING_VOCABULARIES: dict[str, frozenset[str] | None] = {
+    "repositories": None,
+    "targets": frozenset(_REFERENCE_FIELDS),
+    "action_kinds": ACTION_KINDS,
+    "instruction_modes": INSTRUCTION_MODES,
+    "effect_scopes": _EFFECT_KINDS,
+}
+
+AUTHORITY_NARROWING_REASONS = frozenset(
+    {
+        "source-ceiling",
+        "persisted-authority",
+        "coverage-empty",
+        "trusted-producers-empty",
+    }
+)
+
+#: What each participating mode needs from the tracker Adapter. `off` is absent
+#: because it needs nothing: it is the claim that Continuation does not run.
+_MODE_REQUIRED_OPERATIONS: dict[str, frozenset[str]] = {
+    "report": frozenset({"reconcile"}),
+    "execute-frontier": frozenset({"reconcile", "record-dispatch-result"}),
+}
+
+
+def _authority_source(value: Any, name: str) -> dict[str, Any]:
+    source = _object(value, name)
+    _fields(
+        source,
+        name,
+        required=frozenset({"source", "mode", "trusted_producers", "ceilings"}),
+        optional=frozenset({"actor", "maintainers"}),
+    )
+    scope = _string(source.get("source"), f"{name}.source")
+    if scope not in AUTHORITY_SOURCES:
+        raise ContinuationError(f"{name}.source is unsupported")
+    mode = _string(source.get("mode"), f"{name}.mode")
+    if mode not in _MODE_RANK:
+        raise ContinuationError(f"{name}.mode is unsupported")
+    resolved: dict[str, Any] = {
+        "source": scope,
+        "mode": mode,
+        "trusted_producers": _authority_set(
+            source.get("trusted_producers"), f"{name}.trusted_producers"
+        ),
+        "ceilings": _authority_ceilings(source.get("ceilings"), f"{name}.ceilings"),
+        "maintainers": _authority_set(
+            source.get("maintainers", []), f"{name}.maintainers"
+        ),
+    }
+    resolved["actor"] = (
+        _string(source["actor"], f"{name}.actor") if "actor" in source else None
+    )
+    return resolved
+
+
+def _authority_set(
+    value: Any, name: str, *, vocabulary: frozenset[str] | None = None
+) -> frozenset[str]:
+    entries = [_string(item, f"{name} item") for item in _array(value, name)]
+    if len(set(entries)) != len(entries):
+        raise ContinuationError(f"{name} must not contain duplicates")
+    if vocabulary is not None:
+        unknown = sorted(set(entries) - vocabulary)
+        if unknown:
+            raise ContinuationError(f"{name} item is unsupported")
+    return frozenset(entries)
+
+
+def _authority_ceilings(value: Any, name: str) -> dict[str, frozenset[str]]:
+    ceilings = _object(value, name)
+    _fields(ceilings, name, required=frozenset(CEILING_VOCABULARIES))
+    return {
+        axis: _authority_set(ceilings.get(axis), f"{name}.{axis}", vocabulary=vocabulary)
+        for axis, vocabulary in CEILING_VOCABULARIES.items()
+    }
+
+
+def _persisted_authority(value: Any, name: str) -> dict[str, Any]:
+    """Validate one previously resolved authority, in the shape this command emits."""
+    prior = _object(value, name)
+    _fields(
+        prior,
+        name,
+        required=frozenset({"mode", "trusted_producers", "ceilings"}),
+        optional=frozenset({"actor", "maintainers"}),
+    )
+    mode = _string(prior.get("mode"), f"{name}.mode")
+    if mode not in _MODE_RANK:
+        raise ContinuationError(f"{name}.mode is unsupported")
+    actor = prior.get("actor")
+    if actor is not None:
+        actor = _string(actor, f"{name}.actor")
+    return {
+        "source": name,
+        "mode": mode,
+        "trusted_producers": _authority_set(
+            prior.get("trusted_producers"), f"{name}.trusted_producers"
+        ),
+        "maintainers": _authority_set(
+            prior.get("maintainers", []), f"{name}.maintainers"
+        ),
+        "ceilings": _authority_ceilings(prior.get("ceilings"), f"{name}.ceilings"),
+        "actor": actor,
+    }
+
+
+def _assert_mode_supported(mode: str, tracker_adapter: str) -> None:
+    """Refuse a mode this distribution's own manifest does not advertise."""
+    adapter = CAPABILITY_MANIFEST["tracker_adapters"].get(tracker_adapter)
+    if adapter is None:
+        raise CapabilityUnsupported(
+            f"tracker adapter {tracker_adapter} is not supported by this distribution"
+        )
+    if CAPABILITY_MANIFEST["continuation_modes"].get(mode) is not True:
+        raise CapabilityUnsupported(
+            f"continuation mode {mode} is not supported by this distribution"
+        )
+    # Report mode is read-only Reconciliation, so the Adapter must be able to
+    # reconcile; a mode advertised over an Adapter that cannot read records would
+    # fail during the Run instead of before it.
+    missing = sorted(_MODE_REQUIRED_OPERATIONS[mode] - set(adapter["operations"]))
+    if missing:
+        raise CapabilityUnsupported(
+            f"continuation mode {mode} requires the {tracker_adapter} adapter "
+            f"operation {missing[0]}"
+        )
+
+
+def resolve_authority(request: dict[str, Any]) -> dict[str, Any]:
+    """Narrow the operator's configuration sources into one effective authority.
+
+    Public because the Runner resolves its own configured authority at preflight
+    through exactly this function. The alternative --- a private copy in the config
+    resolver --- would make `git-loopy continuation resolve-authority` a plausible
+    account of a resolution that never happened.
+    """
+    _fields(
+        request,
+        "request",
+        required=frozenset({"sources"}),
+        optional=frozenset(
+            {
+                "continuation_contract_version",
+                "record_format",
+                "tracker_adapter",
+                "prior",
+            }
+        ),
+    )
+    declared = _array(request.get("sources"), "sources", nonempty=True)
+    seen: list[str] = []
+    resolved: list[dict[str, Any]] = []
+    for index, item in enumerate(declared):
+        source = _authority_source(item, f"sources[{index}]")
+        scope = source["source"]
+        if scope in seen:
+            raise ContinuationError(f"sources[{index}].source is declared twice")
+        # The narrowing order is the contract, so an out-of-order source is a
+        # malformed request rather than something to sort quietly: a caller that
+        # believes runtime narrows project is wrong about the result either way.
+        if seen and AUTHORITY_SOURCES.index(scope) < AUTHORITY_SOURCES.index(seen[-1]):
+            raise ContinuationError(f"sources[{index}].source is out of order")
+        seen.append(scope)
+        resolved.append(source)
+
+    narrowed: set[tuple[str, str]] = set()
+    mode = resolved[0]["mode"]
+    producers = resolved[0]["trusted_producers"]
+    maintainers = resolved[0]["maintainers"]
+    ceilings = dict(resolved[0]["ceilings"])
+    actor = resolved[0]["actor"]
+    declared_mode = mode
+
+    for source in resolved[1:]:
+        declared_mode = max(declared_mode, source["mode"], key=_MODE_RANK.__getitem__)
+        mode, producers, maintainers, ceilings, actor = _narrow_authority(
+            mode,
+            producers,
+            maintainers,
+            ceilings,
+            actor,
+            source,
+            reason="source-ceiling",
+            narrowed=narrowed,
+        )
+
+    # Persisted authority is narrowed against, never replaced. Without this, an
+    # operator who widened a config file after a runtime revocation would hand the
+    # next Run back the authority the revocation took away.
+    if "prior" in request:
+        mode, producers, maintainers, ceilings, actor = _narrow_authority(
+            mode,
+            producers,
+            maintainers,
+            ceilings,
+            actor,
+            _persisted_authority(request["prior"], "prior"),
+            reason="persisted-authority",
+            narrowed=narrowed,
+        )
+
+    # A mode is only as real as the ceilings carrying it. With no repository in
+    # coverage, or no Producer whose records may be trusted, a `report` Run would
+    # render an authoritative empty projection over a project full of work.
+    if mode != "off":
+        if not ceilings["repositories"]:
+            mode = "off"
+            narrowed.add(("repositories", "coverage-empty"))
+        if not producers:
+            mode = "off"
+            narrowed.add(("trusted_producers", "trusted-producers-empty"))
+
+    tracker_adapter = _string(
+        request.get("tracker_adapter", "github"), "tracker_adapter"
+    )
+    # `off` is the claim that Continuation does not participate, so it is the one
+    # mode a distribution never has to be able to serve. Everything above it is
+    # checked against the advertised manifest before the caller is told it holds.
+    if mode != "off":
+        _assert_mode_supported(mode, tracker_adapter)
+
+    return {
+        "mode": mode,
+        "declared_mode": declared_mode,
+        "tracker_adapter": tracker_adapter,
+        "participates": mode != "off",
+        "actor": actor,
+        "maintainers": sorted(maintainers),
+        "trusted_producers": sorted(producers),
+        "ceilings": {axis: sorted(values) for axis, values in ceilings.items()},
+        "narrowed": [
+            {"axis": axis, "reason": reason} for axis, reason in sorted(narrowed)
+        ],
+    }
+
+
+def _narrow_authority(
+    mode: str,
+    producers: frozenset[str],
+    maintainers: frozenset[str],
+    ceilings: dict[str, frozenset[str]],
+    actor: str | None,
+    other: dict[str, Any],
+    *,
+    reason: str,
+    narrowed: set[tuple[str, str]],
+) -> tuple[str, frozenset[str], frozenset[str], dict[str, frozenset[str]], str | None]:
+    """Intersect one authority with another. Nothing here may widen."""
+    if _MODE_RANK[other["mode"]] < _MODE_RANK[mode]:
+        mode = other["mode"]
+        narrowed.add(("mode", reason))
+    if producers & other["trusted_producers"] != producers:
+        narrowed.add(("trusted_producers", reason))
+    producers &= other["trusted_producers"]
+    if maintainers & other["maintainers"] != maintainers:
+        narrowed.add(("maintainers", reason))
+    maintainers &= other["maintainers"]
+    for axis, values in ceilings.items():
+        narrowed_values = values & other["ceilings"][axis]
+        if narrowed_values != values:
+            narrowed.add((axis, reason))
+        ceilings[axis] = narrowed_values
+    if other["actor"] is not None:
+        if actor is not None and actor != other["actor"]:
+            raise ContinuationError("actor is declared twice with different identities")
+        actor = other["actor"]
+    return mode, producers, maintainers, ceilings, actor
+
+
+def make_github_client() -> ContinuationGitHubClient:
+    """The production tracker seam, shared by the native command and the Runner."""
+    return _make_github_client()
+
+
+def reconcile_records(
+    request: dict[str, Any], github: ContinuationGitHubClient
+) -> dict[str, Any]:
+    """Read-only Reconciliation, in the shape `continuation reconcile` returns.
+
+    Public so report mode reconciles through the same code path the native command
+    does. A Runner with its own reader would be projecting a different view of the
+    project than the one an operator can ask for by hand.
+    """
+    return _reconcile(request, github)
+
+
 def run_command(
     operation: str,
     *,
@@ -4496,6 +4811,12 @@ def run_command(
         request = _read_request(input_path, stdin)
         if operation == "publish":
             result = _publish(request, _make_github_client())
+        elif operation == "resolve-authority":
+            result = {
+                "ok": True,
+                "operation": operation,
+                "result": resolve_authority(request),
+            }
         elif operation == "reconcile":
             result = _reconcile(request, _make_github_client())
         elif operation == "record-dispatch-result":
@@ -4504,6 +4825,18 @@ def run_command(
             result = _repair_index(request, _make_github_client())
         else:
             result = None
+    except CapabilityUnsupported as exc:
+        message = str(exc)
+        _emit_json(
+            {
+                "ok": False,
+                "operation": operation,
+                "error": {"code": "unsupported_operation", "message": message},
+            },
+            stdout,
+        )
+        print(f"git-loopy continuation: {message}", file=stderr)
+        return 1
     except PublicationRepairRequired as exc:
         message = str(exc)
         _emit_json(

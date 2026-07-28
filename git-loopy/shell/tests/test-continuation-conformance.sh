@@ -389,41 +389,53 @@ run_capability_verification_gate() {
   # family can see. It lands in the fixture as data and is pinned here against this
   # distribution's own declaration: three members that quietly judged different
   # requirements under one profile name would otherwise never disagree anywhere.
-  local fixture_profile declared
-  fixture_profile="$(jq -S -c '.capability_verification.profiles.foundation' "$fixture")"
-  declared="$(
-    # shellcheck disable=SC1091
-    source "$port_dir/lib/continuation.sh"
-    git_loopy_continuation_profile foundation | jq -S -c .
-  )"
-  [[ "$declared" == "$fixture_profile" ]] || fail \
-    "the shell foundation profile disagrees with the fixture:"$'\n'"declared: $declared"$'\n'"fixture:  $fixture_profile"
+  # `report` is the second profile (#263): a distribution that cannot resolve an
+  # operator authority or does not advertise the mode fails closed here rather
+  # than during a Run.
+  local profile_name
+  for profile_name in foundation report; do
+    local fixture_profile declared
+    fixture_profile="$(
+      jq -S -c ".capability_verification.profiles.$profile_name" "$fixture"
+    )"
+    declared="$(
+      # shellcheck disable=SC1091
+      source "$port_dir/lib/continuation.sh"
+      git_loopy_continuation_profile "$profile_name" | jq -S -c .
+    )"
+    [[ "$declared" == "$fixture_profile" ]] || fail \
+      "the shell $profile_name profile disagrees with the fixture:"$'\n'"declared: $declared"$'\n'"fixture:  $fixture_profile"
 
-  # The verdict is taken on the manifest this distribution really advertises, so the
-  # chain runs real manifest -> setup verdict with no hand-asserted link.
-  local expected_verdict actual_verdict
-  expected_verdict="$(jq -S -c '.capability_verification.verdicts.shell' "$fixture")"
-  actual_verdict="$(
-    # shellcheck disable=SC1091
-    source "$port_dir/lib/continuation.sh"
-    git_loopy_continuation_capabilities |
-      jq -c '.capabilities' |
-      git_loopy_evaluate_continuation_capabilities foundation |
-      jq -S -c 'del(.release_version)'
-  )"
-  [[ "$actual_verdict" == "$expected_verdict" ]] || fail \
-    "the shell verdict disagrees with the fixture:"$'\n'"actual:   $actual_verdict"$'\n'"expected: $expected_verdict"
+    # The verdict is taken on the manifest this distribution really advertises, so
+    # the chain runs real manifest -> setup verdict with no hand-asserted link.
+    local expected_verdict actual_verdict
+    expected_verdict="$(
+      jq -S -c ".capability_verification.verdicts.$profile_name.shell" "$fixture"
+    )"
+    actual_verdict="$(
+      # shellcheck disable=SC1091
+      source "$port_dir/lib/continuation.sh"
+      git_loopy_continuation_capabilities |
+        jq -c '.capabilities' |
+        git_loopy_evaluate_continuation_capabilities "$profile_name" |
+        jq -S -c 'del(.release_version)'
+    )"
+    [[ "$actual_verdict" == "$expected_verdict" ]] || fail \
+      "the shell $profile_name verdict disagrees with the fixture:"$'\n'"actual:   $actual_verdict"$'\n'"expected: $expected_verdict"
+  done
 
   # A verifier that answered "satisfied" unconditionally would pass both checks
-  # above, so every requirement is shown to fail on its own broken manifest.
+  # above, so every requirement is shown to fail on its own broken manifest. Each
+  # refusal now names the profile it is judged against.
   local refusal_count index
   refusal_count="$(jq '.capability_verification.refusals | length' "$fixture")"
   ((refusal_count > 0)) || fail "the fixture registers no capability-verification refusals"
   for ((index = 0; index < refusal_count; index++)); do
-    local refusal id remove expected actual
+    local refusal id remove profile expected actual
     refusal="$(jq -c ".capability_verification.refusals[$index]" "$fixture")"
     id="$(jq -r '.id' <<<"$refusal")"
     remove="$(jq -c '.remove' <<<"$refusal")"
+    profile="$(jq -r '.profile' <<<"$refusal")"
     expected="$(jq -S -c '{satisfied: false, unsatisfied_requirements}' <<<"$refusal")"
     actual="$(
       # shellcheck disable=SC1091
@@ -436,21 +448,21 @@ run_capability_verification_gate() {
             else .[$path[0]] |= del(.[$path[1]])
             end
         ' |
-        git_loopy_evaluate_continuation_capabilities foundation |
+        git_loopy_evaluate_continuation_capabilities "$profile" |
         jq -S -c '{satisfied, unsatisfied_requirements}'
     )"
     [[ "$actual" == "$expected" ]] || fail \
       "refusal $id was not refused as pinned:"$'\n'"actual:   $actual"$'\n'"expected: $expected"
   done
 
-  # An unknown profile is refused rather than silently widened: `report` and
-  # `execute-frontier` are #263/#264 vocabulary, and answering them would let a pass
-  # be read as readiness for a mode no distribution supports.
+  # An unknown profile is refused rather than silently widened: `execute-frontier`
+  # is #264 vocabulary, and answering it would let a pass be read as readiness for
+  # a mode no distribution supports.
   local unknown_status=0
   (
     # shellcheck disable=SC1091
     source "$port_dir/lib/continuation.sh"
-    git_loopy_continuation_profile report
+    git_loopy_continuation_profile execute-frontier
   ) >/dev/null 2>&1 || unknown_status=$?
   ((unknown_status != 0)) || fail "an unknown capability profile was answered"
 }

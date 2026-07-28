@@ -129,6 +129,10 @@ from git_loopy import rolling_scheduler
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, resolve_iteration_model
+from git_loopy.continuation import (
+    CapabilityUnsupported as ContinuationCapabilityUnsupported,
+)
+from git_loopy.continuation_report import ContinuationReporter
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
 from git_loopy.persist import (
@@ -249,6 +253,52 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     ``prds`` backend has no GitHub dependency.
     """
     return gh_module.SubprocessGitHubClient()
+
+
+def _make_continuation_reporter(
+    config: RunConfig, diag: logging.Logger
+) -> ContinuationReporter | None:
+    """Resolve this Run's Continuation authority and build its observer, or `None`.
+
+    `None` is mode `off`: an unconfigured Run never constructs a reporter, never
+    resolves an authority and never touches the tracker on Continuation's behalf,
+    so "preserve current Pool behavior, output, retries, Strikes, and exits
+    without invoking Continuation" is a property of the wiring rather than a
+    promise made by code that ran anyway.
+
+    Raises :class:`~git_loopy.continuation.CapabilityUnsupported` when the
+    configured mode is one this distribution does not advertise. The caller turns
+    that into the Wrapper contract's `preflight_failed`.
+    """
+    sources = config.continuation.declared_sources()
+    if not sources:
+        return None
+
+    from git_loopy import continuation as continuation_module
+
+    authority = continuation_module.resolve_authority({"sources": sources})
+    if not authority["participates"]:
+        # Configured, then narrowed away — by a ceiling, an empty coverage or an
+        # empty trusted-Producer set. Said out loud, because a Run that went quiet
+        # for a reason nobody printed looks exactly like one that is working.
+        diag.info(
+            "continuation authority resolved to off (declared %s): %s",
+            authority["declared_mode"],
+            ", ".join(
+                f"{entry['axis']}/{entry['reason']}" for entry in authority["narrowed"]
+            )
+            or "no narrowing recorded",
+        )
+        return None
+
+    client = continuation_module.make_github_client()
+    return ContinuationReporter(
+        authority,
+        reconcile=lambda request: continuation_module.reconcile_records(
+            request, client
+        ),
+        on_guidance=lambda line: print(line, file=sys.stderr),
+    )
 
 
 def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
@@ -572,6 +622,7 @@ class _Loop:
         diag: logging.Logger,
         include_prs: bool = False,
         usage_observer: _EventObserver | None = None,
+        continuation: ContinuationReporter | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -585,7 +636,13 @@ class _Loop:
         self._source = source
         self._diag = diag
         self._include_prs = include_prs
+        # Report mode's read-only observer, or `None` in mode `off` — which is
+        # the default, and the reason an unconfigured Run cannot reach any of
+        # this code at all rather than reaching a Continuation that declines.
+        self._continuation = continuation
         self._rollup = IterationRollupAccumulator(pricing=pricing)
+        if self._continuation is not None:
+            self._continuation.bind_emit(self._emit)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
         # *current Iteration* slot, so it cannot answer "what has this whole
         # Run spent" — which is what AI-credit pressure is measured against.
@@ -657,6 +714,25 @@ class _Loop:
                 issue=exclusion.ref,
                 title=exclusion.title,
                 reason=exclusion.reason,
+            )
+
+    def _observe_continuation(self, iter_num: int, *, phase: str) -> None:
+        """Render read-only Continuation guidance for one Iteration boundary.
+
+        Guarded rather than trusted: an operator who adopted report mode agreed
+        to *see* guidance, not to a new way for a Run to fail. A Reconciliation
+        that cannot complete is a warning and nothing else.
+        """
+        if self._continuation is None:
+            return
+        try:
+            self._continuation.observe(iter_num=iter_num, phase=phase)
+        except Exception as exc:  # noqa: BLE001 - visibility is never fatal
+            self._diag.warning(
+                "continuation %s reconciliation failed: %s: %s",
+                phase,
+                type(exc).__name__,
+                exc,
             )
 
     def _emit_skill_policy_resolved(self) -> None:
@@ -800,6 +876,10 @@ class _Loop:
                 issues=pool_refs,
                 excluded=len(collection.exclusions),
             )
+            # Report mode observes here and again after the Iteration's durable
+            # changes. The Pool above is untouched by what it finds: report mode
+            # grants visibility, never selection.
+            self._observe_continuation(iter_num, phase="pre-iteration")
             if not pool:
                 # Close the iteration cleanly so the snapshot lifecycle is
                 # consistent even on the empty-pool path.
@@ -896,6 +976,7 @@ class _Loop:
             #    [] (the agent owns the `git mv ... done/` step).
             with telemetry.span("git_loopy.enforce_closures"):
                 completions = self._handle_completions_safely(pool, new_commits)
+            self._observe_continuation(iter_num, phase="post-iteration")
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -1413,6 +1494,7 @@ class _ParallelLoop:
         gate_runner: gate_module.GateRunner,
         worktree_setup: worktree_module.WorktreeSetup,
         include_prs: bool = False,
+        continuation: ContinuationReporter | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1532,6 +1614,7 @@ class _ParallelLoop:
             diag=diag,
             include_prs=include_prs,
             usage_observer=self._cost_meter,
+            continuation=continuation,
         )
 
     def _alloc_iter_num(self) -> int:
@@ -2989,6 +3072,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             workspace=Path(skill_workspace.name),
             discoverer=_discover_skill_catalog,
         )
+        continuation_reporter = _make_continuation_reporter(config, diag)
     except (
         OSError,
         PromptMetadataError,
@@ -3013,6 +3097,27 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
+        return exit_code_for("preflight_failed")
+    except ContinuationCapabilityUnsupported as exc:
+        # Fail closed *before* the Pool. A Run that discovered mid-flight that it
+        # could not serve its configured mode would have already behaved like
+        # `off` while reporting success, which is the silent degradation the
+        # capability manifest exists to prevent.
+        diag.error("Continuation preflight failed: %s", exc)
+        print(
+            f"git-loopy: Continuation preflight failed: {exc}. "
+            "Verify this distribution with `git-loopy continuation capabilities`.",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
         return exit_code_for("preflight_failed")
     except RuntimeError as exc:
         diag.error(
@@ -3062,6 +3167,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             gate_runner=_make_gate_runner(),
             worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
+            continuation=continuation_reporter,
         )
     else:
         loop = _Loop(
@@ -3078,6 +3184,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             source=source,
             diag=diag,
             include_prs=include_prs,
+            continuation=continuation_reporter,
         )
 
     exit_code = 1

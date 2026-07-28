@@ -16,6 +16,10 @@ class GitLoopyContinuationRepairRequired : System.Exception {
     GitLoopyContinuationRepairRequired([string]$Message) : base($Message) {}
 }
 
+class GitLoopyContinuationCapabilityUnsupported : System.Exception {
+    GitLoopyContinuationCapabilityUnsupported([string]$Message) : base($Message) {}
+}
+
 class GitLoopyContinuationGitHubException : System.Exception {
     [string]$Context
     [string]$StderrTail
@@ -38,8 +42,8 @@ class GitLoopyContinuationGitHubException : System.Exception {
     }
 }
 
-$Script:ContinuationContractVersion = "1.2"
-$Script:SupportedContinuationContractVersions = @("1.0", "1.1", "1.2")
+$Script:ContinuationContractVersion = "1.3"
+$Script:SupportedContinuationContractVersions = @("1.0", "1.1", "1.2", "1.3")
 $Script:SafetyCaseContractVersion = "1.2"
 $Script:RecordFormat = 1
 $Script:WrapperContractVersion = "1.5"
@@ -285,6 +289,39 @@ $Script:AssumptionKinds = @(
 # rather than an ordinary retry.
 $Script:RetryKinds = @("at-most-once", "idempotent", "resumable")
 $Script:InstructionModes = @("command", "manual", "skill")
+
+# Operator-configured Continuation authority (§10, #263).
+#
+# The mode lattice, weakest first. Narrowing is `min` over this order, which is
+# what makes authority monotonic: a later configuration source may move a Run
+# down the lattice and never up it.
+$Script:ContinuationModes = @("off", "report", "execute-frontier")
+$Script:ModeRank = [ordered]@{}
+for ($Index = 0; $Index -lt $Script:ContinuationModes.Count; $Index++) {
+    $Script:ModeRank[$Script:ContinuationModes[$Index]] = $Index
+}
+
+# The ordered configuration sources. The order is the narrowing order, so it is
+# part of the contract rather than a convenience: "later narrows earlier" has no
+# meaning without one.
+$Script:AuthoritySources = @("global", "project", "runtime")
+
+# The five positive ceilings, against the closed vocabulary each one draws from.
+# `$null` means the vocabulary is open (a repository name is not enumerable).
+$Script:CeilingVocabularies = [ordered]@{
+    repositories = $null
+    targets = @($Script:ReferenceFields.Keys)
+    action_kinds = $Script:ActionKinds
+    instruction_modes = $Script:InstructionModes
+    effect_scopes = $Script:EffectKinds
+}
+
+# What each participating mode needs from the tracker Adapter. `off` is absent
+# because it needs nothing: it is the claim that Continuation does not run.
+$Script:ModeRequiredOperations = [ordered]@{
+    report = @("reconcile")
+    "execute-frontier" = @("reconcile", "record-dispatch-result")
+}
 $Script:ShaPattern = "\A[0-9a-f]{40}\z"
 # The only two exceptional Dispatch outcomes that become durable evidence.
 # Ordinary success and ordinary execution failure stay in the Runner's
@@ -353,6 +390,7 @@ $Script:CapabilityManifest = [ordered]@{
     }
     operations = [ordered]@{
         capabilities = $true
+        "resolve-authority" = $true
         publish = $true
         reconcile = $true
         "record-dispatch-result" = $true
@@ -369,10 +407,14 @@ $Script:CapabilityManifest = [ordered]@{
         prospective_projection = $true
         fixed_frontier_authorization = $true
     }
+    # Contract 1.3. `report` is advertised because §4's mandatory precondition is
+    # met: every locked coverage area has a recognized Transition owner. `default`
+    # stays `off` -- adoption is the operator's decision, not the distribution's --
+    # and `execute-frontier` stays unadvertised until #264-#267 implement it.
     continuation_modes = [ordered]@{
         default = "off"
         off = $true
-        report = $false
+        report = $true
         "execute-frontier" = $false
     }
 }
@@ -390,8 +432,10 @@ $Script:CapabilityManifest = [ordered]@{
 # records the operator's selection without committing a host-specific executable
 # path or a family-member choice.
 
-# The one named requirement set this distribution is judged against. `report` and
-# `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
+# The named requirement sets this distribution is judged against. `foundation`
+# is the baseline every distribution must clear; `report` (#263) additionally
+# requires the `resolve-authority` operation and the `report` mode to be
+# advertised. `execute-frontier` stays absent: it is #264 vocabulary, and a
 # profile nobody implements would let a pass be read as readiness for a mode no
 # distribution supports.
 $Script:ContinuationProfiles = [ordered]@{
@@ -414,6 +458,28 @@ $Script:ContinuationProfiles = [ordered]@{
             "repair-index"
         )
         mode_default = "off"
+    }
+    report = [ordered]@{
+        requirements = @(
+            "contract-version"
+            "record-format"
+            "tracker-adapter"
+            "native-operations"
+            "mode-default-off"
+            "mode-report"
+        )
+        continuation_contract_version = $Script:ContinuationContractVersion
+        record_format = $Script:RecordFormat
+        tracker_adapter = "github"
+        tracker_operations = @(
+            "publish", "reconcile", "record-dispatch-result", "repair-index"
+        )
+        native_operations = @(
+            "capabilities", "publish", "reconcile", "record-dispatch-result",
+            "repair-index", "resolve-authority"
+        )
+        mode_default = "off"
+        required_modes = @("report")
     }
 }
 
@@ -551,6 +617,16 @@ function Test-GitLoopyCapabilityRequirement {
             return ((Get-GitLoopyManifestValue $Modes "default") -ceq $Default) -and
                 ((Get-GitLoopyManifestValue $Modes $Default) -eq $true)
         }
+        "mode-report" {
+            $Modes = Get-GitLoopyManifestValue $Manifest "continuation_modes"
+            if ($Modes -isnot [Collections.IDictionary]) { return $false }
+            foreach ($Mode in @($ProfileSpec["required_modes"])) {
+                if ((Get-GitLoopyManifestValue $Modes ([string]$Mode)) -ne $true) {
+                    return $false
+                }
+            }
+            return $true
+        }
         default { return $false }
     }
 }
@@ -611,6 +687,7 @@ Usage: git-loopy.ps1 continuation <operation> [options]
 
 Operations:
   capabilities
+  resolve-authority [--input FILE]
   publish [--input FILE]
   reconcile [--input FILE] [--terminal]
   record-dispatch-result [--input FILE]
@@ -7052,6 +7129,388 @@ function Invoke-GitLoopyContinuationRepairIndex {
     }
 }
 
+function Get-GitLoopyAuthoritySet {
+    <#
+    .SYNOPSIS
+        Validate an array as a de-duplicated string set, optionally against a
+        closed vocabulary.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()][string[]]$Vocabulary = $null
+    )
+    $Items = Assert-GitLoopyArray $Value $Name
+    $Entries = [Collections.Generic.List[string]]::new()
+    $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($Item in $Items) {
+        $Entry = Assert-GitLoopyString $Item "$Name item"
+        $Entries.Add($Entry)
+        [void]$Seen.Add($Entry)
+    }
+    if ($Seen.Count -ne $Entries.Count) {
+        throw (New-GitLoopyRejection "$Name must not contain duplicates")
+    }
+    if ($null -ne $Vocabulary) {
+        $Allowed = [Collections.Generic.HashSet[string]]::new(
+            [string[]]$Vocabulary, [StringComparer]::Ordinal
+        )
+        foreach ($Entry in $Entries) {
+            if (-not $Allowed.Contains($Entry)) {
+                throw (New-GitLoopyRejection "$Name item is unsupported")
+            }
+        }
+    }
+    return , [Collections.Generic.HashSet[string]]::new(
+        [string[]]@($Entries), [StringComparer]::Ordinal
+    )
+}
+
+function Get-GitLoopyAuthorityCeilings {
+    <#
+    .SYNOPSIS
+        Validate the five positive ceilings, each against its own vocabulary.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $Ceilings = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Ceilings `
+        -Name $Name `
+        -Required @($Script:CeilingVocabularies.Keys)
+    $Resolved = [ordered]@{}
+    foreach ($Axis in $Script:CeilingVocabularies.Keys) {
+        $Vocabulary = $Script:CeilingVocabularies[$Axis]
+        $Resolved[$Axis] = Get-GitLoopyAuthoritySet `
+            $Ceilings[$Axis] "$Name.$Axis" $Vocabulary
+    }
+    return $Resolved
+}
+
+function Get-GitLoopyAuthoritySource {
+    <#
+    .SYNOPSIS
+        Validate one operator-declared configuration source.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $Source = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Source `
+        -Name $Name `
+        -Required @("source", "mode", "trusted_producers", "ceilings") `
+        -Optional @("actor", "maintainers")
+    $Scope = Assert-GitLoopyString $Source["source"] "$Name.source"
+    if ($Scope -cnotin $Script:AuthoritySources) {
+        throw (New-GitLoopyRejection "$Name.source is unsupported")
+    }
+    $Mode = Assert-GitLoopyString $Source["mode"] "$Name.mode"
+    if (-not $Script:ModeRank.Contains($Mode)) {
+        throw (New-GitLoopyRejection "$Name.mode is unsupported")
+    }
+    $Maintainers = [object[]]@()
+    if ($Source.Contains("maintainers")) {
+        $Maintainers = $Source["maintainers"]
+    }
+    $Resolved = [ordered]@{
+        source = $Scope
+        mode = $Mode
+        trusted_producers = Get-GitLoopyAuthoritySet `
+            $Source["trusted_producers"] "$Name.trusted_producers" $null
+        ceilings = Get-GitLoopyAuthorityCeilings $Source["ceilings"] "$Name.ceilings"
+        maintainers = Get-GitLoopyAuthoritySet $Maintainers "$Name.maintainers" $null
+    }
+    $Resolved["actor"] = if ($Source.Contains("actor")) {
+        Assert-GitLoopyString $Source["actor"] "$Name.actor"
+    }
+    else {
+        $null
+    }
+    return $Resolved
+}
+
+function Get-GitLoopyPersistedAuthority {
+    <#
+    .SYNOPSIS
+        Validate one previously resolved authority, in the shape this command
+        emits.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $Prior = Assert-GitLoopyObject $Value $Name
+    Assert-GitLoopyFields `
+        -Value $Prior `
+        -Name $Name `
+        -Required @("mode", "trusted_producers", "ceilings") `
+        -Optional @("actor", "maintainers")
+    $Mode = Assert-GitLoopyString $Prior["mode"] "$Name.mode"
+    if (-not $Script:ModeRank.Contains($Mode)) {
+        throw (New-GitLoopyRejection "$Name.mode is unsupported")
+    }
+    $Actor = $null
+    if ($Prior.Contains("actor") -and $null -ne $Prior["actor"]) {
+        $Actor = Assert-GitLoopyString $Prior["actor"] "$Name.actor"
+    }
+    $Maintainers = [object[]]@()
+    if ($Prior.Contains("maintainers")) {
+        $Maintainers = $Prior["maintainers"]
+    }
+    return [ordered]@{
+        source = $Name
+        mode = $Mode
+        trusted_producers = Get-GitLoopyAuthoritySet `
+            $Prior["trusted_producers"] "$Name.trusted_producers" $null
+        maintainers = Get-GitLoopyAuthoritySet $Maintainers "$Name.maintainers" $null
+        ceilings = Get-GitLoopyAuthorityCeilings $Prior["ceilings"] "$Name.ceilings"
+        actor = $Actor
+    }
+}
+
+function Assert-GitLoopyModeSupported {
+    <#
+    .SYNOPSIS
+        Refuse a mode this distribution's own manifest does not advertise.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Mode,
+        [Parameter(Mandatory)][string]$TrackerAdapter
+    )
+    $Manifest = $Script:CapabilityManifest
+    $Adapters = $Manifest["tracker_adapters"]
+    if (-not $Adapters.Contains($TrackerAdapter)) {
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "tracker adapter $TrackerAdapter is not supported by this distribution"
+        )
+    }
+    if ($Manifest["continuation_modes"][$Mode] -ne $true) {
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "continuation mode $Mode is not supported by this distribution"
+        )
+    }
+    # Report mode is read-only Reconciliation, so the Adapter must be able to
+    # reconcile; a mode advertised over an Adapter that cannot read records would
+    # fail during the Run instead of before it.
+    $Advertised = [Collections.Generic.HashSet[string]]::new(
+        [string[]]@($Adapters[$TrackerAdapter]["operations"]), [StringComparer]::Ordinal
+    )
+    $Missing = [Collections.Generic.List[string]]::new()
+    foreach ($Operation in @($Script:ModeRequiredOperations[$Mode])) {
+        if (-not $Advertised.Contains($Operation)) {
+            $Missing.Add($Operation)
+        }
+    }
+    if ($Missing.Count -gt 0) {
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "continuation mode $Mode requires the $TrackerAdapter adapter " +
+            "operation $(Get-GitLoopyFirstOrdinal $Missing.ToArray())"
+        )
+    }
+}
+
+function Merge-GitLoopyAuthority {
+    <#
+    .SYNOPSIS
+        Intersect one authority with another. Nothing here may widen.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$State,
+        [Parameter(Mandatory)][Collections.IDictionary]$Other,
+        [Parameter(Mandatory)][string]$Reason,
+        [Collections.Generic.HashSet[string]]$Narrowed
+    )
+    if ($Script:ModeRank[[string]$Other["mode"]] -lt $Script:ModeRank[[string]$State["mode"]]) {
+        $State["mode"] = $Other["mode"]
+        [void]$Narrowed.Add("mode|$Reason")
+    }
+    $Producers = $State["trusted_producers"]
+    $OtherProducers = $Other["trusted_producers"]
+    $NarrowedProducers = [Collections.Generic.HashSet[string]]::new(
+        $Producers, [StringComparer]::Ordinal
+    )
+    $NarrowedProducers.IntersectWith($OtherProducers)
+    if ($NarrowedProducers.Count -ne $Producers.Count) {
+        [void]$Narrowed.Add("trusted_producers|$Reason")
+    }
+    $State["trusted_producers"] = $NarrowedProducers
+
+    $Maintainers = $State["maintainers"]
+    $OtherMaintainers = $Other["maintainers"]
+    $NarrowedMaintainers = [Collections.Generic.HashSet[string]]::new(
+        $Maintainers, [StringComparer]::Ordinal
+    )
+    $NarrowedMaintainers.IntersectWith($OtherMaintainers)
+    if ($NarrowedMaintainers.Count -ne $Maintainers.Count) {
+        [void]$Narrowed.Add("maintainers|$Reason")
+    }
+    $State["maintainers"] = $NarrowedMaintainers
+
+    $Ceilings = $State["ceilings"]
+    $OtherCeilings = $Other["ceilings"]
+    foreach ($Axis in @($Ceilings.Keys)) {
+        $Values = $Ceilings[$Axis]
+        $NarrowedValues = [Collections.Generic.HashSet[string]]::new(
+            $Values, [StringComparer]::Ordinal
+        )
+        $NarrowedValues.IntersectWith($OtherCeilings[$Axis])
+        if ($NarrowedValues.Count -ne $Values.Count) {
+            [void]$Narrowed.Add("$Axis|$Reason")
+        }
+        $Ceilings[$Axis] = $NarrowedValues
+    }
+
+    if ($null -ne $Other["actor"]) {
+        if ($null -ne $State["actor"] -and $State["actor"] -cne $Other["actor"]) {
+            throw (New-GitLoopyRejection (
+                "actor is declared twice with different identities"
+            ))
+        }
+        $State["actor"] = $Other["actor"]
+    }
+}
+
+function Resolve-GitLoopyContinuationAuthority {
+    <#
+    .SYNOPSIS
+        Narrow the operator's configuration sources into one effective authority.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][Collections.IDictionary]$Request)
+
+    Assert-GitLoopyFields `
+        -Value $Request `
+        -Name "request" `
+        -Required @("sources") `
+        -Optional @(
+            "continuation_contract_version", "record_format", "tracker_adapter",
+            "prior"
+        )
+    $Declared = Assert-GitLoopyArray $Request["sources"] "sources" -NonEmpty
+    $Seen = [Collections.Generic.List[string]]::new()
+    $Resolved = [Collections.Generic.List[Collections.IDictionary]]::new()
+    for ($Index = 0; $Index -lt $Declared.Count; $Index++) {
+        $Source = Get-GitLoopyAuthoritySource $Declared[$Index] "sources[$Index]"
+        $Scope = [string]$Source["source"]
+        if ($Seen.Contains($Scope)) {
+            throw (New-GitLoopyRejection "sources[$Index].source is declared twice")
+        }
+        # The narrowing order is the contract, so an out-of-order source is a
+        # malformed request rather than something to sort quietly: a caller that
+        # believes runtime narrows project is wrong about the result either way.
+        if (
+            $Seen.Count -gt 0 -and
+            [array]::IndexOf($Script:AuthoritySources, $Scope) -lt
+                [array]::IndexOf($Script:AuthoritySources, $Seen[$Seen.Count - 1])
+        ) {
+            throw (New-GitLoopyRejection "sources[$Index].source is out of order")
+        }
+        $Seen.Add($Scope)
+        $Resolved.Add($Source)
+    }
+
+    $Narrowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $State = [ordered]@{
+        mode = $Resolved[0]["mode"]
+        trusted_producers = $Resolved[0]["trusted_producers"]
+        maintainers = $Resolved[0]["maintainers"]
+        ceilings = [ordered]@{}
+        actor = $Resolved[0]["actor"]
+    }
+    foreach ($Axis in @($Resolved[0]["ceilings"].Keys)) {
+        $State["ceilings"][$Axis] = $Resolved[0]["ceilings"][$Axis]
+    }
+    $DeclaredMode = [string]$State["mode"]
+
+    for ($Index = 1; $Index -lt $Resolved.Count; $Index++) {
+        $Source = $Resolved[$Index]
+        if ($Script:ModeRank[[string]$Source["mode"]] -gt $Script:ModeRank[$DeclaredMode]) {
+            $DeclaredMode = [string]$Source["mode"]
+        }
+        Merge-GitLoopyAuthority `
+            -State $State -Other $Source -Reason "source-ceiling" -Narrowed $Narrowed
+    }
+
+    # Persisted authority is narrowed against, never replaced. Without this, an
+    # operator who widened a config file after a runtime revocation would hand the
+    # next Run back the authority the revocation took away.
+    if ($Request.Contains("prior")) {
+        $Prior = Get-GitLoopyPersistedAuthority $Request["prior"] "prior"
+        Merge-GitLoopyAuthority `
+            -State $State -Other $Prior -Reason "persisted-authority" -Narrowed $Narrowed
+    }
+
+    # A mode is only as real as the ceilings carrying it. With no repository in
+    # coverage, or no Producer whose records may be trusted, a `report` Run would
+    # render an authoritative empty projection over a project full of work.
+    if ([string]$State["mode"] -cne "off") {
+        if ($State["ceilings"]["repositories"].Count -eq 0) {
+            $State["mode"] = "off"
+            [void]$Narrowed.Add("repositories|coverage-empty")
+        }
+        if ($State["trusted_producers"].Count -eq 0) {
+            $State["mode"] = "off"
+            [void]$Narrowed.Add("trusted_producers|trusted-producers-empty")
+        }
+    }
+
+    $TrackerAdapter = "github"
+    if ($Request.Contains("tracker_adapter")) {
+        $TrackerAdapter = Assert-GitLoopyString $Request["tracker_adapter"] "tracker_adapter"
+    }
+    # `off` is the claim that Continuation does not participate, so it is the one
+    # mode a distribution never has to be able to serve. Everything above it is
+    # checked against the advertised manifest before the caller is told it holds.
+    if ([string]$State["mode"] -cne "off") {
+        Assert-GitLoopyModeSupported -Mode ([string]$State["mode"]) -TrackerAdapter $TrackerAdapter
+    }
+
+    $CeilingsOut = [ordered]@{}
+    foreach ($Axis in @($State["ceilings"].Keys)) {
+        $CeilingsOut[$Axis] = [object[]]@(
+            $State["ceilings"][$Axis] | Sort-Object -CaseSensitive
+        )
+    }
+
+    $NarrowedOut = [Collections.Generic.List[Collections.IDictionary]]::new()
+    foreach ($Entry in $Narrowed) {
+        $Parts = $Entry.Split("|", 2)
+        $NarrowedOut.Add([ordered]@{ axis = $Parts[0]; reason = $Parts[1] })
+    }
+    $NarrowedSorted = @(
+        $NarrowedOut | Sort-Object -CaseSensitive -Property `
+            @{Expression = { $_["axis"] } }, @{Expression = { $_["reason"] } }
+    )
+
+    return [ordered]@{
+        ok = $true
+        operation = "resolve-authority"
+        result = [ordered]@{
+            mode = [string]$State["mode"]
+            declared_mode = $DeclaredMode
+            participates = ([string]$State["mode"] -cne "off")
+            tracker_adapter = $TrackerAdapter
+            actor = $State["actor"]
+            maintainers = [object[]]@($State["maintainers"] | Sort-Object -CaseSensitive)
+            trusted_producers = [object[]]@(
+                $State["trusted_producers"] | Sort-Object -CaseSensitive
+            )
+            ceilings = $CeilingsOut
+            narrowed = [object[]]@($NarrowedSorted)
+        }
+    }
+}
+
 function Invoke-GitLoopyContinuationMain {
     [CmdletBinding()]
     param(
@@ -7079,7 +7538,8 @@ function Invoke-GitLoopyContinuationMain {
     }
 
     $SupportedSurface = @(
-        "publish", "reconcile", "record-dispatch-result", "repair-index"
+        "resolve-authority", "publish", "reconcile", "record-dispatch-result",
+        "repair-index"
     )
     if ($Operation -cnotin $SupportedSurface) {
         [Console]::Error.WriteLine((Get-GitLoopyContinuationUsage))
@@ -7134,6 +7594,9 @@ function Invoke-GitLoopyContinuationMain {
         if ($Operation -ceq "publish") {
             $Result = Invoke-GitLoopyContinuationPublish $Request
         }
+        elseif ($Operation -ceq "resolve-authority") {
+            $Result = Resolve-GitLoopyContinuationAuthority $Request
+        }
         elseif ($Operation -ceq "reconcile") {
             $Result = Invoke-GitLoopyContinuationReconcile $Request
         }
@@ -7151,6 +7614,12 @@ function Invoke-GitLoopyContinuationMain {
         return Write-GitLoopyContinuationError `
             -Operation $Operation `
             -Code "repair_required" `
+            -Message $_.Exception.Message
+    }
+    catch [GitLoopyContinuationCapabilityUnsupported] {
+        return Write-GitLoopyContinuationError `
+            -Operation $Operation `
+            -Code "unsupported_operation" `
             -Message $_.Exception.Message
     }
     catch [GitLoopyContinuationGitHubException] {

@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping
 from git_loopy.continuation import CONTINUATION_CONTRACT_VERSION, RECORD_FORMAT
 
 FOUNDATION_PROFILE = "foundation"
+REPORT_PROFILE = "report"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,9 @@ class ContinuationProfile:
     tracker_operations: tuple[str, ...]
     native_operations: tuple[str, ...]
     mode_default: str
+    #: Participating modes the manifest must advertise as supported. Empty for a
+    #: profile that only cares which mode a distribution *defaults* to.
+    required_modes: tuple[str, ...] = ()
 
 
 #: Fixed declaration order. The rendered and machine results list unsatisfied
@@ -75,12 +79,32 @@ _FOUNDATION = ContinuationProfile(
     mode_default="off",
 )
 
-#: Named requirement sets a manifest may be judged against. `report` and
-#: `execute-frontier` are deliberately absent: they are #263/#264 vocabulary, and a
-#: profile nobody implements would let a pass be read as readiness for a mode no
-#: distribution supports.
+#: Fixed declaration order, as above. `mode-report` is last because it is the one
+#: requirement the foundation gate never asked for: a reader comparing the two
+#: profiles sees exactly what report mode added.
+REPORT_REQUIREMENT_IDS = FOUNDATION_REQUIREMENT_IDS + ("mode-report",)
+
+_REPORT = ContinuationProfile(
+    name=REPORT_PROFILE,
+    requirements=REPORT_REQUIREMENT_IDS,
+    continuation_contract_version=CONTINUATION_CONTRACT_VERSION,
+    record_format=RECORD_FORMAT,
+    tracker_adapter="github",
+    tracker_operations=_FOUNDATION.tracker_operations,
+    # Report mode resolves an operator-configured authority before it reconciles,
+    # so a distribution that cannot resolve one cannot be adopted into it.
+    native_operations=_FOUNDATION.native_operations + ("resolve-authority",),
+    mode_default="off",
+    required_modes=("report",),
+)
+
+#: Named requirement sets a manifest may be judged against. `execute-frontier` is
+#: still deliberately absent: it is #264-#267 vocabulary, and a profile nobody
+#: implements would let a pass be read as readiness for a mode no distribution
+#: supports. `report` is present because every family member now implements it.
 CONTINUATION_PROFILES: Mapping[str, ContinuationProfile] = {
     FOUNDATION_PROFILE: _FOUNDATION,
+    REPORT_PROFILE: _REPORT,
 }
 
 
@@ -229,6 +253,15 @@ def _defaults_to_the_profile_mode(
     )
 
 
+def _advertises_the_required_modes(
+    manifest: Mapping[str, Any], profile: ContinuationProfile
+) -> bool:
+    modes = manifest.get("continuation_modes")
+    if not isinstance(modes, Mapping):
+        return False
+    return all(modes.get(mode) is True for mode in profile.required_modes)
+
+
 def _sequence(value: Any) -> tuple[Any, ...]:
     if isinstance(value, (list, tuple)):
         return tuple(value)
@@ -243,4 +276,5 @@ _REQUIREMENTS: Mapping[str, _Requirement] = {
     "tracker-adapter": _serves_the_tracker_adapter,
     "native-operations": _serves_the_native_operations,
     "mode-default-off": _defaults_to_the_profile_mode,
+    "mode-report": _advertises_the_required_modes,
 }
