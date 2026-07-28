@@ -170,6 +170,24 @@ the `Loop` and `Command` columns. Fill in every runnable row before delegating
 work. Vague verbs such as "run the tests" force each fresh agent to rediscover
 the command and weaken the feedback loop.
 
+This table is not documentation *about* the gate — it **is** the gate's input. In
+Parallel mode, **Integration** merges a **Lane**'s branch into a private stage and
+runs these commands there, top to bottom and fail-fast (ADR-0009). Two consequences
+worth knowing before you fill it in:
+
+- **A row that is left as a `<PLACEHOLDER>`, or an absent section, is not "no gate" —
+  it is a gate that cannot run.** `AgentsMdGateRunner` raises `GateError`, the runner
+  treats that as red, and every Lane merge fails Integration regardless of what the
+  contribution contains.
+- **Every row is blocking.** A command that is already failing for unrelated reasons
+  (a lint backlog, a flaky suite) makes Integration permanently red. Leave it out of
+  the table until it is green, and note in prose why.
+
+git-loopy's own [`AGENTS.md`](../AGENTS.md) is the worked example: it declares one
+row per Runner-family member, ordered cheapest-first so a fail-fast gate reports the
+cheap signal soonest, with tools resolved through `PATH` rather than host-specific
+paths (Integration runs in a throwaway worktree on whatever host the operator has).
+
 If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft tooling** sections to `AGENTS.md` documenting the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources. Otherwise skip them.
 
 ---
