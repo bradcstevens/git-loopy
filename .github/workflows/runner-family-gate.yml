@@ -7,6 +7,13 @@ name: Runner family gate
 # claims to support. All jobs use fake external tools and scratch repositories, so
 # the gate needs neither live Copilot nor GitHub credentials. The shape of this file
 # is pinned by git-loopy/python/tests/test_runner_family_gate.py.
+#
+# Every job here ends by stating an **assertion census** -- how much it actually
+# asserted, in its own runner's reporting unit -- and refusing a zero (issue #317).
+# A gate that dies loudly goes red and CI says so; a gate handed an empty suite goes
+# green having proved nothing, and nothing in the system reports that at all.
+# `cargo test` on a crate with no tests and a PowerShell loop over an empty suite
+# list were both measured exiting 0. The check is non-zero, never a floor count.
 
 on:
   push:
@@ -39,9 +46,13 @@ jobs:
           git-loopy/python/tests/test_continuation_scenarios.py
 
       - name: Python test suite
-        run: >-
-          uv run --project git-loopy/python --all-extras
-          python -m pytest -q git-loopy/python/tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project git-loopy/python --all-extras \
+            python -m pytest -q git-loopy/python/tests 2>&1 | tee pytest.log
+          .github/scripts/assert-nonzero-census.sh Python \
+            "$(.github/scripts/count-passed.sh pytest.log)"
 
   shell:
     name: shell / ${{ matrix.os }}
@@ -84,11 +95,23 @@ jobs:
             git-loopy/shell/lib/release-version.sh \
             git-loopy/shell/lib/tui-install.sh \
             git-loopy/shell/tests/*.sh
-          "$BASH_BIN" git-loopy/shell/tests/test-event-conformance.sh
-          "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-conformance.sh
-          "$BASH_BIN" git-loopy/shell/tests/test-continuation-conformance.sh
-          "$BASH_BIN" git-loopy/shell/tests/test-orchestrator-boundary.sh
-          "$BASH_BIN" git-loopy/shell/tests/test-tui-install.sh
+          # The shell suites print no assertion total of their own, so the census is
+          # the number of suites this gate actually executed. Counting it -- rather
+          # than trusting the list to be non-empty -- is what keeps a list that
+          # collapses to nothing (a glob under `nullglob`, say) red instead of green.
+          SUITES=(
+            git-loopy/shell/tests/test-event-conformance.sh
+            git-loopy/shell/tests/test-orchestrator-conformance.sh
+            git-loopy/shell/tests/test-continuation-conformance.sh
+            git-loopy/shell/tests/test-orchestrator-boundary.sh
+            git-loopy/shell/tests/test-tui-install.sh
+          )
+          EXECUTED=0
+          for SUITE in "${SUITES[@]}"; do
+            "$BASH_BIN" "$SUITE"
+            EXECUTED=$((EXECUTED + 1))
+          done
+          .github/scripts/assert-nonzero-census.sh shell "$EXECUTED"
 
   rust:
     name: Rust Dashboard core / ${{ matrix.os }}
@@ -107,10 +130,16 @@ jobs:
           --component rustfmt --component clippy
 
       - name: Rust Conformance adapter and suite
+        shell: bash
         run: |
+          set -euo pipefail
           cargo fmt --manifest-path git-loopy/tui/Cargo.toml --check
           cargo clippy --manifest-path git-loopy/tui/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path git-loopy/tui/Cargo.toml
+          cargo test --manifest-path git-loopy/tui/Cargo.toml 2>&1 | tee cargo-test.log
+          # `cargo test` exits 0 on a crate with no tests, printing `0 passed`, so
+          # the exit code alone cannot tell a gated suite from an empty one.
+          .github/scripts/assert-nonzero-census.sh Rust \
+            "$(.github/scripts/count-passed.sh cargo-test.log)"
 
   powershell:
     name: PowerShell / ${{ matrix.os }}
@@ -131,13 +160,25 @@ jobs:
           if ($PSVersionTable.PSVersion.Major -lt 7) {
             throw "PowerShell 7+ is required."
           }
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-event-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-orchestrator-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-continuation-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-orchestrator-boundary.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-tui-install.ps1
+          # An empty suite list is the PowerShell member's fail-open case: the loop
+          # runs nothing and exits 0. Counting what was executed, and checking each
+          # suite's own exit code, is what makes this step able to report either.
+          $Suites = @(
+            "git-loopy/powershell/tests/test-event-conformance.ps1",
+            "git-loopy/powershell/tests/test-orchestrator-conformance.ps1",
+            "git-loopy/powershell/tests/test-continuation-conformance.ps1",
+            "git-loopy/powershell/tests/test-orchestrator-boundary.ps1",
+            "git-loopy/powershell/tests/test-tui-install.ps1"
+          )
+          $Executed = 0
+          foreach ($Suite in $Suites) {
+            pwsh -NoLogo -NoProfile -File $Suite
+            if ($LASTEXITCODE -ne 0) {
+              throw "$Suite failed with exit code $LASTEXITCODE."
+            }
+            $Executed++
+          }
+          & .github/scripts/AssertionCensus.ps1 -Label PowerShell -Census "$Executed"
+          if ($LASTEXITCODE -ne 0) {
+            throw "the PowerShell gate reported no assertion census."
+          }
