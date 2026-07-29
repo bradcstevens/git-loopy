@@ -354,42 +354,6 @@ if ($CanRunFabricatedHelper) {
         }) "could not answer --version" "a helper that cannot answer --version is refused"
 }
 
-# --- Atomic activation ------------------------------------------------------
-#
-# The workspace is deliberately a sibling of the destination, so the last step is
-# a same-directory rename: the bytes that were verified are exactly the bytes that
-# land, and there is no window in which a half-written file is discoverable as the
-# clone-local helper.
-
-$ActivateDir = New-Scratch -Name activate
-$Destination = Join-Path $ActivateDir "repo/.git-loopy/bin/git-loopy-tui"
-$Workspace = New-GitLoopyTuiWorkspace -Destination $Destination
-Assert-Equal (Split-Path -Parent $Destination) (Split-Path -Parent $Workspace) `
-    "the staging workspace is a sibling of the destination"
-
-[IO.File]::WriteAllText((Join-Path $Workspace "git-loopy-tui"), "fresh")
-Move-GitLoopyTuiHelper -Verified (Join-Path $Workspace "git-loopy-tui") `
-    -Destination $Destination
-Assert-Equal "fresh" ([IO.File]::ReadAllText($Destination)) `
-    "activation installs the verified helper"
-
-[IO.File]::WriteAllText((Join-Path $Workspace "git-loopy-tui"), "upgraded")
-Move-GitLoopyTuiHelper -Verified (Join-Path $Workspace "git-loopy-tui") `
-    -Destination $Destination
-Assert-Equal "upgraded" ([IO.File]::ReadAllText($Destination)) `
-    "activation replaces the installed helper"
-Remove-Item -LiteralPath $Workspace -Recurse -Force
-
-# The installation slot and the discovery slot are the same slot, asserted rather
-# than asserted-by-comment: the Orchestrator's own finder has to see what the
-# installer just wrote.
-if (-not $IsWindows) {
-    & chmod +x $Destination
-}
-$Discovered = Find-GitLoopyTuiHelper -RepoRoot (Join-Path $ActivateDir "repo") -SearchPath ""
-Assert-True ($null -ne $Discovered) "the Orchestrator discovers what the installer staged"
-Assert-Equal "clone-local" $Discovered.Source "the staged helper is the clone-local one"
-
 # --- Host architecture vocabulary -------------------------------------------
 #
 # The shared alias tables are keyed in `uname -m` vocabulary, because that is what
@@ -465,6 +429,55 @@ Assert-True (-not [string]::IsNullOrEmpty($HostShape.System)) `
     "the runtime names the operating system it is on"
 $HostTriple = Get-GitLoopyTuiHostTarget -Metadata $ArtifactMetadata
 $HostNames = Get-GitLoopyTuiArtifactName -Metadata $ArtifactMetadata -Triple $HostTriple
+
+# --- Atomic activation ------------------------------------------------------
+#
+# The workspace is deliberately a sibling of the destination, so the last step is
+# a same-directory rename: the bytes that were verified are exactly the bytes that
+# land, and there is no window in which a half-written file is discoverable as the
+# clone-local helper.
+#
+# The helper is staged under `$HostNames.Executable` — the name the installer
+# itself would derive on *this* host — rather than under a written-out one,
+# because the helper-name convention is platform-dependent and both halves of the
+# assertion below have to obey the same one. Windows names an executable by its
+# extension, so the finder there generates only extension-carrying candidates; a
+# hard-coded POSIX name made the two halves agree on Linux and macOS by
+# coincidence and disagree on Windows by construction (#319).
+
+$ActivateDir = New-Scratch -Name activate
+$ActivateRepo = Join-Path $ActivateDir "repo"
+$Destination = Join-Path (Join-Path $ActivateRepo ".git-loopy/bin") $HostNames.Executable
+$Workspace = New-GitLoopyTuiWorkspace -Destination $Destination
+Assert-Equal (Split-Path -Parent $Destination) (Split-Path -Parent $Workspace) `
+    "the staging workspace is a sibling of the destination"
+
+$Verified = Join-Path $Workspace $HostNames.Executable
+[IO.File]::WriteAllText($Verified, "fresh")
+Move-GitLoopyTuiHelper -Verified $Verified -Destination $Destination
+Assert-Equal "fresh" ([IO.File]::ReadAllText($Destination)) `
+    "activation installs the verified helper"
+
+[IO.File]::WriteAllText($Verified, "upgraded")
+Move-GitLoopyTuiHelper -Verified $Verified -Destination $Destination
+Assert-Equal "upgraded" ([IO.File]::ReadAllText($Destination)) `
+    "activation replaces the installed helper"
+Remove-Item -LiteralPath $Workspace -Recurse -Force
+
+# The installation slot and the discovery slot are the same slot, asserted rather
+# than asserted-by-comment: the Orchestrator's own finder has to see what the
+# installer just wrote. Nothing is chmod'ed here first — activation carries the
+# execute bit itself, so the finder's runnability test is answered by what the
+# installer did rather than by what the harness helpfully did afterwards.
+$Discovered = Find-GitLoopyTuiHelper -RepoRoot $ActivateRepo -SearchPath ""
+Assert-True ($null -ne $Discovered) "the Orchestrator discovers what the installer staged"
+Assert-Equal "clone-local" $Discovered.Source "the staged helper is the clone-local one"
+# Not merely *a* helper in the slot: the very file activation renamed into place.
+# Resolved on both sides because a discovered path and a constructed one may spell
+# the same file with different separators on Windows.
+Assert-Equal (Resolve-Path -LiteralPath $Destination).Path `
+    (Resolve-Path -LiteralPath $Discovered.Path).Path `
+    "the discovered helper is the file activation wrote"
 
 # --- A published Release, served over a loopback socket ---------------------
 #
