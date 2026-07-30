@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.9",
+  "fixture_schema_version": "1.10",
   "continuation_contract_version": "1.3",
   "record_format": 1,
   "wrapper_contract_version": "1.5",
@@ -2809,7 +2809,8 @@
     "scope_reasons": [
       "capability-absent",
       "family-local-detail",
-      "manifest-identity"
+      "manifest-identity",
+      "mode-absent"
     ],
     "scoped_records": {
       "capabilities-powershell": {
@@ -2866,17 +2867,7 @@
         "operation": "publish",
         "variant_group": "publish-repairs-an-undecodable-reread-revision"
       },
-      "terminal-selection-is-reconcile-only-python": {
-        "reason": "family-local-detail",
-        "operation": "publish",
-        "variant_group": "terminal-selection-is-reconcile-only"
-      },
-      "terminal-selection-is-reconcile-only-shell-powershell": {
-        "reason": "family-local-detail",
-        "operation": "publish",
-        "variant_group": "terminal-selection-is-reconcile-only"
-      },
-      "reconcile-terminal-preserves-invalid-request-shell": {
+      "reconcile-terminal-preserves-invalid-request-powershell": {
         "reason": "family-local-detail",
         "operation": "reconcile",
         "variant_group": "reconcile-terminal-preserves-invalid-request"
@@ -2886,15 +2877,35 @@
         "operation": "reconcile",
         "variant_group": "reconcile-terminal-preserves-invalid-request"
       },
-      "reconcile-terminal-preserves-invalid-request-powershell": {
+      "reconcile-terminal-preserves-invalid-request-shell": {
         "reason": "family-local-detail",
         "operation": "reconcile",
         "variant_group": "reconcile-terminal-preserves-invalid-request"
+      },
+      "resolve-authority-refuses-an-unadvertised-mode": {
+        "reason": "mode-absent",
+        "mode": "execute-frontier",
+        "advertises": false
+      },
+      "resolve-authority-resolves-an-advertised-mode": {
+        "reason": "mode-absent",
+        "mode": "execute-frontier",
+        "advertises": true
+      },
+      "terminal-selection-is-reconcile-only-python": {
+        "reason": "family-local-detail",
+        "operation": "publish",
+        "variant_group": "terminal-selection-is-reconcile-only"
+      },
+      "terminal-selection-is-reconcile-only-shell-powershell": {
+        "reason": "family-local-detail",
+        "operation": "publish",
+        "variant_group": "terminal-selection-is-reconcile-only"
       }
     }
   },
   "capability_verification": {
-    "note": "Setup verifies the running distribution against one named capability profile before it writes or installs anything. Verification is a Consumer of the capability manifest, not a Continuation operation, so it adds no command to the contract's namespace. The distribution running setup is the distribution being verified, which is how the selection is made without committing a host-specific executable path or a family-member choice. `report` is the second profile: a distribution that cannot resolve an operator authority or does not advertise the mode fails closed here rather than during a Run.",
+    "note": "Setup verifies the running distribution against one named capability profile before it writes or installs anything. Verification is a Consumer of the capability manifest, not a Continuation operation, so it adds no command to the contract's namespace. The distribution running setup is the distribution being verified, which is how the selection is made without committing a host-specific executable path or a family-member choice. `report` is the second profile: a distribution that cannot resolve an operator authority or does not advertise the mode fails closed here rather than during a Run. `execute-frontier` is the third profile and the first that is not family-wide: the Python Runner implements serial fixed-frontier Dispatch (#264) and shell and PowerShell do not until #265 and #266, so `profile_distributions` records which members declare each requirement set rather than leaving two families to be judged against a profile neither has heard of.",
     "profiles": {
       "foundation": {
         "requirements": [
@@ -2952,7 +2963,59 @@
         "required_modes": [
           "report"
         ]
+      },
+      "execute-frontier": {
+        "requirements": [
+          "contract-version",
+          "record-format",
+          "tracker-adapter",
+          "native-operations",
+          "mode-default-off",
+          "mode-report",
+          "mode-execute-frontier",
+          "fixed-frontier"
+        ],
+        "continuation_contract_version": "1.3",
+        "record_format": 1,
+        "tracker_adapter": "github",
+        "tracker_operations": [
+          "publish",
+          "reconcile",
+          "record-dispatch-result",
+          "repair-index"
+        ],
+        "native_operations": [
+          "capabilities",
+          "publish",
+          "reconcile",
+          "record-dispatch-result",
+          "repair-index",
+          "resolve-authority"
+        ],
+        "mode_default": "off",
+        "required_modes": [
+          "report",
+          "execute-frontier"
+        ],
+        "required_optional_capabilities": [
+          "fixed_frontier_authorization"
+        ]
       }
+    },
+    "profile_distributions": {
+      "foundation": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "report": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "execute-frontier": [
+        "python"
+      ]
     },
     "verdicts": {
       "foundation": {
@@ -3000,6 +3063,16 @@
         },
         "powershell": {
           "profile": "report",
+          "satisfied": true,
+          "unsatisfied_requirements": [],
+          "unsupported_optional_capabilities": [
+            "concurrent_dispatch"
+          ]
+        }
+      },
+      "execute-frontier": {
+        "python": {
+          "profile": "execute-frontier",
           "satisfied": true,
           "unsatisfied_requirements": [],
           "unsupported_optional_capabilities": [
@@ -3083,6 +3156,28 @@
         "unsatisfied_requirements": [
           "native-operations"
         ]
+      },
+      {
+        "id": "a-manifest-that-does-not-advertise-execute-frontier",
+        "remove": [
+          "continuation_modes",
+          "execute-frontier"
+        ],
+        "unsatisfied_requirements": [
+          "mode-execute-frontier"
+        ],
+        "profile": "execute-frontier"
+      },
+      {
+        "id": "a-manifest-that-does-not-advertise-fixed-frontier-authorization",
+        "remove": [
+          "optional_capabilities",
+          "fixed_frontier_authorization"
+        ],
+        "unsatisfied_requirements": [
+          "fixed-frontier"
+        ],
+        "profile": "execute-frontier"
       }
     ]
   },
@@ -3148,7 +3243,7 @@
               "default": "off",
               "off": true,
               "report": true,
-              "execute-frontier": false
+              "execute-frontier": true
             }
           }
         },
@@ -30822,7 +30917,6 @@
     {
       "id": "resolve-authority-refuses-an-unadvertised-mode",
       "distributions": [
-        "python",
         "shell",
         "powershell"
       ],
@@ -30875,6 +30969,88 @@
           }
         },
         "stderr_contains": "continuation mode execute-frontier is not supported by this distribution",
+        "github_calls": []
+      }
+    },
+    {
+      "id": "resolve-authority-resolves-an-advertised-mode",
+      "distributions": [
+        "python"
+      ],
+      "arguments": [
+        "continuation",
+        "resolve-authority"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "continuation_contract_version": "1.3",
+          "record_format": 1,
+          "sources": [
+            {
+              "source": "global",
+              "mode": "execute-frontier",
+              "trusted_producers": [
+                "planner"
+              ],
+              "ceilings": {
+                "repositories": [
+                  "octo/example"
+                ],
+                "targets": [
+                  "issue"
+                ],
+                "action_kinds": [
+                  "Implement ticket"
+                ],
+                "instruction_modes": [
+                  "skill"
+                ],
+                "effect_scopes": [
+                  "tracker-read"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 0,
+        "stdout": {
+          "ok": true,
+          "operation": "resolve-authority",
+          "result": {
+            "mode": "execute-frontier",
+            "declared_mode": "execute-frontier",
+            "participates": true,
+            "tracker_adapter": "github",
+            "actor": null,
+            "maintainers": [],
+            "trusted_producers": [
+              "planner"
+            ],
+            "ceilings": {
+              "repositories": [
+                "octo/example"
+              ],
+              "targets": [
+                "issue"
+              ],
+              "action_kinds": [
+                "Implement ticket"
+              ],
+              "instruction_modes": [
+                "skill"
+              ],
+              "effect_scopes": [
+                "tracker-read"
+              ]
+            },
+            "narrowed": []
+          }
+        },
+        "stderr_contains": null,
         "github_calls": []
       }
     },

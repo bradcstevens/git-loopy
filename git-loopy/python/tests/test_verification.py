@@ -34,14 +34,15 @@ def test_the_python_distribution_satisfies_the_foundation_profile() -> None:
 
 
 def test_an_unknown_profile_is_refused_rather_than_silently_widened() -> None:
-    """`execute-frontier` is #264-#267 vocabulary, not ours yet.
+    """A profile nobody declared is refused, never answered on a guess.
 
-    Answering a profile nobody implements would let an operator read a pass as
-    readiness for a mode no distribution supports. `report` graduated out of this
-    test in #263 and is pinned by its own profile case; `execute-frontier` stays
-    here until a distribution can actually dispatch one.
+    `report` graduated out of this test in #263 and `execute-frontier` in #264;
+    both are pinned by their own profile cases. What stays here is the property
+    those graduations were tested against: an operator who asks for a requirement
+    set this distribution has never heard of gets a refusal rather than a pass
+    computed against whichever profile the name happened to resemble.
     """
     with pytest.raises(UnknownContinuationProfile):
         evaluate_continuation_capabilities(
-            _capability_manifest(), profile="execute-frontier"
+            _capability_manifest(), profile="concurrent-dispatch"
         )

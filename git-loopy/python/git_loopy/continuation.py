@@ -63,14 +63,16 @@ CAPABILITY_MANIFEST: dict[str, Any] = {
     },
     # Contract 1.3. `report` is advertised because §4's mandatory precondition is
     # met: every locked coverage area has a recognized Transition owner, pinned by
-    # `tests/test_continuation_owner_coverage.py`. `default` stays `off` --- adoption
-    # is the operator's decision, not the distribution's --- and `execute-frontier`
-    # stays unadvertised until #264-#267 implement it.
+    # `tests/test_continuation_owner_coverage.py`. `execute-frontier` is advertised
+    # because this distribution implements serial fixed-frontier Dispatch (#264),
+    # beside `concurrent_dispatch: false` --- serial is the whole of the claim.
+    # `default` stays `off`: adoption is the operator's decision, not the
+    # distribution's, and #267 is the family-wide rollout gate.
     "continuation_modes": {
         "default": "off",
         "off": True,
         "report": True,
-        "execute-frontier": False,
+        "execute-frontier": True,
     },
 }
 

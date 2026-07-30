@@ -391,9 +391,13 @@ run_capability_verification_gate() {
   # requirements under one profile name would otherwise never disagree anywhere.
   # `report` is the second profile (#263): a distribution that cannot resolve an
   # operator authority or does not advertise the mode fails closed here rather
-  # than during a Run.
+  # than during a Run. The profiles judged are read from the fixture's
+  # `profile_distributions` rather than listed here, because `execute-frontier`
+  # (#264) is the first requirement set only one member declares --- and the list
+  # this loop iterates is exactly what #265 changes when this one does.
   local profile_name
-  for profile_name in foundation report; do
+  while read -r profile_name; do
+    [[ -n "$profile_name" ]] || continue
     local fixture_profile declared
     fixture_profile="$(
       jq -S -c ".capability_verification.profiles.$profile_name" "$fixture"
@@ -422,20 +426,36 @@ run_capability_verification_gate() {
     )"
     [[ "$actual_verdict" == "$expected_verdict" ]] || fail \
       "the shell $profile_name verdict disagrees with the fixture:"$'\n'"actual:   $actual_verdict"$'\n'"expected: $expected_verdict"
-  done
+  done < <(
+    jq -r '
+      .capability_verification.profile_distributions
+      | to_entries[]
+      | select(.value | index("shell"))
+      | .key
+    ' "$fixture"
+  )
 
   # A verifier that answered "satisfied" unconditionally would pass both checks
   # above, so every requirement is shown to fail on its own broken manifest. Each
-  # refusal now names the profile it is judged against.
+  # refusal names the profile it is judged against, and a refusal against a
+  # profile this distribution does not declare is skipped rather than asked --- an
+  # unknown profile is refused, so asking would prove the wrong thing.
   local refusal_count index
   refusal_count="$(jq '.capability_verification.refusals | length' "$fixture")"
   ((refusal_count > 0)) || fail "the fixture registers no capability-verification refusals"
   for ((index = 0; index < refusal_count; index++)); do
-    local refusal id remove profile expected actual
+    local refusal id remove profile expected actual declared
     refusal="$(jq -c ".capability_verification.refusals[$index]" "$fixture")"
     id="$(jq -r '.id' <<<"$refusal")"
     remove="$(jq -c '.remove' <<<"$refusal")"
     profile="$(jq -r '.profile' <<<"$refusal")"
+    declared="$(
+      jq -r --arg profile "$profile" '
+        .capability_verification.profile_distributions[$profile]
+        | index("shell") != null
+      ' "$fixture"
+    )"
+    [[ "$declared" == "true" ]] || continue
     expected="$(jq -S -c '{satisfied: false, unsatisfied_requirements}' <<<"$refusal")"
     actual="$(
       # shellcheck disable=SC1091
@@ -456,8 +476,18 @@ run_capability_verification_gate() {
   done
 
   # An unknown profile is refused rather than silently widened: `execute-frontier`
-  # is #264 vocabulary, and answering it would let a pass be read as readiness for
-  # a mode no distribution supports.
+  # is a requirement set the fixture attributes to Python alone until #265, and
+  # answering it here would let a pass be read as readiness for a mode this
+  # distribution does not advertise.
+  local declares_execute_frontier
+  declares_execute_frontier="$(
+    jq -r '
+      .capability_verification.profile_distributions["execute-frontier"]
+      | index("shell") != null
+    ' "$fixture"
+  )"
+  [[ "$declares_execute_frontier" == "false" ]] || fail \
+    "the fixture attributes execute-frontier to shell, which does not declare it"
   local unknown_status=0
   (
     # shellcheck disable=SC1091

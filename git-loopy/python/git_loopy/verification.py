@@ -22,6 +22,7 @@ from git_loopy.continuation import CONTINUATION_CONTRACT_VERSION, RECORD_FORMAT
 
 FOUNDATION_PROFILE = "foundation"
 REPORT_PROFILE = "report"
+EXECUTE_FRONTIER_PROFILE = "execute-frontier"
 
 
 @dataclass(frozen=True)
@@ -43,8 +44,14 @@ class ContinuationProfile:
     native_operations: tuple[str, ...]
     mode_default: str
     #: Participating modes the manifest must advertise as supported. Empty for a
-    #: profile that only cares which mode a distribution *defaults* to.
+    #: profile that only cares which mode a distribution *defaults* to. Each
+    #: entry has its own requirement id, because "which mode is missing" is the
+    #: whole of the answer an operator needs.
     required_modes: tuple[str, ...] = ()
+    #: Optional capability keys the manifest must advertise as ``true``. An
+    #: optional capability is absent-by-default, so a profile that needs one
+    #: says so rather than inferring it from a mode.
+    required_optional_capabilities: tuple[str, ...] = ()
 
 
 #: Fixed declaration order. The rendered and machine results list unsatisfied
@@ -98,13 +105,42 @@ _REPORT = ContinuationProfile(
     required_modes=("report",),
 )
 
+#: Fixed declaration order, as above. The two execute-frontier requirements come
+#: last for the same reason `mode-report` did: a reader comparing the profiles
+#: sees exactly what serial Dispatch added over read-only observation.
+EXECUTE_FRONTIER_REQUIREMENT_IDS = REPORT_REQUIREMENT_IDS + (
+    "mode-execute-frontier",
+    "fixed-frontier",
+)
+
+_EXECUTE_FRONTIER = ContinuationProfile(
+    name=EXECUTE_FRONTIER_PROFILE,
+    requirements=EXECUTE_FRONTIER_REQUIREMENT_IDS,
+    continuation_contract_version=CONTINUATION_CONTRACT_VERSION,
+    record_format=RECORD_FORMAT,
+    tracker_adapter="github",
+    tracker_operations=_FOUNDATION.tracker_operations,
+    native_operations=_REPORT.native_operations,
+    mode_default="off",
+    # `report` is required beside `execute-frontier` because narrowing is real:
+    # an operator whose project table asks for `report` under a global
+    # `execute-frontier` gets `report`, and a distribution that advertised only
+    # the stronger mode would fail closed on the weaker one it just resolved to.
+    required_modes=("report", "execute-frontier"),
+    # §9's authorization is gated by this optional capability, so a manifest that
+    # advertises the mode without it is advertising a mode with no decision
+    # procedure behind it.
+    required_optional_capabilities=("fixed_frontier_authorization",),
+)
+
 #: Named requirement sets a manifest may be judged against. `execute-frontier` is
-#: still deliberately absent: it is #264-#267 vocabulary, and a profile nobody
-#: implements would let a pass be read as readiness for a mode no distribution
-#: supports. `report` is present because every family member now implements it.
+#: present because the Python Runner implements serial fixed-frontier Dispatch
+#: (#264); shell and PowerShell answer `report` until #265 and #266, and the
+#: family-wide rollout gate is #267.
 CONTINUATION_PROFILES: Mapping[str, ContinuationProfile] = {
     FOUNDATION_PROFILE: _FOUNDATION,
     REPORT_PROFILE: _REPORT,
+    EXECUTE_FRONTIER_PROFILE: _EXECUTE_FRONTIER,
 }
 
 
@@ -253,13 +289,30 @@ def _defaults_to_the_profile_mode(
     )
 
 
-def _advertises_the_required_modes(
+def _advertises_mode(mode: str) -> _Requirement:
+    """One requirement per mode, so an unsatisfied verdict names the missing one."""
+
+    def check(manifest: Mapping[str, Any], profile: ContinuationProfile) -> bool:
+        if mode not in profile.required_modes:
+            return True
+        modes = manifest.get("continuation_modes")
+        if not isinstance(modes, Mapping):
+            return False
+        return modes.get(mode) is True
+
+    return check
+
+
+def _advertises_the_required_optional_capabilities(
     manifest: Mapping[str, Any], profile: ContinuationProfile
 ) -> bool:
-    modes = manifest.get("continuation_modes")
-    if not isinstance(modes, Mapping):
+    optional = manifest.get("optional_capabilities")
+    if not isinstance(optional, Mapping):
         return False
-    return all(modes.get(mode) is True for mode in profile.required_modes)
+    return all(
+        optional.get(capability) is True
+        for capability in profile.required_optional_capabilities
+    )
 
 
 def _sequence(value: Any) -> tuple[Any, ...]:
@@ -276,5 +329,7 @@ _REQUIREMENTS: Mapping[str, _Requirement] = {
     "tracker-adapter": _serves_the_tracker_adapter,
     "native-operations": _serves_the_native_operations,
     "mode-default-off": _defaults_to_the_profile_mode,
-    "mode-report": _advertises_the_required_modes,
+    "mode-report": _advertises_mode("report"),
+    "mode-execute-frontier": _advertises_mode("execute-frontier"),
+    "fixed-frontier": _advertises_the_required_optional_capabilities,
 }

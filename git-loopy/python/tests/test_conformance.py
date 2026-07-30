@@ -1259,7 +1259,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.9"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.10"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -1327,6 +1327,35 @@ def test_continuation_capability_verification_pins_the_foundation_profile() -> N
         assert (
             tuple(fixture_profile.get("required_modes", ())) == declared.required_modes
         ), name
+        assert (
+            tuple(fixture_profile.get("required_optional_capabilities", ()))
+            == declared.required_optional_capabilities
+        ), name
+
+
+def test_continuation_capability_profiles_name_the_distributions_that_declare_them() -> (
+    None
+):
+    """A profile narrower than the family says so, rather than being assumed shared.
+
+    `execute-frontier` is the first requirement set only one member declares (#264;
+    shell and PowerShell follow in #265 and #266). Without this axis the other two
+    families would be judged against a profile they have never heard of, and the
+    only record of *why* they are exempt would be a comment in a test loop.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    coverage, _indexed = _coverage_records()
+    attribution = verification["profile_distributions"]
+
+    assert set(attribution) == set(verification["profiles"])
+    for profile, distributions in attribution.items():
+        assert distributions, profile
+        assert set(distributions) <= set(coverage["distributions"]), profile
+    assert {
+        profile
+        for profile, distributions in attribution.items()
+        if "python" in distributions
+    } == set(verification_module.CONTINUATION_PROFILES)
 
 
 def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
@@ -1359,8 +1388,11 @@ def test_continuation_capability_verification_pins_this_distribution_verdict() -
     )
 
     for profile, verdicts in verification["verdicts"].items():
+        # A verdict is recorded for exactly the distributions that declare the
+        # profile. A member that has never heard of a requirement set has no
+        # verdict to give, and an empty one would read as "satisfied nothing".
         assert set(verdicts) == set(
-            _CONTINUATION_SCENARIOS["capability_coverage"]["distributions"]
+            verification["profile_distributions"][profile]
         ), profile
         expected = verdicts["python"]
         verdict = verification_module.evaluate_continuation_capabilities(
@@ -1488,6 +1520,33 @@ def test_continuation_capability_coverage_binds_each_manifest_to_its_distributio
         if scope["reason"] == "manifest-identity"
     }
     assert identities == set(coverage["manifest_scenarios"].values())
+
+
+def test_continuation_mode_absent_scopes_are_derived_from_the_manifests() -> None:
+    """A mode-gated scope is computed from which members advertise the mode.
+
+    The sibling gate below does this for optional capabilities. Modes need their
+    own because `continuation_modes` is where staged adoption actually happens:
+    #263 flipped `report` across the family and #264 flipped `execute-frontier` for
+    Python alone, so a member that starts advertising a mode and does not widen the
+    scenarios gated on it fails here rather than being asked a question it now has
+    a different answer to.
+    """
+    coverage, indexed = _coverage_records()
+    manifests = _advertised_manifests()
+    for record_id, scope in coverage["scoped_records"].items():
+        if scope["reason"] != "mode-absent":
+            continue
+        mode = scope["mode"]
+        advertises = scope["advertises"]
+        expected = set()
+        for distribution, manifest in manifests.items():
+            modes = manifest["continuation_modes"]
+            assert mode in modes, (record_id, distribution, mode)
+            if modes[mode] == advertises:
+                expected.add(distribution)
+        assert expected, record_id
+        assert set(indexed[record_id]["distributions"]) == expected, record_id
 
 
 def test_continuation_capability_absent_scopes_are_derived_from_the_manifests() -> None:

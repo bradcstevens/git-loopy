@@ -1603,8 +1603,19 @@ function Test-CapabilityVerificationGate {
     # The verdict is taken on the manifest this distribution really advertises, so
     # the chain runs real manifest -> setup verdict with no hand-asserted link.
     # `verdicts` is nested by profile since #263 added a second named profile.
+    # The profiles judged are read from the fixture's `profile_distributions`
+    # rather than listed here, because `execute-frontier` (#264) is the first
+    # requirement set only one member declares --- and this list is exactly what
+    # #266 changes when this one does.
     $Manifest = Get-GitLoopyCapabilityManifest
-    foreach ($ProfileName in @("foundation", "report")) {
+    $DeclaredProfiles = @(
+        $Verification["profile_distributions"].Keys |
+            Where-Object { @($Verification["profile_distributions"][$_]) -contains "powershell" }
+    )
+    Assert-True (
+        (@($DeclaredProfiles | Sort-Object) -join ",") -ceq "foundation,report"
+    ) "the fixture attributes exactly the profiles PowerShell declares"
+    foreach ($ProfileName in $DeclaredProfiles) {
         $Expected = $Verification["verdicts"][$ProfileName]["powershell"]
         $Verdict = Get-GitLoopyContinuationVerification `
             -Manifest $Manifest -Name $ProfileName
@@ -1635,6 +1646,12 @@ function Test-CapabilityVerificationGate {
     )
     foreach ($Refusal in $Refusals) {
         $Id = [string]$Refusal["id"]
+        # A refusal against a profile this distribution does not declare is
+        # skipped rather than asked: an unknown profile is refused outright, so
+        # asking would prove the wrong thing.
+        if ($DeclaredProfiles -notcontains [string]$Refusal["profile"]) {
+            continue
+        }
         $Broken = Copy-GitLoopyDeepValue $Manifest
         $Path = @($Refusal["remove"] | ForEach-Object { [string]$_ })
         if ($Path.Count -eq 1) {
@@ -1655,9 +1672,10 @@ function Test-CapabilityVerificationGate {
         ) "refusal $Id names exactly the requirement the fixture pins"
     }
 
-    # An unknown profile is refused rather than silently widened: `execute-frontier`
-    # is #264 vocabulary, and answering it would let a pass be read as readiness
-    # for a mode no distribution supports.
+    # An unknown profile is refused rather than silently widened:
+    # `execute-frontier` is a requirement set the fixture attributes to Python
+    # alone until #266, and answering it here would let a pass be read as
+    # readiness for a mode this distribution does not advertise.
     $Widened = $false
     try {
         Get-GitLoopyContinuationProfile -Name "execute-frontier" | Out-Null

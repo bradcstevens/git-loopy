@@ -260,12 +260,22 @@ def test_a_mode_this_distribution_does_not_advertise_fails_closed(
 ) -> None:
     """Capability is not authority, and a shortfall is not a downgrade.
 
-    `execute-frontier` is unimplemented everywhere until #264-#267, so an operator
-    who configures it is asking for something no family member can serve. Silently
-    resolving `report` instead would run a Pool the operator believed was being
-    driven from the frontier; resolving `off` would go quiet for the same reason.
-    Both are answers to a question nobody asked, so this fails closed.
+    An operator who configures a mode their distribution cannot serve is asking
+    for something that will not happen. Silently resolving `report` instead would
+    run a Pool the operator believed was being driven from the frontier; resolving
+    `off` would go quiet for the same reason. Both are answers to a question
+    nobody asked, so this fails closed.
+
+    The manifest is patched rather than picking a mode this distribution happens
+    to lack, because after #264 it lacks none --- and the shell and PowerShell
+    members are in exactly the patched state until #265 and #266.
     """
+    monkeypatch.setitem(
+        continuation.CAPABILITY_MANIFEST["continuation_modes"],
+        "execute-frontier",
+        False,
+    )
+
     exit_code, payload = _resolve(
         _request(_source("global", "execute-frontier")), monkeypatch, capsys
     )
@@ -421,13 +431,20 @@ def test_run_preflight_narrows_through_the_native_resolver_not_a_second_copy() -
     assert resolved["ceilings"]["repositories"] == ["octo/example"]
 
 
-def test_a_run_that_cannot_serve_its_configured_mode_fails_preflight_closed() -> None:
+def test_a_run_that_cannot_serve_its_configured_mode_fails_preflight_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unservable mode aborts the Run before it collects a Pool.
 
     Discovering the shortfall mid-Run would mean the operator's first signal is
     a Run that behaved like `off` while reporting success, which is precisely
     the silent degradation the manifest exists to prevent.
     """
+    monkeypatch.setitem(
+        continuation.CAPABILITY_MANIFEST["continuation_modes"],
+        "execute-frontier",
+        False,
+    )
     inputs = config.ContinuationInputs(
         project=config.ContinuationInput(
             mode="execute-frontier",

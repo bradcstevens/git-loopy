@@ -401,9 +401,14 @@ def test_report_mode_stays_unadvertised_until_owner_coverage_is_complete() -> No
         assert modes["report"] is False, (
             "report mode is advertised while Transition-owner coverage is incomplete"
         )
-    # Coverage being complete is what #263 needs; flipping the advertisement is
-    # #263's own work, so a complete matrix does not force it true here.
+        # Serial Dispatch stands on the same precondition, only harder: an
+        # execute-frontier Run does not merely *render* the projection built from
+        # these records, it acts on it unattended.
+        assert modes["execute-frontier"] is False, (
+            "execute-frontier is advertised while Transition-owner coverage is "
+            "incomplete"
+        )
+    # Coverage being complete is what #263 and #264 need; flipping either
+    # advertisement was their own work, so a complete matrix does not force
+    # either true here.
     assert complete, "core Transition-owner coverage is incomplete"
-    assert modes["execute-frontier"] is False, (
-        "execute-frontier is advertised before its family-wide gate (#264-#267)"
-    )
