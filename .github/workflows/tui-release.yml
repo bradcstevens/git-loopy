@@ -183,12 +183,24 @@ jobs:
             echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           fi
 
-          # Both cross containers bake `CARGO_BUILD_TARGET` to the triple they
-          # cross-compile *for*, which builds a `dist` for the target and hands
-          # it to a machine that cannot execute it (`Exec format error`, exit
-          # 126). The helper is cross-built on purpose; the tool that
-          # cross-builds it runs here, and is built for here.
+          # Both cross containers describe, in their environment, how to build
+          # the *artifact*: `CARGO_BUILD_TARGET` chooses the architecture and
+          # the `TARGET_*` variables choose the C toolchain. None of it
+          # describes how to build the *tool*, which runs here — and taking it
+          # anyway failed twice over. Unqualified, `cargo install` produced an
+          # aarch64 `dist` that the x86_64 machine holding the container could
+          # not execute (`Exec format error`, exit 126). Qualified by
+          # architecture alone, `aws-lc-sys` — a transitive dependency of the
+          # release tool — still read `TARGET_CC`, which it consults whether or
+          # not it is cross-compiling, and handed `-m64` to an aarch64 gcc.
+          #
+          # Withheld for this step only. `dist build` runs in its own process
+          # and receives the container's environment intact, so the helper is
+          # still cross-built exactly as the proven plan says it is.
           unset CARGO_BUILD_TARGET
+          for name in $(env | sed -n 's/^\(TARGET_[A-Z0-9_]*\)=.*/\1/p'); do
+            unset "$name"
+          done
 
           cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
           dist --version

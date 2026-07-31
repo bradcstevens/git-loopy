@@ -437,8 +437,8 @@ def _stub_cargo(directory: Path) -> Path:
     executable.write_text(
         "#!/usr/bin/env bash\n"
         'printf "argv=%s\\n" "$*" >> "$CARGO_CALLS"\n'
-        'printf "CARGO_BUILD_TARGET=%s\\n" "${CARGO_BUILD_TARGET-<unset>}"'
-        ' >> "$CARGO_CALLS"\n'
+        'env | grep -E "^(CARGO_BUILD_TARGET|TARGET_)" | sort'
+        ' >> "$CARGO_CALLS" || true\n'
         'bin="$(cd "$(dirname "$0")" && pwd)"\n'
         "cat > \"$bin/dist\" <<'INNER'\n"
         "#!/usr/bin/env bash\n"
@@ -529,7 +529,7 @@ def test_the_release_tool_is_built_for_the_machine_that_will_execute_it(
 
     assert completed.returncode == 0, completed.stderr
     recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
-    assert "CARGO_BUILD_TARGET=<unset>" in recorded, recorded
+    assert not any(line.startswith("CARGO_BUILD_TARGET=") for line in recorded), recorded
     assert any(line.startswith("argv=install cargo-dist") for line in recorded)
 
 
@@ -556,7 +556,7 @@ def test_a_container_that_ships_no_rust_is_given_a_toolchain_first(
     assert str(tmp_path / "home" / ".cargo" / "bin") in published
     recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
     assert any(line.startswith("argv=install cargo-dist") for line in recorded)
-    assert "CARGO_BUILD_TARGET=<unset>" in recorded
+    assert not any(line.startswith("CARGO_BUILD_TARGET=") for line in recorded)
 
 
 def test_a_runner_that_already_has_rust_is_not_given_a_second_one(
@@ -578,3 +578,33 @@ def test_a_toolchain_that_is_not_the_pinned_one_is_still_refused(
     )
 
     assert completed.returncode != 0
+
+
+def test_the_release_tool_is_built_with_this_machines_own_c_toolchain(
+    tmp_path: Path,
+) -> None:
+    """The second half of "built for the machine that runs it": built *with* it.
+
+    Choosing the architecture is not enough. Both cross images also describe a
+    C toolchain through `TARGET_CC` and its neighbours, and `aws-lc-sys` -- a
+    transitive dependency of the release tool -- reads `TARGET_CC` whether or
+    not it is cross-compiling. A host build therefore compiled aws-lc's C with
+    the aarch64 gcc and handed it `-m64`, which that compiler does not
+    recognise. A container's cross-compilation environment describes the
+    artifact, not the tool that builds it.
+    """
+    completed = _install_the_toolchain(
+        tmp_path,
+        cargo_on_path=True,
+        CARGO_BUILD_TARGET="aarch64-unknown-linux-musl",
+        TARGET_CC="aarch64-unknown-linux-musl-gcc",
+        TARGET_CXX="aarch64-unknown-linux-musl-g++",
+        TARGET_AR="aarch64-unknown-linux-musl-ar",
+        TARGET_RANLIB="aarch64-unknown-linux-musl-ranlib",
+        TARGET_SYSROOT="/usr/local/musl/aarch64-unknown-linux-musl",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
+    leaked = [line for line in recorded if line.startswith("TARGET_")]
+    assert not leaked, f"the cross toolchain reached the host build: {leaked}"
