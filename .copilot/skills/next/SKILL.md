@@ -5,216 +5,125 @@ description: Route workflow continuation from live project state. Use when a wor
 
 # Route the Workflow
 
-This skill is a read-only **Consumer**. It does not derive **Continuation
-guidance** — the native Reconciliation command does, from the durable **Producer
-revisions** each **Transition owner** published. Your job is to bind one request,
-run one command, and present exactly what came back.
+This skill is the model-invoked router for the engineering flow. Inspect the
+current state and return one recommendation. Leave the repository and issue
+tracker unchanged.
 
-Do not reconstruct the answer. Normalization, trust, **Action identity**,
-ordering, **Readiness**, and the Waiting/guidance/Complete status are all derived
-by `reconcile`; re-deriving any of them here would be a second answer to a
-question the contract already answers.
+## 1. Refresh the durable state
 
-## 1. Bind the request
+Locate `docs/agents/issue-tracker.md`. If the repository has not been configured
+for these skills, make `/setup-agent-skills` the sole candidate. Otherwise read
+the file and refresh the workstream referenced by the conversation from its
+configured tracker: issue or PR state, labels, assignees, comments, sub-issues,
+and blockers. Inspect the local branch, commits, and diff when review or
+publication may be next.
 
-Two values are needed.
+When the conversation names no workstream, review the open workflow-bearing
+issues and their relationships to find the active maps, specs, tickets, and PRs.
+Use live records rather than session summaries because concurrent sessions may
+have changed them.
 
-**Repository.** `gh repo view --json nameWithOwner -q .nameWithOwner`, in
-`owner/name` form.
+This step is complete when every candidate action has current state and blocker
+information from its durable source.
 
-**Trusted producers.** The allowlist of logins whose records may be read as
-guidance. This is a trust ceiling, so it is always an explicit input: take the
-logins the operator names in this session or in the repository's own documented
-Continuation trust policy. There is no Config surface for it yet. If nobody has
-named one, ask the user and stop — never infer an allowlist from collaborators,
-comment authors, or the records you can see. Add `"trusted_apps": ["<login>"]`
-for a bot or App producer; a Bot author outside that list is ignored.
+## 2. Find the earliest unresolved gate
 
-Write this request to a temporary file:
+The workflow is composable, not a fixed checklist. For each active workstream,
+choose the first matching transition:
 
-<!-- continuation-request: refresh -->
-```json
-{
-  "repository": "<repository>",
-  "trusted_producers": ["<trusted-producer>"],
-  "revision_protocol": true
-}
-```
-
-`revision_protocol: true` is what buys closed coverage, so it is not optional
-here: without it Reconciliation reads a label index that can never prove terminal
-completion, can never project a **Retirement receipt**, and can never see a
-**Continuation conflict** between competing **Producer revisions**.
-
-Never add an `automation` key. That block is Dispatch authorization, not a human
-refresh, and `/next` authorizes nothing.
-
-This step is complete when the request names a repository and a non-empty,
-explicitly sourced trusted-producer allowlist.
-
-## 2. Check what the installed distribution can answer
-
-```bash
-git-loopy continuation capabilities
-```
-
-`git-loopy` may be any member of the Runner family, and several fields this Skill
-uses are optional capabilities that fail closed rather than being ignored. Read
-`capabilities.optional_capabilities` once and narrow accordingly:
-
-| Capability | What to drop when it is `false` |
+| Current state | Next skill |
 | --- | --- |
-| `immutable_producer_revisions` | `revision_protocol` — and say so: without it, Complete and **Retirement receipts** are out of reach for this refresh. |
-| `prospective_projection` | `previous_actions` and `handoff` (§5 and §6). |
-| `terminal_rendering` | `--terminal`; read the machine result and present it in the same shape. |
+| The repository is not configured for the engineering skills | `/setup-agent-skills` |
+| The current thread is near its useful context limit or must branch into a fresh session | `/handoff` |
+| An idea outside a codebase still needs sharpening | `/grill-me` |
+| An idea in a codebase still has human decisions | `/grill-with-docs` |
+| The destination is too foggy or large for one planning context | `/wayfinder` |
+| A hard bug lacks a tight command that reproduces it | `/diagnosing-bugs` |
+| A factual unknown blocks a decision | `/research` |
+| A runnable behavior or visual answer is cheaper than more discussion | `/prototype` |
+| Domain language itself blocks the decision | `/domain-modeling` |
+| A module interface, seam, or boundary needs designing | `/codebase-design` |
+| The destination is agreed but no durable spec exists | `/to-spec` |
+| A spec exists but executable tracer-bullet tickets do not | `/to-tickets` |
+| A raw incoming issue or external PR needs readiness work | `/triage` |
+| An in-progress merge, rebase, or cherry-pick has conflicts | `/resolving-merge-conflicts` |
+| A concrete behavior should be built test-first without the broader ticket flow | `/tdd` |
+| An unblocked `ready-for-agent` ticket or small agreed change is available | `/implement` |
+| Implemented work or review fixes still need a fixed-point review | `/code-review` |
+| Reviewed work remains local or the current branch lacks its PR | `/push` |
+| No delivery work is active and codebase health needs a survey | `/improve-codebase-architecture` |
+| The user wants a stateful learning path | `/teach` |
+| The task is to write or revise an agent skill | `/writing-great-skills` |
+| The accepted work is closed, reviewed, and published | No next skill: report completion |
 
-Narrow the request; never work around the gap by deriving the missing field
-yourself.
+Apply these flow rules:
 
-This step is complete when the request contains only fields this distribution
-advertises.
+- Keep `/grill-with-docs`, `/to-spec`, and `/to-tickets` in one unbroken context.
+  Start each `/implement` ticket in a fresh context. A genuinely small change can
+  move directly from grilling to `/implement` in the current context.
+- Bridge a prototype detour with `/handoff` in both directions when the original
+  thread must survive. Route the validated answer back into the main flow.
+- `/to-tickets` output is already agent-ready; reserve `/triage` for work that
+  arrived raw.
+- If a Wayfinder map has an open frontier, continue `/wayfinder`. When the
+  destination is clear and no decision ticket remains, route to `/to-spec`, not
+  directly to implementation unless the effort proved genuinely small.
+- `/implement` drives `/tdd` internally and closes with `/code-review`. Route
+  directly to those skills only for their standalone branches.
+- If review finds defects, route back to `/implement` with the findings. After a
+  bug fix, route to `/improve-codebase-architecture` only when the diagnosis
+  exposed a missing seam or structural cause.
+- A candidate selected by `/improve-codebase-architecture` becomes an idea for
+  `/grill-with-docs`; the survey does not implement it.
+- Reach for `/domain-modeling` or `/codebase-design` directly only when the
+  vocabulary or module shape is itself the unresolved gate.
 
-## 3. Run one Reconciliation
+This step is complete when every candidate is classified as ready, blocked, or
+complete.
 
-```bash
-git-loopy continuation reconcile --terminal --input <request-file>
+## 3. Rank the actions
+
+Rank ready actions before blocked actions. Within each group, prefer:
+
+1. The workstream continued by this session.
+2. The action that clears the most downstream blockers.
+3. The oldest tracker item, then the lexical target name, as stable tie-breakers.
+
+Return at most one action. A blocked action must name the condition that makes
+it ready.
+
+This step is complete when the ordering follows all three rules and every
+blocked action carries a checkable readiness condition.
+
+## 4. Return the recommendation
+
+Use this shape:
+
+````markdown
+1. **<concrete action>** - `/<skill>` - <HITL | AFK-safe>
+Target: <linked issue, PR, map, spec, branch, or document>
+State: <Ready | Blocked by ...>
+Context: <Continue here | Fresh session>
+Why now: <one sentence grounded in live state>
+
+Prompt:
+```text
+/<skill> "<concise imperative naming the target and desired outcome>"
+```
+````
+
+Write the prompt as one physical line beginning with the exact skill invocation.
+Use straight ASCII quotes and spaces, and keep all labels and explanation outside
+the code fence. Match `Context` to the flow rules above. For `/handoff`, use
+`Continue here` and say that its output opens the fresh session.
+
+Mark an action `AFK-safe` only when its target is fully specified and requires no
+new human judgment. Otherwise mark it `HITL`. For a terminal workstream, return:
+
+```markdown
+**Complete:** <why no further workflow skill is needed>.
 ```
 
-Exit `0` prints the locked human projection on stdout; that rendering is the
-answer. Exit `1` prints one typed JSON error object instead — report its `code`
-and `message` and stop. A failed refresh is not permission to fall back to
-reading issues, labels, and branches yourself: guidance you reconstructed is not
-guidance, and silently downgrading to it is the failure this Skill exists to
-remove.
-
-Run `reconcile` at most once per answer. It replaces the whole projection from
-one stable read, so a second call is a different observation, not more of this
-one.
-
-This step is complete when one command has returned a typed result.
-
-## 4. Present the projection
-
-Show the rendered output. Keep its structure and its wording:
-
-- **Primary Action** — one verified Action in full: **Readiness**, summary,
-  interaction classification, **Instruction**, **Target**, and **Basis**.
-- **Ready** and **Blocked** remainders — each states its full count and how many
-  rows were withheld.
-- **Needs attention** — diagnostics: conflicts, malformed guidance, unstable
-  reads, revoked permissions, a carrier missing its discovery label. These are
-  separate from the frontier and never reorder it. Report every one and repair
-  none — a missing label and an unread fact are the Producer's to fix, and an
-  Action whose facts would not stabilize leaves the frontier rather than being
-  guessed Ready or Blocked.
-- **Outcomes** — explicit terminal **Workstream outcomes**.
-
-Copy the Instruction verbatim, on one physical line, in its own code fence so it
-can be pasted straight into a terminal. Every **Target** and **Basis** is a
-durable link; never paste the artifact's content in its place.
-
-Do not re-rank, re-word, merge, split, or filter the Actions. The order is the
-contract's **Continuation view** order.
-
-To expand a withheld remainder, run the same request again without `--terminal`
-and read `result.actions`. That is still read-only.
-
-This step is complete when the projection has been presented as returned.
-
-## 5. Carry a refresh delta, and only from this session
-
-When this session already ran a Reconciliation, hand its own `result.actions`
-back as `previous_actions` and the next refresh returns a bounded `delta` of
-added, retired, and changed **Action identities**:
-
-<!-- continuation-request: refresh-delta -->
-```json
-{
-  "repository": "<repository>",
-  "trusted_producers": ["<trusted-producer>"],
-  "revision_protocol": true,
-  "previous_actions": [
-    {
-      "identity": "<previous-action-identity>",
-      "semantic_fingerprint": "<previous-semantic-fingerprint>"
-    }
-  ]
-}
-```
-
-Reconciliation keeps no memory of past calls, so `previous_actions` is the only
-source of "previous". Take the pairs from the earlier result in *this*
-conversation. Never from a file, a cache, or a summary — a delta against
-someone else's observation is a claim about a change that may never have
-happened.
-
-The delta is a footnote, not the answer. The projection returned now replaces
-the previous one entirely; a **Retirement receipt** under `Retired this refresh`
-is transient evidence that an Action left guidance, never a history to keep.
-An Action whose **Readiness** moved is the same **Action occurrence** and appears
-in no delta group.
-
-This step is complete when a delta has been reported, or omitted because this
-session has no prior projection.
-
-## 6. Attach a resume pointer only for the exact occurrence
-
-When this session holds machine-local **Handoff** context for one Action it is
-resuming, name that Action:
-
-<!-- continuation-request: refresh-handoff -->
-```json
-{
-  "repository": "<repository>",
-  "trusted_producers": ["<trusted-producer>"],
-  "revision_protocol": true,
-  "handoff": {
-    "action_identity": "<resumed-action-identity>",
-    "context_available": true,
-    "reference": "<machine-local-handoff-reference>"
-  }
-}
-```
-
-When the local context is gone, set `"context_available": false` and omit
-`reference`. Reconciliation then reports `handoff_context_unavailable` under
-Needs attention, which is all it is: a diagnostic. The same is true of
-`handoff_action_unavailable` when the named occurrence is no longer in guidance
-— report it and use the projection as returned.
-
-A **Handoff reference** never changes an Action's identity, Readiness, order, or
-completion, and it never recreates an Action that Reconciliation removed. Do not
-attach one when this session is not resuming that exact occurrence.
-
-This step is complete when at most one Handoff was named, for an occurrence this
-session is actually resuming.
-
-## 7. Report the status, not your conclusion
-
-The result's `status` is one of three, and each has exactly one honest reading:
-
-| `status` | What to say |
-| --- | --- |
-| `guidance` | Present the frontier. |
-| `waiting` | **Waiting:** no Action is currently derivable, and no Workstream has a terminal outcome. |
-| `complete` | **Complete:** every discovered Workstream has an explicit destination-satisfied outcome. |
-
-An empty Action list is `waiting`, never completion. Say Waiting and stop.
-
-Reconciliation only sees Workstreams a Transition owner has adopted. When the
-projection is empty, say so plainly — unadopted work is invisible here, and that
-is a reason to publish, not a reason to guess.
-
-## 8. Stay read-only
-
-`/next` never publishes, mutates GitHub, repairs the index, ranks independently,
-authorizes, or executes.
-
-| Never | Because |
-| --- | --- |
-| `continuation publish` | Only a Transition owner publishes, from its own durable transition. |
-| `continuation repair-index` | It writes. Report the repair diagnostic and leave it. |
-| `continuation record-dispatch-result` | Only a Dispatch records evidence. |
-| An `automation` block | That is authorization, and this is a refresh. |
-| `gh issue close`, label edits, comments, pushes | A question about what to do next may not change what is true. |
-| Performing the Action you just reported | Reporting it is the whole job. Hand the Instruction to the user. |
+Routing is complete when every active candidate has been classified and every
+recommendation names a live target, an exact skill, a one-line terminal command
+in its own code fence, the correct context, and any blocker.
