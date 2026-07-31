@@ -31,15 +31,17 @@ information from its durable source.
 The workflow is composable, not a fixed checklist. For each active workstream,
 choose the first matching transition:
 
-| Current state | Next skill |
+| Current state | Next route |
 | --- | --- |
 | The repository is not configured for the engineering skills | `/setup-agent-skills` |
 | The current thread is near its useful context limit or must branch into a fresh session | `/handoff` |
+| The same conversation is at an intentional phase break and can continue from a summary | `/compact` |
 | An idea outside a codebase still needs sharpening | `/grill-me` |
 | An idea in a codebase still has human decisions | `/grill-with-docs` |
 | The destination is too foggy or large for one planning context | `/wayfinder` |
 | A hard bug lacks a tight command that reproduces it | `/diagnosing-bugs` |
-| A factual unknown blocks a decision | `/research` |
+| A factual unknown can be resolved from primary sources | `/research` |
+| A decision depends on information only another person can provide | `/to-questionnaire` |
 | A runnable behavior or visual answer is cheaper than more discussion | `/prototype` |
 | Domain language itself blocks the decision | `/domain-modeling` |
 | A module interface, seam, or boundary needs designing | `/codebase-design` |
@@ -54,15 +56,21 @@ choose the first matching transition:
 | No delivery work is active and codebase health needs a survey | `/improve-codebase-architecture` |
 | The user wants a stateful learning path | `/teach` |
 | The task is to write or revise an agent skill | `/writing-great-skills` |
-| The accepted work is closed, reviewed, and published | No next skill: report completion |
+| The accepted work is closed, reviewed, and published | No next route: report completion |
 
 Apply these flow rules:
 
 - Keep `/grill-with-docs`, `/to-spec`, and `/to-tickets` in one unbroken context.
   Start each `/implement` ticket in a fresh context. A genuinely small change can
   move directly from grilling to `/implement` in the current context.
+- Use `/compact` only at an intentional phase break where a summary is enough.
+  Use `/handoff` when a fresh session or preserved branch of the current thread
+  is required.
 - Bridge a prototype detour with `/handoff` in both directions when the original
   thread must survive. Route the validated answer back into the main flow.
+- Route source-answerable gaps to `/research` and answers held by another person
+  to `/to-questionnaire`. Resume the decision flow with either result in
+  `/grill-with-docs` or `/to-spec`.
 - `/to-tickets` output is already agent-ready; reserve `/triage` for work that
   arrived raw.
 - If a Wayfinder map has an open frontier, continue `/wayfinder`. When the
@@ -100,22 +108,23 @@ blocked action carries a checkable readiness condition.
 Use this shape:
 
 ````markdown
-1. **<concrete action>** - `/<skill>` - <HITL | AFK-safe>
-Target: <linked issue, PR, map, spec, branch, or document>
+1. **<concrete action>** - `/<route>` - <HITL | AFK-safe>
+Target: <linked issue, PR, map, spec, branch, document, or current conversation>
 State: <Ready | Blocked by ...>
 Context: <Continue here | Fresh session>
 Why now: <one sentence grounded in live state>
 
 Prompt:
 ```text
-/<skill> "<concise imperative naming the target and desired outcome>"
+/<route> "<concise imperative naming the target and desired outcome>"
 ```
 ````
 
 Write the prompt as one physical line beginning with the exact skill invocation.
 Use straight ASCII quotes and spaces, and keep all labels and explanation outside
-the code fence. Match `Context` to the flow rules above. For `/handoff`, use
-`Continue here` and say that its output opens the fresh session.
+the code fence. For `/compact`, use `/compact` with no argument. Match `Context`
+to the flow rules above. For `/handoff`, use `Continue here` and say that its
+output opens the fresh session.
 
 Mark an action `AFK-safe` only when its target is fully specified and requires no
 new human judgment. Otherwise mark it `HITL`. For a terminal workstream, return:
@@ -125,5 +134,5 @@ new human judgment. Otherwise mark it `HITL`. For a terminal workstream, return:
 ```
 
 Routing is complete when every active candidate has been classified and every
-recommendation names a live target, an exact skill, a one-line terminal command
-in its own code fence, the correct context, and any blocker.
+recommendation names a live target, an exact invocation, a one-line terminal
+command in its own code fence, the correct context, and any blocker.
