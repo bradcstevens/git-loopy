@@ -75,6 +75,18 @@ jobs:
             BASH_BIN="$(command -v bash)"
           fi
           "$BASH_BIN" --version
+          # A gate that ran no suite is indistinguishable from a gate that
+          # passed. The shell member's only protection was incidental -- an
+          # unmatched glob stays literal and bash cannot open it -- and
+          # `nullglob` turns that into a green, empty run. So set `nullglob`
+          # here and refuse the empty set on purpose.
+          shopt -s nullglob
+          discovered=(git-loopy/shell/tests/test-*.sh)
+          shopt -u nullglob
+          if ((${#discovered[@]} == 0)); then
+            printf 'shell gate: discovered no suite under git-loopy/shell/tests\n' >&2
+            exit 1
+          fi
           "$BASH_BIN" -n \
             git-loopy/shell/git-loopy.sh \
             git-loopy/shell/install.sh \
@@ -107,10 +119,20 @@ jobs:
           --component rustfmt --component clippy
 
       - name: Rust Conformance adapter and suite
+        shell: bash
         run: |
+          set -o pipefail
           cargo fmt --manifest-path git-loopy/tui/Cargo.toml --check
           cargo clippy --manifest-path git-loopy/tui/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path git-loopy/tui/Cargo.toml
+          cargo test --manifest-path git-loopy/tui/Cargo.toml 2>&1 |
+            tee "$RUNNER_TEMP/rust-suite.log"
+          # An empty Rust suite exits 0 printing `test result: ok. 0 passed`, so
+          # the runner's own report is the only evidence an assertion executed.
+          if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' \
+            "$RUNNER_TEMP/rust-suite.log"; then
+            printf 'Rust gate: the suite executed zero assertions\n' >&2
+            exit 1
+          fi
 
   powershell:
     name: PowerShell / ${{ matrix.os }}
@@ -131,13 +153,29 @@ jobs:
           if ($PSVersionTable.PSVersion.Major -lt 7) {
             throw "PowerShell 7+ is required."
           }
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-event-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-orchestrator-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-continuation-conformance.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-orchestrator-boundary.ps1
-          pwsh -NoLogo -NoProfile -File `
-            git-loopy/powershell/tests/test-tui-install.ps1
+          # `foreach` over an empty match set exits 0 having asserted nothing, so
+          # the suite set is discovered and refused when empty before anything
+          # runs.
+          $SuiteDir = Join-Path "git-loopy" (Join-Path "powershell" "tests")
+          $Discovered = @(Get-ChildItem -Path $SuiteDir -Filter "test-*.ps1")
+          if ($Discovered.Count -eq 0) {
+            throw "PowerShell gate: discovered no suite under $SuiteDir"
+          }
+          # `shell: pwsh` propagates only the *last* native command's exit code,
+          # so every suite's status has to be read where it is produced.
+          function Invoke-Suite {
+            param(
+              [Parameter(Mandatory)]
+              [string]$Suite
+            )
+
+            pwsh -NoLogo -NoProfile -File $Suite
+            if ($LASTEXITCODE -ne 0) {
+              throw "PowerShell gate: $Suite failed with exit $LASTEXITCODE"
+            }
+          }
+          Invoke-Suite git-loopy/powershell/tests/test-event-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-continuation-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1
