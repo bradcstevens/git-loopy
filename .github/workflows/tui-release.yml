@@ -129,7 +129,7 @@ jobs:
             runner: ubuntu-22.04
             build: cross
             container: ghcr.io/rust-cross/manylinux2014-cross:aarch64
-            packages_install: pip3 install cargo-zigbuild
+            packages_install: python3 -m pip install cargo-zigbuild ziglang
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             build: native
@@ -137,7 +137,7 @@ jobs:
             runner: ubuntu-22.04
             build: cross
             container: messense/rust-musl-cross:aarch64-musl
-            packages_install: pip3 install cargo-zigbuild
+            packages_install: python3 -m pip install cargo-zigbuild ziglang
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
             build: native
@@ -153,6 +153,14 @@ jobs:
       # x64 musl needs `musl-tools`. `dist plan` is what says so, and the plan
       # job refuses this list the moment it stops matching. The Rust target
       # itself is not added here — cargo-dist runs rustup for it.
+      #
+      # `ziglang` is named alongside cargo-zigbuild rather than left to it:
+      # cargo-zigbuild is a cargo subcommand and `zig` is the compiler it shells
+      # out to, and `pip3 install cargo-zigbuild` brought the module along in
+      # one cross image but not the other. It is installed through `python3 -m
+      # pip` because in `manylinux2014-cross:aarch64` `pip3` and `python3` are
+      # two different interpreters, and the one cargo-zigbuild asks — `python3
+      # -m ziglang` — is the one that has to be able to answer.
       - name: Provision the target toolchain
         if: matrix.packages_install != ''
         shell: bash

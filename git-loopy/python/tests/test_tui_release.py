@@ -661,13 +661,13 @@ def test_the_build_matrix_carries_the_provisioning_each_target_needs() -> None:
         "aarch64-unknown-linux-gnu": (
             "ubuntu-22.04",
             "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
-            "pip3 install cargo-zigbuild",
+            "python3 -m pip install cargo-zigbuild ziglang",
         ),
         "x86_64-unknown-linux-gnu": ("ubuntu-22.04", None, None),
         "aarch64-unknown-linux-musl": (
             "ubuntu-22.04",
             "messense/rust-musl-cross:aarch64-musl",
-            "pip3 install cargo-zigbuild",
+            "python3 -m pip install cargo-zigbuild ziglang",
         ),
         "x86_64-unknown-linux-musl": (
             "ubuntu-22.04",
@@ -786,3 +786,30 @@ def test_the_identity_command_publishes_the_channel_it_resolved(
     version = published["version"]
     assert published["tag"] == f"v{version}"
     assert published["prerelease"] == ("true" if "-" in version else "false")
+
+
+def test_zig_itself_is_provisioned_wherever_cargo_zigbuild_is() -> None:
+    """`cargo-zigbuild` is a cargo subcommand; `zig` is the compiler it shells out to.
+
+    `python3 -m pip install cargo-zigbuild ziglang` happened to pull `ziglang` along in
+    `rust-musl-cross:aarch64-musl` and not in `manylinux2014-cross:aarch64` --
+    where `pip3` is `/usr/local/bin/pip3` and `python3` is `/usr/bin/python3`,
+    two different interpreters, so the module could not land anywhere the
+    `python3 -m ziglang` cargo-zigbuild actually runs would find it. That target
+    failed with `Failed to find zig` the first time it ever reached the
+    compiler. Naming both packages, through the interpreter that will be asked
+    for them, is what stops the provisioning depending on whichever transitive
+    dependency a wheel happens to declare today.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+
+    through_zig = [
+        target
+        for target in metadata.targets
+        if target.requires_tool == "cargo-zigbuild"
+    ]
+    assert through_zig, "no target cross-builds through cargo-zigbuild"
+    for target in through_zig:
+        provisioning = target.packages_install or ""
+        assert provisioning.startswith("python3 -m pip install"), target.triple
+        assert "ziglang" in provisioning, target.triple
