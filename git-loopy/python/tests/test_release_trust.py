@@ -537,11 +537,24 @@ def test_every_declared_credential_actually_reaches_the_signing_job() -> None:
     channel.
     """
     policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-    job = yaml.safe_dump(_workflow(policy)["jobs"][policy.signing_job])
+    # Unfolded: the prefixed bindings below are long enough that the default
+    # 80-column wrap would split a name away from the secret it reads.
+    job = yaml.safe_dump(_workflow(policy)["jobs"][policy.signing_job], width=4096)
 
     for mechanism in policy.mechanisms:
         for credential in mechanism.credentials:
-            assert f"{credential}: ${{{{ secrets.{credential} }}}}" in job, (
+            # #316: the two signers' credentials reach the job under a
+            # `SIGNING_` prefix cargo-dist does not read, and are promoted to
+            # the name it does only when the whole set is present. An *empty*
+            # secret is not an absent one — cargo-dist reads each with
+            # `env::var(..).ok()`, so a pull request's `""` armed both signers
+            # and failed the build instead of degrading to a warning.
+            wired = f"{credential}: ${{{{ secrets.{credential} }}}}" in job
+            withheld_until_present = (
+                f"SIGNING_{credential}: ${{{{ secrets.{credential} }}}}" in job
+                and f'export {credential}="$SIGNING_{credential}"' in job
+            )
+            assert wired or withheld_until_present, (
                 f"{mechanism.id} declares {credential}, but the signing job "
                 "never hands it to the tool that needs it"
             )

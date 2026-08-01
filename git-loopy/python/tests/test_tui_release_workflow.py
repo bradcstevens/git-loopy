@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from git_loopy import tui_release
+from git_loopy import release_trust, tui_release
 
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -76,6 +76,102 @@ def test_the_toolchain_is_installed_at_exactly_the_pinned_version() -> None:
         in install[0]["run"]
     )
     assert 'dist --version | grep -q "$CARGO_DIST_VERSION"' in install[0]["run"]
+
+
+def test_the_release_tool_is_built_for_the_architecture_that_executes_it() -> None:
+    """#316: a cross container's default target is the target being cross-built.
+
+    Both cross images set `CARGO_BUILD_TARGET` to the arm64 triple they exist to
+    produce, so a plain `cargo install` builds an arm64 `dist` that the x64
+    container cannot run — the build died at `Exec format error` before it
+    compiled anything. And `manylinux2014-cross` carries no Rust at all, so the
+    same step died at `cargo: command not found` one target over. The release
+    tool has to be reachable, and built for the architecture that runs it, which
+    is discovered from the compiler rather than assumed from the matrix.
+    """
+    workflow = _load_workflow()
+
+    install = [
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Install the pinned release toolchain"
+    ]
+    assert len(install) == 1
+    run = install[0]["run"]
+
+    assert "command -v cargo" in run, (
+        "a cross container that carries no Rust must get one before `cargo install`"
+    )
+    assert "rustup" in run
+    assert "rustc -vV" in run, (
+        "the executing architecture is read off the compiler, not assumed"
+    )
+    assert '--target "$HOST_TRIPLE"' in run, (
+        "`cargo install` otherwise honours the container's cross-build target "
+        "and installs a `dist` this host cannot execute"
+    )
+
+
+def test_a_signer_is_armed_only_when_its_credentials_are_present() -> None:
+    """#316: an empty credential is not an absent one.
+
+    cargo-dist reads each signing credential with `env::var(..).ok()`, so `""`
+    is `Some("")` and arms the signer. Handing the build step every secret
+    unconditionally therefore armed both signers on a pull request, where each
+    secret resolves to the empty string: `security import` refused an empty
+    certificate and ssl.com refused the OIDC exchange. The credentials are
+    carried under a `SIGNING_` prefix cargo-dist does not read, and only a
+    complete set is promoted to the names it does.
+    """
+    workflow = _load_workflow()
+
+    build_step = [
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Build the release artifact"
+    ]
+    assert len(build_step) == 1
+    env = build_step[0]["env"]
+
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    bound = set(env) & set(policy.credentials)
+    assert bound == set(), (
+        "a name cargo-dist reads as a credential must not be bound in the step "
+        f"environment, where a pull request resolves it to '': {sorted(bound)}"
+    )
+    # The hardened-runtime option is configuration, not a credential: cargo-dist
+    # only consults it once it is already signing, so it stays unconditional.
+    assert env["CODESIGN_OPTIONS"] == "runtime"
+
+    assert {name for name in env if name.startswith("SIGNING_")} == {
+        "SIGNING_CODESIGN_CERTIFICATE",
+        "SIGNING_CODESIGN_CERTIFICATE_PASSWORD",
+        "SIGNING_CODESIGN_IDENTITY",
+        "SIGNING_SSLDOTCOM_USERNAME",
+        "SIGNING_SSLDOTCOM_PASSWORD",
+        "SIGNING_SSLDOTCOM_CREDENTIAL_ID",
+        "SIGNING_SSLDOTCOM_TOTP_SECRET",
+    }
+    for name, value in env.items():
+        if "secrets." in str(value):
+            assert name.startswith("SIGNING_"), (
+                f"{name} hands a credential straight to cargo-dist"
+            )
+
+    run = build_step[0]["run"]
+    assert "::notice" in run, "the skip has to be visible in the log, not silent"
+    for name in (
+        "CODESIGN_CERTIFICATE",
+        "CODESIGN_CERTIFICATE_PASSWORD",
+        "CODESIGN_IDENTITY",
+        "SSLDOTCOM_USERNAME",
+        "SSLDOTCOM_PASSWORD",
+        "SSLDOTCOM_CREDENTIAL_ID",
+        "SSLDOTCOM_TOTP_SECRET",
+    ):
+        assert f'export {name}="$SIGNING_{name}"' in run, (
+            f"{name} never reaches cargo-dist, so nothing is ever signed"
+        )
 
 
 def test_publication_waits_for_conformance_and_the_complete_artifact_set() -> None:
