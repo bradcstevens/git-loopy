@@ -13,8 +13,9 @@ publish package-channel metadata, signed platform artifacts, or a TUI helper.
 The `git-loopy-tui` helper Release (`.github/workflows/tui-release.yml`) is
 gated on what each artifact can *prove* about itself, not on a signing step
 having run without error. Both signers in the pinned cargo-dist degrade to a
-warning when their credentials are absent, so every gate here reads the artifact
-rather than the pipeline.
+warning when their credentials are absent — absent, not empty, so the workflow
+withholds an incomplete credential set instead of handing it over — and every
+gate here reads the artifact rather than the pipeline.
 
 | Channel | macOS | Windows | Linux |
 | --- | --- | --- | --- |

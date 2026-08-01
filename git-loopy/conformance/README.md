@@ -67,9 +67,12 @@ instead of the linker.
 prove. Signing happens inside `dist build`, because cargo-dist writes each
 `.sha256` afterwards and a published checksum must be a checksum of the *signed*
 artifact. Both of its signers degrade to a warning when their credentials are
-absent — which is what keeps a pull request buildable, and exactly why the gate
-proves a signature by unpacking the artifact and asking it, rather than by
-trusting a step that did not fail. Evidence a platform cannot carry is recorded
+absent — absent rather than empty, because cargo-dist reads each credential with
+`env::var(..).ok()` and an empty secret is still a value, so the build job
+withholds an incomplete set instead of passing it through. That is what keeps a
+pull request buildable, and exactly why the gate proves a signature by unpacking
+the artifact and asking it, rather than by trusting a step that did not fail.
+Evidence a platform cannot carry is recorded
 by name and reason, the same way targets are deferred by name: an absent
 requirement and an impossible one look identical from the outside, and only one
 of them is a decision.
