@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "repository": "bradcstevens/git-loopy-skills",
+  "url": "https://github.com/bradcstevens/git-loopy-skills.git",
+  "revision": "9f2222f7520eefec43427c8370808c0a743a8bed",
+  "skills_directory": "skills",
+  "license": {
+    "spdx_id": "MIT",
+    "path": "LICENSE",
+    "sha256": "8c54cd53628839274589cf4e930d5017f2acc8892add0a2ff0158180cd29d6d9",
+    "required_text": [
+      "MIT License",
+      "Copyright (c) 2026 Brad Stevens",
+      "The above copyright notice and this permission notice shall be included in all"
+    ]
+  },
+  "provenance_paths": [
+    "README.md"
+  ]
+}

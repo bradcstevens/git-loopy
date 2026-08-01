@@ -7,16 +7,58 @@ catalog is assembled from third-party, open-source skills; the copyright and
 permission notices for every component git-loopy redistributes travel with the
 distribution and are reproduced (or referenced) below.
 
+The immediate upstream — the source of record the vendored catalog is cut from —
+is `bradcstevens/git-loopy-skills`, pinned to the exact immutable revision
+recorded in `git_loopy/skill_source.json`, which ships beside this file inside
+the wheel (ADR-0023). That pin is what makes this attribution checkable rather
+than asserted: `python -m git_loopy.skill_source` acquires that revision and
+refuses it unless it carries the licence reproduced below. Nothing in a git-loopy
+Run reaches that upstream; the vendored catalog here is the offline fallback a
+Run actually reads.
+
 The three optional tool/vendor integrations that git-loopy does NOT vendor
 (microsoft-docs, microsoft-foundry, playwright-cli) are cleanly severable and are
 not redistributed in the wheel.
+
+===============================================================================
+bradcstevens/git-loopy-skills - https://github.com/bradcstevens/git-loopy-skills
+(MIT License)
+===============================================================================
+
+The workflow skill catalog is vendored from this repository at the pinned
+revision recorded in `git_loopy/skill_source.json`, used under the MIT License,
+reproduced verbatim below.
+
+MIT License
+
+Copyright (c) 2026 Brad Stevens
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ===============================================================================
 mattpocock/skills - https://github.com/mattpocock/skills (MIT License)
 ===============================================================================
 
 Most of the workflow skill catalog is derived from Matt Pocock's agent skills,
-used under the MIT License, reproduced verbatim below.
+used under the MIT License, reproduced verbatim below. That derivation reaches
+git-loopy through the pinned source of record above, whose own LICENSE retains
+this same notice.
 
 MIT License
 

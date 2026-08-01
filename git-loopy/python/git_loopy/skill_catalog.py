@@ -42,7 +42,9 @@ class SdkSkillSurfaceError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class _SkillMetadata:
+class SkillMetadata:
+    """One Skill's leading metadata block, read without its instructions."""
+
     name: str
     description: str
     user_invocable: bool
@@ -62,7 +64,7 @@ def _scalar(value: str) -> str:
     return value
 
 
-def _read_metadata(skill_md: Path) -> _SkillMetadata:
+def read_skill_metadata(skill_md: Path) -> SkillMetadata:
     """Read only a Skill's leading metadata block, never its instructions."""
     try:
         with skill_md.open(encoding="utf-8") as stream:
@@ -111,7 +113,7 @@ def _read_metadata(skill_md: Path) -> _SkillMetadata:
         raise SkillCatalogError(
             f"{skill_md} has invalid user-invocable value {invocable!r}"
         )
-    return _SkillMetadata(
+    return SkillMetadata(
         name=name,
         description=description,
         user_invocable=invocable == "true",
@@ -119,15 +121,15 @@ def _read_metadata(skill_md: Path) -> _SkillMetadata:
     )
 
 
-def _filesystem_skills(root: Path) -> dict[str, _SkillMetadata]:
+def _filesystem_skills(root: Path) -> dict[str, SkillMetadata]:
     if not root.is_dir():
         return {}
-    result: dict[str, _SkillMetadata] = {}
+    result: dict[str, SkillMetadata] = {}
     for child in sorted(root.iterdir(), key=lambda path: path.name):
         skill_md = child / "SKILL.md"
         if not child.is_dir() or not skill_md.is_file():
             continue
-        metadata = _read_metadata(skill_md)
+        metadata = read_skill_metadata(skill_md)
         if metadata.name in result:
             raise SkillCatalogError(
                 f"duplicate canonical Skill name {metadata.name!r} under {root}"

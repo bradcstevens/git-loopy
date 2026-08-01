@@ -44,6 +44,12 @@ blocking gate:
   (`test_conformance.py`, `test_release_identity_conformance.py`,
   `test_continuation_scenarios.py`) is already inside the Python suite row; a second
   row would only pay for it twice.
+- **`python -m git_loopy.skill_source`** (acquire and validate the pinned external
+  Skill catalog, ADR-0023) reaches the network, so it can never be a gate: an
+  unreachable upstream would make Integration red for a reason no change here
+  caused. Its offline half — the immutable pin, the real fetch/checkout path over
+  a `file://` remote, and every validation failure — is covered by
+  `tests/test_skill_source.py` inside the Python suite row.
 
 Commands resolve their tools through `PATH` and are relative to the repository root,
 because Integration runs them in a throwaway private worktree on whatever host the

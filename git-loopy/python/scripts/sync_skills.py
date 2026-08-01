@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """Regenerate the wheel-vendored workflow skill catalog from the canonical source.
 
-git-loopy's authoring workflow ships as agent skills. The repo-root
-``.copilot/skills/`` is the single human-edited canonical source of truth; the
-copies under ``git-loopy/python/git_loopy/skills/`` are *generated* vendored
-copies that travel inside the built wheel so ``git-loopy init`` can scaffold the
-whole catalog from a checkout-free install (PRD #121; extends ADR-0006).
+git-loopy's authoring workflow ships as agent skills. The catalog reaches a
+built wheel through three layers with one direction of flow (ADR-0023)::
+
+    bradcstevens/git-loopy-skills @ the pinned revision   (source of record)
+        -> .copilot/skills/                              (canonical, human-edited)
+            -> git_loopy/skills/                         (packaged fallback, in the wheel)
+
+The first arrow is the explicit maintainer command
+``python -m git_loopy.skill_source``, which acquires and validates exactly the
+immutable revision recorded in ``git_loopy/skill_source.json``. This script is
+the second arrow: the repo-root ``.copilot/skills/`` is the single human-edited
+canonical source of truth, and the copies under
+``git-loopy/python/git_loopy/skills/`` are *generated* vendored copies that
+travel inside the built wheel so ``git-loopy init`` can scaffold the whole
+catalog from a checkout-free install (PRD #121; extends ADR-0006). No arrow runs
+during a Run: an Iteration reads the packaged fallback and the consumer
+project's own skills from disk, never the network.
 
 The vendored catalog is exactly ``subdirs(.copilot/skills/) - SKILL_DENYLIST``:
 every canonical skill except the three optional tool/vendor integrations, which

@@ -82,3 +82,9 @@ docs/feature-requests/
 # Rust build output. Scoped to the crate so an unrelated `target/` stays visible;
 # `Cargo.lock` is tracked because git-loopy-tui ships as a binary.
 /git-loopy/tui/target/
+
+# Acquisitions of the pinned external Skill catalog (ADR-0023). `python -m
+# git_loopy.skill_source` checks the pinned revision out here; it is a
+# reproducible copy of an upstream commit, so committing it would only vendor
+# the same content a third time.
+.git-loopy/

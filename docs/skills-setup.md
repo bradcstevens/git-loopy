@@ -205,6 +205,13 @@ from the packaged workflow catalog and remain available through
 `/find-skills` or this manual copy. The copy is user-level, touches nothing in
 the target repo, and should be repeated after updating the source checkout.
 
+Both the packaged catalog and this source checkout are cut from one external
+source of record, [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
+pinned to an immutable revision. Installing skills never contacts it, and
+neither does a Run — see
+[`docs/skill-catalog-source.md`](skill-catalog-source.md) if you maintain the
+catalog or need to audit what a release redistributes.
+
 ### 1.4 Verify the skills are discoverable
 
 Launch Copilot CLI from the project root and open the slash-command menu:

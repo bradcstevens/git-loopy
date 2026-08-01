@@ -24,7 +24,10 @@ git-loopy's explicit project source (`<repo>/.copilot/skills`) and its packaged
 fallback. Discovery reads **metadata only**: a name, a description, a source,
 and Copilot's own enabled flag. Being in the catalog does **not** make a Skill
 loadable — no instructions, scripts, or resources are read for a Skill the
-policy leaves out. Inspect it with `git-loopy skills list`.
+policy leaves out. Inspect it with `git-loopy skills list`. Where the packaged
+fallback itself comes from — one external source of record, pinned to an
+immutable revision and never contacted during a Run — is
+[`docs/skill-catalog-source.md`](skill-catalog-source.md).
 
 **Skill policy** — the closed-world set of canonical names one *scope* persists.
 This is the thing you edit and commit. It is an **allowlist**: a Skill that
