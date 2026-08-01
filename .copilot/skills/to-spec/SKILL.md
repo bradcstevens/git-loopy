@@ -73,3 +73,5 @@ A description of the things that are out of scope for this spec.
 Any further notes about the feature.
 
 </spec-template>
+
+At the conclusion of a `/to-spec` session, run the `/next` skill.
