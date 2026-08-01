@@ -1338,10 +1338,11 @@ def test_continuation_capability_profiles_name_the_distributions_that_declare_th
 ):
     """A profile narrower than the family says so, rather than being assumed shared.
 
-    `execute-frontier` is the first requirement set only one member declares (#264;
-    shell and PowerShell follow in #265 and #266). Without this axis the other two
-    families would be judged against a profile they have never heard of, and the
-    only record of *why* they are exempt would be a comment in a test loop.
+    `execute-frontier` is the first requirement set not every member declares
+    (#264 for Python, #266 for PowerShell; shell follows in #265). Without this
+    axis the remaining family would be judged against a profile it has never heard
+    of, and the only record of *why* it is exempt would be a comment in a test
+    loop.
     """
     verification = _CONTINUATION_SCENARIOS["capability_verification"]
     coverage, _indexed = _coverage_records()

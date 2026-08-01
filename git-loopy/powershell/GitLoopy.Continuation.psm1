@@ -410,12 +410,15 @@ $Script:CapabilityManifest = [ordered]@{
     # Contract 1.3. `report` is advertised because §4's mandatory precondition is
     # met: every locked coverage area has a recognized Transition owner. `default`
     # stays `off` -- adoption is the operator's decision, not the distribution's --
-    # and `execute-frontier` stays unadvertised until #264-#267 implement it.
+    # and `execute-frontier` is advertised because this distribution can now
+    # authorize and drain a serial fixed frontier (#266). Serial only: general
+    # concurrency is a separate decision, and `concurrent_dispatch` above stays
+    # `$false` so no reader can extrapolate one from the other.
     continuation_modes = [ordered]@{
         default = "off"
         off = $true
         report = $true
-        "execute-frontier" = $false
+        "execute-frontier" = $true
     }
 }
 
@@ -435,9 +438,9 @@ $Script:CapabilityManifest = [ordered]@{
 # The named requirement sets this distribution is judged against. `foundation`
 # is the baseline every distribution must clear; `report` (#263) additionally
 # requires the `resolve-authority` operation and the `report` mode to be
-# advertised. `execute-frontier` stays absent: it is #264 vocabulary, and a
-# profile nobody implements would let a pass be read as readiness for a mode no
-# distribution supports.
+# advertised; `execute-frontier` (#266) additionally requires the mode this
+# distribution now serves and the optional capability §9's authorization is
+# gated by.
 $Script:ContinuationProfiles = [ordered]@{
     foundation = [ordered]@{
         requirements = @(
@@ -480,6 +483,42 @@ $Script:ContinuationProfiles = [ordered]@{
         )
         mode_default = "off"
         required_modes = @("report")
+    }
+    # Fixed declaration order, as above. The two execute-frontier requirements
+    # come last for the same reason `mode-report` did: a reader comparing the
+    # profiles sees exactly what serial Dispatch added over read-only observation.
+    "execute-frontier" = [ordered]@{
+        requirements = @(
+            "contract-version"
+            "record-format"
+            "tracker-adapter"
+            "native-operations"
+            "mode-default-off"
+            "mode-report"
+            "mode-execute-frontier"
+            "fixed-frontier"
+        )
+        continuation_contract_version = $Script:ContinuationContractVersion
+        record_format = $Script:RecordFormat
+        tracker_adapter = "github"
+        tracker_operations = @(
+            "publish", "reconcile", "record-dispatch-result", "repair-index"
+        )
+        native_operations = @(
+            "capabilities", "publish", "reconcile", "record-dispatch-result",
+            "repair-index", "resolve-authority"
+        )
+        mode_default = "off"
+        # `report` is required beside `execute-frontier` because narrowing is
+        # real: an operator whose project table asks for `report` under a global
+        # `execute-frontier` gets `report`, and a distribution that advertised
+        # only the stronger mode would fail closed on the weaker one it just
+        # resolved to.
+        required_modes = @("report", "execute-frontier")
+        # §9's authorization is gated by this optional capability, so a manifest
+        # that advertises the mode without it is advertising a mode with no
+        # decision procedure behind it.
+        required_optional_capabilities = @("fixed_frontier_authorization")
     }
 }
 
@@ -618,10 +657,28 @@ function Test-GitLoopyCapabilityRequirement {
                 ((Get-GitLoopyManifestValue $Modes $Default) -eq $true)
         }
         "mode-report" {
-            $Modes = Get-GitLoopyManifestValue $Manifest "continuation_modes"
-            if ($Modes -isnot [Collections.IDictionary]) { return $false }
-            foreach ($Mode in @($ProfileSpec["required_modes"])) {
-                if ((Get-GitLoopyManifestValue $Modes ([string]$Mode)) -ne $true) {
+            return (Test-GitLoopyAdvertisedMode -Manifest $Manifest -Mode "report")
+        }
+        "mode-execute-frontier" {
+            return (
+                Test-GitLoopyAdvertisedMode -Manifest $Manifest -Mode "execute-frontier"
+            )
+        }
+        "fixed-frontier" {
+            # The optional capabilities §9's authorization is gated by. Named per
+            # requirement rather than folded into the mode check, so setup can
+            # tell an unadvertised mode apart from a mode advertised with no
+            # decision procedure behind it.
+            $Optional = Get-GitLoopyManifestValue $Manifest "optional_capabilities"
+            if ($Optional -isnot [Collections.IDictionary]) { return $false }
+            if (-not $ProfileSpec.Contains("required_optional_capabilities")) {
+                return $false
+            }
+            foreach ($Capability in @($ProfileSpec["required_optional_capabilities"])) {
+                if (-not (
+                        Test-GitLoopyAdvertisedFlag `
+                            -Value (Get-GitLoopyManifestValue $Optional ([string]$Capability))
+                    )) {
                     return $false
                 }
             }
@@ -629,6 +686,46 @@ function Test-GitLoopyCapabilityRequirement {
         }
         default { return $false }
     }
+}
+
+function Test-GitLoopyAdvertisedFlag {
+    <#
+    .SYNOPSIS
+        Is this advertised value the scalar `$true`, and nothing that merely
+        compares equal to it?
+    .DESCRIPTION
+        `-eq` compares a list element-wise and answers with the matching
+        elements, so `@($true, $false) -eq $true` is truthy. A manifest whose
+        capability flag is a list is malformed, and reading it as support would
+        let setup pass a distribution that never claimed the capability at all.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value)
+
+    return ($Value -is [bool]) -and [bool]$Value
+}
+
+function Test-GitLoopyAdvertisedMode {
+    <#
+    .SYNOPSIS
+        Does the manifest advertise exactly this one Continuation mode?
+    .DESCRIPTION
+        One requirement asks about one mode, never about the profile's whole
+        `required_modes` set: a profile that requires two modes must be defeatable
+        by dropping either one on its own, or a refusal could never name which
+        mode the manifest actually stopped serving.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Manifest,
+        [Parameter(Mandatory)][string]$Mode
+    )
+
+    $Modes = Get-GitLoopyManifestValue $Manifest "continuation_modes"
+    if ($Modes -isnot [Collections.IDictionary]) { return $false }
+    return (
+        Test-GitLoopyAdvertisedFlag -Value (Get-GitLoopyManifestValue $Modes $Mode)
+    )
 }
 
 function Get-GitLoopyManifestValue {
@@ -677,6 +774,157 @@ function Test-GitLoopyDistributionCapabilities {
     }
     [Console]::Out.WriteLine("$Line.")
     return $true
+}
+
+# --- Serial fixed-frontier preflight (#266) ----------------------------------
+#
+# §9 decides *whether* one Action may be dispatched, and the shared automation
+# fixtures gate that decision through the real native entrypoint. This is the
+# half that runs before it: one Run turns one resolved §10 authority into the
+# single Performer posture it will dispatch with, and refuses an authority this
+# distribution cannot honour rather than discovering it mid-flight.
+#
+# Nothing here widens. Every rule may remove an Instruction mode from
+# consideration and none may add one, which is why an unenforceable ceiling is
+# refused instead of accepted and quietly ignored.
+#
+# What is deliberately *not* here: the Run loop that turns each authorization
+# into a session and emits the Continuation lifecycle Events. That half lives in
+# the reference Orchestrator (#264) for the same reason report mode's does --- the
+# Event payloads and outer-Run exits are family contract, and a second family
+# inventing them ahead of the reference is exactly the cross-family drift #267
+# gates on. This distribution proves its parity where the family contract is
+# actually pinned: the native command surface and the shared fixtures.
+
+# The Instruction modes this distribution has a handler for. The Orchestrator
+# drives a noninteractive Copilot session, so a canonical Skill is something it
+# can genuinely execute; `command` and `manual` are not. §9 reads the posture as
+# a closed world, so the claim is made narrowly and explicitly --- silence there
+# is read as universal competence.
+$Script:HandledInstructionModes = @("skill")
+
+# §10 ceiling axes this distribution cannot enforce. §9 derives eligibility from
+# coverage, grants and Performer posture; it has no input for an Action-kind or
+# Target cap. An operator who capped kinds and got a Run that dispatched every
+# kind would have been told their authority was narrower than it was --- the
+# single worst failure mode an authority model has.
+$Script:UnenforceableCeilings = @("action_kinds", "targets")
+
+function New-GitLoopyFrontierPlan {
+    <#
+    .SYNOPSIS
+        Turn a resolved §10 authority into the posture this Run will dispatch with.
+    .DESCRIPTION
+        Fails closed rather than mid-flight. A Run that discovered at the moment
+        it had to record a safety-case violation that it had no actor to write as
+        would lose the one record a human needs.
+
+        `SatisfiedRequirements` is what the Run can honestly claim it already
+        holds, in §9's typed `(kind, name)` vocabulary. It is supplied by the
+        caller rather than assumed here, because the only thing this preflight
+        knows about the host is what it was told.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Authority,
+        [AllowEmptyCollection()][object[]]$SatisfiedRequirements = @()
+    )
+
+    $Mode = [string](Get-GitLoopyManifestValue $Authority "mode")
+    if ($Mode -cne "execute-frontier") {
+        # A `report` or `off` authority was never granted execution, so there is
+        # no frontier to plan for it. Manufacturing a posture here would let a
+        # narrowed Run dispatch under authority it had already lost.
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "a frontier plan requires continuation mode execute-frontier"
+        )
+    }
+
+    $Ceilings = Get-GitLoopyManifestValue $Authority "ceilings"
+    if ($Ceilings -isnot [Collections.IDictionary]) {
+        $Ceilings = [ordered]@{}
+    }
+
+    $Actor = Get-GitLoopyManifestValue $Authority "actor"
+    if ([string]::IsNullOrEmpty([string]$Actor)) {
+        # Dispatch evidence is bound to its Performer at both ends:
+        # `record-dispatch-result` requires the authenticated actor to be the
+        # Performer the record names. §10 makes `actor` optional because report
+        # mode never writes; an execute-frontier Run does.
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "continuation mode execute-frontier requires a configured actor"
+        )
+    }
+
+    foreach ($Axis in $Script:UnenforceableCeilings) {
+        if ((Get-GitLoopyAuthorityList $Ceilings $Axis).Count -gt 0) {
+            throw [GitLoopyContinuationCapabilityUnsupported]::new(
+                "continuation ceiling $Axis cannot be enforced by this distribution"
+            )
+        }
+    }
+
+    $Declared = Get-GitLoopyAuthorityList $Ceilings "instruction_modes"
+    # A ceiling narrows the closed world; it never adds a handler to it.
+    $Modes = @(
+        $Script:HandledInstructionModes |
+            Where-Object { $Declared.Count -eq 0 -or $Declared -contains $_ }
+    )
+    if ($Modes.Count -eq 0) {
+        throw [GitLoopyContinuationCapabilityUnsupported]::new(
+            "continuation ceiling instruction_modes excludes every Instruction " +
+            "mode this distribution handles"
+        )
+    }
+
+    return [ordered]@{
+        performer = [ordered]@{
+            id = [string]$Actor
+            posture = [ordered]@{
+                noninteractive = $true
+                satisfied_requirements = @(
+                    $SatisfiedRequirements |
+                        ForEach-Object {
+                            [ordered]@{
+                                kind = [string]$_["kind"]
+                                name = [string]$_["name"]
+                            }
+                        } |
+                        Sort-Object -CaseSensitive -Property `
+                            @{ Expression = { $_["kind"] } }, `
+                            @{ Expression = { $_["name"] } }
+                )
+                instruction_modes = $Modes
+            }
+        }
+        repositories = Get-GitLoopyAuthorityList $Ceilings "repositories"
+        trusted_producers = Get-GitLoopyAuthorityList $Authority "trusted_producers"
+        effect_kinds = Get-GitLoopyAuthorityList $Ceilings "effect_scopes"
+    }
+}
+
+function Get-GitLoopyAuthorityList {
+    <#
+    .SYNOPSIS
+        One authority or ceiling axis, as a list, with absent read as empty.
+    .DESCRIPTION
+        `@($null)` is a one-element list holding nothing, so wrapping a missing
+        key would turn "this operator capped nothing" into "this operator capped
+        one unnameable thing" --- which the preflight would then refuse. Absent
+        and empty are the same claim here: no cap.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)][Collections.IDictionary]$Container,
+        [Parameter(Mandatory, Position = 1)][string]$Key
+    )
+
+    $Value = Get-GitLoopyManifestValue $Container $Key
+    if ($null -eq $Value) { return , @() }
+    # The leading comma keeps a one-element axis a list: PowerShell unrolls an
+    # array returned through the pipeline, and a caller asking a bare string for
+    # its `Count` gets nothing at all.
+    return , @($Value | Where-Object { $null -ne $_ })
 }
 
 function Get-GitLoopyContinuationUsage {
@@ -7657,5 +7905,6 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyCapabilityManifest",
     "Get-GitLoopyContinuationProfile",
     "Get-GitLoopyContinuationVerification",
+    "New-GitLoopyFrontierPlan",
     "Test-GitLoopyDistributionCapabilities"
 )

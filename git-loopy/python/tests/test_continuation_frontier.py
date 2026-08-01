@@ -90,9 +90,9 @@ def test_the_execute_frontier_profile_refuses_a_manifest_that_cannot_serve_it(
 def test_the_report_profile_does_not_inherit_execute_frontier_requirements() -> None:
     """A report-only distribution stays conforming; it just cannot dispatch.
 
-    #265 and #266 have not landed, so shell and PowerShell are exactly that. A
-    profile that folded execute-frontier requirements into `report` would fail two
-    family members for a mode neither claims.
+    #265 has not landed, so shell is exactly that. A profile that folded
+    execute-frontier requirements into `report` would fail that family member for
+    a mode it does not claim.
     """
     report = verification.CONTINUATION_PROFILES[verification.REPORT_PROFILE]
 

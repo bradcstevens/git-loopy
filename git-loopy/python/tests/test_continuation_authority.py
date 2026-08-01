@@ -267,8 +267,8 @@ def test_a_mode_this_distribution_does_not_advertise_fails_closed(
     nobody asked, so this fails closed.
 
     The manifest is patched rather than picking a mode this distribution happens
-    to lack, because after #264 it lacks none --- and the shell and PowerShell
-    members are in exactly the patched state until #265 and #266.
+    to lack, because after #264 it lacks none --- and the shell member is in
+    exactly the patched state until #265.
     """
     monkeypatch.setitem(
         continuation.CAPABILITY_MANIFEST["continuation_modes"],

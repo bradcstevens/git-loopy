@@ -135,8 +135,18 @@ Contract 1.3 is the revision that satisfies this precondition and advertises
 `continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
 implication in the direction it was written: coverage gates the advertisement, and the suite fails
 if `report` is advertised while any locked area is unowned. `default` remains `off` — an adopter
-opts in per §10 — and `execute-frontier` remains `false` in every distribution until it can
-actually dispatch one.
+opts in per §10 — and `execute-frontier` is advertised only by a distribution that can actually
+dispatch one: the Python Runner (#264) and the PowerShell Orchestrator (#266) advertise
+`execute-frontier: true`, shell answers `report` until #265. Advertising the mode is serial
+Dispatch only; `concurrent_dispatch` stays `false` everywhere, so no reader can extrapolate one
+from the other.
+
+A distribution advertising `execute-frontier: true` is judged by setup against the
+`execute-frontier` capability profile, which adds two requirements to `report`'s:
+`mode-execute-frontier` (the mode is advertised) and `fixed-frontier` (the
+`fixed_frontier_authorization` optional capability §9's authorization is gated by is advertised
+beside it). Each is defeatable on its own, so a refusal names which half of the claim the manifest
+stopped serving.
 
 ## 5. Event observations
 

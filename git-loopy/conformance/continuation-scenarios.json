@@ -2905,7 +2905,7 @@
     }
   },
   "capability_verification": {
-    "note": "Setup verifies the running distribution against one named capability profile before it writes or installs anything. Verification is a Consumer of the capability manifest, not a Continuation operation, so it adds no command to the contract's namespace. The distribution running setup is the distribution being verified, which is how the selection is made without committing a host-specific executable path or a family-member choice. `report` is the second profile: a distribution that cannot resolve an operator authority or does not advertise the mode fails closed here rather than during a Run. `execute-frontier` is the third profile and the first that is not family-wide: the Python Runner implements serial fixed-frontier Dispatch (#264) and shell and PowerShell do not until #265 and #266, so `profile_distributions` records which members declare each requirement set rather than leaving two families to be judged against a profile neither has heard of.",
+    "note": "Setup verifies the running distribution against one named capability profile before it writes or installs anything. Verification is a Consumer of the capability manifest, not a Continuation operation, so it adds no command to the contract's namespace. The distribution running setup is the distribution being verified, which is how the selection is made without committing a host-specific executable path or a family-member choice. `report` is the second profile: a distribution that cannot resolve an operator authority or does not advertise the mode fails closed here rather than during a Run. `execute-frontier` is the third profile and the first that is not family-wide: the Python Runner (#264) and the PowerShell Orchestrator (#266) implement serial fixed-frontier Dispatch and shell does not until #265, so `profile_distributions` records which members declare each requirement set rather than leaving a family to be judged against a profile it has never heard of.",
     "profiles": {
       "foundation": {
         "requirements": [
@@ -3014,7 +3014,8 @@
         "powershell"
       ],
       "execute-frontier": [
-        "python"
+        "python",
+        "powershell"
       ]
     },
     "verdicts": {
@@ -3072,6 +3073,14 @@
       },
       "execute-frontier": {
         "python": {
+          "profile": "execute-frontier",
+          "satisfied": true,
+          "unsatisfied_requirements": [],
+          "unsupported_optional_capabilities": [
+            "concurrent_dispatch"
+          ]
+        },
+        "powershell": {
           "profile": "execute-frontier",
           "satisfied": true,
           "unsatisfied_requirements": [],
@@ -3312,7 +3321,7 @@
               "default": "off",
               "off": true,
               "report": true,
-              "execute-frontier": false
+              "execute-frontier": true
             }
           }
         },
@@ -30917,8 +30926,7 @@
     {
       "id": "resolve-authority-refuses-an-unadvertised-mode",
       "distributions": [
-        "shell",
-        "powershell"
+        "shell"
       ],
       "arguments": [
         "continuation",
@@ -30975,7 +30983,8 @@
     {
       "id": "resolve-authority-resolves-an-advertised-mode",
       "distributions": [
-        "python"
+        "python",
+        "powershell"
       ],
       "arguments": [
         "continuation",
