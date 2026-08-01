@@ -104,4 +104,327 @@ The end-to-end behaviour this ticket makes work, from the user's perspective —
 
 In either form, avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
 
+Work the frontier one ticket at a time with `/implement`, clearing context between tickets.
+
+## 6. Publish the decomposition transition
+
+Decomposition is a durable workflow transition, and this skill owns it. Record it so the next
+session — human or agent — reads the same answer you did.
+
+**Publish only once the whole approved graph is durable.** The approved child set and its
+edges are what make a leaf executable, so nothing is published until every one of them exists
+natively:
+
+1. Create **every** approved ticket, and link each one to the spec parent as a native
+   **sub-issue**: `gh api --method POST repos/<owner>/<repo>/issues/<spec>/sub_issues -F
+   sub_issue_id=<child-db-id>`, where `<child-db-id>` is the child's numeric database id
+   (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number`).
+2. Create **every** approved blocking edge as a native dependency: `gh api --method POST
+   repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`.
+   These native edges are the lifecycle fact readiness is derived from — a "Blocked by" line
+   in the body is a fallback for trackers without dependencies, never the record.
+3. Post one short transition-evidence comment on the spec parent naming the tickets you
+   created (`gh issue comment <spec-issue> --body "..."`), and capture its comment id.
+4. Only now publish: one request per ticket, then the parent-cleanup request. Never write a
+   Continuation record, its `<!-- git-loopy-continuation... -->` marker, or its index label
+   yourself — the command owns the carrier comment.
+
+```bash
+git-loopy continuation publish --input /tmp/implement-<ticket-issue>.json
+```
+
+If you cannot finish the graph, publish nothing. A partially published decomposition would
+make a leaf executable against a plan that does not exist yet; the `artifact-exists`
+prerequisites below are the second line of that defence, holding every published leaf
+**Blocked** until its whole approved sibling set is durable.
+
+Replace every `<placeholder>` with the durable identifier it names. Repeat the
+`artifact-exists` prerequisite once per **other** approved ticket, and the
+`dependency-satisfied` prerequisite once per native `blocked_by` blocker — a ticket with no
+blockers carries none.
+
+<!-- continuation-request: implement-leaf -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<ticket-issue>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<ticket-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "decomposition",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<spec-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<ticket-issue>"
+    },
+    "actions": [
+      {
+        "key": "implement",
+        "summary": "Implement ticket <ticket-issue>",
+        "kind": "Implement ticket",
+        "occurrence": "v1",
+        "instruction": {"mode": "skill", "value": "/implement <ticket-issue>"},
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<ticket-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<spec-issue>"
+          }
+        ],
+        "prerequisites": [
+          {
+            "kind": "artifact-exists",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<sibling-issue>"
+            }
+          },
+          {
+            "kind": "dependency-satisfied",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<blocking-issue>"
+            }
+          }
+        ],
+        "interaction": {
+          "classification": "AFK-safe",
+          "evidence": {
+            "kind": "transition-owner-attestation",
+            "noninteractive": true,
+            "owner": "decomposition"
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<ticket-issue>"
+          }
+        },
+        "safety_case": {
+          "version": "1",
+          "instruction": {"mode": "skill", "value": "/implement <ticket-issue>"},
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<ticket-issue>"
+          },
+          "completion_condition": {
+            "kind": "issue-closed",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<ticket-issue>"
+            }
+          },
+          "assumptions": [
+            {
+              "kind": "durable-inputs-fixed",
+              "statement": "The approved child graph and its native dependencies are already durable."
+            },
+            {
+              "kind": "objective-completion",
+              "statement": "The ticket is done exactly when it closes."
+            }
+          ],
+          "effects": [
+            {"kind": "repository-write", "scope": "<repository>"},
+            {"kind": "tracker-write", "scope": "issue:<repository>#<ticket-issue>"}
+          ],
+          "requirements": [
+            {"kind": "skill", "name": "implement"},
+            {"kind": "access", "name": "tracker-write"}
+          ],
+          "retry": {"kind": "resumable"},
+          "triggers": []
+        }
+      }
+    ]
+  }
+}
+```
+
+Closing the spec parent is **cleanup**, not delivery. It is its own low-priority Workstream —
+anchored on the transition-evidence comment, so it neither proves the decomposition's
+Destination nor gates any ticket — and it stays **Blocked** until every native sub-issue is
+complete. Publish it once, last:
+
+<!-- continuation-request: close-parent -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue-comment",
+        "repository": "<repository>",
+        "issue": "<spec-issue>",
+        "comment_id": "<evidence-comment>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<spec-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "decomposition",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<spec-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<spec-issue>"
+    },
+    "actions": [
+      {
+        "key": "close-parent",
+        "summary": "Close the decomposed specification parent",
+        "kind": "Close parent",
+        "occurrence": "v1",
+        "instruction": {"mode": "command", "value": "gh issue close <spec-issue>"},
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<spec-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<spec-issue>",
+            "comment_id": "<evidence-comment>"
+          }
+        ],
+        "prerequisites": [
+          {
+            "kind": "sub-issues-complete",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<spec-issue>"
+            }
+          }
+        ],
+        "interaction": {
+          "classification": "AFK-safe",
+          "evidence": {
+            "kind": "transition-owner-attestation",
+            "noninteractive": true,
+            "owner": "decomposition"
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<spec-issue>"
+          }
+        },
+        "safety_case": {
+          "version": "1",
+          "instruction": {"mode": "command", "value": "gh issue close <spec-issue>"},
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<spec-issue>"
+          },
+          "completion_condition": {
+            "kind": "issue-closed",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<spec-issue>"
+            }
+          },
+          "assumptions": [
+            {
+              "kind": "no-human-decision",
+              "statement": "Every approved child has closed, so closing the parent is bookkeeping."
+            },
+            {
+              "kind": "objective-completion",
+              "statement": "The cleanup is done exactly when the parent closes."
+            }
+          ],
+          "effects": [
+            {"kind": "tracker-write", "scope": "issue:<repository>#<spec-issue>"}
+          ],
+          "requirements": [
+            {"kind": "command", "name": "gh"},
+            {"kind": "access", "name": "tracker-write"}
+          ],
+          "retry": {"kind": "idempotent"},
+          "triggers": []
+        }
+      }
+    ]
+  }
+}
+```
+
+`<producer-login>` is the authenticated tracker account (`gh api user --jq .login`). Both
+AFK-safe actions carry a safety case: an unattended claim with no argument behind it is a
+guidance fault, and the runner will refuse to dispatch it.
+
+**If `publish` fails, the work is repair-required, not done.** The tickets, their sub-issue
+links, and their dependencies are already durable, so an exit-`1` result carrying
+`"code": "repair_required"` means the decomposition happened but its record did not. Say so
+plainly, name the tickets whose records are missing, and stop — do not retry blindly, invent a
+record, or report the session as complete.
+
 At the conclusion of a `/to-tickets` session, run the `/next` skill.
