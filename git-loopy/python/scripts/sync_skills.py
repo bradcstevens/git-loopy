@@ -1,222 +1,175 @@
 #!/usr/bin/env python3
-"""Regenerate the wheel-vendored workflow skill catalog from the canonical source.
+"""Regenerate git-loopy's packaged Skill fallback from the pinned catalog.
 
-git-loopy's authoring workflow ships as agent skills. The catalog reaches a
-built wheel through three layers with one direction of flow (ADR-0023)::
+git-loopy's authoring workflow ships as Skills. Those Skills reach a built
+distribution through two arrows with one direction of flow (ADR-0023,
+ADR-0025)::
 
     bradcstevens/git-loopy-skills @ the pinned revision   (source of record)
-        -> .copilot/skills/                              (canonical, human-edited)
-            -> git_loopy/skills/                         (packaged fallback, in the wheel)
+        -> git_loopy/skills/ + git_loopy/skill_fallback.json  (packaged fallback)
+    .copilot/skills/{push, research}                      (git-loopy's own)
+        -> the same packaged fallback
 
-The first arrow is the explicit maintainer command
-``python -m git_loopy.skill_source``, which acquires and validates exactly the
-immutable revision recorded in ``git_loopy/skill_source.json``. This script is
-the second arrow: the repo-root ``.copilot/skills/`` is the single human-edited
-canonical source of truth, and the copies under
-``git-loopy/python/git_loopy/skills/`` are *generated* vendored copies that
-travel inside the built wheel so ``git-loopy init`` can scaffold the whole
-catalog from a checkout-free install (PRD #121; extends ADR-0006). No arrow runs
-during a Run: an Iteration reads the packaged fallback and the consumer
-project's own skills from disk, never the network.
+The first arrow is ``python -m git_loopy.skill_source``: it acquires exactly the
+immutable revision recorded in ``git_loopy/skill_source.json`` and refuses it
+unless it proves out. This script is the second: it cuts the packaged fallback
+from that proven checkout under the committed inclusion policy
+(``git_loopy.skill_fallback.INCLUSION_POLICY``), copying the selected Skills
+byte-for-byte, removing anything the policy no longer selects, redistributing
+the upstream licence, and writing the record every later check reads.
 
-The vendored catalog is exactly ``subdirs(.copilot/skills/) - SKILL_DENYLIST``:
-every canonical skill except the three optional tool/vendor integrations, which
-are cleanly severable and obtainable via ``/find-skills`` or a manual copy.
+The policy's second clause is the named few Skills that carry git-loopy's
+Continuation contract (``INCLUSION_POLICY.project_owned``). Those are this
+project's interface rather than the generic catalog's, so they are cut from this
+repository's ``.copilot/skills/`` and the record says so per Skill. Every other
+packaged Skill is a byte-for-byte redistribution of the pinned revision, and
+this repository's copies of *those* are its own consumer copies — read during
+its Runs, never an input to what it ships.
 
-This is the committed, explicit sync command (run via the repo's ``uv``
-toolchain) -- deliberately **not** a pre-commit hook, so regeneration stays
-reviewable::
+Neither arrow runs during a Run. An Iteration resolves its Skills from the
+packaged fallback and the consumer project's own ``.copilot/skills/``, from
+disk, never the network.
 
+Two modes, both explicit and both reviewable::
+
+    # regenerate (needs an acquisition; writes the fallback and its record)
     uv run --project git-loopy/python python git-loopy/python/scripts/sync_skills.py
 
-Run it after editing (or adding/removing) a canonical skill, then commit the
-regenerated tree. Adding a skill needs no allowlist edit -- drop it under
-``.copilot/skills/`` and re-run; it auto-ships and auto-scaffolds. Excluding a
-new integration is a one-line :data:`SKILL_DENYLIST` edit.
+    # verify the committed fallback offline (no acquisition, no network)
+    uv run --project git-loopy/python python git-loopy/python/scripts/sync_skills.py --check
 
-The byte-identical guard in ``tests/test_packaged_skills.py`` imports this
-module's :data:`SKILL_DENYLIST` and :func:`catalog_skill_names` (so the sync and
-the guard can never disagree) and fails CI if the vendored copies drift, if a
-denied skill leaks in, or if the built wheel is missing a catalog skill.
+``--check`` is what CI runs, and the same verification runs against the
+extracted tree of a tagged Release (``git_loopy.source_release``), so a packaged
+fallback, a source revision, an inclusion policy, or a provenance claim that
+drifts fails in all three places with the same named diagnosis.
+
+Deliberately **not** a pre-commit hook: regeneration stays a committed diff a
+reviewer reads next to the pin bump that justifies it.
 """
 
 from __future__ import annotations
 
 import argparse
-import filecmp
-import shutil
 import sys
 from pathlib import Path
-from typing import NamedTuple
 
-# The one place the exclusion set is defined. Imported by the guard test so the
-# sync and the guard can never disagree about which skills are vendored. These
-# are optional tool/vendor integrations, cleanly severable from the core
-# loop-engineering catalog (PRD #121).
-SKILL_DENYLIST: frozenset[str] = frozenset(
-    {
-        "azure-mcaps-resource-deployment",
-        "microsoft-docs",
-        "microsoft-foundry",
-        "playwright-cli",
-    }
+# scripts/ -> python/ -> importable git_loopy
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from git_loopy.skill_fallback import (  # noqa: E402
+    INCLUSION_POLICY,
+    PACKAGED,
+    REGENERATE_COMMAND,
+    FallbackGeneration,
+    SkillFallbackError,
+    generate_packaged_fallback,
+    verify_packaged_fallback,
+)
+from git_loopy.skill_source import (  # noqa: E402
+    ACQUIRE_COMMAND,
+    DEFAULT_CHECKOUT,
+    SkillSourceError,
+    read_skill_source_pin,
+    validate_skill_source,
 )
 
-# scripts/ -> python/ -> git-loopy/ -> <repo root>
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-CANONICAL_SKILLS_DIR = _REPO_ROOT / ".copilot" / "skills"
-VENDORED_SKILLS_DIR = Path(__file__).resolve().parents[1] / "git_loopy" / "skills"
-
-# Named in the guard's drift message so a forgotten sync is self-correcting.
-SYNC_COMMAND = (
-    "uv run --project git-loopy/python python git-loopy/python/scripts/sync_skills.py"
-)
+#: Named in drift messages so a forgotten regeneration is self-correcting.
+SYNC_COMMAND = REGENERATE_COMMAND
 
 
-class SyncResult(NamedTuple):
-    """What a sync did (or, from :func:`classify`, would do)."""
-
-    added: list[str]
-    updated: list[str]
-    removed: list[str]
-    unchanged: list[str]
-
-    @property
-    def changed(self) -> bool:
-        """True when the vendored tree was (or would be) mutated."""
-        return bool(self.added or self.updated or self.removed)
-
-
-def catalog_skill_names(canonical_dir: Path = CANONICAL_SKILLS_DIR) -> list[str]:
-    """Sorted catalog: every canonical skill subdirectory minus the denylist."""
-    return sorted(
-        child.name
-        for child in canonical_dir.iterdir()
-        if child.is_dir() and child.name not in SKILL_DENYLIST
+def _summarise(result: FallbackGeneration) -> str:
+    manifest = result.manifest
+    lead = (
+        f"{manifest.repository} @ {manifest.short_revision}: "
+        f"{len(manifest.skills)} Skills packaged "
+        f"({len(manifest.adopted)} adopted, "
+        f"{len(manifest.project_owned)} project-owned)"
     )
-
-
-def dirs_equal(left: Path, right: Path) -> bool:
-    """True when two directory trees are byte-identical (recursive, deep)."""
-    cmp = filecmp.dircmp(str(left), str(right))
-    if cmp.left_only or cmp.right_only or cmp.funny_files:
-        return False
-    # dircmp's default shallow compare only stats files; force a deep,
-    # content-level comparison so a byte drift with a matching size is caught.
-    _, mismatch, errors = filecmp.cmpfiles(
-        str(left), str(right), cmp.common_files, shallow=False
-    )
-    if mismatch or errors:
-        return False
-    return all(dirs_equal(left / sub, right / sub) for sub in cmp.common_dirs)
-
-
-def classify(
-    canonical_dir: Path = CANONICAL_SKILLS_DIR,
-    vendored_dir: Path = VENDORED_SKILLS_DIR,
-) -> SyncResult:
-    """Diff the vendored tree against the catalog **without** writing anything."""
-    desired = catalog_skill_names(canonical_dir)
-    existing = (
-        sorted(child.name for child in vendored_dir.iterdir() if child.is_dir())
-        if vendored_dir.is_dir()
-        else []
-    )
-    removed = [name for name in existing if name not in desired]
-    added: list[str] = []
-    updated: list[str] = []
-    unchanged: list[str] = []
-    for name in desired:
-        dst = vendored_dir / name
-        if not dst.exists():
-            added.append(name)
-        elif not dirs_equal(canonical_dir / name, dst):
-            updated.append(name)
-        else:
-            unchanged.append(name)
-    return SyncResult(added, updated, removed, unchanged)
-
-
-def sync(
-    canonical_dir: Path = CANONICAL_SKILLS_DIR,
-    vendored_dir: Path = VENDORED_SKILLS_DIR,
-) -> SyncResult:
-    """Regenerate ``vendored_dir`` to exactly the catalog. Idempotent.
-
-    Re-running when already in sync makes no filesystem changes and reports an
-    empty (unchanged-only) :class:`SyncResult`.
-    """
-    result = classify(canonical_dir, vendored_dir)
-    vendored_dir.mkdir(parents=True, exist_ok=True)
-    for name in result.removed:
-        shutil.rmtree(vendored_dir / name)
-    for name in (*result.added, *result.updated):
-        dst = vendored_dir / name
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(canonical_dir / name, dst)
-    return result
-
-
-def _summarise(result: SyncResult, *, applied: bool) -> str:
     if not result.changed:
-        return (
-            f"Already in sync: {len(result.unchanged)} vendored catalog "
-            "skills, no changes."
-        )
-    verb_add, verb_upd, verb_rem = (
-        ("added", "updated", "removed")
-        if applied
-        else ("to add", "to update", "to remove")
-    )
+        return f"{lead}; already in sync, no changes."
     parts = []
     if result.added:
-        parts.append(f"{verb_add} {len(result.added)} ({', '.join(result.added)})")
+        parts.append(f"added {len(result.added)} ({', '.join(result.added)})")
     if result.updated:
-        parts.append(f"{verb_upd} {len(result.updated)} ({', '.join(result.updated)})")
+        parts.append(f"updated {len(result.updated)} ({', '.join(result.updated)})")
     if result.removed:
-        parts.append(f"{verb_rem} {len(result.removed)} ({', '.join(result.removed)})")
-    lead = "Synced vendored catalog: " if applied else "Vendored catalog out of sync: "
-    return lead + "; ".join(parts) + "."
+        parts.append(f"removed {len(result.removed)} ({', '.join(result.removed)})")
+    return f"{lead}; " + "; ".join(parts) + "."
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Regenerate the wheel-vendored workflow skill catalog from the "
-            "canonical .copilot/skills/ (minus the denylist)."
+            "Regenerate git-loopy's packaged Skill fallback from an acquisition "
+            "of the pinned external catalog revision, or verify the committed "
+            "fallback offline."
         )
+    )
+    parser.add_argument(
+        "--from",
+        dest="checkout",
+        type=Path,
+        default=DEFAULT_CHECKOUT,
+        help=(
+            "the acquired checkout of the pinned revision to cut from "
+            f"(default: {DEFAULT_CHECKOUT}, where `{ACQUIRE_COMMAND}` lands it)"
+        ),
     )
     parser.add_argument(
         "--check",
         action="store_true",
         help=(
-            "Report drift and exit non-zero if the vendored catalog is out of "
-            "sync, without writing anything (for CI / pre-flight)."
+            "verify the committed packaged fallback against its pin and record "
+            "without acquiring anything or writing anything (for CI / pre-flight)"
         ),
     )
-    args = parser.parse_args(argv)
+    return parser
 
-    if not CANONICAL_SKILLS_DIR.is_dir():
-        print(
-            f"error: canonical skills dir not found at {CANONICAL_SKILLS_DIR}",
-            file=sys.stderr,
-        )
-        return 2
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
 
     if args.check:
-        result = classify()
-        print(_summarise(result, applied=False))
-        if result.changed:
-            print(
-                "error: vendored catalog is out of sync; run:\n  " + SYNC_COMMAND,
-                file=sys.stderr,
-            )
+        try:
+            verified = verify_packaged_fallback(PACKAGED, policy=INCLUSION_POLICY)
+        except SkillFallbackError as exc:
+            print(f"packaged Skill fallback check failed: {exc}", file=sys.stderr)
             return 1
+        print(
+            f"packaged Skill fallback verified: {len(verified.skills)} Skills "
+            f"({len(verified.adopted)} cut from {verified.repository} @ "
+            f"{verified.revision[:12]}, {len(verified.project_owned)} project-owned) "
+            f"(catalog {verified.catalog_sha256[:12]})"
+        )
         return 0
 
-    result = sync()
-    print(_summarise(result, applied=True))
+    try:
+        pin = read_skill_source_pin(PACKAGED.pin)
+        checkout = validate_skill_source(pin, args.checkout)
+    except SkillSourceError as exc:
+        print(
+            f"cannot regenerate the packaged Skill fallback: {exc}\n"
+            f"acquire the pinned revision first with:\n  {ACQUIRE_COMMAND}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        result = generate_packaged_fallback(
+            pin, checkout, PACKAGED, policy=INCLUSION_POLICY
+        )
+    except SkillFallbackError as exc:
+        print(f"packaged Skill fallback generation failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(_summarise(result))
+    stale = INCLUSION_POLICY.excluded_absent(checkout.skills)
+    if stale:
+        print(
+            "note: the inclusion policy excludes Skills the pinned revision does "
+            f"not carry: {', '.join(stale)}",
+            file=sys.stderr,
+        )
     return 0
 
 

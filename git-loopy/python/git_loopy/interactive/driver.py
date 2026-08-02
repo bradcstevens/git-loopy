@@ -27,6 +27,7 @@ from rich.console import Console
 from git_loopy.config import RunConfig
 from git_loopy.interactive.app import GitLoopyApp
 from git_loopy.interactive.state import LiveRunState
+from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.sinks import EventSink, SinkFanout
 
 if TYPE_CHECKING:
@@ -51,9 +52,15 @@ class InteractiveDriver:
         state: LiveRunState,
         *,
         app_factory: AppFactory = GitLoopyApp,
+        terminal: TerminalOwner | None = None,
     ) -> None:
         self.state = state
         self._app_factory = app_factory
+        #: The **Terminal owner** (issue #323, ADR-0024). Acquired before the
+        #: Dashboard starts and released unconditionally afterwards, so
+        #: git-loopy never returns control to a shell in a terminal state it
+        #: did not find. Injected so tests can drive a fake terminal.
+        self._terminal = terminal if terminal is not None else TerminalOwner()
         #: Loop-owned panes attached by :func:`git_loopy.loop.run` (issue #26)
         #: before :meth:`run`: the live run-summary table source and the
         #: captured line-printer log text source. ``None`` until attached.
@@ -126,6 +133,14 @@ class InteractiveDriver:
         * natural completion / crash also leave a scrollback record (the table),
           so the TUI never tears down to a blank screen.
 
+        The whole peering is wrapped in the **Terminal owner** (issue #323,
+        ADR-0024): the terminal's entry state is captured before the Dashboard
+        starts and released in a ``finally``, so natural completion, a **Stop**,
+        a **Detach**, a **Dashboard fault** and an unhandled loop exception all
+        leave the operator with a working shell. The run-end **Summary** is
+        printed *after* release, so the permanent record lands in real
+        scrollback rather than in an alternate screen about to be discarded.
+
         A ``KeyboardInterrupt`` (the *second* ``Ctrl+C``, a real signal once the
         TUI has restored the terminal) is never swallowed — it propagates out of
         the ``gather`` below for an immediate exit. On a user **Stop** the loop
@@ -133,6 +148,31 @@ class InteractiveDriver:
         completion the loop's own exit code is returned; a crash inside the loop
         is re-raised so the caller records it as a non-zero outcome.
         """
+        self._terminal.acquire()
+        try:
+            detached, results = await self._run_peers(drive)
+        finally:
+            self._terminal.release()
+
+        # Scrollback-on-exit: unless we detached (the line printer already
+        # printed the run, including its own run-end table), echo the run-end
+        # summary table so the terminal keeps a permanent textual record. This
+        # happens after the terminal has been released, so it lands in real
+        # scrollback.
+        if not detached:
+            self._print_scrollback_summary()
+
+        loop_result = results[0]
+        if isinstance(loop_result, asyncio.CancelledError):
+            return 0
+        if isinstance(loop_result, BaseException):
+            raise loop_result
+        return loop_result
+
+    async def _run_peers(
+        self, drive: Callable[[], Coroutine[object, object, int]]
+    ) -> tuple[bool, list[object]]:
+        """Run the app and the loop as peers; return ``(detached, results)``."""
         app = self._app_factory(
             self.state, summary=self.summary, log_source=self.log_source
         )
@@ -168,19 +208,7 @@ class InteractiveDriver:
         results = await asyncio.gather(
             loop_task, app_task, return_exceptions=True
         )
-
-        # Scrollback-on-exit: unless we detached (the line printer already
-        # printed the run, including its own run-end table), echo the run-end
-        # summary table so the terminal keeps a permanent textual record.
-        if not detached:
-            self._print_scrollback_summary()
-
-        loop_result = results[0]
-        if isinstance(loop_result, asyncio.CancelledError):
-            return 0
-        if isinstance(loop_result, BaseException):
-            raise loop_result
-        return loop_result
+        return detached, results
 
     def _detach(self) -> None:
         """Swap the live sink list back to the parked line printer (Detach)."""

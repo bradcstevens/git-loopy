@@ -22,7 +22,9 @@ from git_loopy.interactive.driver import (
     build_interactive_driver,
 )
 from git_loopy.interactive.state import LiveRunState
+from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.sinks import SinkFanout
+from tests.test_interactive_terminal import FakeTerminal
 
 
 class _FakeApp:
@@ -367,3 +369,226 @@ def test_base_interrupt_is_never_swallowed_forcing_immediate_exit() -> None:
 
     with pytest.raises(_SecondInterrupt):
         asyncio.run(driver.run(_drive_raising(_SecondInterrupt())))
+
+
+# ---------------------------------------------------------------------------
+# Terminal ownership (issue #323, ADR-0024)
+# ---------------------------------------------------------------------------
+
+
+class _TerminalGrabbingApp(_FakeApp):
+    """A Dashboard that acquires the terminal and never gives it back.
+
+    Models the failure ADR-0024 exists for: Textual's orderly teardown is the
+    only thing that restores the terminal today, and it is precisely that
+    teardown which does not complete when the Dashboard dies abnormally. The
+    app leaves alternate screen, raw mode and mouse tracking set, so any test
+    that finds the terminal restored afterwards can only have the **Terminal
+    owner** to thank.
+    """
+
+    terminal: "FakeTerminal | None" = None
+
+    async def run_async(self) -> None:
+        assert self.terminal is not None
+        self.terminal.enter_dashboard()
+        await super().run_async()
+
+
+def _grabbing_factory(
+    terminal: "FakeTerminal", cls: type[_FakeApp] = _TerminalGrabbingApp
+) -> Callable[..., _FakeApp]:
+    def factory(s: LiveRunState, **kwargs: object) -> _FakeApp:
+        app = cls(s, **kwargs)
+        app.terminal = terminal  # type: ignore[attr-defined]
+        return app
+
+    return factory
+
+
+def test_natural_completion_restores_the_terminal() -> None:
+    """A run that ends on its own returns the shell it found."""
+    terminal = FakeTerminal()
+    state = LiveRunState()
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=_grabbing_factory(terminal),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+    exit_code = asyncio.run(driver.run(_drive_returning(0)))
+
+    assert exit_code == 0
+    assert terminal.modes == (False, False, False)
+
+
+class _StoppingGrabbingApp(_TerminalGrabbingApp):
+    """Grabs the terminal, then the operator **Stop**s (``q``)."""
+
+    async def run_async(self) -> None:
+        assert self.terminal is not None
+        self.terminal.enter_dashboard()
+        self.exit()
+
+
+class _DetachingGrabbingApp(_TerminalGrabbingApp):
+    """Grabs the terminal, then the operator **Detach**es (``d``)."""
+
+    def __init__(self, state: LiveRunState, **kw: object) -> None:
+        super().__init__(state, **kw)
+        self.detach_requested = False
+
+    async def run_async(self) -> None:
+        assert self.terminal is not None
+        self.terminal.enter_dashboard()
+        self.detach_requested = True
+        self.exit()
+
+
+class _FaultingGrabbingApp(_TerminalGrabbingApp):
+    """A **Dashboard fault**: the Dashboard raises with the terminal grabbed."""
+
+    async def run_async(self) -> None:
+        assert self.terminal is not None
+        self.terminal.enter_dashboard()
+        raise RuntimeError("dashboard exploded")
+
+
+def test_stop_restores_the_terminal() -> None:
+    """``q`` returns the shell the operator started with."""
+    terminal = FakeTerminal()
+    state = LiveRunState()
+    tracker = {"cancelled": False}
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=_grabbing_factory(terminal, _StoppingGrabbingApp),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+    exit_code = asyncio.run(driver.run(_drive_forever(tracker)))
+
+    assert exit_code == 0
+    assert state.status == "stopped"
+    assert terminal.modes == (False, False, False)
+
+
+def test_detach_restores_the_terminal_while_the_run_continues() -> None:
+    """The live view goes; the run keeps printing into a usable scrollback."""
+    terminal = FakeTerminal()
+    state = LiveRunState()
+    fanout = SinkFanout()
+    line_printer = _RecordingSink()
+    fanout.set_sinks([_RecordingSink()])
+
+    async def drive() -> int:
+        for _ in range(10_000):
+            if line_printer in fanout.sinks:
+                break
+            await asyncio.sleep(0)
+        return 0
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=_grabbing_factory(terminal, _DetachingGrabbingApp),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+    driver.attach_detach(
+        sinks=fanout,
+        line_printer=line_printer,
+        console=Console(file=io.StringIO(), force_terminal=False),
+    )
+    exit_code = asyncio.run(driver.run(drive))
+
+    assert exit_code == 0
+    assert fanout.sinks == (line_printer,)
+    assert terminal.modes == (False, False, False)
+
+
+def test_a_dashboard_fault_restores_the_terminal() -> None:
+    """A Dashboard that raises costs the view, not the operator's shell."""
+    terminal = FakeTerminal()
+    state = LiveRunState()
+    tracker = {"cancelled": False}
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=_grabbing_factory(terminal, _FaultingGrabbingApp),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+    asyncio.run(driver.run(_drive_forever(tracker)))
+
+    assert terminal.modes == (False, False, False)
+
+
+def test_an_unhandled_loop_exception_restores_the_terminal() -> None:
+    """The loop crashing must not leave a terminal nobody can type into."""
+    terminal = FakeTerminal()
+    state = LiveRunState()
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=_grabbing_factory(terminal),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+
+    with pytest.raises(RuntimeError, match="loop exploded"):
+        asyncio.run(driver.run(_drive_raising(RuntimeError("loop exploded"))))
+
+    assert terminal.modes == (False, False, False)
+
+
+def test_the_run_end_summary_is_emitted_after_the_terminal_is_released() -> None:
+    """The permanent record lands in real scrollback, not the alternate screen.
+
+    Both the terminal writes and the run-end summary print go into one ordered
+    journal, so the assertion is about what the operator's terminal saw and in
+    what order — not about which method ran first.
+    """
+    journal: list[str] = []
+
+    class _JournalTerminal(FakeTerminal):
+        def write(self, text: str) -> None:
+            super().write(text)
+            journal.append("terminal-write")
+
+    class _JournalFile(io.StringIO):
+        def write(self, text: str) -> int:
+            if _MarkerSummary.RUN_END_MARKER in text:
+                journal.append("run-end-summary")
+            return super().write(text)
+
+    terminal = _JournalTerminal()
+    driver = InteractiveDriver(
+        LiveRunState(),
+        app_factory=_grabbing_factory(terminal),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+    driver.attach_panes(summary=_MarkerSummary(), log_source=lambda: "")  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=_JournalFile(), force_terminal=False),
+    )
+
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    # Every byte the terminal saw came before the run-end summary print, so
+    # the summary landed on the main screen rather than the alternate one.
+    assert journal[-1] == "run-end-summary"
+    assert journal.count("run-end-summary") == 1
+    assert "terminal-write" in journal
+    assert terminal.modes == (False, False, False)
+
+
+def test_the_driver_never_clears_scrollback_when_it_releases() -> None:
+    """Release must not be a blanket reset — the run-end record has to survive."""
+    terminal = FakeTerminal()
+    driver = InteractiveDriver(
+        LiveRunState(),
+        app_factory=_grabbing_factory(terminal),  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal),
+    )
+
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert terminal.scrollback_cleared is False

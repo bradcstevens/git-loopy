@@ -1,0 +1,3 @@
+interface:
+  display_name: "Pre-Push Codebase Audit"
+  short_description: "Audit a codebase before publishing"

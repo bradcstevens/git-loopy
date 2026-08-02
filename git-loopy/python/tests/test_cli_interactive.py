@@ -175,6 +175,34 @@ def test_main_non_interactive_passes_no_driver(
     assert driver is None
 
 
+def test_main_non_interactive_acquires_no_terminal_ownership(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The non-interactive path owns no terminal (issue #323, ADR-0024).
+
+    Piped, redirected and CI invocations put the terminal into no mode, so
+    there is nothing to capture and nothing to restore; the **Terminal owner**
+    lives entirely behind the interactive driver, which this path never builds.
+    """
+    from git_loopy.interactive import terminal as terminal_module
+
+    acquisitions: list[object] = []
+    monkeypatch.setattr(
+        terminal_module.TerminalOwner,
+        "acquire",
+        lambda self: acquisitions.append(self),
+    )
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: False)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    rc = cli_module.main([])
+
+    assert rc == 0
+    assert acquisitions == []
+
+
 def test_main_interactive_default_skips_picker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

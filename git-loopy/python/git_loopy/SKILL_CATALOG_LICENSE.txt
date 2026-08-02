@@ -1,32 +1,3 @@
-Third-Party Licenses
-====================
-
-git-loopy redistributes a workflow Skill catalog inside its distributions as
-package data, so `git-loopy init` can scaffold it and a Run can resolve its
-Skills from disk -- with no source checkout and no network.
-
-That catalog is not authored here. It is *generated* from one external source of
-record, `bradcstevens/git-loopy-skills`, at the exact immutable revision recorded
-in `git_loopy/skill_source.json`, under the inclusion policy recorded in
-`git_loopy/skill_fallback.json`. Both records ship beside this file, so a
-released artifact can always name the revision its catalog was cut from, the
-Skills that revision contributed, and the Skills the inclusion policy withheld
-(ADR-0023, ADR-0025). Nothing in a git-loopy Run reaches that upstream; the
-packaged catalog here is the offline fallback a Run actually reads.
-
-The upstream licence is redistributed byte-for-byte as
-`git_loopy/SKILL_CATALOG_LICENSE.txt` and reproduced verbatim below. It carries
-both applicable notices: the source of record's own, and the retained notice of
-`mattpocock/skills` (https://github.com/mattpocock/skills), from which most of
-the workflow catalog is derived. `python git-loopy/python/scripts/sync_skills.py
---check` refuses a distribution whose redistributed licence is not the notice its
-pin names, or whose aggregate notice below no longer reproduces it.
-
-===============================================================================
-bradcstevens/git-loopy-skills - https://github.com/bradcstevens/git-loopy-skills
-(MIT License, reproduced verbatim from the pinned revision's LICENSE)
-===============================================================================
-
 MIT License
 
 Copyright (c) 2026 Brad Stevens
