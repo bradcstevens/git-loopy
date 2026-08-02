@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import signal
 from typing import Any, Callable, Coroutine
 
 import pytest
@@ -26,7 +27,7 @@ from git_loopy.interactive.driver import (
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.sinks import SinkFanout
-from tests.test_interactive_terminal import FakeTerminal
+from tests.test_interactive_terminal import FakeSignals, FakeTerminal
 
 
 class _FakeApp:
@@ -1119,3 +1120,79 @@ def test_a_loop_crash_after_a_startup_failure_still_propagates() -> None:
 
     with pytest.raises(RuntimeError, match="loop exploded"):
         asyncio.run(driver.run(_drive_raising(RuntimeError("loop exploded"))))
+
+
+class _SignalledGrabbingApp(_TerminalGrabbingApp):
+    """Grabs the terminal, then the process is signalled from another window.
+
+    Records the terminal's observable mode state at the *instant* the signal is
+    handled, which is what distinguishes the signal having restored it from the
+    driver's own unconditional release doing so afterwards.
+    """
+
+    signals: "FakeSignals | None" = None
+    modes_when_signalled: tuple[bool, bool, bool] | None = None
+
+    async def run_async(self) -> None:
+        assert self.terminal is not None and self.signals is not None
+        self.terminal.enter_dashboard()
+        self.signals.deliver(signal.SIGTERM)
+        self.modes_when_signalled = self.terminal.modes
+        self.exit()
+
+
+def test_an_external_signal_restores_the_terminal_through_the_driver() -> None:
+    """A ``kill`` from another window leaves the operator a working shell (#324).
+
+    Driven through the real :class:`InteractiveDriver`, so this asserts that the
+    driver's **Terminal owner** is the one holding the dispositions — the whole
+    point of routing signal restoration through the same owner rather than a
+    second mechanism.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals()
+    state = LiveRunState()
+
+    apps: list[_SignalledGrabbingApp] = []
+
+    def factory(s: LiveRunState, **kwargs: object) -> _SignalledGrabbingApp:
+        app = _SignalledGrabbingApp(s, **kwargs)
+        app.terminal = terminal
+        app.signals = signals
+        apps.append(app)
+        return app
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=factory,  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal, signals=signals),
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert apps[0].modes_when_signalled == (False, False, False)
+    assert terminal.restored is True
+    assert signals.redelivered == [signal.SIGTERM]
+
+
+def test_a_startup_fault_takes_no_signal_dispositions() -> None:
+    """A Dashboard that never came up never acquired, so it holds nothing.
+
+    The **Terminal owner**'s no-op on this path (#326) covers the signal half
+    too: nothing was taken from the process, so nothing has to be given back.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals()
+    state = LiveRunState()
+
+    def factory(s: LiveRunState, **kwargs: object) -> _FakeApp:
+        raise RuntimeError("dashboard could not start")
+
+    driver = InteractiveDriver(
+        state,
+        app_factory=factory,  # type: ignore[arg-type]
+        terminal=TerminalOwner(terminal, signals=signals),
+    )
+    exit_code = asyncio.run(driver.run(_drive_returning(0)))
+
+    assert exit_code == 0
+    assert signals.handlers == {}

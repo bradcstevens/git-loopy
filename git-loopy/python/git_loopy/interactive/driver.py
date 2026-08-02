@@ -170,7 +170,9 @@ class InteractiveDriver:
         #: The **Terminal owner** (issue #323, ADR-0024). Acquired before the
         #: Dashboard starts and released unconditionally afterwards, so
         #: git-loopy never returns control to a shell in a terminal state it
-        #: did not find. Injected so tests can drive a fake terminal.
+        #: did not find — including when the process is signalled (#324), which
+        #: the owner covers through that same release. Injected so tests can
+        #: drive a fake terminal.
         self._terminal = terminal if terminal is not None else TerminalOwner()
         #: Loop-owned panes attached by :func:`git_loopy.loop.run` (issue #26)
         #: before :meth:`run`: the live run-summary table source and the
@@ -269,20 +271,24 @@ class InteractiveDriver:
         the terminal's entry state is captured before the Dashboard starts and
         released in a ``finally``, so natural completion, a **Stop**, a
         **Detach**, a **Dashboard fault** and an unhandled loop exception all
-        leave the operator with a working shell. A Dashboard that fails to come
-        up never reaches an acquisition, so on that one path the owner correctly
+        leave the operator with a working shell. Acquisition also takes the
+        signal dispositions (#324), so ``Ctrl+C`` and a ``kill`` from another
+        window reach that *same* release rather than a second mechanism, and
+        this ``finally`` gives them back. A Dashboard that fails to come up
+        never reaches an acquisition, so on that one path the owner correctly
         does nothing — a live view that never started cannot be why the terminal
-        needed restoring. The run-end **Summary** is printed *after* release, so
-        the permanent record lands in real scrollback rather than in an
-        alternate screen about to be discarded.
+        needed restoring, and the process keeps every disposition it had. The
+        run-end **Summary** is printed *after* release, so the permanent record
+        lands in real scrollback rather than in an alternate screen about to be
+        discarded.
 
-        A ``KeyboardInterrupt`` (the *second* ``Ctrl+C``, a real signal once the
-        TUI has restored the terminal) is never swallowed — it propagates out of
-        the ``gather`` below for an immediate exit, from either peer. On a user
-        **Stop** the loop task is cancelled and ``0`` (clean stop) is returned;
-        on natural completion the loop's own exit code is returned; a crash
-        inside the loop is re-raised so the caller records it as a non-zero
-        outcome.
+        A ``KeyboardInterrupt`` (the *second* ``Ctrl+C``, arriving at the
+        disposition the owner has already put back) is never swallowed — it
+        propagates out of the ``gather`` below for an immediate exit, from
+        either peer. On a user **Stop** the loop task is cancelled and ``0``
+        (clean stop) is returned; on natural completion the loop's own exit code
+        is returned; a crash inside the loop is re-raised so the caller records
+        it as a non-zero outcome.
 
         After a **Dashboard fault** *mid-run* the exit code is never ``0``, so a
         supervising script is never told everything was fine: a non-zero loop

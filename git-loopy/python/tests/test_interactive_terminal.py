@@ -13,11 +13,13 @@ internal method performed the restore.
 
 from __future__ import annotations
 
+import signal
 import sys
+from typing import Callable
 
 import pytest
 
-from git_loopy.interactive.terminal import TerminalOwner
+from git_loopy.interactive.terminal import RELEASE_SEQUENCE, TerminalOwner
 
 try:  # pragma: no cover - platform-dependent
     import termios
@@ -269,7 +271,7 @@ def test_terminal_owner_imports_nothing_from_textual_or_the_tui_extra() -> None:
     source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    allow = {"__future__", "sys", "termios", "typing"}
+    allow = {"__future__", "signal", "sys", "termios", "types", "typing"}
     seen: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -420,3 +422,544 @@ def test_the_terminal_is_found_by_tty_ness_not_by_stream_position(
     finally:
         tty_stream.close()
         os.close(master)
+
+
+# ---------------------------------------------------------------------------
+# Signals (#324)
+# ---------------------------------------------------------------------------
+
+
+class Terminated(BaseException):
+    """The process dying of a signal, as a test can observe it.
+
+    ``SIG_DFL`` for every signal in ``RELEASE_SIGNALS`` ends the process without
+    unwinding Python, which is precisely why the restore has to have already
+    happened. Modelled as a ``BaseException`` so it is not mistaken for the
+    ordinary failures the code under test catches.
+    """
+
+
+class FakeSignals:
+    """A ``SignalControl`` that models the stdlib's disposition table.
+
+    ``install`` mirrors :func:`signal.signal` exactly — it swaps the handler in,
+    hands back the one it displaced, and refuses ``None`` the way the stdlib
+    does — so the guard is exercised against the semantics it will meet in a
+    real process, without the test process ever installing a handler or raising
+    a signal of its own.
+
+    With ``terminates=True`` a default disposition ends the run by raising
+    :class:`Terminated`, which is the only way a test can tell "the terminal was
+    restored *before* the process died" from "the terminal was restored".
+    """
+
+    def __init__(
+        self,
+        *,
+        installable: bool = True,
+        terminates: bool = False,
+        existing: dict[int, object] | None = None,
+        on_install: "Callable[[int, object], None] | None" = None,
+        refuse: "Callable[[int, object], bool] | None" = None,
+    ) -> None:
+        self._installable = installable
+        self._terminates = terminates
+        self._on_install = on_install
+        self._refuse = refuse
+        #: The disposition table, as the process would hold it.
+        self.handlers: dict[int, object] = dict(existing or {})
+        #: Signals re-delivered to their (now restored) default disposition.
+        self.redelivered: list[int] = []
+
+    def current(self, signum: int) -> object:
+        return self.handlers.get(signum, signal.SIG_DFL)
+
+    def install(self, signum: int, handler: object) -> object:
+        if not self._installable:
+            # What ``signal.signal`` raises off the main thread.
+            raise ValueError("signal only works in main thread")
+        if handler is None:
+            # What ``signal.signal`` raises: a disposition installed from
+            # outside Python is reported as ``None`` and cannot be put back.
+            raise TypeError("signal handler must be signal.SIG_IGN, ...")
+        if self._refuse is not None and self._refuse(signum, handler):
+            raise OSError("this disposition cannot be set")
+        previous = self.current(signum)
+        self.handlers[signum] = handler
+        if self._on_install is not None:
+            self._on_install(signum, handler)
+        return previous
+
+    def redeliver(self, signum: int) -> None:
+        self.redelivered.append(signum)
+        self._default_action(signum)
+
+    # -- what the operating system does ----------------------------------
+    def deliver(self, signum: int) -> None:
+        """Deliver ``signum`` to whatever disposition is currently installed."""
+        handler = self.current(signum)
+        if callable(handler):
+            handler(signum, None)
+            return
+        if handler is signal.SIG_IGN:
+            return
+        self._default_action(signum)
+
+    def _default_action(self, signum: int) -> None:
+        if self._terminates:
+            raise Terminated(signum)
+
+
+def test_a_termination_signal_restores_the_terminal() -> None:
+    """A ``kill`` from another window leaves the operator a working shell.
+
+    The failure this closes: there was no signal handling in the package at
+    all, so a signalled ``git-loopy`` exited straight out of the Dashboard's
+    alternate screen and raw mode.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals()
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    assert terminal.modes == (True, True, True)
+
+    signals.deliver(signal.SIGTERM)
+
+    assert terminal.restored is True
+
+
+def test_an_interrupt_still_raises_keyboardinterrupt_after_restoring() -> None:
+    """Restoring the terminal must not swallow the interrupt that caused it.
+
+    ``Ctrl+C``'s ordinary disposition is :func:`signal.default_int_handler`,
+    which raises ``KeyboardInterrupt``. The guard is on the way to it, not in
+    place of it.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals(existing={signal.SIGINT: signal.default_int_handler})
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+
+    with pytest.raises(KeyboardInterrupt):
+        signals.deliver(signal.SIGINT)
+
+    assert terminal.restored is True
+
+
+def test_a_second_interrupt_is_not_intercepted_at_all() -> None:
+    """Making a fault survivable must never make the process unkillable.
+
+    After the first signal the guard has stood down, so a second ``Ctrl+C``
+    meets the disposition the process had before ``git-loopy`` started and
+    forces an immediate exit — with nothing of this module's on the way.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals(existing={signal.SIGINT: signal.default_int_handler})
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    with pytest.raises(KeyboardInterrupt):
+        signals.deliver(signal.SIGINT)
+
+    assert signals.handlers[signal.SIGINT] is signal.default_int_handler
+    with pytest.raises(KeyboardInterrupt):
+        signals.deliver(signal.SIGINT)
+
+
+def test_a_termination_signal_still_terminates() -> None:
+    """The process dies of the signal it was sent, not of a guessed exit code.
+
+    ``SIGTERM``'s disposition is ``SIG_DFL``, which is not callable, so the
+    only faithful way to let it through is to raise it again against the
+    default the guard has just put back.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals()
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    signals.deliver(signal.SIGTERM)
+
+    assert signals.redelivered == [signal.SIGTERM]
+    assert signals.handlers[signal.SIGTERM] is signal.SIG_DFL
+
+
+def test_an_ordinary_release_gives_every_disposition_back() -> None:
+    """The guard leaves the process exactly as it found it.
+
+    Nothing of ``git-loopy``'s survives the run to surprise a host process that
+    embedded the runner and carries on afterwards.
+    """
+    terminal = FakeTerminal()
+    before = {
+        signal.SIGINT: signal.default_int_handler,
+        signal.SIGTERM: signal.SIG_IGN,
+    }
+    signals = FakeSignals(existing=before)
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    assert signals.handlers[signal.SIGINT] is not signal.default_int_handler
+
+    owner.release()
+
+    assert {sig: signals.handlers[sig] for sig in before} == before
+    assert all(
+        not callable(handler) or handler in before.values()
+        for handler in signals.handlers.values()
+    )
+
+
+def test_a_signal_handled_after_release_is_left_entirely_alone() -> None:
+    """A run that has already given the terminal back intercepts nothing."""
+    terminal = FakeTerminal()
+    signals = FakeSignals()
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    owner.release()
+    writes_after_release = len(terminal.writes)
+
+    signals.deliver(signal.SIGTERM)
+
+    assert signals.redelivered == []
+    assert len(terminal.writes) == writes_after_release
+
+
+def test_dispositions_that_cannot_be_taken_are_left_alone() -> None:
+    """Off the main thread the guard installs nothing, and says nothing.
+
+    An embedded runner has no business raising over a disposition it was never
+    entitled to; the terminal work is unaffected, so the run proceeds and the
+    ordinary release paths still restore the screen.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals(installable=False)
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+
+    assert signals.handlers == {}
+    assert owner.acquired is True
+
+    owner.release()
+
+    assert terminal.restored is True
+
+
+def test_a_terminal_that_was_never_acquired_takes_no_dispositions() -> None:
+    """The non-interactive path installs no terminal-restoring signal handling.
+
+    It never acquires — piped, redirected and CI invocations reach exactly this
+    branch — so the criterion falls out of the ownership rather than out of a
+    second mode check that could disagree with it.
+    """
+    terminal = FakeTerminal(is_tty=False)
+    signals = FakeSignals()
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+
+    assert owner.acquired is False
+    assert signals.handlers == {}
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.skipif(termios is None, reason="no termios on this platform")
+def test_a_real_signal_restores_a_real_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole thing, against the real :mod:`signal` module and a real pty.
+
+    The fakes above pin the behaviour; this pins that the behaviour is reached
+    through the disposition table the operating system actually consults. A
+    real ``SIGINT`` is raised at a real handler, the pty is inspected for the
+    release, and the process is left with the disposition it started with.
+    """
+    import os
+    import pty
+
+    from git_loopy.interactive.terminal import (
+        RELEASE_SEQUENCE,
+        PosixTerminalControl,
+    )
+
+    entry = signal.getsignal(signal.SIGINT)
+    master, slave = pty.openpty()
+    os.set_blocking(master, False)
+    tty_stream = os.fdopen(slave, "w", buffering=1)
+    try:
+        monkeypatch.setattr(sys, "__stderr__", tty_stream)
+        monkeypatch.setattr(sys, "__stdin__", tty_stream)
+
+        owner = TerminalOwner(PosixTerminalControl())
+        owner.acquire()
+        assert owner.acquired is True
+        assert signal.getsignal(signal.SIGINT) is not entry
+
+        with pytest.raises(KeyboardInterrupt):
+            signal.raise_signal(signal.SIGINT)
+
+        assert _drain(master) == RELEASE_SEQUENCE
+        assert signal.getsignal(signal.SIGINT) is entry
+        assert owner.acquired is False
+    finally:
+        signal.signal(signal.SIGINT, entry)
+        tty_stream.close()
+        os.close(master)
+
+
+class _SignallingTerminal(FakeTerminal):
+    """A terminal that is signalled *while* it is being restored.
+
+    The window between "the guard stood down" and "the modes are actually back"
+    is the one interval in which the owner is responsible for a terminal it can
+    no longer defend, so it is the interval a test has to aim at directly.
+    """
+
+    def __init__(self, signals: FakeSignals, signum: int) -> None:
+        super().__init__()
+        self._signals = signals
+        self._signum = signum
+        self._fired = False
+
+    def restore_modes(self, captured: object) -> None:
+        if not self._fired:
+            self._fired = True
+            self._signals.deliver(self._signum)
+        super().restore_modes(captured)
+
+
+def test_a_signal_during_the_restore_still_leaves_the_terminal_restored() -> None:
+    """The guard stands down only once the terminal is genuinely back.
+
+    Given up too early, a ``kill`` that lands in the middle of an ordinary
+    release ends the process with the alternate screen still up — the exact
+    failure this ticket exists to close, reintroduced by the ordering of the
+    fix for it.
+    """
+    signals = FakeSignals(terminates=True)
+    terminal = _SignallingTerminal(signals, signal.SIGTERM)
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+
+    with pytest.raises(Terminated):
+        owner.release()
+
+    assert terminal.restored is True
+
+
+def test_a_disposition_owned_outside_python_is_never_displaced() -> None:
+    """What cannot be given back is not taken in the first place.
+
+    :func:`signal.getsignal` reports a handler installed from outside Python as
+    ``None``, and :func:`signal.signal` refuses ``None`` — so displacing one
+    would be a disposition the guard could never restore, and its own stand-down
+    would raise on the exit path.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals(existing={signal.SIGTERM: None})
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+
+    assert signals.handlers[signal.SIGTERM] is None
+
+    owner.release()
+
+    assert signals.handlers[signal.SIGTERM] is None
+    assert terminal.restored is True
+
+
+def test_a_signal_during_stand_down_still_finds_its_own_disposition() -> None:
+    """Standing down one signal must not lose the record of the others.
+
+    A signal delivered while the guard is part-way through giving dispositions
+    back has to meet its *own* predecessor — here ``SIG_IGN``, which means the
+    operator asked for it to be ignored — not a default the guard assumed
+    because it had already emptied its own books.
+    """
+    terminal = FakeTerminal()
+    delivered: list[int] = []
+
+    def deliver_sigterm_while_standing_down(signum: int, handler: object) -> None:
+        # Once only: a signal lands *during* the stand-down; it is not caused
+        # by it, so a hook that re-fired on its own restorations would be
+        # modelling a terminal that does not exist.
+        if (
+            signum == signal.SIGINT
+            and handler is signal.default_int_handler
+            and not delivered
+        ):
+            delivered.append(signal.SIGTERM)
+            signals.deliver(signal.SIGTERM)
+
+    signals = FakeSignals(
+        existing={
+            signal.SIGINT: signal.default_int_handler,
+            signal.SIGTERM: signal.SIG_IGN,
+        },
+        on_install=deliver_sigterm_while_standing_down,
+    )
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    owner.release()
+
+    assert delivered == [signal.SIGTERM], "the mid-stand-down signal never fired"
+    assert signals.redelivered == []
+    assert signals.handlers[signal.SIGTERM] is signal.SIG_IGN
+
+
+class _TwiceSignallingTerminal(FakeTerminal):
+    """A terminal signalled a *second* time while the first release is running."""
+
+    def __init__(self, signals: FakeSignals, signum: int) -> None:
+        super().__init__()
+        self._signals = signals
+        self._signum = signum
+        self.deliveries = 0
+
+    def write(self, text: str) -> None:
+        super().write(text)
+        if self.deliveries == 0 and RELEASE_SEQUENCE in text:
+            self.deliveries += 1
+            self._signals.deliver(self._signum)
+
+
+def test_a_second_interrupt_mid_release_is_not_intercepted() -> None:
+    """An impatient operator is never made to wait on the restore.
+
+    The guard stands down for *this* signal before it starts any work, so a
+    ``Ctrl+C`` pressed again while the terminal is still being handed back
+    reaches the original disposition directly and forces an immediate exit.
+    Interception is what would make the process feel unkillable, and that is
+    the one thing recovery is never allowed to cost.
+    """
+    signals = FakeSignals(existing={signal.SIGINT: signal.default_int_handler})
+    terminal = _TwiceSignallingTerminal(signals, signal.SIGINT)
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+
+    with pytest.raises(KeyboardInterrupt):
+        signals.deliver(signal.SIGINT)
+
+    assert terminal.deliveries == 1
+    assert signals.redelivered == []
+    assert signals.handlers[signal.SIGINT] is signal.default_int_handler
+
+
+def test_a_signal_during_acquisition_leaves_no_handler_behind() -> None:
+    """A guard that stood down while it was still arming disarms completely.
+
+    A predecessor that *returns* rather than raising — ``asyncio``'s own
+    first-``Ctrl+C`` handler is exactly one — hands control back to the
+    half-finished acquisition loop, which would otherwise go on installing
+    dispositions for a terminal it had already given away. Nothing would ever
+    take those back: the owner is unacquired, so every later release is a no-op
+    and the handlers outlive the run.
+    """
+    terminal = FakeTerminal()
+    entry: dict[int, object] = {
+        signal.SIGINT: lambda signum, frame: None,
+        signal.SIGTERM: signal.SIG_IGN,
+    }
+    fired: list[int] = []
+
+    def deliver_sigint_mid_acquisition(signum: int, handler: object) -> None:
+        if signum == signal.SIGINT and not fired:
+            fired.append(signum)
+            signals.deliver(signal.SIGINT)
+
+    signals = FakeSignals(
+        existing=dict(entry), on_install=deliver_sigint_mid_acquisition
+    )
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+
+    assert fired == [signal.SIGINT], "the mid-acquisition signal never fired"
+    assert {sig: signals.handlers[sig] for sig in entry} == entry
+    assert all(
+        handler in entry.values() or handler is signal.SIG_DFL
+        for handler in signals.handlers.values()
+    ), f"a disposition was left pointing at the guard: {signals.handlers}"
+
+
+def test_a_disposition_that_could_not_be_restored_is_not_forgotten() -> None:
+    """The guard never records a restoration it did not achieve.
+
+    If the disposition could not be put back, the handler is still what the
+    operating system will call — so forgetting the predecessor would turn the
+    next delivery into a default the process never had, and ``SIG_IGN`` would
+    become a termination.
+    """
+    terminal = FakeTerminal()
+    signals = FakeSignals(
+        existing={signal.SIGINT: signal.SIG_IGN},
+        refuse=lambda signum, handler: (
+            signum == signal.SIGINT and handler is signal.SIG_IGN
+        ),
+    )
+    owner = TerminalOwner(terminal, signals=signals)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    owner.release()
+
+    assert terminal.restored is True
+    # The restore was refused, so the guard is still what the OS will call —
+    # and it must still know that this signal was asked to be ignored.
+    signals.deliver(signal.SIGINT)
+
+    assert signals.redelivered == []
+
+
+@pytest.mark.timeout(10)
+def test_the_guard_nests_inside_asyncio_s_own_interrupt_handling() -> None:
+    """The real thing, inside the real ``asyncio.run`` the driver runs in.
+
+    ``asyncio.run`` installs an interrupt handler of its own for the duration of
+    the loop, so in production the guard's predecessor is *asyncio's* handler
+    rather than the process's. Acquisition must nest inside that rather than
+    displace it permanently: what the loop installed is what the loop gets back,
+    and what the process started with is what the process ends with.
+    """
+    import asyncio
+
+    entry = signal.getsignal(signal.SIGINT)
+    observed: dict[str, object] = {}
+
+    async def body() -> None:
+        asyncios_own = signal.getsignal(signal.SIGINT)
+        owner = TerminalOwner(FakeTerminal())
+
+        owner.acquire()
+        observed["while_held"] = signal.getsignal(signal.SIGINT)
+        owner.release()
+
+        observed["after_release"] = signal.getsignal(signal.SIGINT)
+        observed["asyncios_own"] = asyncios_own
+
+    try:
+        asyncio.run(body())
+    finally:
+        signal.signal(signal.SIGINT, entry)
+
+    assert observed["while_held"] is not observed["asyncios_own"]
+    assert observed["after_release"] is observed["asyncios_own"]
+    assert signal.getsignal(signal.SIGINT) is entry
