@@ -122,13 +122,13 @@ runner-authored work as agent progress.
 | `GIT_LOOPY_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
 | Exit `0` — clean                 | empty ready-for-agent Pool **or** Iteration cap reached                                                                                         |
-| Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, malformed pricing, etc.) |
+| Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, etc.) |
 | Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
-| Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + live-catalog estimated-cost signal, run-end summary table                              |
+| Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table                              |
 | OpenTelemetry tracing            | opt-in via `uv sync --project git-loopy/python --extra otel` + `GIT_LOOPY_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
 | Prerequisites                    | `gh`, `git`, `copilot`, Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                    |
 
-The runner gives you a richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / estimated cost, a JSONL replay log under `.git-loopy/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. Its dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `git-loopy/python/` — they do not touch your project's runtime.
+The runner gives you a richer terminal experience — frozen iteration `Panel`s showing tool calls / tokens / billed **AI Credits**, a JSONL replay log under `.git-loopy/logs/` you can grep through later, a run-summary JSON for post-hoc analysis, and (optionally) OpenTelemetry tracing of the full SDK + wrapper span tree. Its dependencies (Python ≥ 3.11, `uv`) are one-time and stay scoped to `git-loopy/python/` — they do not touch your project's runtime.
 
 The cost figure surfaced by the runner is an **estimate** based on provider list prices (not Copilot's premium-request billing). See [`git-loopy/python/README.md`](../git-loopy/python/README.md) for the full caveat.
 
@@ -201,7 +201,7 @@ project-in-a-repo-else-global) matches the `init` wizard. See
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                            |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
 | **Aborted — stuck**   | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
-| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed, or malformed pricing. |
+| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed. |
 
 The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
 

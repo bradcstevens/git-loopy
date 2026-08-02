@@ -129,7 +129,6 @@ def test_git_loopy_help_exits_zero() -> None:
         "GIT_LOOPY_MAX_NMT_STRIKES",
         "GIT_LOOPY_ENABLED_SKILLS",
         "GIT_LOOPY_DENY_TOOLS",
-        "GIT_LOOPY_PRICING_FILE",
         "--version",
     ):
         assert expected in stdout, (

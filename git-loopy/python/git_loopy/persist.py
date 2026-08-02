@@ -57,7 +57,6 @@ The :class:`RunSummaryWriter` emits a single JSON document on close::
           "tokens_in": 12345,                              # int (per-iteration sum)
           "tokens_out": 678,                               # int (per-iteration sum)
           "context_used": 13023,                           # int, cumulative context tokens
-          "est_cost_usd": "0.0234",                        # str (Decimal-as-string) | null
           "tool_count": 6,                                 # int
           "skill_count": 1,                                # int
           "skills_consulted": ["tdd"],                      # sorted distinct skill names
@@ -76,10 +75,6 @@ The :class:`RunSummaryWriter` emits a single JSON document on close::
         "skills": ["tdd"]                                   # sorted distinct names across run
       }
     }
-
-``est_cost_usd`` is :data:`None` (JSON ``null``) when the iteration's
-model has no pricing entry — *never zero*, so downstream consumers can
-distinguish "unknown" from "free".
 
 ``skill_adoption`` is measurement only: an iteration counts when either
 ``skill_count`` is non-zero or ``skills_consulted`` is non-empty. It does not
@@ -117,7 +112,6 @@ import time
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Mapping, Self, TextIO
@@ -262,7 +256,6 @@ class IterationCounters:
     tokens_in: int = 0
     tokens_out: int = 0
     context_used: int = 0
-    est_cost_usd: Decimal | None = None
     tool_count: int = 0
     skill_count: int = 0
     skills_consulted: tuple[str, ...] = ()
@@ -281,7 +274,6 @@ class IterationCounters:
         issues = payload.get("issues")
         if not isinstance(summary, Mapping) or not isinstance(issues, list):
             raise ValueError("invalid normalized Iteration rollup")
-        cost = summary.get("cost_usd")
         peak = summary.get("peak_context_window")
         return cls(
             iter=iter_num,
@@ -292,7 +284,6 @@ class IterationCounters:
             tokens_in=int(summary["tokens_in"]),
             tokens_out=int(summary["tokens_out"]),
             context_used=int(summary["observed_tokens"]),
-            est_cost_usd=Decimal(str(cost)) if cost is not None else None,
             tool_count=int(summary["tool_count"]),
             skill_count=int(summary["skill_call_count"]),
             skills_consulted=tuple(
@@ -436,9 +427,6 @@ class RunSummaryWriter(AbstractContextManager["RunSummaryWriter"]):
                     "tokens_in": c.tokens_in,
                     "tokens_out": c.tokens_out,
                     "context_used": c.context_used,
-                    "est_cost_usd": (
-                        str(c.est_cost_usd) if c.est_cost_usd is not None else None
-                    ),
                     "tool_count": c.tool_count,
                     "skill_count": c.skill_count,
                     "skills_consulted": list(c.skills_consulted),

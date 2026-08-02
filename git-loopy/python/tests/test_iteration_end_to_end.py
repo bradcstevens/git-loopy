@@ -61,7 +61,7 @@ from copilot.generated.session_events import (
     ToolExecutionStartData,
 )
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import cli
 from git_loopy import events as events_module
 from git_loopy import gh as gh_module
@@ -74,7 +74,6 @@ from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
-from git_loopy.pricing import Pricing
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -498,7 +497,6 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "tokens_in": 1234,
         "tokens_out": 567,
         "observed_tokens": 1801,
-        "cost_usd": None,
         "credits": None,
         "premium_requests": None,
         "cache_read": None,
@@ -1507,36 +1505,6 @@ def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> Non
     assert exit_code == 1
 
 
-def test_loop_bad_pricing_file_returns_exit_one(tmp_path, monkeypatch) -> None:
-    """A malformed ``GIT_LOOPY_PRICING_FILE`` override surfaces as exit 1.
-
-    Rubber-duck-confirmed acceptance: do NOT silently fall back to the
-    packaged default, because that hides the operator's intent.
-    """
-    (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
-
-    # Write a broken TOML file to point pricing_file at.
-    bad_pricing = tmp_path / "bad-pricing.toml"
-    bad_pricing.write_text("this is not = valid [toml", encoding="utf-8")
-
-    monkeypatch.setattr(
-        loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
-    )
-
-    fake_client = FakeCopilotClient(scripted_events=[])
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-
-    cfg = RunConfig(
-        issue_source="github", max_iterations=1, pricing_file=bad_pricing
-    )
-    exit_code = asyncio.run(loop_module.run(cfg))
-
-    assert exit_code == 1
-    # No SDK session created — we bailed before constructing the client.
-    assert len(fake_client.created) == 0
-
-
 def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     """Loop runs ``max_iterations`` iterations and exits 0 at the cap.
 
@@ -1961,7 +1929,7 @@ def _make_loop(
     inert stand-ins the constructor merely stores.
     """
     writers = create_writers(repo_root)
-    denomination = ListPriceDenomination(pricing=Pricing(models={}))
+    denomination = BilledCreditsDenomination()
     loop = loop_module._Loop(
         config=RunConfig(),
         release_version=EXPECTED_RELEASE_VERSION,

@@ -126,7 +126,6 @@ pub(crate) struct IssueContribution {
     pub(crate) tokens_in: i64,
     pub(crate) tokens_out: i64,
     pub(crate) usage_observed: bool,
-    pub(crate) cost_usd: Option<f64>,
     pub(crate) credits: Option<f64>,
     pub(crate) premium_requests: Option<f64>,
     pub(crate) cache_read: Option<i64>,
@@ -148,7 +147,6 @@ pub(crate) struct IssueLedgerEntry {
     pub(crate) usage_observed: bool,
     pub(crate) tokens_in: i64,
     pub(crate) tokens_out: i64,
-    pub(crate) normalized_cost_usd: Option<f64>,
     /// Billed **AI Credits** accrued across this issue's work, latched to
     /// unknown the moment a sample or contribution failed to report one.
     pub(crate) credits: BilledTotal,
@@ -170,7 +168,6 @@ impl IssueLedgerEntry {
             usage_observed: false,
             tokens_in: 0,
             tokens_out: 0,
-            normalized_cost_usd: None,
             credits: BilledTotal::default(),
             premium_requests: BilledTotal::default(),
             log: Vec::new(),
@@ -684,24 +681,9 @@ impl DashboardState {
                 .iter()
                 .map(|contribution| contribution.tokens_out)
                 .sum();
-            entry.normalized_cost_usd = if entry
-                .contributions
-                .iter()
-                .all(|contribution| contribution.cost_usd.is_some())
-            {
-                Some(
-                    entry
-                        .contributions
-                        .iter()
-                        .filter_map(|contribution| contribution.cost_usd)
-                        .sum(),
-                )
-            } else {
-                None
-            };
-            // The Queue total follows the same all-or-nothing rule as
-            // normalized_cost_usd: a billed total missing one contribution's
-            // term latches to unknown rather than understating the work.
+            // The Queue total follows an all-or-nothing rule: a billed total
+            // missing one contribution's term latches to unknown rather than
+            // understating the work.
             let mut credits = BilledTotal::default();
             let mut premium_requests = BilledTotal::default();
             for contribution in &entry.contributions {
@@ -873,7 +855,6 @@ fn contribution_from(
             0
         },
         usage_observed,
-        cost_usd: row.cost_usd,
         credits: consumption.credits,
         premium_requests: consumption.premium_requests,
         cache_read: consumption.cache_read.map(|value| value.max(0)),

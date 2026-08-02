@@ -86,7 +86,7 @@ fn cells(row: &str) -> Vec<String> {
 }
 
 /// The locked Queue headings, in the locked order.
-const QUEUE_HEADINGS: [&str; 11] = [
+const QUEUE_HEADINGS: [&str; 10] = [
     "Issue",
     "Status",
     "Started",
@@ -97,7 +97,6 @@ const QUEUE_HEADINGS: [&str; 11] = [
     "Tokens out",
     "Credits",
     "Premium",
-    "Cost",
 ];
 
 #[test]
@@ -113,7 +112,7 @@ fn a_narrow_terminal_gives_up_its_least_decisive_columns() {
 
     assert_eq!(
         drawn,
-        ["Issue", "Status", "Started", "Active", "Iters", "Cost"],
+        ["Issue", "Status", "Started", "Active", "Iters", "Tokens in"],
         "identity, lifecycle, and the accounting an operator steers by survive; \
          the wide Consumption counters are what a narrow terminal loses"
     );
@@ -123,7 +122,7 @@ fn a_narrow_terminal_gives_up_its_least_decisive_columns() {
     );
     assert_eq!(
         cells(&band(&lines, "Queue")[1]),
-        ["#42", "closed", "6:00:01 PM", "0:00:04", "1", "$0.0004"],
+        ["#42", "closed", "6:00:01 PM", "0:00:04", "1", "100"],
         "a dropped column drops its cell too, rather than shifting the row"
     );
 }
@@ -205,7 +204,7 @@ fn the_drill_in_gives_up_its_own_least_decisive_columns() {
             "Duration",
             "Status",
             "Active",
-            "Cost"
+            "Tokens in"
         ],
         "the contribution's identity and lifecycle survive a narrow terminal"
     );

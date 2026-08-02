@@ -178,7 +178,6 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "Tokens out",
             "Credits",
             "Premium",
-            "Cost",
         ],
         "the locked Queue columns, in the locked order"
     );
@@ -195,7 +194,6 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "50",
             "—",
             "—",
-            "$0.0004",
         ],
     );
 }
@@ -210,7 +208,7 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     // queued, so it precedes the closed #7 even though #7 was seen first.
     assert_eq!(
         cells(&queue[1]),
-        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "—", "—", "—"],
+        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "—", "—"],
         "an Orchestrator that cannot measure Consumption never renders a zero"
     );
     assert_eq!(
@@ -222,7 +220,6 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
             "0:00:48",
             "5:30:50 AM",
             "2",
-            "—",
             "—",
             "—",
             "—",
@@ -283,7 +280,6 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "Tokens in",
             "Tokens out",
             "Observed tokens",
-            "Cost",
             "Tools",
             "Skills",
             "Skills consulted",
@@ -305,7 +301,6 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "100",
             "50",
             "150",
-            "$0.0004",
             "0",
             "0",
             "—",
@@ -327,7 +322,7 @@ fn a_summary_row_declares_every_measurement_its_orchestrator_cannot_take() {
     assert_eq!(
         cells(&summary[1]),
         [
-            "1", "advanced", "0:00:29", "—", "—", "—", "—", "—", "—", "—", "—", "2", "0", "1", "0",
+            "1", "advanced", "0:00:29", "—", "—", "—", "—", "—", "—", "—", "2", "0", "1", "0",
         ],
         "commits, closures, advances, and Strikes stay observable even when \
          Consumption is not"
@@ -335,7 +330,7 @@ fn a_summary_row_declares_every_measurement_its_orchestrator_cannot_take() {
     assert_eq!(
         cells(&summary[2]),
         [
-            "2", "closed", "0:00:19", "—", "—", "—", "—", "—", "—", "—", "—", "1", "1", "0", "0",
+            "2", "closed", "0:00:19", "—", "—", "—", "—", "—", "—", "—", "1", "1", "0", "0",
         ],
     );
 }
@@ -497,7 +492,6 @@ fn end_of_input_draws_a_final_frame_and_hands_the_terminal_back() {
             "50",
             "—",
             "—",
-            "$0.0004",
         ],
         "the final frame is the whole terminal Run, not the last delta"
     );

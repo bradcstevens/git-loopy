@@ -173,7 +173,6 @@ class IterationSnapshot:
     issues: tuple[dict[str, Any], ...] = ()
     normalized_duration_seconds: Optional[float] = None
     normalized_observed_tokens: Optional[int] = None
-    normalized_cost_usd: Optional[Decimal] = None
     has_normalized_rollup: bool = False
     #: Normalized-rollup measurement keys the producing Orchestrator declared
     #: unavailable (sent as ``null``). Renderers project these as the unknown
@@ -225,21 +224,10 @@ class IterationSnapshot:
             return 0.0
         return (self.ended_at - self.started_at).total_seconds()
 
-    def cost_usd(self, denomination: CostDenomination) -> Optional[Decimal]:
-        """The iteration's Cost, or ``None`` when the denomination cannot say.
-
-        Delegates to :meth:`~git_loopy.denomination.CostDenomination.cost`,
-        which owns the unknown-model guard so callers render the em dash rather
-        than silently understating Cost.
-        """
-        if self.has_normalized_rollup:
-            return self.normalized_cost_usd
-        return denomination.cost(self.usage)
-
     def credits(self, denomination: CostDenomination) -> Optional[Decimal]:
         """The Iteration's billed **AI Credits**, or ``None`` when unknown.
 
-        Resolves through the same seam the estimate does, so the **Summary**, the
+        Resolves through the one denomination seam, so the **Summary**, the
         **Queue** and the per-issue **Iteration breakdown** cannot disagree about
         what an Iteration cost. A normalized rollup rebuilt this tally from the
         producing Orchestrator's own figures, so the seam answers for a native
@@ -256,7 +244,7 @@ class IterationSnapshot:
         """
         return self.usage.premium_requests
 
-    def to_counters_kwargs(self, *, denomination: CostDenomination) -> dict:
+    def to_counters_kwargs(self) -> dict:
         """Return a kwargs dict suitable for constructing
         :class:`git_loopy.persist.IterationCounters`.
 
@@ -265,9 +253,7 @@ class IterationSnapshot:
         ``git_loopy.persist``. Compatibility callers may do::
 
             from git_loopy.persist import IterationCounters
-            counters = IterationCounters(
-                **snap.to_counters_kwargs(denomination=d)
-            )
+            counters = IterationCounters(**snap.to_counters_kwargs())
 
         Production persistence instead uses
         :meth:`git_loopy.persist.IterationCounters.from_rollup`.
@@ -279,7 +265,6 @@ class IterationSnapshot:
             "tokens_in": self.usage.tokens_in,
             "tokens_out": self.usage.tokens_out,
             "context_used": self.context_used,
-            "est_cost_usd": self.cost_usd(denomination),
             "tool_count": self.tool_count,
             "skill_count": self.skill_count,
             "skills_consulted": tuple(sorted(self.skills_consulted)),
@@ -315,11 +300,10 @@ class RunTotals:
     tokens_in_observed: bool
     tokens_out_observed: bool
     skills_observed: bool
-    cost_usd: Optional[Decimal]
     #: Billed **AI Credits** and premium requests summed over the Iterations that
-    #: reported them, or ``None`` when none did. Folded on the same rule as
-    #: ``cost_usd``: an Iteration that could not report contributes nothing
-    #: rather than a zero, so the footer never reads as free work.
+    #: reported them, or ``None`` when none did. An Iteration that could not
+    #: report contributes nothing rather than a zero, so the footer never reads
+    #: as free work.
     credits: Optional[Decimal]
     premium_requests: Optional[Decimal]
     commits: int
@@ -350,21 +334,25 @@ class RunSummary:
             on this Summary resolves through — the one seam, so the Summary and
             the Queue cannot disagree about what an issue cost. Its
             :attr:`~git_loopy.denomination.CostDenomination.provenance` supplies
-            the caveat printed beside a per-Iteration cost line.
-        credits_denomination: The seam the primary **AI Credits** figure resolves
-            through (ADR-0026). Transitional: while the list-price estimate is
-            still rendered (#330 retires it) the Summary carries both
-            denominations, and when the estimate goes this is the one that
-            remains.
+            the caveat printed beside the per-Iteration Credits line. Defaults
+            to the one production adapter, so a Summary someone else built is
+            never silently Credit-less — a *null* default would render the em
+            dash forever, which is the one thing an unknown may not become.
+        cost_reportable: The ``cost`` **Insight capability** the producing
+            **Orchestrator** declared at **Run** start. ``False`` means *this
+            Orchestrator cannot report Cost at all*, which is a different fact
+            from a Run that can report it and saw none — and one the rollup
+            payload cannot carry, because the Wrapper contract lets a producer
+            signal an unobservable measurement by omitting the key *or* by
+            nulling it. The declaration is the only place the two are told
+            apart, which is why the renderer reads it rather than a field.
         current: The in-progress :class:`IterationSnapshot`, or ``None``
             between iterations.
         completed: Frozen snapshots in iteration order.
     """
 
-    denomination: CostDenomination
-    credits_denomination: CostDenomination = field(
-        default_factory=BilledCreditsDenomination
-    )
+    denomination: CostDenomination = field(default_factory=BilledCreditsDenomination)
+    cost_reportable: bool = True
     current: Optional[IterationSnapshot] = None
     completed: list[IterationSnapshot] = field(default_factory=list)
 
@@ -420,7 +408,6 @@ class RunSummary:
                 "tokens_in",
                 "tokens_out",
                 "observed_tokens",
-                "cost_usd",
                 "tool_count",
                 "skill_call_count",
                 "skills_consulted",
@@ -446,10 +433,6 @@ class RunSummary:
         observed_tokens = summary.get("observed_tokens")
         snap.normalized_observed_tokens = (
             None if observed_tokens is None else _rollup_int(observed_tokens)
-        )
-        cost = summary.get("cost_usd")
-        snap.normalized_cost_usd = (
-            Decimal(str(cost)) if cost is not None else None
         )
         snap.has_normalized_rollup = True
         snap.tool_count = _rollup_int(summary.get("tool_count"))
@@ -539,10 +522,10 @@ class RunSummary:
     def totals(self) -> RunTotals:
         """Aggregate counters across :attr:`completed` iterations.
 
-        Cost only sums iterations the denomination could price —
-        unpriceable iterations contribute ``None`` and are skipped, so
-        the totals row never silently understates cost by treating
-        unknown as zero.
+        Cost only sums iterations the harness billed — an Iteration it
+        reported nothing for contributes ``None`` and is skipped, so the
+        totals row never silently understates cost by treating unknown as
+        zero.
 
         ``final_strikes`` is the last completed iteration's strike count
         (not the sum) — strikes reset on progress in the wrapper
@@ -566,18 +549,8 @@ class RunSummary:
         commits = sum(s.commits for s in self.completed)
         auto_closures = sum(s.auto_closures for s in self.completed)
         pr_advances = sum(s.pr_advances for s in self.completed)
-        priced_costs = [
-            s.cost_usd(self.denomination)
-            for s in self.completed
-        ]
-        defined_costs = [c for c in priced_costs if c is not None]
-        cost_usd: Optional[Decimal]
-        if defined_costs:
-            cost_usd = sum(defined_costs, Decimal(0))
-        else:
-            cost_usd = None
         credits = _sum_or_unknown(
-            s.credits(self.credits_denomination) for s in self.completed
+            s.credits(self.denomination) for s in self.completed
         )
         premium_requests = _sum_or_unknown(
             s.premium_requests for s in self.completed
@@ -605,7 +578,6 @@ class RunSummary:
             tokens_in_observed=tokens_in_observed,
             tokens_out_observed=tokens_out_observed,
             skills_observed=skills_observed,
-            cost_usd=cost_usd,
             credits=credits,
             premium_requests=premium_requests,
             commits=commits,
@@ -666,13 +638,9 @@ class RunSummary:
         body.append_text(self._format_peak_context_line(snap))
         body.append("\n")
 
-        # Cost lines — the billed figure first, the estimate it will replace after.
+        # Cost — the harness's billed figure, the only one there is (ADR-0026).
         body.append("Cost: ", style=STYLES["meta"])
         body.append_text(self._format_credits_line(snap))
-        body.append("\n")
-        body.append("Est cost: ", style=STYLES["meta"])
-        cost_text = self._format_cost_line(snap)
-        body.append_text(cost_text)
         body.append("\n")
 
         # Tool / explicit skill-call counts
@@ -759,11 +727,6 @@ class RunSummary:
             footer=_format_premium(totals.premium_requests),
         )
         table.add_column(
-            "Cost USD",
-            justify="right",
-            footer=_format_decimal_footer(totals.cost_usd),
-        )
-        table.add_column(
             "Commits",
             justify="right",
             footer=str(totals.commits),
@@ -785,8 +748,6 @@ class RunSummary:
         )
 
         for snap in self.completed:
-            cost = snap.cost_usd(self.denomination)
-            cost_str = f"${cost:.4f}" if cost is not None else "—"
             issue_str = f"#{snap.issue_num}" if snap.issue_num is not None else "—"
             model_str = snap.model if snap.model is not None else "—"
             table.add_row(
@@ -800,9 +761,8 @@ class RunSummary:
                 _observed_text(
                     snap.measurement_observed("tokens_out"), f"{snap.tokens_out:,}"
                 ),
-                _format_credits(snap.credits(self.credits_denomination)),
+                _format_credits(snap.credits(self.denomination)),
                 _format_premium(snap.premium_requests),
-                cost_str,
                 str(snap.commits),
                 str(snap.auto_closures),
                 str(snap.pr_advances),
@@ -815,12 +775,12 @@ class RunSummary:
 
         A single-line, *live* (not frozen) run-level totals strip — the band of
         the Dashboard stacked under the Queue. It mirrors the run-end
-        :meth:`build_run_table` footer: summed tokens, estimated cost, commits,
+        :meth:`build_run_table` footer: summed tokens, billed Credits, commits,
         closures, and the final strike count, plus the iteration count for
         context. Returned as a Rich :class:`~rich.text.Text` the interactive app
         drops into a ``Static``; the full per-iteration table stays the run-end
-        artefact. Cost renders as the em dash when no completed iteration had a
-        priced model (the same unknown-model treatment as the table footer).
+        artefact. Cost renders as the em dash when no completed iteration was
+        billed (the same unknown treatment as the table footer).
         """
         totals = self.totals()
         text = Text()
@@ -837,7 +797,7 @@ class RunSummary:
             f"  •  Observed tokens {observed}"
             f" (in={tokens_in} out={tokens_out})"
         )
-        text.append(f"  •  cost {_format_decimal_footer(totals.cost_usd)}")
+        text.append(f"  •  credits {_format_credits(totals.credits)}")
         text.append(f"  •  commits {totals.commits}")
         text.append(f"  •  closures {totals.auto_closures}")
         text.append(f"  •  PR advances {totals.pr_advances}")
@@ -879,17 +839,22 @@ class RunSummary:
         """Render the billed Credits line, its premium requests, and provenance.
 
         The two unavailability reasons stay distinguishable rather than sharing
-        one em dash (ADR-0026): an **Orchestrator** that declares Cost
-        unavailable says so in its own words, while a Python **Run** that simply
-        saw no billing on the stream says *that*.
+        one em dash (ADR-0026): an **Orchestrator** whose ``cost`` **Insight
+        capability** is ``false`` says so in its own words, while a **Run** that
+        can report Cost and simply saw no billing on the stream says *that*.
+
+        Read off the capability rather than off a nulled rollup key, because the
+        Wrapper contract lets a producer signal an unobservable measurement by
+        omitting the key *or* by nulling it — so the payload cannot tell the two
+        apart, and the declaration is the only place that can.
         """
         text = Text()
-        credits = snap.credits(self.credits_denomination)
+        credits = snap.credits(self.denomination)
         if credits is None:
             text.append("—  ", style=STYLES["meta"])
             text.append(
                 "(no billing telemetry reported)"
-                if snap.measurement_observed("cost_usd")
+                if self.cost_reportable
                 else "(this Orchestrator cannot report Cost)",
                 style=STYLES["meta"],
             )
@@ -901,26 +866,9 @@ class RunSummary:
             f"  •  {rendered} premium request{'' if rendered == '1' else 's'}",
             style=STYLES["meta"],
         )
-        provenance = self.credits_denomination.provenance
-        if provenance is not None:
-            text.append(f"  ({provenance})", style=STYLES["meta"])
-        return text
-
-    def _format_cost_line(self, snap: IterationSnapshot) -> Text:
-        """Render the cost line with the denomination's provenance, or the em dash."""
-        text = Text()
-        cost = snap.cost_usd(self.denomination)
-        if cost is None:
-            text.append("—  ", style=STYLES["meta"])
-            text.append("(model not in pricing table)", style=STYLES["meta"])
-            return text
-        text.append(f"${cost:.4f} USD")
         provenance = self.denomination.provenance
         if provenance is not None:
-            text.append(
-                f"  ({provenance})",
-                style=STYLES["meta"],
-            )
+            text.append(f"  ({provenance})", style=STYLES["meta"])
         return text
 
 
@@ -929,19 +877,11 @@ class RunSummary:
 # ---------------------------------------------------------------------------
 
 
-def _format_decimal_footer(cost: Optional[Decimal]) -> str:
-    """Footer-cell formatter for cost totals; em dash for None."""
-    if cost is None:
-        return "—"
-    return f"${cost:.4f}"
-
-
 def _sum_or_unknown(values: Iterable[Optional[Decimal]]) -> Optional[Decimal]:
     """Total the figures that were reported, or ``None`` when none were.
 
-    Folds on the same rule ``cost_usd`` already uses: an Iteration that could not
-    report contributes nothing rather than a zero, so the footer never reads as
-    free work, and the two Cost footers stay comparable while both are rendered.
+    An Iteration that could not report contributes nothing rather than a zero,
+    so the footer never reads as free work.
     """
     defined = [value for value in values if value is not None]
     if not defined:

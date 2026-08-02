@@ -40,7 +40,6 @@ exit `1` **before** doing any work:
 - `gh` is authenticated, and `git`, `copilot` are on `PATH`. The shell port additionally requires
   `jq`.
 - The resolved `PROMPT.md` exists (see §4).
-- If cost estimation is active, pricing data parses (phase 3).
 
 ## 2. Collection (phase 1, MUST)
 
@@ -207,7 +206,6 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§17). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
-| `GIT_LOOPY_PRICING_FILE`       | 3     | packaged         | Override pricing table for cost estimation.                   |
 | `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | **Lane** count in **Parallel mode**.                          |
 | `GIT_LOOPY_WORKTREE_SETUP`     | 5     | none             | Per-worktree setup command for **Parallel mode**.             |
 
@@ -349,18 +347,25 @@ Orchestrator rollout tickets own enabling those producers.
   `summary`, and an `issues` contribution list.
 
 The normalized `summary` requires `model`, `tokens_in`, `tokens_out`, `observed_tokens`,
-`cost_usd`, `tool_count`, `skill_call_count`, sorted-distinct `skills_consulted`, `commits`,
+`tool_count`, `skill_call_count`, sorted-distinct `skills_consulted`, `commits`,
 `auto_closures`, `pr_advances`, `strikes`, and nullable `peak_context_window`. Each issue
 contribution requires `issue`, `status`, UTC RFC3339 `first_started_at`, closure-only `closed_at`,
 closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_seconds`,
-`consumption` (`model`, `tokens_in`, `tokens_out`), nullable `cost_usd`, and nullable
-`peak_context_window`. Only authoritative source closure populates closure-only fields.
+`consumption` (`model`, `tokens_in`, `tokens_out`), and nullable `peak_context_window`. Only
+authoritative source closure populates closure-only fields.
+
+Cost is the harness's reported billing — optional `credits`, `premium_requests`, `cache_read` and
+`cache_write`, added additively (ADR-0026). They are optional rather than required precisely so an
+Orchestrator that cannot observe billing omits them rather than fabricating a figure. The
+dollar-named `cost_usd` is **retired**: it was git-loopy's own list-price estimate, the price table
+is deleted, and it is never repurposed to carry Credits — a consumer must never read Credits out of
+a key whose name says dollars. Producers that still emit it remain conformant; consumers ignore it.
 
 The shell and PowerShell Orchestrators emit this normalized payload from their native observable
 boundaries. Iteration, Active-issue, and cumulative Active durations come from each Orchestrator's
 monotonic clock; agent commits, successful wrapper closures, PR advances, and Strikes remain
 observed counts. Model and token Consumption, structured tool and Skill activity, Context fill,
-model pricing, and Cost remain `null` because native Copilot CLI output does not expose those
+and Cost remain `null` because native Copilot CLI output does not expose those
 measurements. The configured model is not a substitute for observed Consumption, and unavailable
 counters or collections MUST NOT be reported as `0` or `[]`.
 

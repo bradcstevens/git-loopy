@@ -31,7 +31,6 @@ import asyncio
 import io
 import json
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID, uuid4
@@ -52,7 +51,7 @@ from copilot.generated.session_events import (
 from copilot.session import PermissionRequestResult
 from rich.console import Console
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import session as session_module
 from git_loopy.active_issue import ActiveIssueBinding
@@ -67,7 +66,6 @@ from git_loopy.events import (
     WRAPPER_ASK_USER_ATTEMPTED,
 )
 from git_loopy.persist import EventLogWriter
-from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.session import (
     ASK_USER_TOOL_NAME,
     SKILL_TOOL_NAME,
@@ -229,16 +227,7 @@ def _capture_console(width: int = 120) -> tuple[Console, io.StringIO]:
 
 
 def _make_renderer() -> tuple[Renderer, io.StringIO]:
-    pricing = Pricing(
-        models={
-            "claude-opus-4.7-xhigh": ModelPricing(
-                input_per_mtok=Decimal("15.00"),
-                output_per_mtok=Decimal("75.00"),
-                context_window=200_000,
-            ),
-        }
-    )
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=pricing))
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     console, buf = _capture_console()
     renderer = Renderer(console=console, summary=summary, verbosity=0)
     return renderer, buf
@@ -1762,7 +1751,7 @@ def test_session_module_imports_are_constrained() -> None:
     modules it integrates with.
 
     Catches accidental coupling to ``gh`` / ``git`` / ``loop`` / ``cli`` /
-    ``config`` / ``wrapper`` / ``pricing`` — every one of those would
+    ``config`` / ``wrapper`` — every one of those would
     invert the dependency direction and make the session module harder
     to test in isolation. ``emit`` (issue #44) is the shared scrub-and-fan-out
     seam; it is itself a pure leaf (``__future__`` + ``typing`` + ``events``).
@@ -1781,7 +1770,7 @@ def test_session_module_imports_are_constrained() -> None:
         "copilot.generated.rpc",
         "copilot.generated.session_events",
         # peer git-loopy modules — strictly the deep ones we integrate
-        # with. NO loop / cli / config / gh / git / wrapper / pricing.
+        # with. NO loop / cli / config / gh / git / wrapper.
         "git_loopy",
         "git_loopy.emit",
         "git_loopy.events",

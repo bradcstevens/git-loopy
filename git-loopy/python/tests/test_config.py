@@ -30,7 +30,6 @@ def test_run_config_defaults_are_safe() -> None:
     assert cfg.verbosity == 0
     assert cfg.render_reasoning is True
     assert cfg.otel_enabled is False
-    assert cfg.pricing_file is None
     assert cfg.parallel == 1
     assert cfg.send_timeout_seconds == 7200.0
 
@@ -128,11 +127,14 @@ def test_run_config_accepts_valid_reasoning_effort(effort: str) -> None:
     assert cfg.reasoning_effort == effort
 
 
-def test_run_config_accepts_explicit_pricing_path() -> None:
-    """Pricing-file overrides are preserved verbatim (no I/O at construction)."""
-    p = Path("/nowhere/pricing.toml")
-    cfg = RunConfig(pricing_file=p)
-    assert cfg.pricing_file == p
+def test_run_config_has_no_pricing_file_knob() -> None:
+    """#330 deleted the price table, so there is no override left to preserve.
+
+    Kept as a fence rather than simply removed: re-adding the field would mean
+    re-adding a hand-maintained price table, which ADR-0026 forbids.
+    """
+    with pytest.raises(TypeError):
+        RunConfig(pricing_file=Path("/nowhere/pricing.toml"))  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------

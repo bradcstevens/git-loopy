@@ -254,7 +254,6 @@ class IssueLedgerEntry:
     closed_wall: datetime | None = None
     issue_elapsed_seconds: float | None = None
     contributions: list[IssueContribution] = field(default_factory=list)
-    normalized_cost_usd: float | None = None
 
     def active_seconds(self, now: float) -> float:
         """Total active time, live-ticking against ``now`` while active."""
@@ -313,7 +312,6 @@ class IssueContribution:
     active_seconds: float
     usage: UsageTally
     usage_observed: bool
-    cost_usd: float | None
     peak_context_window: ContextWindowSnapshot | None
 
 
@@ -1398,8 +1396,6 @@ class LiveRunState:
                     tokens_out or 0,
                     BillingSample.from_event(consumption),
                 )
-            cost = payload.get("cost_usd")
-            cost_usd = float(cost) if isinstance(cost, (int, float)) else None
             is_lane = key in self._iter_lane_refs
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
@@ -1413,7 +1409,6 @@ class LiveRunState:
                 ),
                 usage=usage,
                 usage_observed=usage_observed,
-                cost_usd=cost_usd,
                 peak_context_window=_context_window_snapshot(
                     payload.get("peak_context_window")
                 ),
@@ -1441,15 +1436,6 @@ class LiveRunState:
             entry.usage = UsageTally()
             for item in entry.contributions:
                 entry.usage.merge(item.usage)
-            entry.normalized_cost_usd = (
-                sum(
-                    item.cost_usd
-                    for item in entry.contributions
-                    if item.cost_usd is not None
-                )
-                if all(item.cost_usd is not None for item in entry.contributions)
-                else None
-            )
 
     def _normalize_ref(self, ref: Any) -> int | str:
         """Resolve a ref to its existing ledger key, tolerating int/str skew.
@@ -1816,7 +1802,6 @@ class QueueRow:
     usage_observed: bool
     closed_wall: datetime | None
     iteration_count: int
-    cost_usd: float | None
 
     @property
     def label(self) -> str:
@@ -1860,7 +1845,6 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 usage_observed=entry.usage_observed,
                 closed_wall=entry.closed_wall,
                 iteration_count=len(entry.contributions),
-                cost_usd=entry.normalized_cost_usd,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))

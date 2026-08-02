@@ -223,7 +223,6 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "50",
             "—",
             "—",
-            "$0.0004",
             "12,000/32,000",
         ],
         "one row per contribution, scoped to this issue inside it"
@@ -252,7 +251,7 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
         let drawn = cells(row);
         assert_eq!(
             &drawn[5..],
-            ["—", "—", "—", "—", "—", "—"],
+            ["—", "—", "—", "—", "—"],
             "an unavailable measurement never renders as an observed zero"
         );
     }

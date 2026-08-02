@@ -1,22 +1,23 @@
 """Tests for ``git_loopy.denomination`` (issue #328 — one cost-denomination seam).
 
 **Cost** is derived from **Consumption** by one shared rule. Until this seam
-existed that rule was reachable only by holding the price table itself, so every
+existed that rule was reachable only by holding a price table, so every
 Cost-bearing surface — the **Summary**, the **Queue**, the per-issue **Iteration
-breakdown** and **Rolling dispatch**'s cost pressure — took a
-:class:`~git_loopy.pricing.Pricing` constructor parameter and re-derived the
-arithmetic plus the unknown-model guard for itself.
+breakdown** and **Rolling dispatch**'s cost pressure — took a price-table
+constructor parameter and re-derived the arithmetic plus the unknown-model guard
+for itself.
 
 The seam is :class:`~git_loopy.denomination.CostDenomination`: given a
-**Consumption** tally, what did it cost. What denominates Cost is now a
-substitutable **Adapter** behind that one method, which is what lets the tickets
-after this one change the denomination without touching a consumer.
+**Consumption** tally, what did it cost. What denominates Cost is a substitutable
+**Adapter** behind that one method, which is what let #329 change the denomination
+without touching a consumer and what let #330 delete the price table without
+touching one either.
 
 Covered here:
 
-* :class:`ListPriceDenomination` — the one production adapter today: a
-  :class:`~decimal.Decimal` for a known model, ``None`` (never zero) for an
-  unknown model and for a ``None`` model, and provenance carried alongside.
+* :class:`BilledCreditsDenomination` — the one production adapter: the **AI
+  Credits** the harness reported billing, never tokens multiplied by a price
+  (ADR-0026).
 * The protocol admits a second adapter, which is what makes the seam real
   rather than hypothetical.
 """
@@ -32,75 +33,8 @@ from git_loopy import loop as loop_module
 from git_loopy.denomination import (
     BilledCreditsDenomination,
     CostDenomination,
-    ListPriceDenomination,
 )
-from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.usage import BillingSample, UsageTally
-
-
-def _pricing() -> Pricing:
-    """A one-model table with round prices so assertions can be exact."""
-    return Pricing(
-        models={
-            "known-model": ModelPricing(
-                input_per_mtok=Decimal("10"),
-                output_per_mtok=Decimal("30"),
-                context_window=200_000,
-            ),
-        }
-    )
-
-
-# ---------------------------------------------------------------------------
-# ListPriceDenomination — the production adapter
-# ---------------------------------------------------------------------------
-
-
-def test_cost_of_a_known_model_is_the_list_price_arithmetic() -> None:
-    """1000 in @ $10/Mtok + 2000 out @ $30/Mtok = 0.01 + 0.06."""
-    denomination = ListPriceDenomination(pricing=_pricing())
-    tally = UsageTally(model="known-model", tokens_in=1000, tokens_out=2000)
-    assert denomination.cost(tally) == Decimal("0.07")
-
-
-def test_cost_of_an_unknown_model_is_none_not_zero() -> None:
-    """A model absent from the table yields ``None`` so callers render the em dash."""
-    denomination = ListPriceDenomination(pricing=_pricing())
-    tally = UsageTally(model="not-in-table", tokens_in=1000, tokens_out=2000)
-    assert denomination.cost(tally) is None
-
-
-def test_cost_of_an_unnamed_model_is_none_not_zero() -> None:
-    """A tally no Consumption sample has named yet costs nothing knowable.
-
-    Asserted against a table that would price *any* key, so the answer comes
-    from the unnamed-model guard rather than incidentally from a lookup miss.
-    Without the guard this Consumption would render a confident figure billed
-    against a model nobody observed.
-    """
-
-    class _PricesAnything(dict):
-        def get(self, key, default=None):  # type: ignore[override]
-            return ModelPricing(
-                input_per_mtok=Decimal("10"),
-                output_per_mtok=Decimal("30"),
-                context_window=200_000,
-            )
-
-    denomination = ListPriceDenomination(pricing=Pricing(models=_PricesAnything()))
-    assert denomination.cost(UsageTally(model="anything", tokens_in=1000)) is not None
-    assert denomination.cost(UsageTally(model=None, tokens_in=1000, tokens_out=2000)) is None
-
-
-def test_provenance_defaults_to_unstated() -> None:
-    """No date label was supplied, so the renderer has no suffix to print."""
-    assert ListPriceDenomination(pricing=_pricing()).provenance is None
-
-
-def test_provenance_carries_the_list_price_date_label() -> None:
-    """The caveat the renderer prints travels with the denomination, not beside it."""
-    denomination = ListPriceDenomination(pricing=_pricing(), as_of="2026-05-16")
-    assert denomination.provenance == "provider list, as of 2026-05-16"
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +66,12 @@ def test_a_second_adapter_satisfies_the_seam() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_denomination_module_imports_only_stdlib_usage_and_pricing() -> None:
+def test_denomination_module_imports_only_stdlib_and_usage() -> None:
     """The seam stays a pure leaf (ADR-0001's import-guard posture).
 
-    It may reach the price table and the Consumption value object — both
-    stdlib-only themselves — and nothing heavier. No Textual, no SDK.
+    It may reach the Consumption value object — stdlib-only itself — and
+    nothing heavier. No Textual, no SDK, and since #330 no price table: the
+    allowlist was *narrowed* when the table went, not left open.
     """
     source = Path(denomination_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -145,7 +80,6 @@ def test_denomination_module_imports_only_stdlib_usage_and_pricing() -> None:
         "dataclasses",
         "decimal",
         "typing",
-        "git_loopy.pricing",
         "git_loopy.usage",
     }
     seen: set[str] = set()
@@ -192,7 +126,7 @@ def test_the_summary_totals_through_the_injected_denomination() -> None:
     summary.record_usage(model="anything", tokens_in=1, tokens_out=1)
     summary.on_iteration_end()
 
-    assert summary.totals().cost_usd == Decimal("2.5")
+    assert summary.totals().credits == Decimal("2.5")
 
 
 def test_the_iteration_rollup_prices_through_the_injected_denomination() -> None:
@@ -207,7 +141,7 @@ def test_the_iteration_rollup_prices_through_the_injected_denomination() -> None
     payload = rollup.finish(iter_num=1, strikes=0, outcome="ok")
 
     assert payload is not None
-    assert payload["summary"]["cost_usd"] == 2.5
+    assert payload["summary"]["credits"] == 2.5
 
 
 def test_rolling_dispatch_cost_pressure_prices_through_the_injected_denomination() -> None:
@@ -249,26 +183,7 @@ def test_the_dashboard_projection_prices_through_the_summarys_denomination() -> 
     projection = project_run_view(LiveRunState(), summary, issue=1)
     rows = projection["dashboard"]["summary"]["rows"]
 
-    assert [row["cost_usd"] for row in rows] == [2.5]
-
-
-def test_the_queue_cell_prices_through_the_injected_denomination() -> None:
-    """A live (not yet finalized) Queue row renders the seam's figure."""
-    from git_loopy.interactive.app import _format_queue_cost
-
-    cell = _format_queue_cost(
-        UsageTally(model="anything", tokens_in=1, tokens_out=1),
-        _FixedDenomination("2.5"),
-    )
-    assert cell == "$2.5000"
-
-
-def test_the_queue_cell_is_the_em_dash_with_no_denomination_attached() -> None:
-    """No Summary attached means no seam to ask, which is unknown — never zero."""
-    from git_loopy.interactive.app import _format_queue_cost
-
-    cell = _format_queue_cost(UsageTally(model="anything", tokens_in=1, tokens_out=1), None)
-    assert cell == "—"
+    assert [row["credits"] for row in rows] == [2.5]
 
 
 def test_a_lane_contributions_cost_resolves_through_the_same_seam() -> None:
@@ -302,8 +217,8 @@ def test_a_lane_contributions_cost_resolves_through_the_same_seam() -> None:
     )
     payload = rollup.finish(iter_num=1, strikes=0, outcome="ok")
 
-    assert [issue["cost_usd"] for issue in payload["issues"]] == [2.5]
-    assert payload["summary"]["cost_usd"] == 2.5
+    assert [issue["consumption"]["credits"] for issue in payload["issues"]] == [2.5]
+    assert payload["summary"]["credits"] == 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -381,11 +296,15 @@ def test_the_run_injects_the_billed_credits_denomination_at_one_site() -> None:
     assert summary_calls, "loop.py must construct the Run's Summary"
     for call in summary_calls:
         keywords = {kw.arg for kw in call.keywords}
-        assert "denomination" in keywords
-        assert "credits_denomination" in keywords, (
-            "the Credits denomination must be injected explicitly, not left to "
-            "the constructor default that exists only to spare #328's suites a "
-            "mechanical edit"
+        assert "denomination" in keywords, (
+            "the denomination must be injected explicitly, not left to the "
+            "constructor default that exists only so a Summary someone else "
+            "built is never Credit-less"
+        )
+        assert "cost_reportable" in keywords, (
+            "whether this Orchestrator can report Cost at all is a Run-start "
+            "declaration, not something the renderer may infer from an absent "
+            "figure (#330)"
         )
     assert "BilledCreditsDenomination()" in source
 
@@ -393,12 +312,10 @@ def test_the_run_injects_the_billed_credits_denomination_at_one_site() -> None:
 def test_the_summary_default_is_the_billed_credits_denomination() -> None:
     """A Summary built without one still denominates Credits from billing.
 
-    The default exists so the ten suites #328 already threaded did not need a
-    second mechanical edit, and so a Dashboard attached to a Summary someone else
-    built is never silently Credit-less. It must be the *production* adapter, not
-    a null object that would render the em dash forever.
+    The default exists so a Dashboard attached to a Summary someone else built is
+    never silently Credit-less. It must be the *production* adapter, not a null
+    object that would render the em dash forever.
     """
     from git_loopy.ui.summary import RunSummary
 
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=_pricing()))
-    assert isinstance(summary.credits_denomination, BilledCreditsDenomination)
+    assert isinstance(RunSummary().denomination, BilledCreditsDenomination)

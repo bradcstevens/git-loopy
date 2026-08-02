@@ -12,8 +12,8 @@ Covers the filesystem side of observability:
   scrubber pass-through, envelope-conformant output, append-on-crash
   survivability (verified via subprocess ``os._exit``).
 * :class:`RunSummaryWriter` — context manager, lazy directory creation,
-  JSON schema matches the module docstring, ``est_cost_usd`` serialised
-  as string (or ``null``), per-iteration counter rows preserve order.
+  JSON schema matches the module docstring, per-iteration counter rows
+  preserve order.
 * :func:`create_writers` — aligned stem across artefacts, ``.gitignore``
   touched exactly once, validates explicit ``run_id``, isolates
   diagnostic logger handlers across calls.
@@ -32,7 +32,6 @@ import subprocess
 import sys
 import textwrap
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -402,7 +401,6 @@ def test_run_summary_json_matches_documented_schema(tmp_path: Path) -> None:
                 tokens_in=1000,
                 tokens_out=200,
                 context_used=1200,
-                est_cost_usd=Decimal("0.0234"),
                 tool_count=3,
                 skill_count=1,
                 skills_consulted=("domain-modeling", "tdd"),
@@ -424,7 +422,6 @@ def test_run_summary_json_matches_documented_schema(tmp_path: Path) -> None:
         "tokens_in": 1000,
         "tokens_out": 200,
         "context_used": 1200,
-        "est_cost_usd": "0.0234",
         "tool_count": 3,
         "skill_count": 1,
         "skills_consulted": ["domain-modeling", "tdd"],
@@ -438,13 +435,18 @@ def test_run_summary_json_matches_documented_schema(tmp_path: Path) -> None:
     }
 
 
-def test_run_summary_json_null_est_cost_for_unknown_model(tmp_path: Path) -> None:
-    """When the model has no pricing entry, est_cost_usd serialises as null."""
+def test_run_summary_json_carries_no_retired_cost_estimate(tmp_path: Path) -> None:
+    """The persisted row no longer carries the deleted list-price estimate (#330).
+
+    A replay must not find a dollar-named key it could mistake for what the Run
+    was billed; Cost is the harness's reported **AI Credits** (ADR-0026), and the
+    estimate is gone rather than renamed onto them.
+    """
     path = tmp_path / "run.json"
     with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS) as w:
-        w.record(IterationCounters(iter=1, model="brand-new-model", est_cost_usd=None))
+        w.record(IterationCounters(iter=1, model="brand-new-model"))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["iterations"][0]["est_cost_usd"] is None
+    assert "est_cost_usd" not in payload["iterations"][0]
 
 
 def test_run_summary_json_null_model_for_no_model_recorded(tmp_path: Path) -> None:

@@ -21,7 +21,7 @@ use crate::state::{
 use crate::timestamp::{Timestamp, Zone};
 
 /// The canonical Queue columns, in order.
-const QUEUE_COLUMNS: [&str; 11] = [
+const QUEUE_COLUMNS: [&str; 10] = [
     "issue",
     "status",
     "started_at",
@@ -32,7 +32,6 @@ const QUEUE_COLUMNS: [&str; 11] = [
     "tokens_out",
     "credits",
     "premium_requests",
-    "cost_usd",
 ];
 
 /// What the renderer's terminal can do.
@@ -154,7 +153,6 @@ pub struct QueueRow {
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
-    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -188,7 +186,6 @@ pub struct SummaryRow {
     pub observed_tokens: Option<i64>,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
-    pub cost_usd: Option<f64>,
     pub tool_count: Option<i64>,
     pub skill_call_count: Option<i64>,
     pub skills_consulted: Option<Vec<String>>,
@@ -235,7 +232,6 @@ pub struct ContributionRow {
     pub consumption: ConsumptionView,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
-    pub cost_usd: Option<f64>,
     pub peak_context_window: Option<PeakContext>,
 }
 
@@ -356,7 +352,6 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
                     premium_requests: entry.premium_requests.value(),
-                    cost_usd: entry.normalized_cost_usd,
                 },
             )
         })
@@ -389,7 +384,6 @@ fn summary_row(row: &IterationRow) -> SummaryRow {
         observed_tokens: reported(&summary.observed_tokens).copied().flatten(),
         credits: reported(&summary.credits).copied().flatten(),
         premium_requests: reported(&summary.premium_requests).copied().flatten(),
-        cost_usd: reported(&summary.cost_usd).copied().flatten(),
         tool_count: reported_or(&summary.tool_count, 0),
         skill_call_count: reported_or(&summary.skill_call_count, 0),
         skills_consulted: reported(&summary.skills_consulted).cloned().flatten().map(
@@ -495,7 +489,6 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         },
         credits: contribution.credits,
         premium_requests: contribution.premium_requests,
-        cost_usd: contribution.cost_usd,
         peak_context_window: contribution
             .peak_context_window
             .and_then(normalize_sample)

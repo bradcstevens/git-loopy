@@ -18,9 +18,8 @@ Design notes:
 
 * **Frozen.** The loop reuses the same config across every iteration;
   freezing makes accidental mid-run mutation impossible.
-* **No I/O at construction time.** ``pricing_file`` is a :class:`Path`
-  reference — actually opening it is :func:`git_loopy.pricing.load_pricing`'s
-  job and only happens inside :func:`git_loopy.loop.run`.
+* **No I/O at construction time.** Every field is a value or a :class:`Path`
+  reference; opening anything is :func:`git_loopy.loop.run`'s job.
 * **``otel_enabled`` is plumbed but inert in this slice.** Issue #12
   wires it; this slice just makes sure the flag survives the CLI →
   RunConfig → loop pipe so #12 doesn't have to re-touch the dataclass.
@@ -32,7 +31,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Literal, Mapping
 
@@ -423,9 +421,6 @@ class RunConfig:
             (either ``GIT_LOOPY_OTEL_ENABLED=1`` or
             ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set). The OTel wiring
             itself lands in issue #12; this slice just plumbs the flag.
-        pricing_file: Optional explicit path to a ``pricing.toml``.
-            ``None`` lets :func:`git_loopy.pricing.load_pricing` resolve
-            from ``GIT_LOOPY_PRICING_FILE`` or the packaged default.
         parallel: Opt-in **Parallel mode** cap (ADR-0008). ``1`` (the
             default) is serial — :func:`git_loopy.loop.run` drives the
             existing single-worktree loop byte-for-byte unchanged. ``> 1``
@@ -474,7 +469,6 @@ class RunConfig:
     verbosity: int = 0
     render_reasoning: bool = True
     otel_enabled: bool = False
-    pricing_file: Path | None = None
     parallel: int = 1
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)

@@ -153,9 +153,7 @@ from git_loopy.persist import (
 from git_loopy.denomination import (
     BilledCreditsDenomination,
     CostDenomination,
-    ListPriceDenomination,
 )
-from git_loopy.pricing import PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_install import (
@@ -680,8 +678,7 @@ def _resolve_include_prs(config: RunConfig, repo_root: Path) -> bool:
 def _packaged_prompt_path() -> Path:
     """Resolve the packaged default ``PROMPT.md`` to a real filesystem path.
 
-    Mirrors :func:`git_loopy.pricing._packaged_path`: the wheel ships a default
-    prompt as package data (alongside ``pricing.toml``) so a bare run in a repo
+    The wheel ships a default prompt as package data so a bare run in a repo
     with no ``git-loopy/`` folder still has a working prompt — the "run from
     anywhere" story (ADR-0006).
     """
@@ -3402,21 +3399,12 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         return 1
 
     # 2) Cost denomination — resolved once per Run and threaded as one seam
-    #    (#328), so every Cost-bearing surface denominates identically. Bails
-    #    out loudly on a malformed override (rubber-duck feedback: silent
-    #    fallback hides operator intent).
-    try:
-        denomination = ListPriceDenomination(
-            pricing=load_pricing(config.pricing_file)
-        )
-    except PricingError as exc:
-        print(f"git-loopy: pricing load failed: {exc}", file=sys.stderr)
-        return 1
-    # The primary Cost figure: **AI Credits** as the harness reported billing
-    # them (ADR-0026, #329). Injected as its own seam beside the estimate it
-    # will replace, so #330 retires the estimate by deleting a parameter here
-    # rather than by a pass over every Cost-bearing surface.
-    credits_denomination = BilledCreditsDenomination()
+    #    (#328), so every Cost-bearing surface denominates identically. Cost is
+    #    the **AI Credits** the harness reported billing (ADR-0026, #329), which
+    #    needs nothing loaded and can therefore never stop a Run from starting:
+    #    the price-file preflight that could abort here is deleted with the table
+    #    it validated (#330).
+    denomination = BilledCreditsDenomination()
 
     # 3) Writers + diagnostics logger + renderer + sink fan-out.
     try:
@@ -3429,7 +3417,13 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         )
         return 1
     summary = RunSummary(
-        denomination=denomination, credits_denomination=credits_denomination
+        denomination=denomination,
+        # Read off the same declaration published in the Run-start capability
+        # block, so "this Orchestrator cannot report Cost" and "no billing
+        # telemetry reached us" cannot drift apart from what the stream says.
+        cost_reportable=bool(
+            events_module.PYTHON_INSIGHT_CAPABILITIES.get("cost", False)
+        ),
     )
     console = get_console()
     renderer = Renderer(

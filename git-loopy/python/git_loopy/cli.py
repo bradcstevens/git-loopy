@@ -66,8 +66,6 @@ Env vars:
 * ``GIT_LOOPY_DENY_TOOLS`` — comma-separated tool denylist (set-unioned
   with ``--deny-tool`` flags).
 * ``GIT_LOOPY_DENY_SKILLS`` — deprecated comma-separated Skill deny guard.
-* ``GIT_LOOPY_PRICING_FILE`` — explicit ``pricing.toml`` path (overrides
-  the packaged default).
 * ``GIT_LOOPY_OTEL_ENABLED`` — truthy ``"1"`` enables OTel plumbing
   (operative wiring lands in issue #12).
 * ``OTEL_EXPORTER_OTLP_ENDPOINT`` — presence enables OTel.
@@ -260,7 +258,6 @@ def build_parser() -> argparse.ArgumentParser:
             "  GIT_LOOPY_DENY_TOOLS            Comma-separated tool denylist.\n"
             "  GIT_LOOPY_DENY_SKILLS           Deprecated comma-separated Skill "
             "deny guard.\n"
-            "  GIT_LOOPY_PRICING_FILE          Explicit pricing.toml path.\n"
             "  GIT_LOOPY_OTEL_ENABLED          Truthy '1' enables OTel.\n"
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
             "  GIT_LOOPY_INTERACTIVE           '1' forces the TUI, '0' forces "
@@ -1057,18 +1054,6 @@ def _resolve_include_prs_tiered(
     return settings.table_bool(global_, "include_prs", scope="global")
 
 
-def _resolve_pricing_file(env: Mapping[str, str]) -> Path | None:
-    """Read ``GIT_LOOPY_PRICING_FILE`` and return a Path or None.
-
-    Like ``parallel``, the pricing-file override is a per-run/env knob and is
-    never sourced from a persisted ``config.toml`` this slice.
-    """
-    raw = env.get("GIT_LOOPY_PRICING_FILE")
-    if raw is None or not raw.strip():
-        return None
-    return Path(raw)
-
-
 #: The axes an operator may cap, keyed by the :class:`ContinuationInput` field
 #: they populate. Config key and environment variable are both mechanical from
 #: the field name, so adding a ceiling to the contract cannot leave the
@@ -1481,8 +1466,8 @@ def resolve_config(
     ``otel_enabled``, ``interactive``, ``send_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
-    ``parallel``, temporary Skill overlays, and the ``pricing_file`` override)
-    are NEVER read from a config file — they resolve from flags / env only.
+    ``parallel`` and temporary Skill overlays) are NEVER read from a config
+    file — they resolve from flags / env only.
 
     ``[routing]`` is a **config-file-only** tier: it merges project-over-global
     per task-type key, and any explicit ``--model`` / ``--reasoning-effort``
@@ -1559,7 +1544,6 @@ def resolve_config(
         verbosity=verbosity,
         render_reasoning=bool(args.render_reasoning),
         otel_enabled=_otel_enabled(env, project, global_),
-        pricing_file=_resolve_pricing_file(env),
         parallel=_resolve_parallel(args, env),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
@@ -1651,6 +1635,30 @@ _LEGACY_SKILL_POLICY_WARNING = (
     "or `git-loopy init` on a terminal to choose the Skills this installation "
     "may load."
 )
+
+
+#: What a Run says to an operator who still sets the deleted price-file override.
+#: Cost is the **AI Credits** the harness reported billing (ADR-0026), so there is
+#: no price table left for the variable to point at. Setting it is *intent*, and
+#: the kit's rule is to warn on unmet intent and stay silent on absent intent —
+#: silently ignoring it would reproduce the drift the deletion removes.
+_REMOVED_PRICING_FILE_ENV = "GIT_LOOPY_PRICING_FILE"
+_REMOVED_PRICING_FILE_WARNING = (
+    f"{_REMOVED_PRICING_FILE_ENV} is set but no longer does anything — the "
+    "hand-maintained price table was deleted (#330). Cost is now the AI Credits "
+    "the harness reported billing, which git-loopy neither authors nor "
+    "recomputes. Unset the variable."
+)
+
+
+def _warn_removed_pricing_override(env: Mapping[str, str]) -> None:
+    """Warn once when the deleted price-file override is still set.
+
+    Whitespace-only is treated as unset, matching how the override itself used
+    to read: an operator who exported an empty value never asked for a table.
+    """
+    if (env.get(_REMOVED_PRICING_FILE_ENV) or "").strip():
+        _warn(_REMOVED_PRICING_FILE_WARNING)
 
 
 def _should_select_model(args: argparse.Namespace) -> bool:
@@ -1748,6 +1756,11 @@ def main(argv: list[str] | None = None) -> int:
     except settings.SettingsError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
+
+    # A deleted knob an operator still sets is unmet intent, and unmet intent is
+    # warned about (#330). Emitted here — after the Config resolves, before any
+    # work — so it lands whichever path the Run then takes.
+    _warn_removed_pricing_override(os.environ)
 
     # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
     # scope, an interactive TTY auto-runs the `init` wizard first, then continues

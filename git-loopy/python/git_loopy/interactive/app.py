@@ -101,37 +101,6 @@ _ACTIVITY_BAND_HEIGHT = 9
 _ACTIVITY_PLACEHOLDER = "Waiting for the agent..."
 
 
-def _format_queue_cost(
-    usage: UsageTally,
-    denomination: CostDenomination | None,
-    *,
-    normalized_cost: float | None = None,
-    has_contributions: bool = False,
-    has_open_contribution: bool = False,
-) -> str:
-    """Render a Queue row's normalized or live **Cost** cell.
-
-    Finalized contributions carry the Orchestrator-owned normalized Cost. Before
-    finalization, derive the live figure from the row's shared
-    :class:`~git_loopy.usage.UsageTally` through the injected **Cost
-    denomination** (#328), which owns the one unknown guard every Cost figure
-    shares: Consumption the denomination cannot price — or that no usage event
-    has named a model for yet — yields ``None`` → the em-dash placeholder rather
-    than crashing or silently understating cost. Only the *no denomination at
-    all* case (``denomination is None``, e.g. no Summary attached) is still
-    guarded here. This is the same unknown treatment the Summary band / run-end
-    table use, because it is literally the same seam.
-    """
-    if has_open_contribution and has_contributions:
-        return "—"
-    if has_contributions:
-        return f"${normalized_cost:.4f}" if normalized_cost is not None else "—"
-    if denomination is None:
-        return "—"
-    cost = denomination.cost(usage)
-    return f"${cost:.4f}" if cost is not None else "—"
-
-
 def _format_queue_credits(
     usage: UsageTally, denomination: CostDenomination | None
 ) -> str:
@@ -189,7 +158,6 @@ class _Dashboard(Vertical):
         table.add_column("Tokens out", key="tokens_out")
         table.add_column("Credits", key="credits")
         table.add_column("Premium", key="premium_requests")
-        table.add_column("Cost", key="cost")
 
 
 class _ActivityScroll(VerticalScroll):
@@ -292,7 +260,6 @@ class _IterationBreakdown(DataTable):
         self.add_column("Tokens out", key="tokens_out")
         self.add_column("Credits", key="credits")
         self.add_column("Premium", key="premium_requests")
-        self.add_column("Cost", key="cost")
         self.add_column("Peak Context fill", key="peak_context")
 
 
@@ -599,10 +566,9 @@ class GitLoopyApp(App[None]):
         # The per-issue Cost resolves through the Summary's own Cost
         # denomination (issue #36, #328), so the Queue costs and the Summary
         # band cost share one seam — keeping the two reconcilable by
-        # construction. ``None`` (no summary attached) renders the em dash, the
-        # same unknown treatment as an unpriceable model.
-        denomination = getattr(self._summary, "denomination", None)
-        credits_denomination = credits_denomination_for(self._summary)
+        # construction. A Summary that carries none falls back to the default
+        # adapter: the harness already billed the figure and the tally holds it.
+        denomination = credits_denomination_for(self._summary)
         new_refs = [str(row.ref) for row in rows]
         if new_refs != self._displayed_refs:
             saved = self._cursor_ref(table)
@@ -617,15 +583,8 @@ class GitLoopyApp(App[None]):
                     str(row.iteration_count),
                     f"{row.usage.tokens_in:,}" if row.usage_observed else "—",
                     f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
-                    _format_queue_credits(row.usage, credits_denomination),
+                    _format_queue_credits(row.usage, denomination),
                     _format_premium_requests(row.usage.premium_requests),
-                    _format_queue_cost(
-                        row.usage,
-                        denomination,
-                        normalized_cost=row.cost_usd,
-                        has_contributions=row.iteration_count > 0,
-                        has_open_contribution=row.is_active,
-                    ),
                     key=str(row.ref),
                 )
             self._displayed_refs = new_refs
@@ -652,23 +611,12 @@ class GitLoopyApp(App[None]):
                 table.update_cell(
                     key,
                     "credits",
-                    _format_queue_credits(row.usage, credits_denomination),
+                    _format_queue_credits(row.usage, denomination),
                 )
                 table.update_cell(
                     key,
                     "premium_requests",
                     _format_premium_requests(row.usage.premium_requests),
-                )
-                table.update_cell(
-                    key,
-                    "cost",
-                    _format_queue_cost(
-                        row.usage,
-                        denomination,
-                        normalized_cost=row.cost_usd,
-                        has_contributions=row.iteration_count > 0,
-                        has_open_contribution=row.is_active,
-                    ),
                 )
 
     def _sync_log(self) -> None:
@@ -728,11 +676,6 @@ class GitLoopyApp(App[None]):
                     else "—"
                 ),
                 _format_premium_requests(contribution["premium_requests"]),
-                (
-                    f"${contribution['cost_usd']:.4f}"
-                    if contribution["cost_usd"] is not None
-                    else "—"
-                ),
                 peak_text,
             )
         body = Text()

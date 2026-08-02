@@ -3,9 +3,9 @@
 │active —  •  context —  •  running  •  strikes 0/3                                                                                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Queue ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Issue       Status        Started       Active     Closed        Iters   Tokens in    Tokens out   Credits      Premium    Cost                                                                       │
-│#9          queued        —             0:00:00    —             0       —            —            —            —          —                                                                          │
-│#7          closed        5:30:01 AM    0:00:48    5:30:50 AM    2       —            —            —            —          —                                                                          │
+│Issue       Status        Started       Active     Closed        Iters   Tokens in    Tokens out   Credits      Premium                                                                               │
+│#9          queued        —             0:00:00    —             0       —            —            —            —                                                                                     │
+│#7          closed        5:30:01 AM    0:00:48    5:30:50 AM    2       —            —            —            —                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -26,9 +26,9 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Summary ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Cost        Tools   Skills   Skills consulted                     Commits   Closures   PR advances   Strikes │
-│1      advanced    0:00:29    —               —           —            —                 —           —       —        —                                    2         0          1             0       │
-│2      closed      0:00:19    —               —           —            —                 —           —       —        —                                    1         1          0             0       │
+│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted                                 Commits   Closures   PR advances   Strikes │
+│1      advanced    0:00:29    —               —           —            —                 —       —        —                                                2         0          1             0       │
+│2      closed      0:00:19    —               —           —            —                 —       —        —                                                1         1          0             0       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │

@@ -31,7 +31,7 @@ from datetime import datetime
 
 from rich.console import Console
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy.events import (
     AGENT_OUTPUT,
     ASSISTANT_MESSAGE,
@@ -55,7 +55,6 @@ from git_loopy.interactive.state import (
     issue_detail,
     queue_rows,
 )
-from git_loopy.pricing import Pricing
 from git_loopy.ui import Renderer, RunSummary
 
 
@@ -219,7 +218,7 @@ def test_wave_summary_aggregates_cost_and_progress_across_lanes() -> None:
     # The Summary is fed by the buffer-backed Renderer sink; one
     # iteration.start/end pair per Wave means every Lane's usage + commits fold
     # into the single per-Wave snapshot by construction.
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     console = Console(
         file=io.StringIO(), force_terminal=False, no_color=True, width=100
     )

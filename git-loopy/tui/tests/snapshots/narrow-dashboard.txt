@@ -3,8 +3,8 @@
 │active —  •  context —  •  running  •  strikes 0/3                            │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Queue ───────────────────────────────────────────────────────────────────────┐
-│Issue       Status        Started       Active     Iters   Cost               │
-│#42         closed        6:00:01 PM    0:00:04    1       $0.0004            │
+│Issue       Status        Started       Active     Iters   Tokens in          │
+│#42         closed        6:00:01 PM    0:00:04    1       100                │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -21,8 +21,8 @@
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Summary ─────────────────────────────────────────────────────────────────────┐
-│Iter   Outcome     Duration   Model           Cost        Commits   Strikes   │
-│1      closed      0:00:04    gpt-5.6-sol     $0.0004     1         0         │
+│Iter   Outcome     Duration   Model           Tokens in   Commits   Strikes   │
+│1      closed      0:00:04    gpt-5.6-sol     100         1         0         │
 │                                                                              │
 │                                                                              │
 │                                                                              │

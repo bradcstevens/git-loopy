@@ -20,7 +20,6 @@ import io
 import json
 import re
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +28,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
@@ -57,7 +56,6 @@ from git_loopy.events import (
     WRAPPER_STRIKE,
     make_event,
 )
-from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.ui import IterationSnapshot, Renderer, RunSummary, get_console
 from git_loopy.ui.console import STYLES
 from git_loopy.usage import UsageTally
@@ -85,30 +83,6 @@ def _capture_console(width: int = 120) -> tuple[Console, io.StringIO]:
     return console, buf
 
 
-def _fixed_pricing() -> Pricing:
-    """A predictable two-model pricing table for cost-rendering assertions."""
-    return Pricing(
-        models={
-            "claude-opus-4.7-xhigh": ModelPricing(
-                input_per_mtok=Decimal("15.00"),
-                output_per_mtok=Decimal("75.00"),
-                context_window=200_000,
-            ),
-            "gpt-5.4": ModelPricing(
-                input_per_mtok=Decimal("1.25"),
-                output_per_mtok=Decimal("10.00"),
-                context_window=256_000,
-            ),
-        }
-    )
-
-
-
-def _fixed_denomination() -> ListPriceDenomination:
-    """The list-price Cost denomination over :func:`_fixed_pricing`."""
-    return ListPriceDenomination(pricing=_fixed_pricing())
-
-
 def _ts() -> datetime:
     return datetime(2026, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -117,14 +91,12 @@ def _make_renderer(
     *,
     verbosity: int = 0,
     render_reasoning: bool = True,
-    pricing: Pricing | None = None,
-    pricing_date: str | None = None,
     width: int = 120,
+    cost_reportable: bool = True,
 ) -> tuple[Renderer, RunSummary, io.StringIO]:
     """Construct a Renderer wired to a fresh capture buffer + RunSummary."""
-    pricing = pricing if pricing is not None else _fixed_pricing()
     summary = RunSummary(
-        denomination=ListPriceDenomination(pricing=pricing, as_of=pricing_date)
+        denomination=BilledCreditsDenomination(), cost_reportable=cost_reportable
     )
     console, buf = _capture_console(width=width)
     renderer = Renderer(
@@ -790,7 +762,6 @@ def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
                 "tokens_in": 100,
                 "tokens_out": 20,
                 "observed_tokens": 120,
-                "cost_usd": None,
                 "tool_count": 4,
                 "skill_call_count": 1,
                 "skills_consulted": ["tdd"],
@@ -959,7 +930,7 @@ def test_strike_accounting_increments_when_no_cumulative_value() -> None:
 
 def test_iteration_panel_rendered_at_iteration_end() -> None:
     """The Panel renders all required counters at iteration end."""
-    renderer, summary, buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
     renderer.render(
         {
@@ -997,8 +968,8 @@ def test_iteration_panel_rendered_at_iteration_end() -> None:
     assert "1000" in out or "1,000" in out, f"tokens_in missing:\n{out}"
     assert "200" in out
     # Skill + tool counts surface.
-    # Cost is present and dated.
-    assert "2026-05-16" in out, f"pricing date label missing:\n{out}"
+    # Cost is present, and unknown reads as unknown rather than as free work.
+    assert "Cost: —  (no billing telemetry reported)" in out, f"cost line missing:\n{out}"
     # Commits + auto-closures surface.
     assert "deadbeef" in out or "commit" in out.lower()
 
@@ -1014,8 +985,15 @@ def test_iteration_panel_labels_explicit_skill_calls() -> None:
     assert "Skills:" not in out
 
 
-def test_iteration_panel_cost_is_em_dash_for_unknown_model() -> None:
-    """When the iteration's model is not in the pricing table, cost = ``—``."""
+def test_iteration_panel_cost_is_em_dash_when_nothing_was_billed() -> None:
+    """Consumption the harness did not bill renders the em dash, never a zero.
+
+    Asserted against the whole rendered Cost line rather than "an em dash appears
+    somewhere in the panel": the panel is full of em dashes for other unreported
+    measurements, so the loose form passes even when this cell has regressed to
+    ``0.0000``. The concrete string is the only assertion that can fail on the
+    regression it names.
+    """
     renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
     renderer.render(
@@ -1028,27 +1006,30 @@ def test_iteration_panel_cost_is_em_dash_for_unknown_model() -> None:
     )
     renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
     out = buf.getvalue()
-    assert "—" in out, f"em dash missing from unknown-model cost line:\n{out}"
-    # Defensively: must NOT render '$0.00' or '0.00' as the cost.
-    assert "$0.00" not in out, f"unknown-model cost rendered as $0.00:\n{out}"
+    assert "Cost: \u2014  (no billing telemetry reported)" in out, (
+        f"unbilled Cost did not render as the unknown em dash:\n{out}"
+    )
+    assert "0.0000 credits" not in out, f"unbilled Cost rendered as zero:\n{out}"
 
 
-def test_iteration_panel_cost_omits_date_when_label_absent() -> None:
-    """When no ``pricing_date`` is supplied, the cost line skips the date suffix."""
-    renderer, summary, buf = _make_renderer(pricing_date=None)
+def test_iteration_panel_cost_names_the_harness_as_the_author() -> None:
+    """A billed figure carries where it came from, and no list-price caveat.
+
+    #330 deleted the price table, so the provenance the panel prints is the
+    harness's — never "provider list, as of <date>", which named a table
+    git-loopy maintained itself.
+    """
+    renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
     renderer.render(
-        {
-            "type": USAGE_TOKENS,
-            "model": "claude-opus-4.7-xhigh",
-            "input": 1000,
-            "output": 200,
-        }
+        _billed_usage_event(credits=1.5, premium=1.0, cache_read=0, cache_write=0)
     )
     renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
     out = buf.getvalue()
-    # No "as of" date string should appear when pricing_date is None.
-    assert "as of" not in out.lower()
+    assert "1.5000 credits" in out, f"billed Credits missing:\n{out}"
+    assert "billed AI Credits, reported by the harness" in out
+    assert "as of" not in out.lower(), f"list-price caveat survived:\n{out}"
+    assert "provider list" not in out.lower()
 
 
 def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
@@ -1077,7 +1058,7 @@ def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
         auto_closures=1,
         strikes=0,
     )
-    kwargs = snap.to_counters_kwargs(denomination=_fixed_denomination())
+    kwargs = snap.to_counters_kwargs()
     assert kwargs["iter"] == 2
     assert kwargs["duration_seconds"] == pytest.approx(30.0, rel=1e-3)
     assert kwargs["model"] == "claude-opus-4.7-xhigh"
@@ -1090,28 +1071,15 @@ def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
     assert kwargs["commits"] == 1
     assert kwargs["auto_closures"] == 1
     assert kwargs["strikes"] == 0
-    # Cost is Decimal-typed (or None for unknown model).
-    assert kwargs["est_cost_usd"] is not None
-    assert isinstance(kwargs["est_cost_usd"], Decimal)
-    # The dict is shaped to be splatted into IterationCounters; verify that
-    # contract end-to-end so persist-side field renames surface here loudly.
+    # #330: the persisted row carries no Cost estimate at all. The kwargs are
+    # shaped to be splatted into IterationCounters; verify that contract
+    # end-to-end so persist-side field renames surface here loudly.
+    assert "est_cost_usd" not in kwargs
     from git_loopy.persist import IterationCounters
 
     counters = IterationCounters(**kwargs)
     assert counters.iter == 2
     assert counters.context_used == 1200
-    assert counters.est_cost_usd == kwargs["est_cost_usd"]
-
-
-def test_iteration_snapshot_to_counters_kwargs_unknown_model_yields_none_cost() -> None:
-    snap = IterationSnapshot(
-        iter_num=1,
-        started_at=_ts(),
-        ended_at=_ts(),
-        usage=UsageTally(model="unknown-model", tokens_in=100, tokens_out=20),
-    )
-    kwargs = snap.to_counters_kwargs(denomination=_fixed_denomination())
-    assert kwargs["est_cost_usd"] is None
 
 
 def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
@@ -1121,13 +1089,13 @@ def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
     the ``UsageTally``'s and the unknown guard is the **Cost denomination**'s —
     not a second copy in ``summary.py``. ``record_usage`` folds through
     :meth:`UsageTally.add`; ``context_used`` reads straight off the tally and
-    ``cost_usd`` is exactly what the injected denomination says the tally cost.
+    Credits are exactly what the injected denomination says the tally cost.
     """
     # The snapshot carries a real UsageTally, default-constructed.
     snap = IterationSnapshot(iter_num=1)
     assert isinstance(snap.usage, UsageTally)
 
-    denomination = _fixed_denomination()
+    denomination = BilledCreditsDenomination()
     summary = RunSummary(denomination=denomination)
     summary.on_iteration_start(iter_num=1, issue_num=7)
     # A leading None model, then the authoritative model, then a *different*
@@ -1141,9 +1109,9 @@ def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
     assert cur.usage.model == "claude-opus-4.7-xhigh"
     assert cur.usage.tokens_in == 31
     assert cur.usage.tokens_out == 11
-    # context_used / cost_usd delegate to the tally (no independent arithmetic).
+    # context_used / Credits delegate to the tally (no independent arithmetic).
     assert cur.context_used == cur.usage.total_tokens == 42
-    assert cur.cost_usd(denomination) == denomination.cost(cur.usage)
+    assert cur.credits(denomination) == denomination.cost(cur.usage)
 
 
 # ---------------------------------------------------------------------------
@@ -1153,7 +1121,7 @@ def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
 
 def test_run_end_table_renders_one_row_per_iteration_plus_totals() -> None:
     """The run-end Table renders rows for every completed iteration + totals footer."""
-    renderer, summary, buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A1"})
     for i, issue in enumerate([42, 43], start=1):
         renderer.render(
@@ -1221,7 +1189,7 @@ def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
     iterations would be misleading. The footer surfaces the value that
     actually determined whether the run aborted.
     """
-    renderer, summary, buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A3"})
     # Iter 1: 2 strikes
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
@@ -1244,10 +1212,11 @@ def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
 def test_run_summary_totals_sum_tokens_and_costs() -> None:
     """RunSummary.totals() sums tokens, commits, auto-closures across iterations.
 
-    Cost sum only over iterations whose model was in the pricing table
-    (unknown-model iterations contribute None and are skipped).
+    Credits sum only over the Iterations the harness billed; an Iteration with no
+    billing telemetry contributes nothing rather than a zero, so the footer never
+    reads as free work.
     """
-    renderer, summary, _buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, summary, _buf = _make_renderer()
     for i, model in enumerate(["claude-opus-4.7-xhigh", "unknown-model"], start=1):
         renderer.render({"type": WRAPPER_ITERATION_START, "iter": i, "issue": 40 + i})
         renderer.render(
@@ -1261,9 +1230,8 @@ def test_run_summary_totals_sum_tokens_and_costs() -> None:
     assert totals.tokens_in == 2000
     assert totals.tokens_out == 400
     assert totals.commits == 2
-    # Cost summed only over the iteration whose model was priced.
-    expected = (Decimal(1000) * Decimal("15.00") + Decimal(200) * Decimal("75.00")) / Decimal(1_000_000)
-    assert totals.cost_usd == expected
+    # Neither Iteration carried billing, so Credits are unknown — never zero.
+    assert totals.credits is None
 
 
 # ---------------------------------------------------------------------------
@@ -1278,7 +1246,7 @@ def test_rollup_band_shows_run_level_totals() -> None:
     surfaces the same summed tokens / cost / commits / closures / strikes the
     run-end Table footer does, kept live (not frozen) across iterations.
     """
-    renderer, summary, _buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, summary, _buf = _make_renderer()
     for i, issue in enumerate([42, 43], start=1):
         renderer.render({"type": WRAPPER_ITERATION_START, "iter": i, "issue": issue})
         renderer.render(
@@ -1301,8 +1269,10 @@ def test_rollup_band_shows_run_level_totals() -> None:
     assert "commits 2" in text
     assert "closures 2" in text
     assert "strikes 0" in text
-    # A priced model surfaces a real cost, not the unknown em dash.
-    assert "$" in text
+    # #330: the band's Cost is billed Credits. Nothing here was billed, so it is
+    # the em dash — and there is no invented dollar figure standing in for it.
+    assert "credits —" in text
+    assert "$" not in text
 
 
 def test_rollup_band_labels_observed_tokens_and_sorted_skills_from_rollups() -> None:
@@ -1319,7 +1289,6 @@ def test_rollup_band_labels_observed_tokens_and_sorted_skills_from_rollups() -> 
                 "tokens_in": 100,
                 "tokens_out": 50,
                 "observed_tokens": 175,
-                "cost_usd": None,
                 "tool_count": 2,
                 "skill_call_count": 2,
                 "skills_consulted": ["tdd", "prototype"],
@@ -1340,14 +1309,14 @@ def test_rollup_band_labels_observed_tokens_and_sorted_skills_from_rollups() -> 
 
 
 def test_rollup_band_unknown_model_cost_is_em_dash() -> None:
-    """An unknown-model run renders the cost as the existing em dash, not a crash."""
+    """A Run the harness did not bill renders the em dash, not a crash or a zero."""
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
     renderer.render(
         {"type": USAGE_TOKENS, "model": "unknown-model", "input": 10, "output": 5}
     )
     renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
-    assert "cost —" in summary.build_rollup_band().plain
+    assert "credits —" in summary.build_rollup_band().plain
 
 
 def test_rollup_band_with_no_iterations_renders_zeroes() -> None:
@@ -1368,7 +1337,7 @@ def test_output_has_no_ansi_escapes_when_force_terminal_is_false() -> None:
 
     Required for ``tee``- and redirect-friendly mirrors of unattended runs.
     """
-    renderer, _summary, buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, _summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
     renderer.render(
         {
@@ -1498,7 +1467,7 @@ def test_ui_smoke_event_sequence_through_renderer() -> None:
     tool call → skill invocation → assistant message → usage tokens →
     commit recorded → auto-close → iteration-end → run-end.
     """
-    renderer, _summary, buf = _make_renderer(pricing_date="2026-05-16")
+    renderer, _summary, buf = _make_renderer()
     events: list[dict[str, Any]] = [
         {"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A0"},
         {
@@ -1560,7 +1529,7 @@ def test_ui_smoke_event_sequence_through_renderer() -> None:
     assert "Done." in out
     assert "#42" in out
     assert "claude-opus-4.7-xhigh" in out
-    assert "2026-05-16" in out, f"pricing date label missing:\n{out}"
+    assert "Cost: —  (no billing telemetry reported)" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1676,7 +1645,6 @@ def _null_telemetry_rollup() -> dict:
             "tokens_in": None,
             "tokens_out": None,
             "observed_tokens": None,
-            "cost_usd": None,
             "tool_count": None,
             "skill_call_count": None,
             "skills_consulted": None,
@@ -1700,7 +1668,6 @@ def _null_telemetry_rollup() -> dict:
                     "tokens_in": None,
                     "tokens_out": None,
                 },
-                "cost_usd": None,
                 "peak_context_window": None,
             }
         ],
@@ -1727,7 +1694,6 @@ def test_unavailable_normalized_measurements_are_not_reported_as_observed() -> N
             "tokens_in",
             "tokens_out",
             "observed_tokens",
-            "cost_usd",
             "tool_count",
             "skill_call_count",
             "skills_consulted",
@@ -1795,7 +1761,6 @@ def test_mixed_availability_totals_sum_only_the_observed_iterations() -> None:
                 "tokens_in": 100,
                 "tokens_out": 50,
                 "observed_tokens": 150,
-                "cost_usd": None,
                 "tool_count": 0,
                 "skill_call_count": 1,
                 "skills_consulted": ["tdd"],
@@ -1861,7 +1826,6 @@ def test_frozen_run_table_renders_unavailable_token_cells_and_footers_as_unknown
                 "tokens_in": 100,
                 "tokens_out": 50,
                 "observed_tokens": 150,
-                "cost_usd": None,
                 "tool_count": 0,
                 "skill_call_count": 1,
                 "skills_consulted": ["tdd"],
@@ -2073,8 +2037,8 @@ def test_run_table_leads_with_billed_credits_and_premium_requests() -> None:
     """Credits is the primary Cost column; premium requests sit beside it.
 
     Credits is the number closest to the telemetry and the budget an operator
-    exhausts mid-Run, so both precede the list-price estimate — which this ticket
-    leaves rendering unchanged (#330 retires it).
+    exhausts mid-Run. Since #330 they are the *only* Cost columns: the list-price
+    estimate that used to follow them is deleted, not renamed onto them.
     """
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
@@ -2090,8 +2054,8 @@ def test_run_table_leads_with_billed_credits_and_premium_requests() -> None:
 
     table = summary.build_run_table()
     headers = [str(column.header) for column in table.columns]
-    assert headers.index("Credits") < headers.index("Cost USD")
-    assert headers.index("Premium") < headers.index("Cost USD")
+    assert "Cost USD" not in headers
+    assert headers.index("Credits") < headers.index("Premium")
 
     credits_column = table.columns[headers.index("Credits")]
     premium_column = table.columns[headers.index("Premium")]
@@ -2120,8 +2084,9 @@ def test_run_table_renders_unreported_credits_as_unknown_not_zero() -> None:
     credits_column = table.columns[headers.index("Credits")]
     assert list(credits_column.cells) == ["—"]
     assert credits_column.footer == "—"
-    # The estimate this ticket leaves alone still renders from the same tokens.
-    assert list(table.columns[headers.index("Cost USD")].cells) != ["—"]
+    # #330: there is no second Cost column left to fill the gap with a figure
+    # git-loopy invented from a price table it wrote itself.
+    assert "Cost USD" not in headers
 
 
 def test_iteration_panel_states_billed_credits_and_names_the_harness() -> None:
@@ -2148,6 +2113,14 @@ def test_the_two_reasons_credits_are_unavailable_read_differently() -> None:
     may be a harness that stopped reporting, while a native shell or PowerShell
     **Orchestrator** is telling the truth about a capability it never had. Both
     are unknown and neither is a zero, but they say so in their own words.
+
+    #330: the two are told apart by the ``cost`` **Insight capability** the
+    producing **Orchestrator** declared at **Run** start, not by whether a figure
+    happened to arrive. The rollup payload cannot carry the distinction — the
+    Wrapper contract lets a producer signal an unobservable measurement by
+    omitting the key *or* by nulling it — so the declaration is the only honest
+    signal. The old discriminator read an absent estimate, which also mislabelled
+    a Python Run whose model was simply unpriced.
     """
     renderer, _summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
@@ -2159,8 +2132,9 @@ def test_the_two_reasons_credits_are_unavailable_read_differently() -> None:
     assert "no billing telemetry reported" in live
     assert "this Orchestrator cannot report Cost" not in live
 
-    # A native Orchestrator's normalized rollup: every measurement declared null.
-    renderer, summary, _buf = _make_renderer()
+    # A native Orchestrator: it declared cost unreportable at Run start, and its
+    # normalized rollup declares every measurement null.
+    renderer, summary, _buf = _make_renderer(cost_reportable=False)
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 2, "issue": 329})
     summary.on_iteration_end(
         {
@@ -2169,7 +2143,6 @@ def test_the_two_reasons_credits_are_unavailable_read_differently() -> None:
                 "tokens_in": None,
                 "tokens_out": None,
                 "observed_tokens": None,
-                "cost_usd": None,
                 "tool_count": None,
                 "skill_call_count": None,
                 "skills_consulted": None,

@@ -70,7 +70,7 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// Identity comes first and is never given up. Then lifecycle, then the
 /// accounting an operator steers by, and last the wide Consumption counters —
 /// the numbers worth a second look rather than a glance.
-const QUEUE_COLUMNS: [Column; 11] = [
+const QUEUE_COLUMNS: [Column; 10] = [
     fixed("Issue", 10, 0),
     fixed("Status", 12, 1),
     fixed("Started", 12, 4),
@@ -81,11 +81,10 @@ const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Tokens out", 11, 7),
     fixed("Credits", 11, 9),
     fixed("Premium", 9, 10),
-    fixed("Cost", 10, 5),
 ];
 
 /// The locked Summary columns, in the locked order.
-const SUMMARY_COLUMNS: [Column; 15] = [
+const SUMMARY_COLUMNS: [Column; 14] = [
     fixed("Iter", 5, 0),
     fixed("Outcome", 10, 1),
     fixed("Duration", 9, 2),
@@ -93,7 +92,6 @@ const SUMMARY_COLUMNS: [Column; 15] = [
     fixed("Tokens in", 10, 7),
     fixed("Tokens out", 11, 8),
     fixed("Observed tokens", 16, 12),
-    fixed("Cost", 10, 6),
     fixed("Tools", 6, 10),
     fixed("Skills", 7, 11),
     filling("Skills consulted", 18, 14),
@@ -405,7 +403,6 @@ fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], glyphs: &Glyphs)
                 tokens(row.tokens_out, glyphs),
                 credits(row.credits, glyphs),
                 premium(row.premium_requests, glyphs),
-                cost(row.cost_usd, glyphs),
             ]
         }),
         " Queue ",
@@ -419,10 +416,6 @@ fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], glyphs: &Glyphs)
 /// different fact from a measured zero and must never render as one.
 fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), grouped)
-}
-
-fn cost(value: Option<f64>, glyphs: &Glyphs) -> String {
-    value.map_or_else(|| glyphs.unknown.to_string(), |usd| format!("${usd:.4}"))
 }
 
 /// Billed **AI Credits** to four places, or the unknown placeholder.
@@ -491,7 +484,6 @@ fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], glyphs: &Gly
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
                 tokens(row.observed_tokens, glyphs),
-                cost(row.cost_usd, glyphs),
                 tokens(row.tool_count, glyphs),
                 tokens(row.skill_call_count, glyphs),
                 consulted(row.skills_consulted.as_deref(), glyphs),
@@ -536,7 +528,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Gl
 }
 
 /// The locked Iteration-breakdown columns, in the locked order.
-const BREAKDOWN_COLUMNS: [Column; 11] = [
+const BREAKDOWN_COLUMNS: [Column; 10] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
@@ -546,7 +538,6 @@ const BREAKDOWN_COLUMNS: [Column; 11] = [
     fixed("Tokens out", 11, 7),
     fixed("Credits", 11, 9),
     fixed("Premium", 9, 10),
-    fixed("Cost", 10, 5),
     filling("Peak Context fill", 19, 8),
 ];
 
@@ -676,7 +667,6 @@ fn draw_breakdown(frame: &mut Frame, area: Rect, rows: &[ContributionRow], glyph
                 tokens(row.consumption.tokens_out, glyphs),
                 credits(row.credits, glyphs),
                 premium(row.premium_requests, glyphs),
-                cost(row.cost_usd, glyphs),
                 peak_context(row.peak_context_window.as_ref(), glyphs),
             ]
         }),

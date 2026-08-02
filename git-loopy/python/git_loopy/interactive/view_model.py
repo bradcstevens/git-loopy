@@ -35,7 +35,6 @@ _QUEUE_COLUMNS = [
     "tokens_out",
     "credits",
     "premium_requests",
-    "cost_usd",
 ]
 
 
@@ -43,15 +42,14 @@ def credits_denomination_for(summary: RunSummary | None) -> CostDenomination:
     """The seam a Run's billed **AI Credits** resolve through (#329).
 
     One rule, shared by the renderer-neutral projection and the Dashboard's own
-    Queue, so the two cannot disagree about what an issue cost. Unlike the
-    list-price estimate beside it, a missing **Summary** does *not* cost the
-    figure: there is no per-Run price table that could be absent — the harness
-    already billed it and the tally already holds it, so the default adapter
-    reads it out. A Summary-shaped object that carries no denomination is the
-    same absence, so a Dashboard attached to one still renders rather than
-    raising on a missing attribute.
+    Queue, so the two cannot disagree about what an issue cost. A missing
+    **Summary** does *not* cost the figure: there is no per-Run price table that
+    could be absent — the harness already billed it and the tally already holds
+    it, so the default adapter reads it out. A Summary-shaped object that
+    carries no denomination is the same absence, so a Dashboard attached to one
+    still renders rather than raising on a missing attribute.
     """
-    resolved = getattr(summary, "credits_denomination", None)
+    resolved = getattr(summary, "denomination", None)
     if resolved is not None:
         return resolved
     return BilledCreditsDenomination()
@@ -64,14 +62,14 @@ def project_run_view(
     issue: int | str,
 ) -> dict[str, Any]:
     """Project one complete renderer-neutral Dashboard and issue drill-in."""
-    credits_denomination = credits_denomination_for(summary)
+    denomination = credits_denomination_for(summary)
     return {
         "dashboard": {
             "header": _header(state),
             "queue": {
                 "columns": list(_QUEUE_COLUMNS),
                 "rows": [
-                    _queue_row(row, denomination=credits_denomination)
+                    _queue_row(row, denomination=denomination)
                     for row in queue_rows(state)
                 ],
             },
@@ -82,11 +80,7 @@ def project_run_view(
             "summary": {
                 "rows": (
                     [
-                        _summary_row(
-                            snapshot,
-                            denomination=summary.denomination,
-                            credits_denomination=credits_denomination,
-                        )
+                        _summary_row(snapshot, denomination=denomination)
                         for snapshot in summary.completed
                     ]
                     if summary is not None
@@ -94,7 +88,7 @@ def project_run_view(
                 ),
             },
         },
-        "drill_in": _drill_in(state, issue, denomination=credits_denomination),
+        "drill_in": _drill_in(state, issue, denomination=denomination),
     }
 
 
@@ -161,17 +155,12 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
         "tokens_out": row.usage.tokens_out if row.usage_observed else None,
         "credits": _decimal_float(denomination.cost(row.usage)),
         "premium_requests": _decimal_float(row.usage.premium_requests),
-        "cost_usd": row.cost_usd,
     }
 
 
 def _summary_row(
-    snapshot: IterationSnapshot,
-    *,
-    denomination: CostDenomination,
-    credits_denomination: CostDenomination,
+    snapshot: IterationSnapshot, *, denomination: CostDenomination
 ) -> dict[str, Any]:
-    cost_value = snapshot.cost_usd(denomination)
     unavailable = snapshot.unavailable_measurements
 
     def observed(key: str, value: Any) -> Any:
@@ -188,9 +177,8 @@ def _summary_row(
         "tokens_in": observed("tokens_in", snapshot.tokens_in),
         "tokens_out": observed("tokens_out", snapshot.tokens_out),
         "observed_tokens": observed("observed_tokens", snapshot.context_used),
-        "credits": _decimal_float(snapshot.credits(credits_denomination)),
+        "credits": _decimal_float(snapshot.credits(denomination)),
         "premium_requests": _decimal_float(snapshot.premium_requests),
-        "cost_usd": _decimal_float(cost_value),
         "tool_count": observed("tool_count", snapshot.tool_count),
         "skill_call_count": observed("skill_call_count", snapshot.skill_count),
         "skills_consulted": observed(
@@ -258,7 +246,6 @@ def _contribution_row(
         },
         "credits": _decimal_float(denomination.cost(contribution.usage)),
         "premium_requests": _decimal_float(contribution.usage.premium_requests),
-        "cost_usd": contribution.cost_usd,
         "peak_context_window": (
             {
                 "current_tokens": peak.current_tokens,

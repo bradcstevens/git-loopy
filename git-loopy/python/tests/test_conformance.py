@@ -12,7 +12,7 @@ from typing import Any, Mapping
 import pytest
 from rich.console import Console
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
@@ -28,7 +28,6 @@ from git_loopy.config import (
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.interactive.view_model import project_run_view
-from git_loopy.pricing import Pricing
 from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.skill_exposure import SkillExposure
@@ -220,7 +219,7 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
     assert case["input"]["pricing"] == {"models": {}}
     clock = _FixtureClock()
     rollup = IterationRollupAccumulator(
-        denomination=ListPriceDenomination(pricing=Pricing(models={})),
+        denomination=BilledCreditsDenomination(),
         monotonic=clock,
     )
     actual = []
@@ -313,7 +312,6 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "tokens_in",
                 "tokens_out",
                 "observed_tokens",
-                "cost_usd",
                 "tool_count",
                 "skill_call_count",
                 "skills_consulted",
@@ -332,7 +330,6 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "active_seconds",
                 "cumulative_active_seconds",
                 "consumption",
-                "cost_usd",
                 "peak_context_window",
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
@@ -360,6 +357,23 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "never an estimate recomputed from tokens. cache_read and "
                 "cache_write are components of tokens_in, not figures beside "
                 "it: summing them into a token total double-counts."
+            ),
+            # #330: the list-price estimate is deleted, so no producer derives
+            # cost_usd any more. Retired rather than repurposed — a consumer
+            # must never read Credits out of a dollar-named key — and still
+            # accepted, because a port that has not yet dropped it is emitting
+            # a null it can honestly report.
+            "retired": ["cost_usd"],
+            "retirement": (
+                "cost_usd was the list-price estimate, computed by git-loopy "
+                "from a price table it hand-maintained. The table is deleted "
+                "(#330) and Cost is the AI Credits the harness reported "
+                "billing (ADR-0026), so no producer derives the field any "
+                "more. It is retired rather than repurposed: a consumer must "
+                "never read Credits out of a key whose name says dollars. "
+                "Still accepted, not forbidden, because a port that has not "
+                "yet dropped it is emitting a null it can honestly report; a "
+                "consumer must ignore it."
             ),
         },
         "wrapper.skill_policy.resolved": {
@@ -867,7 +881,6 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Tokens out",
         "Credits",
         "Premium",
-        "Cost",
     ]
     assert [column["key"] for column in contract["queue_columns"]] == [
         "issue",
@@ -880,7 +893,6 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "tokens_out",
         "credits",
         "premium_requests",
-        "cost_usd",
     ]
     assert [column["label"] for column in contract["iteration_breakdown_columns"]] == [
         "Contribution",
@@ -892,7 +904,6 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Tokens out",
         "Credits",
         "Premium",
-        "Cost",
         "Peak Context fill",
     ]
     assert contract["placeholders"] == {
@@ -960,7 +971,6 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "tokens_out": None,
         "credits": None,
         "premium_requests": None,
-        "cost_usd": None,
     }
 
     assert closed["after_event_count"] == len(case["events"])
@@ -1232,7 +1242,7 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
             wall_clock=wall,
         )
         summary = RunSummary(
-            denomination=ListPriceDenomination(pricing=Pricing(models={}))
+            denomination=BilledCreditsDenomination()
         )
         renderer = Renderer(
             console=Console(file=StringIO(), force_terminal=False),
@@ -1869,7 +1879,7 @@ _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")
     ids=lambda case: case["id"],
 )
 def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     snap = summary.on_iteration_start(iter_num=1)
     for tool_call in case["tool_calls"]:
         summary.record_tool_call(**tool_call)
@@ -1882,7 +1892,7 @@ def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
 
 
 def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     for iter_num, case in enumerate(_SKILL_CONSULTATION["cases"], start=1):
         summary.on_iteration_start(iter_num=iter_num)
         for tool_call in case["tool_calls"]:
@@ -2007,7 +2017,7 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
     # Unavailable Consumption stays unknown; Iters and Active time do not.
     assert closed_row["tokens_in"] is None
     assert closed_row["tokens_out"] is None
-    assert closed_row["cost_usd"] is None
+    assert closed_row["credits"] is None
     assert closed_row["iteration_count"] == 2
     assert closed_row["active_seconds"] == 48.0
 
@@ -2021,7 +2031,6 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
             "tokens_in",
             "tokens_out",
             "observed_tokens",
-            "cost_usd",
             "credits",
             "premium_requests",
             "tool_count",
@@ -2309,7 +2318,7 @@ def test_run_skill_policy_and_iteration_consultation_stay_separate_facts() -> No
         migration_warning=False,
     ).event_payload
 
-    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     snap = summary.on_iteration_start(iter_num=1)
     summary.record_tool_call(tool_name="skill", arguments={"skill": "tdd"})
 

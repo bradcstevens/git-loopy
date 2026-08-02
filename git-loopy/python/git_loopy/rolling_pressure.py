@@ -60,7 +60,7 @@ from git_loopy.rolling_concurrency import (
     ConcurrencyController,
     LimitChange,
 )
-from git_loopy.usage import UsageTally
+from git_loopy.usage import BillingSample, UsageTally
 
 __all__ = [
     "ENV_ADAPTIVE",
@@ -250,10 +250,12 @@ class RunCostMeter:
     from Lane sessions and serial **Iterations** alike without either path
     having to report it a second way.
 
-    A Run whose **Cost denomination** cannot price one sample latches
-    :attr:`priceable` off and reports ``None`` from then on. ADR-0018 and #219
-    §11 point the same way here: understating burn is an estimate, and an
-    estimate is exactly what a contraction may not be made on.
+    The figure is the **AI Credits** the harness reported billing (ADR-0026),
+    read off the same Event the tally is folded from — never recomputed from
+    tokens and a price. A Run whose **Cost denomination** cannot answer for one
+    sample latches :attr:`priceable` off and reports ``None`` from then on.
+    ADR-0018 and #219 §11 point the same way here: understating burn is an
+    estimate, and an estimate is exactly what a contraction may not be made on.
     """
 
     denomination: CostDenomination
@@ -265,20 +267,21 @@ class RunCostMeter:
         if event.get("type") != _USAGE_TOKENS:
             return
         model = event.get("model")
-        cost = self.denomination.cost(
-            UsageTally(
-                model=str(model) if isinstance(model, str) and model else None,
-                tokens_in=_nonnegative_int(event.get("input")),
-                tokens_out=_nonnegative_int(event.get("output")),
-            )
+        tally = UsageTally()
+        tally.add(
+            str(model) if isinstance(model, str) and model else None,
+            _nonnegative_int(event.get("input")),
+            _nonnegative_int(event.get("output")),
+            BillingSample.from_event(event),
         )
+        cost = self.denomination.cost(tally)
         if cost is None:
             self._priceable = False
         else:
             self._spent += cost
 
     def __call__(self) -> float | None:
-        """Run-to-date USD, or ``None`` once anything proved unpriceable."""
+        """Run-to-date billed Credits, or ``None`` once anything was unreported."""
         return float(self._spent) if self._priceable else None
 
 

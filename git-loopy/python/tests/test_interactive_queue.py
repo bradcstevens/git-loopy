@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy.interactive import state as state_module
 from git_loopy.interactive.state import (
@@ -29,7 +29,6 @@ from git_loopy.interactive.state import (
     format_wall_clock,
     queue_rows,
 )
-from git_loopy.pricing import ModelPricing, Pricing, estimate_cost
 from git_loopy.ui.summary import RunSummary
 from git_loopy.usage import UsageTally
 
@@ -81,20 +80,11 @@ def _usage(state: LiveRunState, *, model: str | None, tin: int, tout: int) -> No
 #: A small, explicit pricing table so per-issue cost is exactly assertable and
 #: independent of the packaged ``pricing.toml`` figures (15 / 75 USD per Mtok —
 #: the ``claude-opus-4.8`` shape).
-_PRICING = Pricing(
-    models={
-        "claude-opus-4.8": ModelPricing(
-            input_per_mtok=Decimal("15"),
-            output_per_mtok=Decimal("75"),
-            context_window=200_000,
-        )
-    }
-)
-
 #: The Queue's Cost denomination — the one seam a Queue row's Cost resolves
-#: through (#328), and the same one the Summary is given below so the two
-#: remain reconcilable.
-_DENOM = ListPriceDenomination(pricing=_PRICING)
+#: through (#328), and the same one the Summary is given below so the two remain
+#: reconcilable. Since #330 it reads what the harness billed; there is no price
+#: table left to hold.
+_DENOM = BilledCreditsDenomination()
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +355,6 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
                         "tokens_in": 100,
                         "tokens_out": 50,
                     },
-                    "cost_usd": 0.0004,
                     "peak_context_window": {
                         "current_tokens": 12_000,
                         "token_limit": 32_000,
@@ -384,7 +373,6 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
     assert row.usage == UsageTally(
         model="claude-opus-4.8", tokens_in=100, tokens_out=50
     )
-    assert row.cost_usd == 0.0004
 
     detail = state_module.issue_detail(state, 42)
     assert detail.issue_elapsed_seconds == 4.0
@@ -399,7 +387,6 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
             active_seconds=4.0,
             usage=UsageTally(model="claude-opus-4.8", tokens_in=100, tokens_out=50),
             usage_observed=True,
-            cost_usd=0.0004,
             peak_context_window=state_module.ContextWindowSnapshot(
                 current_tokens=12_000,
                 token_limit=32_000,
@@ -431,7 +418,6 @@ def test_repeated_normalized_contributions_drive_iters_and_closure_only_fields()
                     "tokens_in": 100,
                     "tokens_out": 25,
                 },
-                "cost_usd": 0.001,
                 "peak_context_window": None,
             },
         ),
@@ -450,7 +436,6 @@ def test_repeated_normalized_contributions_drive_iters_and_closure_only_fields()
                     "tokens_in": 200,
                     "tokens_out": 50,
                 },
-                "cost_usd": 0.002,
                 "peak_context_window": None,
             },
         ),
@@ -471,7 +456,6 @@ def test_repeated_normalized_contributions_drive_iters_and_closure_only_fields()
     assert row.closed_wall == datetime.fromisoformat("2026-05-16T00:00:11+00:00")
     assert row.usage.tokens_in == 300
     assert row.usage.tokens_out == 75
-    assert row.cost_usd == 0.003
 
     detail = state_module.issue_detail(state, 42)
     assert detail.issue_elapsed_seconds == 10.0
@@ -567,11 +551,10 @@ def test_queue_row_carries_usage_tally_and_derives_cost() -> None:
         200,
         "claude-opus-4.8",
     )
-    # The per-issue Cost derives from the tally's own guard: 1000 * 15/1e6 +
-    # 200 * 75/1e6 = 0.0300 for the priced model (the widget renders "$0.0300").
-    assert _DENOM.cost(worked.usage) == Decimal("0.0300")
-    # A still-queued issue carries a default tally (None model) whose cost is
-    # None — the em-dash source the widget renders, never zero.
+    # No billing reached this tally, so its Cost is unknown — the em-dash source
+    # the widget renders, never zero, and never a figure recomputed from tokens.
+    assert _DENOM.cost(worked.usage) is None
+    # A still-queued issue carries a default tally, likewise unknown.
     assert _DENOM.cost(by_ref[56].usage) is None
 
 
@@ -669,10 +652,12 @@ def test_orphan_usage_without_an_active_issue_is_not_attributed() -> None:
         assert row.usage.model is None
 
 
-def test_unknown_model_cost_is_none_not_a_crash() -> None:
-    """An issue worked on a model absent from the pricing table keeps its tokens
-    but yields ``None`` cost — the existing unknown-model treatment (the renderer
-    shows the em dash), never a crash (issue #36 acceptance criterion)."""
+def test_unbilled_consumption_cost_is_none_not_a_crash() -> None:
+    """An issue the harness did not bill keeps its tokens but yields ``None`` cost.
+
+    The renderer shows the em dash rather than crashing or inventing a figure
+    (issue #36's acceptance criterion, re-based by #330 onto reported billing).
+    """
     clock = _FakeClock()
     state = _make_state(clock)
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
@@ -683,16 +668,9 @@ def test_unknown_model_cost_is_none_not_a_crash() -> None:
     row = queue_rows(state)[0]
     assert row.usage.model == "mystery-model"
     assert row.usage.tokens_in == 400
-    # The unknown model yields None cost (not zero, not a crash) — the em-dash
-    # source. UsageTally.cost now owns the guard (issue #42), and it agrees with
-    # the underlying estimate_cost oracle.
+    # Unbilled Consumption yields None cost (not zero, not a crash) — the em-dash
+    # source. The guard is the denomination's, not a second copy here.
     assert _DENOM.cost(row.usage) is None
-    assert (
-        estimate_cost(
-            row.usage.model, row.usage.tokens_in, row.usage.tokens_out, _PRICING
-        )
-        is None
-    )
 
 
 def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
@@ -730,12 +708,12 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
     by_ref = {r.ref: r for r in rows}
     assert (by_ref[100].usage.tokens_in, by_ref[100].usage.tokens_out) == (1500, 300)
     assert (by_ref[101].usage.tokens_in, by_ref[101].usage.tokens_out) == (300, 50)
-    # Cost reconciles too (cost is linear in tokens; one model across the run).
-    per_issue_cost = Decimal(0)
+    # Cost reconciles too: nothing here was billed, so per-issue and Run-level
+    # Cost agree that it is unknown rather than one of them reading as zero.
     for r in rows:
         assert r.usage.model is not None  # every worked issue recorded its model
-        per_issue_cost += _DENOM.cost(r.usage) or Decimal(0)
-    assert per_issue_cost == totals.cost_usd
+        assert _DENOM.cost(r.usage) is None
+    assert totals.credits is None
 
 
 def test_unavailable_normalized_consumption_stays_unknown_not_zero() -> None:
@@ -770,7 +748,6 @@ def test_unavailable_normalized_consumption_stays_unknown_not_zero() -> None:
                         "tokens_in": None,
                         "tokens_out": None,
                     },
-                    "cost_usd": None,
                     "peak_context_window": None,
                 }
             ],
@@ -779,7 +756,6 @@ def test_unavailable_normalized_consumption_stays_unknown_not_zero() -> None:
 
     row = queue_rows(state)[0]
     assert row.usage_observed is False
-    assert row.cost_usd is None
 
     contribution = state_module.issue_detail(state, 42).contributions[0]
     assert contribution.usage_observed is False
@@ -811,7 +787,6 @@ def test_observed_zero_normalized_consumption_stays_zero() -> None:
                         "tokens_in": 0,
                         "tokens_out": 0,
                     },
-                    "cost_usd": None,
                     "peak_context_window": None,
                 }
             ],

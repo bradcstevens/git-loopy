@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -29,7 +28,7 @@ pytest.importorskip("textual")
 from rich.text import Text  # noqa: E402
 from textual.widgets import ContentSwitcher, DataTable, Static  # noqa: E402
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module  # noqa: E402
 from git_loopy.interactive.app import (  # noqa: E402
     GitLoopyApp,
@@ -39,7 +38,6 @@ from git_loopy.interactive.app import (  # noqa: E402
     _LogView,
 )
 from git_loopy.interactive.state import LiveRunState  # noqa: E402
-from git_loopy.pricing import ModelPricing, Pricing  # noqa: E402
 from git_loopy.ui.summary import RunSummary  # noqa: E402
 
 
@@ -264,7 +262,6 @@ async def test_dashboard_queue_uses_canonical_contribution_columns() -> None:
             "Tokens out",
             "Credits",
             "Premium",
-            "Cost",
         ]
         assert "Waiting" not in labels
         # The active row (#26) shows its Started wall clock in 12h AM/PM.
@@ -308,7 +305,6 @@ async def test_dashboard_queue_localizes_normalized_closure_and_accounting() -> 
                         "tokens_in": 100,
                         "tokens_out": 50,
                     },
-                    "cost_usd": 0.0004,
                     "peak_context_window": None,
                 }
             ],
@@ -330,27 +326,17 @@ async def test_dashboard_queue_localizes_normalized_closure_and_accounting() -> 
         "50",
         "—",
         "—",
-        "$0.0004",
     ]
 
 
 async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
-    """The Queue carries live per-issue tokens in / out + estimated Cost (#36).
+    """The Queue carries live per-issue tokens in / out + billed Cost (#36).
 
-    The active issue (#26) accrues a usage event and shows its tokens plus a
-    cost computed from the **Summary's** pricing table (the same source the
-    rollup band uses, so the two reconcile). A still-queued issue (#27) shows
-    zero tokens and the em-dash cost — no usage, no priced model yet.
+    The active issue (#26) accrues a usage event and shows its tokens plus the
+    Cost the **Summary's** denomination reports (the same seam the rollup band
+    uses, so the two reconcile). A still-queued issue (#27) shows zero tokens and
+    the em-dash Cost — no usage, nothing billed yet.
     """
-    pricing = Pricing(
-        models={
-            "claude-opus-4.8": ModelPricing(
-                input_per_mtok=Decimal("15"),
-                output_per_mtok=Decimal("75"),
-                context_window=200_000,
-            )
-        }
-    )
     state = LiveRunState(run_id="01U", model="claude-opus-4.8", reasoning_effort="x")
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
@@ -369,23 +355,23 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
 
     app = GitLoopyApp(
         state,
-        summary=RunSummary(denomination=ListPriceDenomination(pricing=pricing)),
+        summary=RunSummary(denomination=BilledCreditsDenomination()),
         refresh_interval=3600,
     )
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
         # Columns: Issue | Status | Started | Active | Closed | Iters |
-        # Tokens in | out | Credits | Cost.
+        # Tokens in | out | Credits | Premium.
         active_row = table.get_row_at(0)
         assert active_row[0] == "#26"
         assert active_row[6] == "1,000"
         assert active_row[7] == "200"
-        # No billing telemetry rode the sample, so Credits is the em dash while
-        # the token-derived estimate beside it still renders (#329).
+        # No billing telemetry rode the sample, so Cost is the em dash — and
+        # since #330 there is no token-derived estimate beside it to fill in a
+        # figure git-loopy invented from a price table it wrote itself.
         assert active_row[8] == "—"
         assert active_row[9] == "—"
-        # 1000 * 15/1e6 + 200 * 75/1e6 = 0.015 + 0.015 = 0.0300.
-        assert active_row[10] == "$0.0300"
+        assert len(active_row) == 10
         # The still-queued #27 has no observed token sample or known cost.
         queued_row = table.get_row_at(1)
         assert queued_row[0] == "#27"
@@ -393,19 +379,9 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
         assert queued_row[7] == "—"
         assert queued_row[8] == "—"
         assert queued_row[9] == "—"
-        assert queued_row[10] == "—"
 
 
 async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> None:
-    pricing = Pricing(
-        models={
-            "claude-opus-4.8": ModelPricing(
-                input_per_mtok=Decimal("15"),
-                output_per_mtok=Decimal("75"),
-                context_window=200_000,
-            )
-        }
-    )
     state = LiveRunState(run_id="01U", model="claude-opus-4.8")
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
     state.render(
@@ -426,7 +402,6 @@ async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> No
                         "tokens_in": 1_000,
                         "tokens_out": 200,
                     },
-                    "cost_usd": 0.03,
                     "peak_context_window": None,
                 }
             ],
@@ -452,7 +427,7 @@ async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> No
 
     app = GitLoopyApp(
         state,
-        summary=RunSummary(denomination=ListPriceDenomination(pricing=pricing)),
+        summary=RunSummary(denomination=BilledCreditsDenomination()),
         refresh_interval=3600,
     )
     async with app.run_test():
@@ -668,7 +643,6 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
                         "tokens_in": 100,
                         "tokens_out": 50,
                     },
-                    "cost_usd": 0.0004,
                     "peak_context_window": {
                         "current_tokens": 12_000,
                         "token_limit": 32_000,
@@ -702,7 +676,6 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "Tokens out",
         "Credits",
         "Premium",
-        "Cost",
         "Peak Context fill",
     ]
     assert breakdown.get_row_at(0) == [
@@ -715,7 +688,6 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "50",
         "—",
         "—",
-        "$0.0004",
         "12,000/32,000 38%",
     ]
     assert isinstance(body, Text)
@@ -920,7 +892,6 @@ async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -
                         "tokens_in": None,
                         "tokens_out": None,
                     },
-                    "cost_usd": None,
                     "peak_context_window": None,
                 }
             ],
@@ -945,9 +916,8 @@ async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -
         "—",
         "—",
         "—",
-        "—",
     ]
-    assert queue.get_row_at(0)[6:11] == ["—", "—", "—", "—", "—"]
+    assert queue.get_row_at(0)[6:10] == ["—", "—", "—", "—"]
 
 
 async def test_band_order_matches_the_language_neutral_semantic_contract() -> None:

@@ -59,8 +59,7 @@ fn a_run_projects_the_canonical_band_inventory_before_any_event() {
             "tokens_in",
             "tokens_out",
             "credits",
-            "premium_requests",
-            "cost_usd"
+            "premium_requests"
         ])
     );
 }

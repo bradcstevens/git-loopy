@@ -11,7 +11,7 @@ auto-close backstop, the `GIT_LOOPY_*` configuration surface, and the
 clean-on-empty / abort-on-stuck termination model.
 
 The runner gives you a rich terminal UX — frozen iteration `Panel`s,
-per-iteration token + estimated-cost signal, a JSONL replay log under
+per-iteration token + billed-Credits signal, a JSONL replay log under
 `.git-loopy/logs/`, a run-summary JSON under `.git-loopy/runs/`, and opt-in
 OpenTelemetry tracing — after a one-time `uv sync` bootstrap. See the
 [skills setup prerequisites](../../docs/skills-setup.md#prerequisites) and the
@@ -254,7 +254,7 @@ Copilot, network access, or the TUI.
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                                                                                                                                                                                        |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
 | Aborted — stuck       | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                                                                                                                                                                             |
-| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, malformed `GIT_LOOPY_PRICING_FILE`, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
+| Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
 ---
 
@@ -274,11 +274,10 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_ENABLED_SKILLS`            | unset                          | **Exact replacement** of the configured base **Skill policy** (ADR-0015) for one Run — comma-separated canonical Skill names. *Presence*, not content, is what counts: an explicitly empty value is a real empty policy (which then fails preflight for omitting the **Required Skills**), while leaving it unset keeps the project / global `enabled_skills`. Because it replaces the base policy it also suppresses the one-time legacy-Config migration offer. See [`docs/skill-policy.md`](../../docs/skill-policy.md). |
 | `GIT_LOOPY_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | **Deprecated** final guard (contract §17.2): comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags and across config tiers — it only ever subtracts, and a denial that would remove a Required Skill is a validation failure rather than a quiet subtraction. Prefer omitting the name from `enabled_skills`. |
-| `GIT_LOOPY_PRICING_FILE`              | packaged `pricing.toml`        | Explicit `pricing.toml` path. A malformed file aborts the run with exit `1` (no silent fallback — operator intent is preserved).                                                                                 |
 | `GIT_LOOPY_OTEL_ENABLED`              | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
-| `GIT_LOOPY_INTERACTIVE`               | unset (auto-detect from TTY)   | Truthy (`1`, `true`, `yes`, `on`) forces the interactive Textual dashboard; falsy (`0`, ...) forces today's line printer. Unset = auto-detect (interactive only on a TTY). Either way the interactive path additionally requires the `[tui]` extra; if it is missing, an explicit request warns and falls back to the line printer. **Before the loop starts, an interactive run with ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`; the flag wins over the env var) opens a one-time, two-stage startup picker** (model, then reasoning effort): stage 1 lists models live from `list_models()` (id, display name, premium multiplier, context-window limit, reasoning support + default effort) with policy-disabled models greyed-out and non-selectable and the cursor pre-selected on `GIT_LOOPY_MODEL` (or the built-in default); stage 2 lists the chosen model's supported efforts and is auto-skipped when it supports none. `Enter` confirms, `Esc` steps back / cancels, `q` / `Ctrl+C` cancels (keeping the env/default). The confirmed model + effort are baked into the run. On any `list_models()` failure (offline / unauthed / error) the picker falls back to the env/default values with a warning and the run still proceeds. The picker is **opt-in**: a default interactive run skips it and goes straight to the loop on the configured model/effort with no prompt. When the picker is requested but no interactive TUI is available (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent — and `--no-interactive` / non-TTY runs always skip it), the run warns and falls back to the configured model. The live interface is **tabless and two-level** (ADR-0003). **Level 1** is the **Dashboard** — the only top-level screen: the header band, the live **Queue**, and a compact **Summary** rollup band (run-level totals: tokens, cost, commits, closures, strikes), stacked. The Queue holds focus; `Up`/`Down` move its cursor. Its columns are **Issue \| Status \| Started \| Active \| Tokens in \| Tokens out \| Cost USD**: **Started** is the 12-hour AM/PM local wall-clock time the issue first became active (blank until it has been active), **Active** is a live `H:MM:SS` duration that sums across every iteration that worked the issue (the run-start time stays in the header), and **Tokens in**, **Tokens out**, and **Cost USD** are that issue's live per-issue consumption — tokens and an estimated cost accrued to the **active** issue (the one named by the working marker) and summed across every iteration that worked it, reconciling with the **Summary** band's run-level totals (an unknown / unpriced model renders the `—` em dash for its cost, the same treatment the Summary uses). All **wall-clock** surfaces — the header run-start, the Queue's **Started**, and the **Log** line stamps — use 12-hour AM/PM local time, while **durations** (the header elapsed, the Queue's **Active**) stay `H:MM:SS`. **Level 2** is the per-issue **Log**: pressing `Enter` on a selected Queue row opens that issue's Log — the **active** issue shows a live, interleaved **Log** (reasoning dimmed + assistant message + key events, a bounded per-issue tail), a **non-active** issue shows its own retained Log tail with a footer noting the full record is in the JSONL replay log — and `Esc` returns to the Dashboard with the Queue cursor preserved. The Log **auto-scrolls** to the latest line (sticky-with-release): while it is at the bottom it stays pinned to the newest line as output streams in; scrolling up **pauses** autoscroll and shows a `↓ new lines below` indicator; returning to the bottom or pressing `End` **re-engages** auto-bottom and clears it. Every Log line is stamped with the 12-hour AM/PM local-system time it was appended (repeats within the same second are collapsed, so only the first line of a second shows the stamp), and each reasoning block opens with a timestamped `✻ Thinking:` marker. The full per-iteration **Summary** table stays the run-end scrollback artefact, not an in-app screen. `d` **Detaches** (tears down the dashboard but lets the run continue, printing the remainder to normal scrollback); `q` / `Ctrl+C` **Stops** the run, writing the run-end summary table to scrollback (a second `Ctrl+C` forces an immediate exit). |
+| `GIT_LOOPY_INTERACTIVE`               | unset (auto-detect from TTY)   | Truthy (`1`, `true`, `yes`, `on`) forces the interactive Textual dashboard; falsy (`0`, ...) forces today's line printer. Unset = auto-detect (interactive only on a TTY). Either way the interactive path additionally requires the `[tui]` extra; if it is missing, an explicit request warns and falls back to the line printer. **Before the loop starts, an interactive run with ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`; the flag wins over the env var) opens a one-time, two-stage startup picker** (model, then reasoning effort): stage 1 lists models live from `list_models()` (id, display name, premium multiplier, context-window limit, reasoning support + default effort) with policy-disabled models greyed-out and non-selectable and the cursor pre-selected on `GIT_LOOPY_MODEL` (or the built-in default); stage 2 lists the chosen model's supported efforts and is auto-skipped when it supports none. `Enter` confirms, `Esc` steps back / cancels, `q` / `Ctrl+C` cancels (keeping the env/default). The confirmed model + effort are baked into the run. On any `list_models()` failure (offline / unauthed / error) the picker falls back to the env/default values with a warning and the run still proceeds. The picker is **opt-in**: a default interactive run skips it and goes straight to the loop on the configured model/effort with no prompt. When the picker is requested but no interactive TUI is available (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent — and `--no-interactive` / non-TTY runs always skip it), the run warns and falls back to the configured model. The live interface is **tabless and two-level** (ADR-0003). **Level 1** is the **Dashboard** — the only top-level screen: the header band, the live **Queue**, and a compact **Summary** rollup band (run-level totals: tokens, cost, commits, closures, strikes), stacked. The Queue holds focus; `Up`/`Down` move its cursor. Its columns are **Issue \| Status \| Started \| Active \| Tokens in \| Tokens out \| Credits \| Premium**: **Started** is the 12-hour AM/PM local wall-clock time the issue first became active (blank until it has been active), **Active** is a live `H:MM:SS` duration that sums across every iteration that worked the issue (the run-start time stays in the header), and **Tokens in**, **Tokens out**, **Credits** and **Premium** are that issue's live per-issue consumption — tokens plus the **AI Credits** and premium requests the harness reported billing, accrued to the **active** issue (the one named by the working marker) and summed across every iteration that worked it, reconciling with the **Summary** band's run-level totals (an Iteration the harness did not bill renders the `—` em dash rather than a zero, the same treatment the Summary uses). All **wall-clock** surfaces — the header run-start, the Queue's **Started**, and the **Log** line stamps — use 12-hour AM/PM local time, while **durations** (the header elapsed, the Queue's **Active**) stay `H:MM:SS`. **Level 2** is the per-issue **Log**: pressing `Enter` on a selected Queue row opens that issue's Log — the **active** issue shows a live, interleaved **Log** (reasoning dimmed + assistant message + key events, a bounded per-issue tail), a **non-active** issue shows its own retained Log tail with a footer noting the full record is in the JSONL replay log — and `Esc` returns to the Dashboard with the Queue cursor preserved. The Log **auto-scrolls** to the latest line (sticky-with-release): while it is at the bottom it stays pinned to the newest line as output streams in; scrolling up **pauses** autoscroll and shows a `↓ new lines below` indicator; returning to the bottom or pressing `End` **re-engages** auto-bottom and clears it. Every Log line is stamped with the 12-hour AM/PM local-system time it was appended (repeats within the same second are collapsed, so only the first line of a second shows the stamp), and each reasoning block opens with a timestamped `✻ Thinking:` marker. The full per-iteration **Summary** table stays the run-end scrollback artefact, not an in-app screen. `d` **Detaches** (tears down the dashboard but lets the run continue, printing the remainder to normal scrollback); `q` / `Ctrl+C` **Stops** the run, writing the run-end summary table to scrollback (a second `Ctrl+C` forces an immediate exit). |
 
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker (see `GIT_LOOPY_INTERACTIVE`). Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. The picker is a TUI action: when requested on a non-interactive run (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent) the run warns and falls back to the configured model. |
 
@@ -334,7 +333,7 @@ model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
 overridden — matching the security-positive env-var behavior. **Per-run-only**
 knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
-verbosity, `--no-reasoning`, `--parallel`, and `GIT_LOOPY_PRICING_FILE`. A
+verbosity, `--no-reasoning`, and `--parallel`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
 
@@ -410,9 +409,8 @@ The prompt loaded each iteration resolves like the model/effort config —
    accepted, for case-sensitive filesystems).
 2. **global** — `$XDG_CONFIG_HOME/git-loopy/PROMPT.md` (honouring
    `$XDG_CONFIG_HOME`), else `~/.config/git-loopy/PROMPT.md`.
-3. **packaged default** — a `PROMPT.md` shipped **inside the wheel** (as
-   `pricing.toml` already is), so a bare run in a repo with no `git-loopy/`
-   folder still has a working prompt.
+3. **packaged default** — a `PROMPT.md` shipped **inside the wheel**, so a bare
+   run in a repo with no `git-loopy/` folder still has a working prompt.
 
 Only the packaged default is guaranteed present; drop a `PROMPT.md` into either
 scope to override it (a project file overrides a global one, which overrides the
@@ -463,10 +461,10 @@ This snapshot follows the current Copilot catalog. The retired
 official choices; persisted legacy ids still use the unknown-model
 warn-and-pass-through path so the Copilot CLI remains the final authority.
 
-A subset of these carry list prices in the packaged `pricing.toml`
-(`claude-opus-4.8`, `claude-opus-4.7`, `claude-sonnet-4.6`, `gpt-5.4`,
-`gpt-5-mini`); any other model runs unpriced and renders `—` in the cost
-column rather than a fabricated estimate.
+Cost is not derived from this list. It is the **AI Credits** the harness
+reported billing (ADR-0026), so a model git-loopy has never heard of costs
+exactly what the harness says it cost — and a Run the harness did not bill
+renders `—` rather than a fabricated estimate.
 
 ---
 
@@ -481,7 +479,7 @@ so the artefacts don't get accidentally committed.
 | Artefact          | Path                                            | Format                                                                                                            |
 | ----------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | Event log         | `.git-loopy/logs/<iso>-<run_id>.jsonl`              | Append-only JSONL, one envelope per line, replay-grade. Flushed after every write so a crash leaves a partial-but-parseable file. |
-| Run summary       | `.git-loopy/runs/<iso>-<run_id>.json`               | Per-iteration counter rollup (duration, tokens, estimated cost, tool / skill / commit / auto-closure / strike counts). Written on close. |
+| Run summary       | `.git-loopy/runs/<iso>-<run_id>.json`               | Per-iteration counter rollup (duration, tokens, tool / skill / commit / auto-closure / strike counts). Written on close. |
 | Process diag.     | stderr **and** `.git-loopy/logs/<iso>-<run_id>.log` | Human-readable diagnostics. The stderr stream is primary; the `.log` file is the mirror.                          |
 
 `<iso>` is a filesystem-safe `YYYY-MM-DDTHH-MM-SSZ` timestamp;
@@ -494,26 +492,28 @@ The run-summary JSON schema is documented at the top of
 
 ---
 
-## Cost figure caveat
+## Cost figures
 
-The Python runner surfaces an **estimated cost in USD per iteration** in
-each iteration `Panel` and in the run-end summary table. This figure is
-an **estimate based on provider list prices** — it is **not** the
-amount GitHub Copilot will bill you. The Copilot CLI is billed on a
-premium-request quota that the SDK does not expose; the figures the
-renderer shows are useful for **cost-shape signal only** (which model
-is heavier than which, how iteration cost trends over a run).
+Cost is what the harness reported billing, denominated in **AI Credits** —
+never tokens multiplied by a price table git-loopy maintains itself
+(ADR-0026). The premium-request count and the cache read/write split ride
+alongside it, on the same telemetry.
 
-- The packaged pricing table at
-  [`git_loopy/pricing.toml`](git_loopy/pricing.toml) is dated
-  **2026-05-16**. Pricing drifts; update the file or override via the
-  env var below.
-- Override the packaged table at runtime via
-  `GIT_LOOPY_PRICING_FILE=/path/to/your.toml`. Schema and example entries
-  are in the packaged file.
-- The cost figure renders `—` (em dash) for any model not present in
-  the active pricing table — **never** `$0.00`, so downstream consumers
-  can distinguish "unknown" from "free".
+- git-loopy publishes **no USD figure**. The harness's own Rate card is
+  denominated in Credits too, and nothing on any surface the kit reads is
+  dollar-denominated by its schema, so a USD column would need a
+  Credits-to-USD rate that exists nowhere. ADR-0018 rejected that
+  operator-supplied constant and ADR-0026 upheld the rejection.
+- The list-price estimate, the packaged `pricing.toml` and the
+  `GIT_LOOPY_PRICING_FILE` override are **deleted** (#330). Nothing replaced
+  them: an estimate git-loopy computed itself was never the bill.
+- An unreported figure renders `—` (em dash), **never** `0`, so a consumer
+  can tell "nobody said" from "free". A total is reported only when every
+  figure summed into it is known, so an unreported Iteration never silently
+  understates a Run.
+- An Orchestrator that cannot report Cost at all says so in its own words,
+  which is a different fact from a Run that could have reported it and saw
+  nothing.
 
 ---
 

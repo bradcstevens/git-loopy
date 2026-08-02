@@ -3,8 +3,8 @@
 │active —  •  context —  •  running  •  strikes 0/3                                                                                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Queue ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Issue       Status        Started       Active     Closed        Iters   Tokens in    Tokens out   Credits      Premium    Cost                                                                       │
-│#42         closed        6:00:01 PM    0:00:04    6:00:05 PM    1       100          50           —            —          $0.0004                                                                    │
+│Issue       Status        Started       Active     Closed        Iters   Tokens in    Tokens out   Credits      Premium                                                                               │
+│#42         closed        6:00:01 PM    0:00:04    6:00:05 PM    1       100          50           —            —                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -26,8 +26,8 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Summary ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Cost        Tools   Skills   Skills consulted                     Commits   Closures   PR advances   Strikes │
-│1      closed      0:00:04    gpt-5.6-sol     100         50           150               $0.0004     0       0        —                                    1         1          0             0       │
+│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted                                 Commits   Closures   PR advances   Strikes │
+│1      closed      0:00:04    gpt-5.6-sol     100         50           150               0       0        —                                                1         1          0             0       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │

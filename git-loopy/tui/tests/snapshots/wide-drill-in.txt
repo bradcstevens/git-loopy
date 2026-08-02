@@ -3,8 +3,8 @@
 │elapsed 0:00:04  •  active 0:00:04  •  iterations 1                                                                                                                                                   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Iteration breakdown ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Contribution    Outcome     Duration   Status        Active     Tokens in    Tokens out   Credits      Premium    Cost        Peak Context fill                                                       │
-│iter 1          closed      0:00:04    closed        0:00:04    100          50           —            —          $0.0004     12,000/32,000                                                           │
+│Contribution    Outcome     Duration   Status        Active     Tokens in    Tokens out   Credits      Premium    Peak Context fill                                                                   │
+│iter 1          closed      0:00:04    closed        0:00:04    100          50           —            —          12,000/32,000                                                                       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │

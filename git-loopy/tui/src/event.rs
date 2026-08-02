@@ -241,9 +241,6 @@ pub struct IterationSummary {
     /// Tokens observed in the Context window.
     #[serde(default, deserialize_with = "reported")]
     pub observed_tokens: Option<Option<i64>>,
-    /// Estimated Cost.
-    #[serde(default, deserialize_with = "reported")]
-    pub cost_usd: Option<Option<f64>>,
     /// Billed **AI Credits**, the harness's own figure.
     #[serde(default, deserialize_with = "reported")]
     pub credits: Option<Option<f64>>,
@@ -308,9 +305,6 @@ pub struct IterationIssue {
     /// Token Consumption attributed to this issue in this Iteration.
     #[serde(default)]
     pub consumption: Option<Consumption>,
-    /// Estimated Cost attributed to this issue in this Iteration.
-    #[serde(default)]
-    pub cost_usd: Option<f64>,
     /// Its peak Context fill in this Iteration.
     #[serde(default)]
     pub peak_context_window: Option<ContextWindowSample>,

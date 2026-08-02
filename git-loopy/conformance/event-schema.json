@@ -104,7 +104,6 @@
         "tokens_in",
         "tokens_out",
         "observed_tokens",
-        "cost_usd",
         "tool_count",
         "skill_call_count",
         "skills_consulted",
@@ -123,13 +122,14 @@
         "active_seconds",
         "cumulative_active_seconds",
         "consumption",
-        "cost_usd",
         "peak_context_window"
       ],
       "consumption_required": ["model", "tokens_in", "tokens_out"],
       "summary_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "consumption_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
-      "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts."
+      "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts.",
+      "retired": ["cost_usd"],
+      "retirement": "cost_usd was the list-price estimate, computed by git-loopy from a price table it hand-maintained. The table is deleted (#330) and Cost is the AI Credits the harness reported billing (ADR-0026), so no producer derives the field any more. It is retired rather than repurposed: a consumer must never read Credits out of a key whose name says dollars. Still accepted, not forbidden, because a port that has not yet dropped it is emitting a null it can honestly report; a consumer must ignore it."
     },
     "wrapper.skill_policy.resolved": {
       "required_when_present": [
@@ -218,7 +218,6 @@
         "tokens_in",
         "tokens_out",
         "observed_tokens",
-        "cost_usd",
         "commits",
         "closures",
         "closure_outcome",
@@ -230,7 +229,9 @@
       ],
       "strike_reaction_values": ["reset", "+1"],
       "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
-      "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total."
+      "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total.",
+      "retired": ["cost_usd"],
+      "retirement": "Retired on the same terms as wrapper.iteration.end's: the list-price estimate is deleted (#330), and Credits are never read out of a dollar-named key."
     },
     "wrapper.concurrency.changed": {
       "required_when_present": [
@@ -470,7 +471,6 @@
             "tokens_in": 0,
             "tokens_out": 0,
             "observed_tokens": 0,
-            "cost_usd": null,
             "credits": null,
             "premium_requests": null,
             "cache_read": null,
@@ -507,7 +507,6 @@
                 "cache_read": null,
                 "cache_write": null
               },
-              "cost_usd": null,
               "peak_context_window": {
                 "current_tokens": 0,
                 "token_limit": null,
@@ -585,7 +584,6 @@
             "tokens_in": 0,
             "tokens_out": 0,
             "observed_tokens": 0,
-            "cost_usd": null,
             "credits": null,
             "premium_requests": null,
             "cache_read": null,
@@ -617,7 +615,6 @@
                 "cache_read": null,
                 "cache_write": null
               },
-              "cost_usd": null,
               "peak_context_window": null
             }
           ]
@@ -630,7 +627,6 @@
             "tokens_in": 0,
             "tokens_out": 0,
             "observed_tokens": 0,
-            "cost_usd": null,
             "credits": null,
             "premium_requests": null,
             "cache_read": null,
@@ -662,7 +658,6 @@
                 "cache_read": null,
                 "cache_write": null
               },
-              "cost_usd": null,
               "peak_context_window": null
             }
           ]

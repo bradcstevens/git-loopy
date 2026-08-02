@@ -27,14 +27,13 @@ from __future__ import annotations
 import ast
 import io
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 from rich.console import Console
 
-from git_loopy.denomination import ListPriceDenomination
+from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import sinks as sinks_module
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
@@ -50,7 +49,6 @@ from git_loopy.events import (
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
 )
-from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.ui import Renderer, RunSummary
 from git_loopy.ui import summary as summary_module
@@ -106,24 +104,8 @@ def _capture_console(width: int = 120) -> tuple[Console, io.StringIO]:
     return console, buf
 
 
-def _fixed_pricing() -> Pricing:
-    return Pricing(
-        models={
-            "claude-opus-4.7-xhigh": ModelPricing(
-                input_per_mtok=Decimal("15.00"),
-                output_per_mtok=Decimal("75.00"),
-                context_window=200_000,
-            ),
-        }
-    )
-
-
 def _make_renderer() -> tuple[Renderer, io.StringIO]:
-    summary = RunSummary(
-        denomination=ListPriceDenomination(
-            pricing=_fixed_pricing(), as_of="2026-05-16"
-        )
-    )
+    summary = RunSummary(denomination=BilledCreditsDenomination())
     console, buf = _capture_console()
     return Renderer(console=console, summary=summary, verbosity=0), buf
 
