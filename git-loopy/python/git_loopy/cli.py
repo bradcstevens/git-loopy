@@ -97,6 +97,8 @@ from git_loopy.config import (
     SkillPolicyInputs,
     gate_reasoning_effort,
 )
+from git_loopy.model_listing import LiveModelListing
+from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_policy import (
     SkillPolicyStartupState,
@@ -1833,10 +1835,6 @@ def main(argv: list[str] | None = None) -> int:
     elif startup_state is SkillPolicyStartupState.LEGACY:
         _warn(_LEGACY_SKILL_POLICY_WARNING)
 
-    # Import here so the SDK / Rich / pricing only load if we're
-    # actually going to run. Keeps `git-loopy --help` snappy.
-    from git_loopy import loop as _loop
-
     # Interactive path (issue #23, ADR-0001): launch the loop as a peer of a
     # Textual app observing a LiveRunState. The driver module imports Textual,
     # so it is reached only once `_should_run_interactive` has confirmed the
@@ -1853,7 +1851,34 @@ def main(argv: list[str] | None = None) -> int:
     # and fall back to the configured model (issue #31).
     if select_model:
         _warn(_model_select_unavailable_message(config))
-    return asyncio.run(_loop.run(config))
+    return asyncio.run(_drive_line_printer(config))
+
+
+def _make_model_listing() -> LiveModelListing:
+    """Build the **Run**'s single live model listing.
+
+    A module-level factory so the suite — which never spawns the harness — can
+    substitute it, exactly as ``loop._make_client`` is substituted.
+    """
+    return LiveModelListing()
+
+
+async def _drive_line_printer(config: RunConfig) -> int:
+    """Resolve the **Rate card**, then drive the line-printer loop (#331).
+
+    The non-interactive path is what an unattended loop actually runs, and the
+    card is the **Run**'s audit record rather than a Dashboard feature — so it
+    is resolved here too, off a listing of this path's own. There is no picker
+    to share the call with, so this is the *first* round trip rather than a
+    second one.
+    """
+    # Imported here so the SDK / Rich only load if we're actually going to run.
+    # Keeps `git-loopy --help` snappy.
+    from git_loopy import loop as _loop
+
+    listing = _make_model_listing()
+    rate_card = await resolve_rate_card(listing, warn=_warn)
+    return await _loop.run(config, rate_card=rate_card)
 
 
 async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
@@ -1872,20 +1897,27 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
        directly (issue #31).
     2. The (possibly picked) choice is baked into a fresh frozen
        :class:`RunConfig` (the loop still creates and owns its *own* run client).
-    3. The interactive driver launches the loop as a peer of the observing app
+    3. The **Rate card** is resolved from the *same* listing the picker just
+       read (#331, ADR-0026), so it costs no additional round trip, and is held
+       fixed for the whole Run.
+    4. The interactive driver launches the loop as a peer of the observing app
        (ADR-0001).
     """
     from git_loopy import loop as _loop
+
+    listing = _make_model_listing()
 
     if select_model:
         from git_loopy.interactive import picker
 
         model, reasoning_effort = await picker.resolve_run_model(
-            config, warn=_warn
+            config, warn=_warn, fetch=listing.models
         )
         config = dataclasses.replace(
             config, model=model, reasoning_effort=reasoning_effort
         )
+
+    rate_card = await resolve_rate_card(listing, warn=_warn)
 
     # The Dashboard's own module is the earliest thing that can fail on the way
     # up (#326). The [tui] gate probed Textual with ``find_spec``, which does
@@ -1901,8 +1933,8 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
             "the live view could not start — the Dashboard failed to load "
             f"({type(exc).__name__}: {exc}); falling back to the line printer."
         )
-        return await _loop.run(config)
-    return await _loop.run(config, driver=driver)
+        return await _loop.run(config, rate_card=rate_card)
+    return await _loop.run(config, driver=driver, rate_card=rate_card)
 
 
 if __name__ == "__main__":  # pragma: no cover - import-as-script convenience

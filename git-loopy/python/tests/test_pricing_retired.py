@@ -38,7 +38,7 @@ def _install_fake_runner(
     """Run the real CLI resolution but stop short of an SDK client."""
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
 
-    async def _fake_run(cfg: RunConfig) -> int:
+    async def _fake_run(cfg: RunConfig, **_extra: object) -> int:
         captured.append(cfg)
         return 0
 

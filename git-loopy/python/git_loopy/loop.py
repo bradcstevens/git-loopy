@@ -155,6 +155,7 @@ from git_loopy.denomination import (
     CostDenomination,
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
+from git_loopy.rate_card import RateCard
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_install import (
     SkillInstallError,
@@ -839,9 +840,15 @@ class _Loop:
         usage_observer: _EventObserver | None = None,
         continuation: ContinuationReporter | None = None,
         frontier_plan: continuation_frontier.FrontierPlan | None = None,
+        rate_card: RateCard | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
+        # The **Rate card** resolved once at Run start and held fixed for the
+        # whole Run (#331, ADR-0026), or `None` when the listing could not be
+        # read. Nothing derives from it -- it is published so a replay can audit
+        # the bill rather than merely total it.
+        self._rate_card = rate_card
         self._git = git
         self._prompt_text = prompt_text
         self._writers = writers
@@ -1656,7 +1663,12 @@ class _Loop:
             issue_source=self._config.issue_source,
             release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            insight_capabilities=events_module.python_insight_capabilities(
+                rate_card=self._rate_card is not None
+            ),
+            rate_card=(
+                None if self._rate_card is None else self._rate_card.to_payload()
+            ),
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
@@ -1726,7 +1738,12 @@ class _Loop:
             issue_source=self._config.issue_source,
             release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            insight_capabilities=events_module.python_insight_capabilities(
+                rate_card=self._rate_card is not None
+            ),
+            rate_card=(
+                None if self._rate_card is None else self._rate_card.to_payload()
+            ),
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
@@ -1928,9 +1945,13 @@ class _ParallelLoop:
         worktree_setup: worktree_module.WorktreeSetup,
         include_prs: bool = False,
         continuation: ContinuationReporter | None = None,
+        rate_card: RateCard | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
+        # Held fixed for the whole Run, exactly as the serial path holds it, so
+        # a Parallel Summary is denominated by one card too (#331).
+        self._rate_card = rate_card
         self._git = git
         self._prompt_text = prompt_text
         self._writers = writers
@@ -2083,7 +2104,12 @@ class _ParallelLoop:
             issue_source=self._config.issue_source,
             release_version=self._release_version,
             schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            insight_capabilities=events_module.python_insight_capabilities(
+                rate_card=self._rate_card is not None
+            ),
+            rate_card=(
+                None if self._rate_card is None else self._rate_card.to_payload()
+            ),
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
@@ -3344,7 +3370,12 @@ class InteractiveDriver(Protocol):
     async def run(self, drive: Callable[[], Coroutine[object, object, int]]) -> int: ...
 
 
-async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> int:
+async def run(
+    config: RunConfig,
+    *,
+    driver: InteractiveDriver | None = None,
+    rate_card: RateCard | None = None,
+) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
     Constructs the long-lived per-run state (writers, summary, renderer,
@@ -3354,6 +3385,14 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     Args:
         config: The frozen :class:`RunConfig` composed by
             :func:`git_loopy.cli.main`.
+        rate_card: The **Rate card** :mod:`git_loopy.cli` resolved once at
+            **Run** start from the Run's shared live model listing, or ``None``
+            when that listing could not be read or carries no prices (#331,
+            ADR-0026). Injected rather than fetched here for ADR-0019's reason:
+            a card the loop went and got for itself would be a second round
+            trip on the path where the picker already made the first. ``None``
+            is not a failure — nothing derives from the card, so an absent one
+            only makes the rate-card **Insight capability** declare ``false``.
         driver: Optional interactive driver (ADR-0001 observer model). When
             ``None`` (the default, non-interactive path) the line-printer
             :class:`~git_loopy.ui.renderer.Renderer` is the sole sink and the
@@ -3653,6 +3692,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
             continuation=continuation_reporter,
+            rate_card=rate_card,
         )
     else:
         loop = _Loop(
@@ -3671,6 +3711,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             include_prs=include_prs,
             continuation=continuation_reporter,
             frontier_plan=frontier_plan,
+            rate_card=rate_card,
         )
 
     exit_code = 1

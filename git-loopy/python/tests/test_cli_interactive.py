@@ -122,7 +122,7 @@ def test_no_interactive_flag_resolves_to_false_intent() -> None:
 def _install_fake_loop_run(
     monkeypatch: pytest.MonkeyPatch, captured: list[tuple[RunConfig, Any]]
 ) -> None:
-    async def fake_run(cfg: RunConfig, *, driver: Any = None) -> int:
+    async def fake_run(cfg: RunConfig, *, driver: Any = None, **_extra: Any) -> int:
         captured.append((cfg, driver))
         return 0
 
@@ -146,7 +146,7 @@ def _install_fake_resolve_run_model(
     calls: list[RunConfig] = []
 
     async def fake_resolve(
-        config: RunConfig, *, warn: Any
+        config: RunConfig, *, warn: Any, **_extra: Any
     ) -> tuple[str | None, str | None]:
         calls.append(config)
         if result is not None:

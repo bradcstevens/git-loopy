@@ -536,7 +536,7 @@ def test_type_mismatched_config_raises_settings_error() -> None:
 
 
 def _fake_loop_run(monkeypatch, captured: list) -> None:
-    async def fake_run(cfg, *, driver=None) -> int:
+    async def fake_run(cfg, *, driver=None, **_extra) -> int:
         captured.append(cfg)
         return 0
 

@@ -392,7 +392,7 @@ def _drive_main(
     order: list[str] = []
     ran: list[RunConfig] = []
 
-    async def fake_run(cfg: RunConfig, *, driver: Any = None) -> int:
+    async def fake_run(cfg: RunConfig, *, driver: Any = None, **_extra: Any) -> int:
         order.append("loop")
         ran.append(cfg)
         return 0

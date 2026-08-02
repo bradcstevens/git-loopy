@@ -474,6 +474,10 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "context_window": True,
         "skill_consultation": True,
         "cost": True,
+        # Run-scoped (#331): this Run reached no live model listing, so it holds
+        # no Rate card. Declared `false` rather than omitted -- and beside a
+        # `cost: True` it does not disturb, because nothing derives from a card.
+        "rate_card": False,
     }
     # #311 AC3: a serial Run declares its scheduling capabilities too. The
     # manifest describes the distribution, not the Run: an operator reading a

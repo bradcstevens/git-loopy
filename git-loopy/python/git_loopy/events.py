@@ -151,6 +151,32 @@ PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "cost": True,
 }
 
+# Insight capabilities whose answer is a fact about **this Run** rather than
+# about the distribution, so they cannot live in the frozen per-Orchestrator
+# manifest above. `rate_card` (#331, ADR-0026) is the first: whether a Run holds
+# the server's live **Rate card** depends on whether *that Run* reached the
+# listing, and two Runs of one binary can differ. Publishing it as a constant
+# would let a Run that fetched nothing declare `true`.
+#
+# It is declared *apart from* `cost` on purpose. Nothing derives a figure from
+# the card, so an absent card never costs a figure; collapsing the two would
+# make "no billing telemetry" and "no Rate card" one unknown, which is exactly
+# the collapse this arc exists to end.
+#
+# Family-wide it is **accepted, never required**: the shell and PowerShell
+# Orchestrators declare it in #334, and until then a port that omits it is
+# conformant. That is why it is not in `INSIGHT_CAPABILITY_NAMES`.
+RUN_SCOPED_INSIGHT_CAPABILITY_NAMES: tuple[str, ...] = ("rate_card",)
+
+
+def python_insight_capabilities(*, rate_card: bool) -> dict[str, bool]:
+    """The Python Runner's Run-start Insight manifest for one Run.
+
+    The frozen per-distribution capabilities, plus this Run's own answer to
+    whether it resolved a **Rate card**.
+    """
+    return {**PYTHON_INSIGHT_CAPABILITIES, "rate_card": rate_card}
+
 # What an Orchestrator can *schedule*, as opposed to what it can observe.
 # `insight_capabilities` above answers "can this port see token usage?";
 # these answer "can this port fill a second **Lane** at all?" (ADR-0020).

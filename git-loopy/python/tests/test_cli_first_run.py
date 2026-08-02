@@ -101,7 +101,7 @@ class _FakeStdin:
 def _install_fake_loop_run(
     monkeypatch: pytest.MonkeyPatch, captured: list[tuple[RunConfig, Any]]
 ) -> None:
-    async def fake_run(cfg: RunConfig, *, driver: Any = None) -> int:
+    async def fake_run(cfg: RunConfig, *, driver: Any = None, **_extra: Any) -> int:
         captured.append((cfg, driver))
         return 0
 

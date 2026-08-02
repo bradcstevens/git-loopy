@@ -29,7 +29,7 @@ import os
 
 import pytest
 
-from git_loopy import skill_install
+from git_loopy import model_listing, skill_install
 from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
 
@@ -58,6 +58,28 @@ def _refuse_remote_skill_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(pin, destination)  # type: ignore[arg-type]
 
     monkeypatch.setattr(skill_install, "acquire_skill_source", _guarded)
+
+
+@pytest.fixture(autouse=True)
+def _refuse_live_model_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail the fetch, rather than spawn the harness, if a test lists models live.
+
+    Since #331 every **Run** resolves its **Rate card** from a live
+    ``models.list``. The real fetch starts a Copilot client, which spawns the
+    pinned CLI and authenticates — slow, flaky, and dependent on who is running
+    it. Failing it here also exercises the honest default: a **Run** with no
+    reachable listing starts normally and declares the rate-card **Insight
+    capability** ``false``. A test that wants a card injects
+    ``LiveModelListing(fetch=...)``.
+    """
+
+    async def _refuse():
+        raise RuntimeError(
+            "a test tried to list models live; the suite never spawns the "
+            "harness. Inject a LiveModelListing(fetch=...) instead."
+        )
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", _refuse)
 
 
 @pytest.fixture(autouse=True)

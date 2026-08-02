@@ -792,6 +792,10 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "context_window": True,
         "skill_consultation": True,
         "cost": True,
+        # Run-scoped (#331): this Run reached no live model listing, so it holds
+        # no Rate card. Declared `false` rather than omitted -- and beside a
+        # `cost: True` it does not disturb, because nothing derives from a card.
+        "rate_card": False,
     }
     # #311 AC3: what this Orchestrator can *schedule*, declared alongside what
     # it can observe. `contribution_events` is false because the Lane rows

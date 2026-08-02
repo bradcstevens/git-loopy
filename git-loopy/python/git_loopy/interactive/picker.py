@@ -4,8 +4,11 @@ The one-time **model + reasoning-effort picker** (decisions D2a-D2d) runs on the
 interactive path *before* the loop starts. This module is the orchestration seam
 the CLI calls:
 
-1. fetch the live model list with a short-lived **throwaway client** (connect ->
-   ``list_models()`` -> stop), then
+1. read the live model list — by default with a short-lived **throwaway client**
+   (connect -> ``list_models()`` -> stop), and in production through the Run's
+   shared :class:`~git_loopy.model_listing.LiveModelListing`, so that the picker
+   and the **Rate card** (#331) are two readings of one call rather than two
+   round trips — then
 2. show the two-stage Textual picker (model, then — unless the model supports no
    reasoning effort — effort), and
 3. return the chosen ``(model, effort)`` for the CLI to bake into the frozen
@@ -21,8 +24,9 @@ choice, not an error).
 
 **Import discipline.** Neither Textual nor the SDK is imported at module top: the
 Textual picker app (:mod:`git_loopy.interactive.picker_app`) is imported lazily
-inside the default ``run_app``, and the SDK ``CopilotClient`` lazily inside the
-default fetch. Together with the injectable ``fetch`` / ``run_app`` seams this
+inside the default ``run_app``, and the SDK ``CopilotClient`` lazily inside
+:func:`git_loopy.model_listing.fetch_live_models`. Together with the injectable
+``fetch`` / ``run_app`` seams this
 keeps :func:`resolve_run_model` — and crucially its fallback path — importable
 and unit-testable without the optional ``[tui]`` extra and without a live
 backend (mirrors how :mod:`git_loopy.interactive.driver` keeps Textual out of
@@ -31,7 +35,7 @@ backend (mirrors how :mod:`git_loopy.interactive.driver` keeps Textual out of
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Awaitable, Callable, Sequence
 
 from git_loopy.config import RunConfig
 from git_loopy.interactive.models import (
@@ -40,39 +44,14 @@ from git_loopy.interactive.models import (
     default_cursor_index,
     to_model_choices,
 )
+from git_loopy.model_listing import ClientFactory, ModelFetcher, fetch_live_models
 
-__all__ = ["resolve_run_model", "fetch_live_models"]
-
-#: Builds the short-lived SDK client used only to list models. Injected so tests
-#: can supply a fake async-context-manager client without spawning the CLI
-#: server. The default constructs a bare :class:`copilot.CopilotClient` (the run
-#: loop owns its own, separate, telemetry-configured client).
-ClientFactory = Callable[[], Any]
-
-#: Async ``() -> list[ModelInfo]`` model fetch, injected so the orchestrator's
-#: fallback + success paths are unit-testable without a live backend.
-ModelFetcher = Callable[[], Awaitable[Sequence[Any]]]
+__all__ = ["resolve_run_model", "fetch_live_models", "ClientFactory", "ModelFetcher"]
 
 #: Async picker runner: ``(choices, *, cursor) -> Selection | None`` (``None`` =
 #: the user quit). Injected so the orchestration is testable without Textual; the
 #: default lazily runs the real :class:`~git_loopy.interactive.picker_app.ModelPickerApp`.
 PickerRunner = Callable[..., Awaitable["Selection | None"]]
-
-
-async def fetch_live_models(*, client_factory: ClientFactory | None = None) -> Sequence[Any]:
-    """List models via a throwaway client (connect -> list -> stop).
-
-    The client is entered as an async context manager so ``start()`` and
-    ``stop()`` bracket the single ``list_models()`` call — the run loop later
-    builds and owns its *own* client, so this one is discarded immediately.
-    """
-    if client_factory is None:
-        from copilot import CopilotClient
-
-        client_factory = CopilotClient
-    client = client_factory()
-    async with client:
-        return await client.list_models()
 
 
 async def _run_picker_app(

@@ -40,7 +40,7 @@ def _capture_config(
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     captured: list[RunConfig] = []
 
-    async def _fake_run(cfg: RunConfig) -> int:
+    async def _fake_run(cfg: RunConfig, **_extra: object) -> int:
         captured.append(cfg)
         return 0
 

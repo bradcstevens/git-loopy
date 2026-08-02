@@ -271,7 +271,7 @@ where a dot belongs) is a conformance failure.
 
 Every `wrapper.run.start` MUST carry the exact distribution `release_version`, numeric
 `schema_version: 1`, and an
-`insight_capabilities` object with exactly these boolean keys:
+`insight_capabilities` object with at least these boolean keys:
 
 ```json
 {
@@ -289,6 +289,60 @@ Orchestrators declare only `agent_output` available. Later work may change a val
 when that Orchestrator emits the signal truthfully. `false` means unavailable. `true` with no sample
 yet is still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and
 an observed collection with no members is `[]`.
+
+### Run-scoped Insight capabilities
+
+The six keys above are **per-distribution**: they answer "can this Orchestrator observe it at all?",
+so they are the same for every Run of one binary and every port MUST declare all six. A **run-scoped**
+capability answers a different question — "did *this* Run obtain it?" — and two Runs of one binary
+can differ. Run-scoped keys are declared in the same object, are **accepted from any producer and
+required of none**, and are listed under `insight_capabilities.run_scoped` in
+`conformance/event-schema.json`.
+
+There is one today, `rate_card` (ADR-0026). An Orchestrator that declares it MUST also carry a
+`rate_card` key on `wrapper.run.start`: the **Rate card** it resolved, or `null` when it resolved
+none. The card is the harness's own live per-model price listing, obtained from the same
+`models.list` call that supplies the roster and the picker's premium column, resolved **once** at Run
+start and held fixed for the whole Run, so every row of one **Summary** is denominated identically
+even if the server reprices mid-Run. It MUST NOT be loaded from a packaged file — a pinned fixture
+cannot be correct under `COPILOT_CLI_PATH` (ADR-0019).
+
+The card is **provenance, not arithmetic**. No figure anywhere in the kit derives from it, so an
+absent card never costs a figure and never affects the separate `cost` declaration. Its prices are
+denominated in **AI Credits per batch of `batch_size` tokens** — the same unit the harness already
+reports as *billed* — and MUST be recorded as published: separate input, output, cache-read and
+cache-write prices, the batch size, the prompt-token budget and the nested `long_context` block.
+Flattening them to one rate is a conformance failure: the cache prices dominate a real agent loop,
+and a card recorded lossily is not a record of what a Run was billed under.
+
+A card that cannot be fetched MUST NOT prevent a Run from starting. The Run warns on exactly the
+terms the roster fetch failure already uses, declares the capability `false`, and proceeds.
+
+```json
+{
+  "insight_capabilities": { "cost": true, "rate_card": true },
+  "rate_card": {
+    "models": {
+      "claude-haiku-4.5": {
+        "multiplier": 0.33,
+        "discount_percent": null,
+        "prices": {
+          "batch_size": 1000000,
+          "input_price": 0.1,
+          "output_price": 0.4,
+          "cache_read_price": 0.01,
+          "cache_write_price": 0.125,
+          "max_prompt_tokens": 128000,
+          "long_context": null
+        }
+      }
+    }
+  }
+}
+```
+
+The shell and PowerShell Orchestrators declare no run-scoped capability today; they subscribe to no
+SDK event stream and read no model listing.
 
 Every `wrapper.run.start` MUST also carry a `parallel_capabilities` object with exactly these
 boolean keys:
