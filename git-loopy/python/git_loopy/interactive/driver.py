@@ -6,8 +6,19 @@ waits for whichever finishes first.
 
 * If the **loop** finishes first (the run reached a natural outcome), the app is
   told to exit so the TUI tears down.
-* If the **app** finishes first (the user pressed ``q`` / ``Ctrl+C`` — a
-  **Stop**), the loop task is cancelled and the run is wound down cleanly.
+* If the **app** finishes first, the exit is classified **three** ways
+  (#325, ADR-0024): an operator **Stop** (``q`` / ``Ctrl+C``) cancels the loop
+  task and winds the run down cleanly; a voluntary **Detach** (``d``) swaps the
+  sink list to the parked line printer and lets the loop run on; and a
+  **Dashboard fault** — a Dashboard that raises — takes that same Detach path,
+  so a rendering bug costs the operator the view rather than the work.
+
+ADR-0001 enumerated the app's exits as ``q`` / ``Ctrl+C`` and Detach, and under
+that enumeration "not a Detach" really did mean "a Stop". An exception is a
+third way for the app task to finish and it carries no intent to read, so
+ADR-0024 supersedes that exit clause: the fault is classified, surfaced to the
+operator, written to the **Run**'s durable record, and reflected in the exit
+code, instead of being discarded unread while the cancelled loop returned zero.
 
 :func:`git_loopy.loop.run` holds this object structurally (its ``InteractiveDriver``
 Protocol) and calls :meth:`InteractiveDriver.run` with the loop's ``drive``
@@ -20,11 +31,13 @@ primary sink and, for #26, attaches the loop-owned Summary/Log pane sources via
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Callable, Coroutine
+from typing import TYPE_CHECKING, Callable, Coroutine, Protocol
 
 from rich.console import Console
+from rich.markup import escape
 
 from git_loopy.config import RunConfig
+from git_loopy.events import WRAPPER_DASHBOARD_FAULT
 from git_loopy.interactive.app import GitLoopyApp
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
@@ -33,7 +46,25 @@ from git_loopy.sinks import EventSink, SinkFanout
 if TYPE_CHECKING:
     from git_loopy.ui.summary import RunSummary
 
-__all__ = ["InteractiveDriver", "build_interactive_driver"]
+__all__ = [
+    "EXIT_DASHBOARD_FAULT",
+    "InteractiveDriver",
+    "build_interactive_driver",
+]
+
+#: Process exit code for a **Run** that continued past a **Dashboard fault**
+#: (#325, ADR-0024). A clean **Stop** is ``0`` and, before this code existed, so
+#: was a crashed Dashboard — a supervising script was told everything was fine
+#: while the operator had lost the live view to a bug.
+#:
+#: This is deliberately **not** a :func:`git_loopy.wrapper.exit_code_for`
+#: reason. That matrix is the family-wide Wrapper contract and the shell and
+#: PowerShell **Orchestrators** host no Dashboard, so a fault is not a
+#: termination any of them can produce (ADR-0024). It lives on the Python
+#: interactive path, next to the branch that raises it, and takes the first
+#: value the Wrapper matrix does not use (``0`` clean, ``1`` aborted, ``2``
+#: usage error).
+EXIT_DASHBOARD_FAULT = 3
 
 #: Factory for the observing app, injected so tests can swap in a fake app and
 #: exercise the peering/Stop logic without a TTY. Accepts the state plus the
@@ -42,6 +73,41 @@ __all__ = ["InteractiveDriver", "build_interactive_driver"]
 #: the factory contract but no longer rendered (the whole-run Log tab is retired,
 #: ADR-0003).
 AppFactory = Callable[..., "GitLoopyApp"]
+
+
+class RunRecord(Protocol):
+    """The **Run**'s durable record, as the driver needs it (#325).
+
+    :class:`git_loopy.emit.EventEmitter` satisfies this structurally. Named as
+    a narrow structural Protocol so the driver records a **Dashboard fault**
+    without importing the emitter, the writers, or anything else the loop owns
+    — the same dependency direction :mod:`git_loopy.emit` itself uses.
+    """
+
+    def emit(
+        self, event_type: str, *, iter_num: int | None, **payload: object
+    ) -> object: ...
+
+
+def _app_fault(app_task: "asyncio.Task[None]") -> Exception | None:
+    """Return the **Dashboard fault** ``app_task`` finished with, if any.
+
+    A Dashboard that raises an :class:`Exception` is a fault; a Dashboard that
+    was cancelled or returned normally is not. Reading the task's own exception
+    is what makes the fault a *classified* outcome rather than the fallback arm
+    of a two-way branch — the exact confusion ADR-0024 supersedes ADR-0001's
+    exit model over.
+
+    A bare :class:`BaseException` — the Dashboard side of a second ``Ctrl+C``,
+    a ``SystemExit`` — is deliberately **not** a fault. It is not a rendering
+    bug to be survived but an order to leave, and making faults recoverable
+    must never make the process unkillable. It is left for the caller to
+    re-raise.
+    """
+    if not app_task.done() or app_task.cancelled():
+        return None
+    exc = app_task.exception()
+    return exc if isinstance(exc, Exception) else None
 
 
 class InteractiveDriver:
@@ -74,6 +140,12 @@ class InteractiveDriver:
         self._sinks: SinkFanout | None = None
         self._line_printer: EventSink | None = None
         self._console: Console | None = None
+        #: The **Run**'s durable record, attached alongside the exit-model
+        #: handoff (#325). A **Dashboard fault** is written here so a replay
+        #: can tell it apart from a voluntary **Detach**. ``None`` until
+        #: attached, and on that path the fault is still surfaced to the
+        #: operator — observability is never a precondition for reporting.
+        self._record: RunRecord | None = None
 
     def attach_panes(
         self,
@@ -101,16 +173,21 @@ class InteractiveDriver:
         sinks: SinkFanout,
         line_printer: EventSink,
         console: Console,
+        record: RunRecord | None = None,
     ) -> None:
         """Receive the exit-model handoff seam (issue #28).
 
         Called by :func:`git_loopy.loop.run` on the interactive path with the
         run's swappable :class:`~git_loopy.sinks.SinkFanout`, the parked
         line-printer :class:`~git_loopy.ui.renderer.Renderer` (kept out of the
-        sink list while the TUI owns the terminal), and the real stdout console.
+        sink list while the TUI owns the terminal), the real stdout console,
+        and the **Run**'s durable record.
 
         * **Detach** (``d``) swaps ``sinks`` wholesale to ``[line_printer]`` so
           the remainder of the run prints to normal scrollback.
+        * A **Dashboard fault** (#325, ADR-0024) makes the *same* swap — one
+          continuation, two labels — and additionally writes the fault to
+          ``record`` and names it on ``console``.
         * **Stop** (``q`` / ``Ctrl+C``) and natural completion print the run-end
           summary table to ``console`` so the terminal is never left blank after
           the TUI tears down.
@@ -118,16 +195,23 @@ class InteractiveDriver:
         self._sinks = sinks
         self._line_printer = line_printer
         self._console = console
+        self._record = record
 
     async def run(self, drive: Callable[[], Coroutine[object, object, int]]) -> int:
         """Launch the app + the loop's ``drive`` as peers; return the exit code.
 
-        Three app-exit-first outcomes (issue #28):
+        Three app-exit-first outcomes (issue #28, split three ways by #325):
 
         * **Detach** (``app.detach_requested``): swap the live sink back to the
           line printer (:meth:`SinkFanout.set_sinks`) and let the loop run to
           its natural outcome — it keeps printing to scrollback. The loop's own
           run-end table is the scrollback record, so the driver prints nothing.
+        * **Dashboard fault** (the app task raised): the *same* swap, so there
+          is one continuation to keep correct rather than two. The loop task is
+          left running, the operator is told at the point of the swap that the
+          live view has gone and why, and the fault is written to the **Run**'s
+          durable record — where its absence on the voluntary path is what
+          tells the two apart.
         * **Stop**: cancel the loop task, mark the state stopped, and (after the
           wind-down) print the run-end summary table to scrollback.
         * natural completion / crash also leave a scrollback record (the table),
@@ -143,14 +227,21 @@ class InteractiveDriver:
 
         A ``KeyboardInterrupt`` (the *second* ``Ctrl+C``, a real signal once the
         TUI has restored the terminal) is never swallowed — it propagates out of
-        the ``gather`` below for an immediate exit. On a user **Stop** the loop
-        task is cancelled and ``0`` (clean stop) is returned; on natural
-        completion the loop's own exit code is returned; a crash inside the loop
-        is re-raised so the caller records it as a non-zero outcome.
+        the ``gather`` below for an immediate exit, from either peer. On a user
+        **Stop** the loop task is cancelled and ``0`` (clean stop) is returned;
+        on natural completion the loop's own exit code is returned; a crash
+        inside the loop is re-raised so the caller records it as a non-zero
+        outcome.
+
+        After a **Dashboard fault** the exit code is never ``0``, so a
+        supervising script is never told everything was fine: a non-zero loop
+        code is returned unchanged (a renderer crash does not mask the outcome
+        of the actual work), and a loop that came out clean yields
+        :data:`EXIT_DASHBOARD_FAULT` — the only remaining fact worth reporting.
         """
         self._terminal.acquire()
         try:
-            detached, results = await self._run_peers(drive)
+            detached, fault, results = await self._run_peers(drive)
         finally:
             self._terminal.release()
 
@@ -162,17 +253,48 @@ class InteractiveDriver:
         if not detached:
             self._print_scrollback_summary()
 
-        loop_result = results[0]
+        loop_result, app_result = results[0], results[1]
+
+        # A bare ``BaseException`` from the Dashboard — the app side of a second
+        # ``Ctrl+C``, a ``SystemExit`` — is an order to leave, not a fault to
+        # recover from. It is re-raised ahead of everything else so making a
+        # fault survivable never makes the process unkillable.
+        if isinstance(app_result, BaseException) and not isinstance(
+            app_result, (Exception, asyncio.CancelledError)
+        ):
+            raise app_result
+
+        # A Dashboard that raised *after* the loop had already finished is
+        # still a **Dashboard fault**; ``_run_peers`` did not classify it
+        # because there was no continuation left to arrange. Surfacing it here
+        # is what stops the exception being discarded unread — both peers'
+        # outcomes are inspected, not just the loop's.
+        if fault is None and isinstance(app_result, Exception):
+            fault = app_result
+            self._report_fault(fault)
+
         if isinstance(loop_result, asyncio.CancelledError):
             return 0
         if isinstance(loop_result, BaseException):
             raise loop_result
+        if fault is not None and loop_result == 0:
+            # The work itself came out clean, so the loop's own code carries no
+            # signal to preserve and returning it would report the crashed
+            # Dashboard as a clean stop. A non-zero loop code is left alone
+            # below: the outcome of the work is never masked by a renderer bug.
+            return EXIT_DASHBOARD_FAULT
         return loop_result
 
     async def _run_peers(
         self, drive: Callable[[], Coroutine[object, object, int]]
-    ) -> tuple[bool, list[object]]:
-        """Run the app and the loop as peers; return ``(detached, results)``."""
+    ) -> tuple[bool, Exception | None, list[object]]:
+        """Run the app and the loop as peers.
+
+        Returns ``(detached, fault, results)`` — whether the run continues in
+        scrollback, the **Dashboard fault** that put it there (``None`` for a
+        voluntary **Detach**, a **Stop** or a natural completion), and both
+        peers' outcomes.
+        """
         app = self._app_factory(
             self.state, summary=self.summary, log_source=self.log_source
         )
@@ -189,6 +311,7 @@ class InteractiveDriver:
         )
 
         detached = False
+        fault: Exception | None = None
         if loop_task.done() and not app_task.done():
             # Run finished naturally → close the TUI.
             app.exit()
@@ -200,7 +323,17 @@ class InteractiveDriver:
             # Release is idempotent, so the unconditional one in :meth:`run`
             # still covers every path that does not come through here.
             self._terminal.release()
-            if getattr(app, "detach_requested", False):
+            fault = _app_fault(app_task)
+            if fault is not None:
+                # A **Dashboard fault** is an involuntary Detach (#325,
+                # ADR-0024), not a Stop: the operator loses the live view, not
+                # the work. It reuses the very same swap seam as the voluntary
+                # case, so there is one continuation to keep correct rather
+                # than two, and the loop task is left running.
+                self._detach()
+                self._report_fault(fault)
+                detached = True
+            elif getattr(app, "detach_requested", False):
                 # Detach → swap to the line printer; the loop runs on. The swap
                 # is atomic w.r.t. the single-threaded loop's synchronous event
                 # dispatch (the loop is suspended at an await here), so no event
@@ -215,13 +348,50 @@ class InteractiveDriver:
         results = await asyncio.gather(
             loop_task, app_task, return_exceptions=True
         )
-        return detached, results
+        return detached, fault, results
 
     def _detach(self) -> None:
         """Swap the live sink list back to the parked line printer (Detach)."""
         if self._sinks is not None and self._line_printer is not None:
             self._sinks.set_sinks([self._line_printer])
 
+    def _report_fault(self, fault: Exception) -> None:
+        """Surface a **Dashboard fault**: to the operator, and to the record.
+
+        Called at the point of the swap, after the **Terminal owner** has
+        released, so the notice lands in the real scrollback the run is about
+        to continue printing into — rather than leaving the operator guessing
+        why their screen turned into a line printer.
+
+        Both halves are guarded: a **Run** must not be brought down by the act
+        of reporting that its renderer came down. That would trade one
+        swallowed fault for a louder one.
+        """
+        if self._console is not None:
+            try:
+                # The fault's own text is arbitrary — a traceback message can
+                # contain square brackets — so it is escaped rather than
+                # rendered as markup. Otherwise the unluckiest faults, the ones
+                # whose message happens to be malformed markup, would be the
+                # silent ones.
+                self._console.print(
+                    "[bold yellow]git-loopy:[/] the live view has gone — the "
+                    f"Dashboard raised {escape(type(fault).__name__)}: "
+                    f"{escape(str(fault))}. The run continues here in "
+                    "scrollback."
+                )
+            except Exception:
+                pass
+        if self._record is not None:
+            try:
+                self._record.emit(
+                    WRAPPER_DASHBOARD_FAULT,
+                    iter_num=None,
+                    error_type=type(fault).__name__,
+                    error=str(fault),
+                )
+            except Exception:
+                pass
     def _print_scrollback_summary(self) -> None:
         """Write the run-end summary table to normal scrollback (Stop / done)."""
         if self._console is not None and self.summary is not None:

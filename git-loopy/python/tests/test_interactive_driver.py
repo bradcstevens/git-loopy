@@ -17,7 +17,9 @@ import pytest
 from rich.console import Console
 
 from git_loopy.config import RunConfig
+from git_loopy.events import WRAPPER_DASHBOARD_FAULT
 from git_loopy.interactive.driver import (
+    EXIT_DASHBOARD_FAULT,
     InteractiveDriver,
     build_interactive_driver,
 )
@@ -515,14 +517,15 @@ def test_a_dashboard_fault_restores_the_terminal() -> None:
     """A Dashboard that raises costs the view, not the operator's shell."""
     terminal = FakeTerminal()
     state = LiveRunState()
-    tracker = {"cancelled": False}
 
     driver = InteractiveDriver(
         state,
         app_factory=_grabbing_factory(terminal, _FaultingGrabbingApp),  # type: ignore[arg-type]
         terminal=TerminalOwner(terminal),
     )
-    asyncio.run(driver.run(_drive_forever(tracker)))
+    # The fault no longer ends the run (#325), so the loop is given an outcome
+    # to reach rather than an unbounded sleep to be cancelled out of.
+    asyncio.run(driver.run(_drive_returning(0)))
 
     assert terminal.restored is True
 
@@ -599,3 +602,358 @@ def test_the_driver_never_clears_scrollback_when_it_releases() -> None:
     asyncio.run(driver.run(_drive_returning(0)))
 
     assert terminal.scrollback_cleared is False
+
+
+# ---------------------------------------------------------------------------
+# A Dashboard fault is an involuntary Detach (issue #325, ADR-0024)
+# ---------------------------------------------------------------------------
+
+
+class _FaultingApp(_FakeApp):
+    """A **Dashboard fault**: the Dashboard raises while the loop is running.
+
+    The app-crash twin of :class:`_FaultingApp`'s loop-side counterpart
+    ``_drive_raising``. That the suite had the loop-side case and not this one
+    is the regression #325 closes.
+    """
+
+    BOOM = "dashboard exploded"
+
+    async def run_async(self) -> None:
+        raise RuntimeError(self.BOOM)
+
+
+def _drive_reaching_its_outcome(
+    tracker: dict[str, bool], code: int
+) -> Callable[[], Coroutine[object, object, int]]:
+    """A loop that needs several turns to finish, so a fault can interrupt it."""
+
+    async def drive() -> int:
+        try:
+            for _ in range(200):
+                await asyncio.sleep(0)
+            tracker["completed"] = True
+            return code
+        except asyncio.CancelledError:
+            tracker["cancelled"] = True
+            raise
+
+    return drive
+
+
+def test_a_dashboard_fault_leaves_the_run_going_to_its_natural_outcome() -> None:
+    """A renderer crash costs the operator the view, not the work.
+
+    Today any app exit without a Detach flag is treated as an operator **Stop**:
+    the loop task is cancelled and the run dies with hours of unattended work
+    lost. A **Dashboard fault** is not an intent to stop, so the loop must run
+    on and the state must not be marked stopped.
+    """
+    state = LiveRunState()
+    tracker = {"cancelled": False, "completed": False}
+
+    driver = InteractiveDriver(state, app_factory=_FaultingApp)  # type: ignore[arg-type]
+    asyncio.run(driver.run(_drive_reaching_its_outcome(tracker, 0)))
+
+    assert tracker["cancelled"] is False
+    assert tracker["completed"] is True
+    assert state.status != "stopped"
+
+
+class _GatedFaultingApp(_FakeApp):
+    """Faults only once the loop has emitted, so the handoff can be observed."""
+
+    BOOM = "dashboard exploded"
+
+    def __init__(self, state: LiveRunState, *, gate: asyncio.Event, **kw: object) -> None:
+        super().__init__(state, **kw)
+        self._gate = gate
+
+    async def run_async(self) -> None:
+        await self._gate.wait()
+        raise RuntimeError(self.BOOM)
+
+
+def test_a_dashboard_fault_swaps_to_the_line_printer_dropping_no_event() -> None:
+    """The fault reuses the voluntary Detach's swap seam, atomically.
+
+    Everything emitted before the fault reaches the live (TUI) sink only,
+    everything after reaches the parked line printer only — the same no-drop /
+    no-duplication property the voluntary path already relies on. One
+    continuation mechanism, two labels.
+    """
+    fanout = SinkFanout()
+    live = _RecordingSink()
+    line_printer = _RecordingSink()
+    fanout.set_sinks([live])
+    gate = asyncio.Event()
+
+    def factory(s: LiveRunState, **kwargs: object) -> _GatedFaultingApp:
+        return _GatedFaultingApp(s, gate=gate, **kwargs)
+
+    async def drive() -> int:
+        fanout.render({"type": "e1"})
+        fanout.render({"type": "e2"})
+        gate.set()
+        for _ in range(10_000):
+            if line_printer in fanout.sinks:
+                break
+            await asyncio.sleep(0)
+        fanout.render({"type": "e3"})
+        fanout.render({"type": "e4"})
+        return 0
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=factory)  # type: ignore[arg-type]
+    driver.attach_panes(summary=_MarkerSummary(), log_source=lambda: "")  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=fanout,
+        line_printer=line_printer,
+        console=Console(file=io.StringIO(), force_terminal=False),
+    )
+
+    asyncio.run(driver.run(drive))
+
+    assert [e["type"] for e in live.events] == ["e1", "e2"]
+    assert [e["type"] for e in line_printer.events] == ["e3", "e4"]
+    assert fanout.sinks == (line_printer,)
+
+
+def test_a_dashboard_fault_yields_an_exit_code_distinct_from_a_clean_stop() -> None:
+    """A supervising script is never told everything was fine.
+
+    A clean **Stop** is ``0``. Before #325 a **Dashboard fault** was also ``0``
+    — the cancelled loop's ``CancelledError`` — so a renderer crash that cost
+    hours of unattended work was indistinguishable from the operator pressing
+    ``q``. The fault gets its own code.
+    """
+    tracker = {"cancelled": False, "completed": False}
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=_FaultingApp)  # type: ignore[arg-type]
+    exit_code = asyncio.run(driver.run(_drive_reaching_its_outcome(tracker, 0)))
+
+    assert tracker["completed"] is True
+    assert exit_code != 0
+    assert exit_code == EXIT_DASHBOARD_FAULT
+
+
+def test_a_loop_completing_after_a_fault_keeps_its_own_exit_code() -> None:
+    """A renderer crash does not mask the outcome of the actual work.
+
+    When the loop's own code carries a signal about the work — a ``stuck`` run,
+    a crashed iteration — that signal is what a supervising script needs, and
+    the fault must not overwrite it.
+    """
+    tracker = {"cancelled": False, "completed": False}
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=_FaultingApp)  # type: ignore[arg-type]
+    exit_code = asyncio.run(driver.run(_drive_reaching_its_outcome(tracker, 1)))
+
+    assert tracker["completed"] is True
+    assert exit_code == 1
+
+
+def test_the_operator_is_told_at_the_point_of_the_swap_and_why() -> None:
+    """No guessing why the screen turned into a line printer.
+
+    The notice has to reach scrollback *before* whatever the run prints next,
+    otherwise it is an explanation the operator finds after the thing it
+    explains.
+    """
+    fanout = SinkFanout()
+    fanout.set_sinks([_RecordingSink()])
+    gate = asyncio.Event()
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=200)
+
+    class _EchoingPrinter(_RecordingSink):
+        def render(self, event: dict[str, Any]) -> None:
+            super().render(event)
+            console.print("POST-FAULT-RUN-OUTPUT")
+
+    line_printer = _EchoingPrinter()
+
+    def factory(s: LiveRunState, **kwargs: object) -> _GatedFaultingApp:
+        return _GatedFaultingApp(s, gate=gate, **kwargs)
+
+    async def drive() -> int:
+        gate.set()
+        for _ in range(10_000):
+            if line_printer in fanout.sinks:
+                break
+            await asyncio.sleep(0)
+        fanout.render({"type": "e1"})
+        return 0
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=factory)  # type: ignore[arg-type]
+    driver.attach_panes(summary=_MarkerSummary(), log_source=lambda: "")  # type: ignore[arg-type]
+    driver.attach_detach(sinks=fanout, line_printer=line_printer, console=console)
+
+    asyncio.run(driver.run(drive))
+
+    printed = buf.getvalue()
+    assert "live view" in printed
+    # …and why: the Dashboard's own failure, named.
+    assert "RuntimeError" in printed
+    assert _GatedFaultingApp.BOOM in printed
+    # At the point of the swap — ahead of everything the run printed after it.
+    assert printed.index("live view") < printed.index("POST-FAULT-RUN-OUTPUT")
+
+
+class _RecordingRunRecord:
+    """Duck-typed ``EventEmitter``: captures what reached the durable record."""
+
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    def emit(
+        self, event_type: str, *, iter_num: int | None, **payload: Any
+    ) -> dict[str, Any]:
+        self.emitted.append((event_type, payload))
+        return {"type": event_type, "iter": iter_num, **payload}
+
+
+def test_a_dashboard_fault_is_recorded_in_the_runs_durable_record() -> None:
+    """The fault stops being swallowed — the replay log carries it.
+
+    Before #325 the Dashboard's exception was discarded unread and the run was
+    written down as a clean stop with no error anywhere. A replay must now name
+    the fault and what raised it.
+    """
+    record = _RecordingRunRecord()
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=_FaultingApp)  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=io.StringIO(), force_terminal=False),
+        record=record,
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert [t for t, _ in record.emitted] == [WRAPPER_DASHBOARD_FAULT]
+    payload = record.emitted[0][1]
+    assert payload["error_type"] == "RuntimeError"
+    assert payload["error"] == _FaultingApp.BOOM
+
+
+def test_a_voluntary_detach_records_no_fault() -> None:
+    """The record tells the two apart: I walked away vs. it broke."""
+    record = _RecordingRunRecord()
+    gate = asyncio.Event()
+
+    def factory(s: LiveRunState, **kwargs: object) -> _DetachingApp:
+        return _DetachingApp(s, gate=gate, **kwargs)
+
+    async def drive() -> int:
+        gate.set()
+        for _ in range(10_000):
+            await asyncio.sleep(0)
+        return 0
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=factory)  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=io.StringIO(), force_terminal=False),
+        record=record,
+    )
+    asyncio.run(driver.run(drive))
+
+    assert record.emitted == []
+
+
+class _InterruptedApp(_FakeApp):
+    """The Dashboard side of a second ``Ctrl+C``: a bare ``BaseException``."""
+
+    async def run_async(self) -> None:
+        raise _SecondInterrupt()
+
+
+def test_a_base_interrupt_from_the_dashboard_is_never_swallowed() -> None:
+    """Making faults recoverable must never make the process unkillable.
+
+    A **Dashboard fault** is an ``Exception``. A ``KeyboardInterrupt`` is not a
+    rendering bug to be recovered from — it is the operator forcing an exit —
+    so the new fault-classifying branch must let it straight through rather
+    than treating it as one more thing to survive.
+    """
+    tracker = {"cancelled": False, "completed": False}
+
+    driver = InteractiveDriver(LiveRunState(), app_factory=_InterruptedApp)  # type: ignore[arg-type]
+
+    with pytest.raises(_SecondInterrupt):
+        asyncio.run(driver.run(_drive_reaching_its_outcome(tracker, 0)))
+
+
+class _FaultingOnTeardownApp(_FakeApp):
+    """The Dashboard raises on the way out, after the loop already finished."""
+
+    BOOM = "dashboard exploded during teardown"
+
+    async def run_async(self) -> None:
+        await super().run_async()
+        raise RuntimeError(self.BOOM)
+
+
+def test_a_fault_after_the_loop_has_finished_is_still_surfaced() -> None:
+    """Both peers' outcomes are inspected, not just the loop's.
+
+    ``asyncio.gather(..., return_exceptions=True)`` hands back the Dashboard's
+    exception, and before #325 nobody ever looked at it. A Dashboard that dies
+    tearing down has no continuation left to arrange, but it is still a fault
+    and still belongs in the record and on the screen.
+    """
+    record = _RecordingRunRecord()
+    buf = io.StringIO()
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(), app_factory=_FaultingOnTeardownApp
+    )
+    driver.attach_panes(summary=_MarkerSummary(), log_source=lambda: "")  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=buf, force_terminal=False, width=200),
+        record=record,
+    )
+    exit_code = asyncio.run(driver.run(_drive_returning(0)))
+
+    assert [t for t, _ in record.emitted] == [WRAPPER_DASHBOARD_FAULT]
+    assert record.emitted[0][1]["error"] == _FaultingOnTeardownApp.BOOM
+    assert "live view" in buf.getvalue()
+    assert exit_code == EXIT_DASHBOARD_FAULT
+
+
+class _MarkupFaultingApp(_FakeApp):
+    """A Dashboard whose failure text happens to look like console markup."""
+
+    BOOM = "widget [/not-open] blew up at [0]"
+
+    async def run_async(self) -> None:
+        raise RuntimeError(self.BOOM)
+
+
+def test_the_operator_notice_survives_a_fault_message_full_of_markup() -> None:
+    """The notice must not be lost to the very text it exists to report.
+
+    A traceback message is arbitrary text and can contain square brackets the
+    console reads as markup. Rendering it as markup makes the *unluckiest*
+    faults — the ones whose message happens to be malformed markup — the
+    silent ones, which is the opposite of what #325 is for.
+    """
+    buf = io.StringIO()
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(), app_factory=_MarkupFaultingApp
+    )
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=buf, force_terminal=False, width=200),
+        record=_RecordingRunRecord(),
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    printed = buf.getvalue()
+    assert "live view" in printed
+    assert "[/not-open]" in printed

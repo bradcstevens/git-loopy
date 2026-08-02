@@ -16,6 +16,7 @@ interactive sink, and the driver owns driving.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -23,6 +24,7 @@ import pytest
 from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
+from git_loopy.events import WRAPPER_DASHBOARD_FAULT
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -55,6 +57,7 @@ class _DelegatingDriver:
         self.attached_sinks: Any = None
         self.attached_line_printer: Any = None
         self.attached_console: Any = None
+        self.attached_record: Any = None
 
     def attach_panes(
         self,
@@ -71,10 +74,12 @@ class _DelegatingDriver:
         sinks: Any,
         line_printer: Any,
         console: Any,
+        record: Any = None,
     ) -> None:
         self.attached_sinks = sinks
         self.attached_line_printer = line_printer
         self.attached_console = console
+        self.attached_record = record
 
     async def run(self, drive: Callable[[], Awaitable[int]]) -> int:
         self.run_called = True
@@ -123,6 +128,7 @@ class _SkippingDriver:
         sinks: Any,
         line_printer: Any,
         console: Any,
+        record: Any = None,
     ) -> None:
         pass
 
@@ -247,3 +253,42 @@ def test_driver_owns_driving_and_run_returns_its_result(tmp_path, monkeypatch) -
     assert exit_code == 7
     # The driver skipped driving, so the loop never emitted run-start.
     assert state.status == "starting"
+
+
+def test_interactive_path_attaches_the_runs_durable_record(
+    tmp_path, monkeypatch
+) -> None:
+    """#325: the driver can write a **Dashboard fault** into the replay log.
+
+    The record it is handed must be the run's own — the same always-on JSONL
+    the loop writes every other event through — so a fault lands in the file a
+    replay reads, not in a second log nobody looks at.
+    """
+    _wire_empty_pool_repo(tmp_path, monkeypatch)
+    driver = _DelegatingDriver(LiveRunState())
+
+    cfg = RunConfig(
+        issue_source="github", max_iterations=1, max_nmt_strikes=3, verbosity=0
+    )
+    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
+
+    assert exit_code == 0
+    assert driver.attached_record is not None
+
+    driver.attached_record.emit(
+        WRAPPER_DASHBOARD_FAULT,
+        iter_num=None,
+        error_type="RuntimeError",
+        error="dashboard exploded",
+    )
+    logged = [
+        json.loads(line)
+        for path in (tmp_path / ".git-loopy").rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fault = [e for e in logged if e["type"] == WRAPPER_DASHBOARD_FAULT]
+    assert len(fault) == 1
+    assert fault[0]["iter"] is None
+    assert fault[0]["error_type"] == "RuntimeError"
+    assert fault[0]["error"] == "dashboard exploded"

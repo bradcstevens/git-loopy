@@ -16,6 +16,10 @@ $script:EventTypes = [ordered]@{
     WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
     WRAPPER_STRIKE = "wrapper.strike"
     WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
+    # Run-scoped record of a **Dashboard fault** (ADR-0024). Only an
+    # Orchestrator that hosts a Dashboard can emit it; this port hosts none, so
+    # it carries the literal for vocabulary parity and never produces the Event.
+    WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
     WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
     WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
     WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"

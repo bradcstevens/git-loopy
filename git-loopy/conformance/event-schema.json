@@ -352,6 +352,7 @@
     "WRAPPER_PR_ADVANCED": "wrapper.pr.advanced",
     "WRAPPER_STRIKE": "wrapper.strike",
     "WRAPPER_ASK_USER_ATTEMPTED": "wrapper.ask_user.attempted",
+    "WRAPPER_DASHBOARD_FAULT": "wrapper.dashboard.fault",
     "WRAPPER_CONTINUATION_RECONCILED": "wrapper.continuation.reconciled",
     "WRAPPER_CONTINUATION_DISPATCH_STARTED": "wrapper.continuation_dispatch.started",
     "WRAPPER_CONTINUATION_DISPATCH_ENDED": "wrapper.continuation_dispatch.ended",

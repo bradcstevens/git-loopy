@@ -83,6 +83,7 @@ __all__ = [
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
     "WRAPPER_ASK_USER_ATTEMPTED",
+    "WRAPPER_DASHBOARD_FAULT",
     "WRAPPER_CONTINUATION_RECONCILED",
     "WRAPPER_CONTINUATION_DISPATCH_STARTED",
     "WRAPPER_CONTINUATION_DISPATCH_ENDED",
@@ -207,6 +208,14 @@ WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"
 WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
+# Emitted once when a **Dashboard fault** — a Dashboard that raises — turns
+# into an involuntary **Detach** (#325, ADR-0024). Run-scoped: it is a fact
+# about the process hosting the renderer, not about any Iteration's work.
+# Carries ``error_type`` and the scrubbed ``error`` text, so a replay can tell
+# a Run the operator walked away from apart from one whose live view crashed
+# out from under them. Interactive Python Runs only — the shell and PowerShell
+# Orchestrators host no Dashboard and never emit it.
+WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
 WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
 WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
 WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
