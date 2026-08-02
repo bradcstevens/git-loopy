@@ -1,6 +1,20 @@
 # Cost is reported by the harness, not estimated from a price table
 
-**Status:** accepted
+**Status:** accepted; the "the live rate card is not read" clause is superseded by
+[ADR-0026](0026-billed-cost-and-the-live-rate-card.md).
+
+> **Superseded in part.** git-loopy *does* read the server's live rate card — once
+> per Run, injected as a parameter, held fixed, and published so a replay records
+> the prices the work was billed under. Read "The live rate card is not read" below
+> as history; ADR-0026 states the current arrangement.
+>
+> Everything else here still stands, including the clause a reader would most expect
+> to have gone with it: git-loopy still publishes **no USD figure**. ADR-0026
+> strengthens that clause rather than reversing it — the card's prices are themselves
+> denominated in AI Credits, so applying it to a billed figure converts Credits into
+> Credits, and a dollar figure would still need the hand-maintained rate this ADR
+> refused. The clause that changed is only the one about *reading*: reading a card is
+> not recomputing what the harness already billed.
 
 git-loopy estimated the cost of a Run by multiplying token counts against
 `pricing.toml`, a hand-maintained table of provider list prices. That table was

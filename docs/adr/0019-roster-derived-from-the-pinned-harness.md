@@ -196,6 +196,8 @@ is indistinguishable from the defective one, which is how the last correction we
   obligation is deferred, not discharged.
 - ADR-0018's remark that the SDK's model-billing type discards token prices is **incorrect**
   at the pinned SDK version; they parse. This decision depends on their being present.
+  [ADR-0026](0026-billed-cost-and-the-live-rate-card.md) reads those same prices as the
+  **Rate card**, on this decision's injection terms and for this decision's reason.
 - The fixture correction should be treated as a fix, not a refinement. Until it lands, the
   offline fallback path can abort an Iteration on a model the kit routes to.
 - `CONTEXT.md` is deliberately untouched. It is a glossary of shipped reality, and none of
