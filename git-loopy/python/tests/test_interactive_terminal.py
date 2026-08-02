@@ -13,6 +13,8 @@ internal method performed the restore.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from git_loopy.interactive.terminal import TerminalOwner
@@ -36,7 +38,10 @@ class FakeTerminal:
     and restores as one opaque token, so the fake models it the same way.
     """
 
-    _MOUSE_MODES = ("1000", "1002", "1003", "1006", "1015")
+    _MOUSE_MODES = ("1000", "1002", "1003", "1006", "1015", "1016")
+    #: Focus reporting, bracketed paste, in-band resize — each one left set
+    #: makes the shell that inherits the terminal misbehave.
+    _REPORTING_MODES = ("1004", "2004", "2048")
 
     def __init__(self, *, is_tty: bool = True, modes_capturable: bool = True) -> None:
         self._is_tty = is_tty
@@ -44,6 +49,9 @@ class FakeTerminal:
         self.alternate_screen = False
         self.raw_mode = False
         self.mouse_tracking = False
+        self.reporting = False
+        self.cursor_visible = True
+        self.line_wrap = True
         self.scrollback_cleared = False
         self.writes: list[str] = []
 
@@ -70,16 +78,49 @@ class FakeTerminal:
                 self.mouse_tracking = True
             if f"\x1b[?{mode}l" in text:
                 self.mouse_tracking = False
+        for mode in self._REPORTING_MODES:
+            if f"\x1b[?{mode}h" in text:
+                self.reporting = True
+            if f"\x1b[?{mode}l" in text:
+                self.reporting = False
+        if "\x1b[?25l" in text:
+            self.cursor_visible = False
+        if "\x1b[?25h" in text:
+            self.cursor_visible = True
+        if "\x1b[?7l" in text:
+            self.line_wrap = False
+        if "\x1b[?7h" in text:
+            self.line_wrap = True
 
     # -- what the Dashboard does to the terminal -------------------------
     def enter_dashboard(self) -> None:
-        """Model the Dashboard's acquisition: alt screen + raw + mouse."""
-        self.write("\x1b[?1049h\x1b[?1000h\x1b[?1006h")
+        """Model the Dashboard's acquisition, as Textual's driver performs it.
+
+        Alternate screen, raw mode, every mouse-tracking encoding, focus /
+        bracketed-paste / in-band-resize reporting, a hidden cursor and line
+        wrapping off — one indivisible acquisition, which is why it has to be
+        one indivisible release.
+        """
+        self.write(
+            "\x1b[?1049h\x1b[?1000h\x1b[?1003h\x1b[?1015h\x1b[?1006h\x1b[?1016h"
+            "\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[?25l\x1b[?7l"
+        )
         self.raw_mode = True
 
     @property
     def modes(self) -> tuple[bool, bool, bool]:
+        """The three modes ADR-0024 names, for the common assertion."""
         return (self.alternate_screen, self.raw_mode, self.mouse_tracking)
+
+    @property
+    def restored(self) -> bool:
+        """Whether *every* mode the Dashboard sets is back to a usable shell."""
+        return (
+            self.modes == (False, False, False)
+            and self.reporting is False
+            and self.cursor_visible is True
+            and self.line_wrap is True
+        )
 
 
 def test_release_restores_the_captured_entry_state() -> None:
@@ -283,7 +324,10 @@ def test_the_posix_control_restores_a_real_pty_without_blocking() -> None:
         return attrs
 
     try:
-        owner = TerminalOwner(PosixTerminalControl(stream))
+        # Both streams are pinned to the pty on purpose: resolved lazily,
+        # a real stdin under ``pytest -s`` would put the developer's own
+        # terminal under test.
+        owner = TerminalOwner(PosixTerminalControl(stream, stream))
         entry = modes()
 
         owner.acquire()
@@ -314,3 +358,65 @@ def _drain(fd: int) -> str:
         return os.read(fd, 65536).decode()
     except BlockingIOError:
         return ""
+
+
+def test_release_puts_back_every_mode_the_dashboard_acquires() -> None:
+    """"No single mode is left set" has to mean all of them, not just three.
+
+    A shell that inherits focus reporting, bracketed paste, in-band resize, a
+    hidden cursor or line wrapping turned off is not the shell the operator
+    handed over, even though the screen looks right.
+    """
+    terminal = FakeTerminal()
+    owner = TerminalOwner(terminal)
+
+    owner.acquire()
+    terminal.enter_dashboard()
+    assert terminal.restored is False
+
+    owner.release()
+
+    assert terminal.restored is True
+
+
+@pytest.mark.skipif(termios is None, reason="no termios on this platform")
+def test_the_terminal_is_found_by_tty_ness_not_by_stream_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A redirected ``stdout`` does not mean there is no terminal to give back.
+
+    ``--interactive`` can be forced while ``stdout`` is redirected; the
+    Dashboard still drives the real terminal, so the owner still has to find it
+    and release it. It does so without importing Textual to ask.
+    """
+    import io
+    import os
+    import pty
+
+    from git_loopy.interactive.terminal import (
+        RELEASE_SEQUENCE,
+        PosixTerminalControl,
+    )
+
+    master, slave = pty.openpty()
+    os.set_blocking(master, False)
+    tty_stream = os.fdopen(slave, "w", buffering=1)
+    redirected = io.StringIO()
+
+    try:
+        monkeypatch.setattr(sys, "stdout", redirected)
+        monkeypatch.setattr(sys, "__stderr__", tty_stream)
+        monkeypatch.setattr(sys, "__stdin__", tty_stream)
+
+        owner = TerminalOwner(PosixTerminalControl())
+        owner.acquire()
+        assert owner.acquired is True
+
+        owner.release()
+
+        assert _drain(master) == RELEASE_SEQUENCE
+        # The redirected stream stays byte-for-byte free of escape sequences.
+        assert redirected.getvalue() == ""
+    finally:
+        tty_stream.close()
+        os.close(master)

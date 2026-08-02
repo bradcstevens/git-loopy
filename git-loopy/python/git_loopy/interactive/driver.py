@@ -193,6 +193,13 @@ class InteractiveDriver:
             # Run finished naturally → close the TUI.
             app.exit()
         elif app_task.done() and not loop_task.done():
+            # The Dashboard is gone, so the terminal is ours again — release it
+            # here rather than after the loop finishes. Anything the run prints
+            # from now on (a Detach's line printer) has to land in real
+            # scrollback, not in an alternate screen about to be discarded.
+            # Release is idempotent, so the unconditional one in :meth:`run`
+            # still covers every path that does not come through here.
+            self._terminal.release()
             if getattr(app, "detach_requested", False):
                 # Detach → swap to the line printer; the loop runs on. The swap
                 # is atomic w.r.t. the single-threaded loop's synchronous event

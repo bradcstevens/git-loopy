@@ -419,7 +419,7 @@ def test_natural_completion_restores_the_terminal() -> None:
     exit_code = asyncio.run(driver.run(_drive_returning(0)))
 
     assert exit_code == 0
-    assert terminal.modes == (False, False, False)
+    assert terminal.restored is True
 
 
 class _StoppingGrabbingApp(_TerminalGrabbingApp):
@@ -469,7 +469,7 @@ def test_stop_restores_the_terminal() -> None:
 
     assert exit_code == 0
     assert state.status == "stopped"
-    assert terminal.modes == (False, False, False)
+    assert terminal.restored is True
 
 
 def test_detach_restores_the_terminal_while_the_run_continues() -> None:
@@ -480,11 +480,17 @@ def test_detach_restores_the_terminal_while_the_run_continues() -> None:
     line_printer = _RecordingSink()
     fanout.set_sinks([_RecordingSink()])
 
+    modes_when_the_line_printer_took_over: list[tuple[bool, bool, bool]] = []
+
     async def drive() -> int:
         for _ in range(10_000):
             if line_printer in fanout.sinks:
                 break
             await asyncio.sleep(0)
+        # The run carries on printing into scrollback from here — so this is
+        # the moment the terminal has to already be back, not the moment the
+        # run eventually ends.
+        modes_when_the_line_printer_took_over.append(terminal.modes)
         return 0
 
     driver = InteractiveDriver(
@@ -501,7 +507,8 @@ def test_detach_restores_the_terminal_while_the_run_continues() -> None:
 
     assert exit_code == 0
     assert fanout.sinks == (line_printer,)
-    assert terminal.modes == (False, False, False)
+    assert modes_when_the_line_printer_took_over == [(False, False, False)]
+    assert terminal.restored is True
 
 
 def test_a_dashboard_fault_restores_the_terminal() -> None:
@@ -517,7 +524,7 @@ def test_a_dashboard_fault_restores_the_terminal() -> None:
     )
     asyncio.run(driver.run(_drive_forever(tracker)))
 
-    assert terminal.modes == (False, False, False)
+    assert terminal.restored is True
 
 
 def test_an_unhandled_loop_exception_restores_the_terminal() -> None:
@@ -534,7 +541,7 @@ def test_an_unhandled_loop_exception_restores_the_terminal() -> None:
     with pytest.raises(RuntimeError, match="loop exploded"):
         asyncio.run(driver.run(_drive_raising(RuntimeError("loop exploded"))))
 
-    assert terminal.modes == (False, False, False)
+    assert terminal.restored is True
 
 
 def test_the_run_end_summary_is_emitted_after_the_terminal_is_released() -> None:
@@ -577,7 +584,7 @@ def test_the_run_end_summary_is_emitted_after_the_terminal_is_released() -> None
     assert journal[-1] == "run-end-summary"
     assert journal.count("run-end-summary") == 1
     assert "terminal-write" in journal
-    assert terminal.modes == (False, False, False)
+    assert terminal.restored is True
 
 
 def test_the_driver_never_clears_scrollback_when_it_releases() -> None:
