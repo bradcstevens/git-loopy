@@ -568,9 +568,7 @@ def _packaged_entries(skills_dir: Path) -> tuple[str, ...]:
     return tuple(sorted(child.name for child in skills_dir.iterdir()))
 
 
-def _project_source(
-    name: str, project_skills_dir: Path
-) -> Path:
+def _project_source(name: str, project_skills_dir: Path) -> Path:
     """One project-owned Skill's canonical directory, proven to earn the clause."""
     source = project_skills_dir / name
     skill_md = source / "SKILL.md"
@@ -580,13 +578,14 @@ def _project_source(
             f"repository has no Skill at {source}; a project-owned Skill is cut "
             "from the project, so there is nothing to cut"
         )
-    if _CONTINUATION_REQUEST_MARKER not in skill_md.read_text(encoding="utf-8"):
+    text = skill_md.read_text(encoding="utf-8")
+    if not any(marker in text for marker in _CONTRACT_MARKERS):
         raise SkillFallbackPolicyError(
             f"the inclusion policy names {name!r} as project-owned, but "
-            f"{skill_md} documents no Continuation request "
-            f"({_CONTINUATION_REQUEST_MARKER} ...); the project-owned clause "
-            "covers Skills that carry git-loopy's Continuation contract, not "
-            "hand-maintained copies of adopted Skills"
+            f"{skill_md} names no part of git-loopy's Continuation contract "
+            f"({', '.join(_CONTRACT_MARKERS)}); the project-owned clause covers "
+            "Skills that carry that contract, not hand-maintained copies of "
+            "adopted Skills"
         )
     return source
 
