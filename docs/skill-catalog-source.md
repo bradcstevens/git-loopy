@@ -1,44 +1,71 @@
 # The Skill catalog's source of record
 
-> Where git-loopy's workflow **Skill catalog** comes from, how a maintainer
-> acquires and proves the exact revision it stands behind, and why none of that
-> happens during a **Run**.
+> Where git-loopy's workflow **Skill catalog** comes from, how it gets onto your
+> machine, and how a maintainer proves the exact revision git-loopy stands
+> behind.
 
-Read this when you are refreshing the catalog, auditing what a released wheel
-redistributes, or answering "which Skills did git-loopy 0.2.0 actually ship?".
-The decision behind it is
-[ADR-0023](adr/0023-pinned-external-skill-catalog.md); which Skills a Run may
-*load* is a separate question, answered by
-[`docs/skill-policy.md`](skill-policy.md).
+Read this when you are refreshing the catalog, auditing what an installation
+obtains, or answering "which Skills did that Run actually use?". The decisions
+behind it are [ADR-0023](adr/0023-pinned-external-skill-catalog.md) (the pin and
+its validation) and [ADR-0025](adr/0025-installed-skill-catalog.md) (installing
+instead of shipping). Which Skills a Run may *load* is a separate question,
+answered by [`docs/skill-policy.md`](skill-policy.md).
 
 ---
 
-## Three layers, one direction
+## One catalog, installed
+
+**git-loopy ships no Skills.** A distribution carries the *pin*; the Skills
+themselves are installed from the pinned external repository into git-loopy's own
+config scope.
 
 ```
 bradcstevens/git-loopy-skills @ the pinned revision   source of record
-    │  python -m git_loopy.skill_source   (explicit, maintainer-run, networked)
+    │  installed at `git-loopy init`, refreshed at the start of every Run
     ▼
-.copilot/skills/                                     canonical, human-edited
-    │  scripts/sync_skills.py             (explicit, maintainer-run, offline)
+<config-home>/git-loopy/skills/                       the installed catalog
+    │
     ▼
-git_loopy/skills/                                    packaged fallback, in the wheel
+the one Skill source git-loopy provides for itself
 ```
 
 | Layer | Lives in | Reached |
 | --- | --- | --- |
-| **External catalog** — the source of record | [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills) at the pinned revision | only by the explicit maintainer command below |
-| **Packaged fallback** | `git_loopy/skills/` inside the built wheel | from disk, offline, at Run time |
-| **Consumer project Skills** | `<repo>/.copilot/skills/` in *your* project | from disk, and they win over the fallback (ADR-0015) |
+| **External catalog** — the source of record | [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills) at the pinned revision | at setup, and at the start of every Run |
+| **Installed catalog** | `<config-home>/git-loopy/skills/` on your machine | from disk, every Iteration |
 
-**A Run never reaches the network for a Skill.** Every Iteration resolves its
-Skills from the packaged fallback and the consuming project's own tree. An
-offline operator, an air-gapped runner, and an unreachable upstream are all
-non-events. The upstream repository is load-bearing for *maintenance* only.
+`<config-home>` is `$XDG_CONFIG_HOME` if set, else `~/.config` — the same rule
+the rest of git-loopy's global scope follows, so the catalog sits beside the
+`config.toml` that governs it. Two siblings support it and are deliberately
+*not* inside it, so nothing bookkeeping-shaped can be mistaken for a Skill:
 
-Your project's `.copilot/skills/` is outside this boundary entirely: the pin
-governs what git-loopy redistributes, never what your repository is allowed to
-hold.
+| Path | What it is |
+| --- | --- |
+| `<config-home>/git-loopy/skills/` | the Skill root: Skills, and nothing else |
+| `<config-home>/git-loopy/skill-catalog/` | the private checkout the install is cut from |
+| `<config-home>/git-loopy/skill-catalog.json` | the install record: repository, revision, Skill names, tree digest |
+
+Your project's `.copilot/skills/` is **not** read. Neither is `~/.copilot/skills/`.
+A Run's Skills are the pinned catalog, so "which Skills ran" is answerable from
+the pin alone — and setup never writes a Skill into your repository.
+
+---
+
+## When it installs, and what happens offline
+
+| Moment | Behaviour |
+| --- | --- |
+| `git-loopy init` | installs the catalog **before** collecting anything, because the Skill policy you are about to choose is a choice among the installed catalog |
+| the start of every Run | refreshes it from the pin, before the Skill preflight |
+| already at the pinned revision, tree intact | no-op; **no connection is opened** |
+| pin moved | the new revision replaces the old one **wholesale** — a Skill retired upstream is gone |
+| a Skill was hand-edited | detected by digest and **repaired**; the installed catalog is git-loopy's to own, so change the pin, not the files |
+| upstream unreachable, catalog installed | **warning**, and the Run continues on the installed revision, naming it and whether it is the pinned one |
+| upstream unreachable, nothing installed | the Run **fails at preflight** — it has no Skills to expose, and discovering that one Iteration later is worse |
+| the acquired revision fails validation | nothing is replaced; the previous install stays exactly as it was |
+
+An install is staged beside the Skill root and swapped into place, so an
+interrupted install never leaves half a catalog.
 
 ---
 
@@ -56,7 +83,7 @@ hold.
   "license": {
     "spdx_id": "MIT",
     "path": "LICENSE",
-    "sha256": "<digest of the exact notice redistributed>",
+    "sha256": "<digest of the exact notice the catalog carries>",
     "required_text": ["..."]
   },
   "provenance_paths": ["README.md"]
@@ -70,12 +97,15 @@ hold.
   a failure readable; the digest is what decides, so a truncated or materially
   altered notice cannot pass by keeping a few familiar lines.
 - The pin **ships inside the wheel**, beside `THIRD_PARTY_LICENSES.txt`. A
-  released artifact can always say which upstream revision its catalog was cut
-  from, with no source checkout and no network.
+  released artifact can always say which upstream revision it installs, with no
+  source checkout and no network.
 
 ---
 
-## The one command
+## Acquiring it by hand
+
+Every install runs the validation below. This command runs it on demand, into a
+scratch directory, so you can review a revision before pinning it:
 
 ```bash
 uv run --project git-loopy/python python -m git_loopy.skill_source
@@ -88,14 +118,13 @@ unless it proves out. On success:
 ```
 acquired bradcstevens/git-loopy-skills @ 9f2222f… into .git-loopy/skill-source
 32 Skills, licence MIT (LICENSE), provenance README.md
-packaged fallback: 25 shared, 7 upstream-only, 0 packaged-only
 ```
 
 | Flag | Use |
 | --- | --- |
 | `--into <dir>` | check the revision out somewhere else (re-running is idempotent) |
 | `--offline` | re-validate an existing acquisition without contacting the remote |
-| `--packaged-skills <dir>` | compare against a fallback other than the installed one |
+| `--pin <file>` | enforce a pin other than the packaged one |
 
 ### What it refuses, and why each is its own failure
 
@@ -112,29 +141,20 @@ must be empty or a previous acquisition of this command (marked inside its own
 `.git`). It force-checks-out the pinned revision, so pointing it at a repository
 you were working in would otherwise discard your work.
 
-The last line of output states the boundary. Skills the upstream has and the
-wheel does not (`upstream-only`) are **normal** — `SKILL_DENYLIST` in
-`scripts/sync_skills.py` excludes the optional tool/vendor integrations
-deliberately. A `packaged-only` Skill is the interesting direction: the wheel
-ships something the source of record does not have, and the command warns about
-it.
-
 ---
 
 ## Refreshing the catalog
 
-1. **Move the pin.** Edit `revision` in `git_loopy/skill_source.json` to the
-   upstream commit you reviewed.
-2. **Acquire and validate it**: `uv run --project git-loopy/python python -m
-   git_loopy.skill_source`.
-3. **Update the canonical tree.** Copy the Skills you are adopting from
-   `.git-loopy/skill-source/skills/` into the repo-root `.copilot/skills/`.
-4. **Regenerate the packaged fallback**: `uv run --project git-loopy/python
-   python git-loopy/python/scripts/sync_skills.py`.
-5. **Commit the pin bump together with the catalog diff it justifies**, so the
-   review sees the claim and the content in one place.
+1. **Change the Skills upstream**, in
+   [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills).
+   That repository is the source of record; there is no copy of it here to edit.
+2. **Review the revision you intend to adopt**: `uv run --project
+   git-loopy/python python -m git_loopy.skill_source --into /tmp/skill-review`
+   after setting `revision` to it.
+3. **Move the pin.** Edit `revision` in `git_loopy/skill_source.json` and commit
+   that one-line change.
 
-Steps 1–2 are how the claim in
+Every operator picks the new catalog up on their next Run. Nothing else in this
+repository needs to change, which is the point: the claim in
 [`THIRD_PARTY_LICENSES.txt`](../git-loopy/python/git_loopy/THIRD_PARTY_LICENSES.txt)
-stays checkable rather than asserted: it names this pin instead of repeating a
-revision that could drift away from it.
+names this pin rather than repeating a revision that could drift away from it.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from importlib.resources import files
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +11,11 @@ from git_loopy.prompt import (
     packaged_required_skills,
     parse_required_skills,
     resolve_required_skills,
+)
+from git_loopy.skill_source import (
+    ACQUIRE_COMMAND,
+    DEFAULT_CHECKOUT,
+    read_skill_source_pin,
 )
 
 EXPECTED_PACKAGED_REQUIRED_SKILLS = (
@@ -148,8 +153,38 @@ def test_legacy_custom_prompt_inherits_the_packaged_required_skills() -> None:
     assert result.migration_warning is True
 
 
-def test_every_packaged_required_skill_exists_in_the_packaged_catalog() -> None:
-    skills_root = files("git_loopy") / "skills"
+
+def _repo_root() -> Path | None:
+    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+            return parent
+    return None
+
+def test_every_required_skill_exists_at_the_pinned_revision() -> None:
+    """The Run instructions may only require Skills the pin actually carries.
+
+    git-loopy ships no Skills, so "does this Required Skill exist?" is a
+    question about the pinned external catalog (ADR-0025). A Run answers it at
+    preflight against the installed catalog and fails closed; this guard answers
+    it earlier, while the prompt is being edited, so a Required Skill that no
+    upstream revision provides is caught here rather than on an operator's
+    machine.
+
+    Skipped when the pinned revision has not been acquired locally: the check
+    reads a checkout, never the network.
+    """
+    root = _repo_root()
+    if root is None:  # pragma: no cover - installed wheel, no source checkout
+        pytest.skip("no source checkout")
+    pin = read_skill_source_pin()
+    checkout = root / DEFAULT_CHECKOUT
+    if not (checkout / pin.skills_directory).is_dir():
+        pytest.skip(
+            f"the pinned catalog is not acquired at {DEFAULT_CHECKOUT}; "
+            f"run `{ACQUIRE_COMMAND}`"
+        )
+    skills_root = checkout / pin.skills_directory
 
     missing = [
         name
@@ -157,4 +192,7 @@ def test_every_packaged_required_skill_exists_in_the_packaged_catalog() -> None:
         if not (skills_root / name / "SKILL.md").is_file()
     ]
 
-    assert missing == []
+    assert missing == [], (
+        f"the Run instructions require Skills the pinned revision "
+        f"{pin.short_revision} of {pin.repository} does not carry: {missing}"
+    )

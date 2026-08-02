@@ -15,6 +15,7 @@ from . import settings
 from .config import SkillPolicyInput, SkillPolicyInputs
 from .copilot_client import make_copilot_client
 from .prompt import PromptMetadataError, load_prompt, resolve_required_skills
+from .skill_install import installed_catalog_dir
 from .skill_catalog import (
     SdkSkillSurfaceError,
     SkillCatalogError,
@@ -350,8 +351,9 @@ def plan_skill_policy_sync(
     )
 
 
-def _packaged_skills_dir() -> Path:
-    return Path(str(files("git_loopy") / "skills"))
+def _installed_skills_dir() -> Path:
+    """The Skill catalog installed in the global config scope (ADR-0025)."""
+    return installed_catalog_dir(os.environ)
 
 
 def _required_skills(
@@ -486,7 +488,7 @@ async def _load_catalog(
     client_factory: ClientFactory,
     discoverer: CatalogDiscoverer,
     repo_root: Path,
-    packaged_skills_dir: Path,
+    installed_skills_dir: Path,
     discovery_directory: Path,
 ) -> SkillCatalog:
     client = client_factory()
@@ -494,7 +496,7 @@ async def _load_catalog(
         return await discoverer(
             client,
             repo_root=repo_root,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
             discovery_directory=discovery_directory,
         )
 
@@ -611,7 +613,7 @@ def _collect_policy_context(
     discoverer: CatalogDiscoverer,
     git: GitClient | None,
     required_skills: Iterable[str] | None,
-    packaged_skills_dir: Path | None,
+    installed_skills_dir: Path | None,
     legacy_denied: Iterable[str] = (),
 ) -> _PolicyContext:
     """Discover the catalog and the current scope's policy, then let it go.
@@ -625,7 +627,7 @@ def _collect_policy_context(
     caller write a Config afterwards without a teardown failure reporting
     failure over a Config that did change.
     """
-    packaged = packaged_skills_dir or _packaged_skills_dir()
+    packaged = installed_skills_dir or _installed_skills_dir()
     with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
         workspace = Path(temporary)
         root = repo_root if repo_root is not None else _repo_less_root(workspace)
@@ -644,7 +646,7 @@ def _collect_policy_context(
                 client_factory=factory,
                 discoverer=discoverer,
                 repo_root=root,
-                packaged_skills_dir=packaged,
+                installed_skills_dir=packaged,
                 discovery_directory=discovery_directory,
             )
         )
@@ -718,7 +720,7 @@ def collect_skill_policy(
     picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
-    packaged_skills_dir: Path | None = None,
+    installed_skills_dir: Path | None = None,
     legacy_denied: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """Discover, seed, pick, and validate one Skill policy without persisting it.
@@ -746,7 +748,7 @@ def collect_skill_policy(
         discoverer=discoverer,
         git=git,
         required_skills=required_skills,
-        packaged_skills_dir=packaged_skills_dir,
+        installed_skills_dir=installed_skills_dir,
         legacy_denied=legacy_denied,
     )
     model = _selection_model(
@@ -775,7 +777,7 @@ def run_skills_edit(
     picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
-    packaged_skills_dir: Path | None = None,
+    installed_skills_dir: Path | None = None,
     writer: ConfigWriter = settings.write_config_atomic,
 ) -> int:
     """Edit and persist one project or global closed-world Skill policy."""
@@ -802,7 +804,7 @@ def run_skills_edit(
             picker_runner=picker_runner,
             git=git,
             required_skills=required_skills,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
         )
         path = _policy_config_path(
             scope=selected_scope, repo_root=repo_root, env=environment
@@ -855,7 +857,7 @@ def run_skill_policy_migration(
     picker_runner: PickerRunner | None = None,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
-    packaged_skills_dir: Path | None = None,
+    installed_skills_dir: Path | None = None,
     writer: ConfigWriter = settings.write_config_atomic,
 ) -> int:
     """Convert one Config that predates ``enabled_skills`` into a Skill policy.
@@ -906,7 +908,7 @@ def run_skill_policy_migration(
             picker_runner=picker_runner,
             git=git,
             required_skills=required_skills,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
             legacy_denied=legacy_denied,
         )
         path = _policy_config_path(
@@ -979,7 +981,7 @@ def run_skills_sync(
     discoverer: CatalogDiscoverer = discover_skill_catalog,
     git: GitClient | None = None,
     required_skills: Iterable[str] | None = None,
-    packaged_skills_dir: Path | None = None,
+    installed_skills_dir: Path | None = None,
     writer: ConfigWriter = settings.write_config_atomic,
 ) -> int:
     """Re-copy the Skill baseline into one scope after an explicit confirmation.
@@ -1011,7 +1013,7 @@ def run_skills_sync(
             discoverer=discoverer,
             git=git,
             required_skills=required_skills,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
         )
         plan = plan_skill_policy_sync(
             context.seed, context.catalog, configured=context.configured
@@ -1067,7 +1069,7 @@ def run_skills_list(
     discoverer: CatalogDiscoverer = discover_skill_catalog,
     enabled_skills: Iterable[str] | None = None,
     required_skills: Iterable[str] | None = None,
-    packaged_skills_dir: Path | None = None,
+    installed_skills_dir: Path | None = None,
 ) -> int:
     """Print one stable, non-mutating view of normalized Skill catalog winners."""
     environment = os.environ if env is None else env
@@ -1076,7 +1078,7 @@ def run_skills_list(
         if error_fn is None
         else error_fn
     )
-    packaged = packaged_skills_dir or _packaged_skills_dir()
+    packaged = installed_skills_dir or _installed_skills_dir()
     # The discovery workspace's own creation and teardown belong inside the
     # inventory handler: an unusable temporary directory is an unavailable
     # inventory, not a traceback.
@@ -1115,7 +1117,7 @@ def run_skills_list(
                     client_factory=factory,
                     discoverer=discoverer,
                     repo_root=root,
-                    packaged_skills_dir=packaged,
+                    installed_skills_dir=packaged,
                     discovery_directory=discovery_directory,
                 )
             )

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,7 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
 from git_loopy import settings
+from git_loopy import skill_install
 from git_loopy import sources as sources_module
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
@@ -235,7 +237,7 @@ def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         return build_skill_catalog(
             (),
             repo_root=Path(str(kwargs["repo_root"])),
-            packaged_skills_dir=Path(str(kwargs["packaged_skills_dir"])),
+            installed_skills_dir=Path(str(kwargs["installed_skills_dir"])),
         )
 
     monkeypatch.setattr(loop_module, "_discover_skill_catalog", discover)
@@ -2052,9 +2054,9 @@ class _SkillExposureRecordingClient(FakeCopilotClient):
 
 
 def _write_project_skill(skills_root: Path, name: str) -> Path:
-    """Write one project Skill document and return its directory."""
+    """Write one Skill document into a catalog root and return its directory."""
     skill = skills_root / name
-    skill.mkdir(parents=True)
+    skill.mkdir(parents=True, exist_ok=True)
     (skill / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {name} description\n---\n# {name}\n",
         encoding="utf-8",
@@ -2063,8 +2065,13 @@ def _write_project_skill(skills_root: Path, name: str) -> Path:
 
 
 def _persisted_policy_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """Lay out a repo whose Config enables one of two tracked project Skills."""
-    skills_root = tmp_path / ".copilot" / "skills"
+    """Lay out a repo whose Config enables one of two installed Skills.
+
+    Both live in the installed catalog, because that is the only Skill root a
+    Run reads (ADR-0025). What is under test is the persisted ``enabled_skills``
+    key, not where a Skill came from.
+    """
+    skills_root = skill_install.installed_catalog_dir(os.environ)
     enabled = _write_project_skill(skills_root, "team-review")
     withheld = _write_project_skill(skills_root, "team-deploy")
     (tmp_path / "git-loopy").mkdir()
@@ -2137,7 +2144,9 @@ def _skill_permission(skill: str) -> PermissionRequestCustomTool:
 
 
 def test_persisted_skill_policy_reaches_exposure_and_permission_enforcement(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed_skill_catalog: object,
 ) -> None:
     """An ``enabled_skills`` key on disk is the Run's whole capability boundary.
 
@@ -2188,7 +2197,9 @@ def test_persisted_skill_policy_reaches_exposure_and_permission_enforcement(
 
 
 def test_frozen_skill_policy_survives_a_catalog_change_mid_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed_skill_catalog: object,
 ) -> None:
     """A catalog input that changes after preflight cannot move the boundary.
 
@@ -2231,32 +2242,36 @@ def test_frozen_skill_policy_survives_a_catalog_change_mid_run(
     ]
 
 
-def test_persisted_policy_enabling_an_untracked_project_skill_fails_preflight(
+def test_persisted_policy_enabling_an_absent_skill_fails_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tracking evidence is preflight's business, not the session's.
+    """A policy the installed catalog cannot honour fails closed, run-wide.
 
-    Issue #227's AC3 fails a configured policy closed on invalid *tracking
-    evidence* — an enabled project winner that no teammate would receive from a
-    clone — before any Iteration or Lane starts. This is the branch that
-    depends on the git seam reaching preflight, so it regresses silently if
-    that wiring is ever dropped.
+    Issue #227's AC3 fails a configured policy closed *before* any Iteration or
+    Lane starts. Since ADR-0025 the only way a persisted ``enabled_skills`` key
+    can be unhonourable is that the installed catalog does not offer the name —
+    the project layer, and with it the tracking-evidence branch this test used
+    to cover, is gone. This is the branch that depends on the catalog seam
+    reaching preflight, so it regresses silently if that wiring is dropped.
     """
-    enabled, withheld = _persisted_policy_repo(tmp_path)
-    # `team-review` is enabled by the persisted Config but tracked by nobody.
-    fake_client = _wire_persisted_policy_run(tmp_path, monkeypatch, tracked=(withheld,))
+    enabled, _withheld = _persisted_policy_repo(tmp_path)
+    # Enabled by the persisted Config, then absent from the installed catalog:
+    # a refresh that drops a Skill must not silently narrow the boundary.
+    shutil.rmtree(enabled)
+    fake_client = _wire_persisted_policy_run(tmp_path, monkeypatch, tracked=())
 
     exit_code, _config = _run_from_persisted_config(tmp_path)
 
     assert exit_code == 1
-    assert enabled.exists()
     assert fake_client.create_calls == [], "no session may start behind a failed policy"
     assert fake_client.start_call_count == 1
     assert fake_client.stop_call_count == 1
 
 
 def test_persisted_skill_policy_bounds_the_replay_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed_skill_catalog: object,
 ) -> None:
     """AC8, replay half: the frozen boundary and the consultation share one log.
 

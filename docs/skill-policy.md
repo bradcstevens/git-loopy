@@ -20,13 +20,17 @@ when you are holding a terminal.
 
 **Skill catalog** — everything git-loopy can *see*. Discovery asks the same
 Copilot CLI runtime the Run will use, under the same `COPILOT_HOME`, and adds
-git-loopy's explicit project source (`<repo>/.copilot/skills`) and its packaged
-fallback. Discovery reads **metadata only**: a name, a description, a source,
-and Copilot's own enabled flag. Being in the catalog does **not** make a Skill
-loadable — no instructions, scripts, or resources are read for a Skill the
-policy leaves out. Inspect it with `git-loopy skills list`. Where the packaged
-fallback itself comes from — one external source of record, pinned to an
-immutable revision and never contacted during a Run — is
+git-loopy's **installed catalog**: the pinned external Skill catalog it keeps in
+its own config home (`$XDG_CONFIG_HOME/git-loopy/skills/`, else
+`~/.config/git-loopy/skills/`), installed at setup and refreshed at the start of
+every Run. That install is git-loopy's own Skill source; the consuming
+repository's `<repo>/.copilot/skills` is **not** read
+([ADR-0025](adr/0025-installed-skill-catalog.md)). Discovery reads **metadata
+only**: a name, a description, a source, and Copilot's own enabled flag. Being
+in the catalog does **not** make a Skill loadable — no instructions, scripts, or
+resources are read for a Skill the policy leaves out. Inspect it with `git-loopy
+skills list`. Where the installed catalog comes from — one external source of
+record, pinned to an immutable revision — is
 [`docs/skill-catalog-source.md`](skill-catalog-source.md).
 
 **Skill policy** — the closed-world set of canonical names one *scope* persists.
@@ -50,8 +54,8 @@ that is per-Run.
 
 **Minimal Skill policy** — exactly the **Required Skills** and nothing else. It
 is the answer whenever no base policy is in effect, which makes a first CI Run
-reproducible: it consults no personal or machine-global Skill source, because
-Required Skills come from the packaged catalog.
+reproducible: it consults no personal Skill source and no Copilot inventory,
+because Required Skills come from the installed catalog.
 
 **Required Skill** — a name the active `PROMPT.md` declares in its
 `required-skills` frontmatter. The packaged prompt requires `diagnosing-bugs`,
@@ -234,8 +238,10 @@ enabled    enabled      yes       packaged  tdd          Test-driven development
   divergence is visible; it has no authority, and the Run follows the
   GIT-LOOPY column.
 - **REQUIRED** — `yes` when the active prompt declares it in `required-skills`.
-- **SOURCE** — the winning source kind: `project`, `inherited`, `personal`,
-  `plugin` (rendered `plugin:<name>`), `custom`, `builtin`, or `packaged`.
+- **SOURCE** — the winning source kind: `inherited`, `personal`, `plugin`
+  (rendered `plugin:<name>`), `custom`, `builtin`, or `packaged` — the last
+  meaning git-loopy's installed catalog. `project` is a historical value that no
+  current Run produces; see [ADR-0025](adr/0025-installed-skill-catalog.md).
 
 Output is stable and path-free by design, so it is safe to diff between machines
 and to paste into an issue: no absolute home-directory paths appear.
@@ -282,12 +288,12 @@ This is the *explicit* action that re-reads Copilot's current enabled state.
 It prints the exact additions and removals first and **saves only after you
 confirm**; cancelling writes nothing.
 
-- It replaces only the Skills Copilot actually reports. git-loopy's packaged
-  fallbacks, and any configured name Copilot does not know, keep their current
-  state rather than being synced away.
+- It replaces only the Skills Copilot actually reports. Skills from git-loopy's
+  installed catalog, and any configured name Copilot does not know, keep their
+  current state rather than being synced away.
 - The proposed policy is validated before it is written, so a sync that would
-  disable a Required Skill, enable an untracked project Skill, or leave an
-  unresolvable name enabled fails **without touching the Config**.
+  disable a Required Skill or leave an unresolvable name enabled fails
+  **without touching the Config**.
 - When the scope has no policy of its own, there is nothing for the baseline to
   differ from, so sync says so and offers to save the whole baseline as that
   scope's first policy.
@@ -325,14 +331,16 @@ The global-then-project rule is what makes a project policy a deliberate
 whatever your machine happened to hold that day. To re-import Copilot's state
 into a scope on purpose, use `git-loopy skills sync`.
 
-### Packaged fallback defaults
+### Installed-catalog defaults
 
-On **first** setup, a packaged Skill that Copilot's inventory does not know
-about starts **enabled** — matching Copilot's own behaviour for a newly added
-Skill. Once a policy exists, that grace period is over: every later catalog
-addition, packaged or not, starts **disabled** until you enable it by name.
-This is the closed-world rule doing its job — an upgrade must never widen a Run
-behind your back.
+On **first** setup, a Skill from git-loopy's installed catalog that Copilot's
+inventory does not know about starts **enabled** — matching Copilot's own
+behaviour for a newly added Skill. Once a policy exists, that grace period is
+over: every later catalog addition, installed or not, starts **disabled** until
+you enable it by name. This matters more now that a Run refreshes the install on
+every start: moving the pin can add Skills, and none of them widen an existing
+policy. This is the closed-world rule doing its job — an upgrade must never
+widen a Run behind your back.
 
 ### Unattended setup and unavailable inventory
 
@@ -345,9 +353,9 @@ git-loopy init --yes
 `git-loopy init --yes`, an unconfigured non-interactive Run, and a first setup
 whose Copilot inventory cannot be resolved all land on the **Minimal Skill
 policy** rather than importing machine-specific state. That is deliberate: a
-first CI Run is reproducible precisely because it consults nothing personal or
-machine-global, and Required Skills come from the packaged catalog so the
-Minimal policy resolves even when no external inventory answers.
+first CI Run is reproducible precisely because it consults nothing personal, and
+Required Skills come from the installed catalog so the Minimal policy resolves
+even when no external inventory answers.
 
 Note the asymmetry. An unavailable inventory is only fatal when you asked for
 something it had to resolve — see
@@ -400,7 +408,7 @@ exactly as it found it, so the fix is always yours to make deliberately.
 | --- | --- | --- |
 | `Enabled Skills are missing from the catalog` | a configured name resolves to nothing — a personal Skill you never installed here, a plugin you removed, or a typo | `git-loopy skills list` to see the real names, then `git-loopy skills edit` to drop or correct it |
 | `Required Skills are disabled` | the effective set omits a name the active `PROMPT.md` declares in `required-skills` — a `--disable-skill` overlay, a legacy deny guard, or a `GIT_LOOPY_ENABLED_SKILLS` / `enabled_skills` value that simply does not list it | if the base came from the environment, correct or unset `GIT_LOOPY_ENABLED_SKILLS`; otherwise `git-loopy skills edit` and re-enable it, or drop the overlay / `deny_skills` entry causing the subtraction |
-| `Enabled project Skills are not git-tracked` | a project policy enables a Skill under `<repo>/.copilot/skills` that is not committed, so it would not exist for a collaborator | `git add` and commit the Skill, or `git-loopy skills edit` to disable it |
+| `Enabled project Skills are not git-tracked` | a policy enables a Skill whose winning source is `project` and that is not committed, so it would not exist for a collaborator. No current Run can reach this: [ADR-0025](adr/0025-installed-skill-catalog.md) removed the project Skill source, and the check is kept only so a Runner that still exposes one fails closed | `git add` and commit the Skill, or `git-loopy skills edit` to disable it |
 | `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | fix the Copilot CLI installation / auth, then re-run; `git-loopy skills list` reports the same discovery failure in isolation |
 
 Preflight failures exit `1` and print

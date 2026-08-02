@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_SKILLS_DIR = Path(__file__).parents[3] / ".copilot" / "skills"
-PACKAGED_SKILLS_DIR = Path(__file__).parents[1] / "git_loopy" / "skills"
 
 TEMPLATE_RE = re.compile(
     r"<!-- continuation-request: (?P<name>[a-z-]+) -->\s*```json\n(?P<body>.*?)```",

@@ -169,7 +169,7 @@ def _migrate(
         picker_runner=picker_runner,
         git=FakeGitClient(tmp_path),
         required_skills=("tdd",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         output_fn=(output if output is not None else []).append,
         error_fn=(errors if errors is not None else []).append,
         **({} if writer is None else {"writer": writer}),
@@ -275,7 +275,7 @@ def test_migration_outside_a_repository_targets_the_global_scope(
         discoverer=discover,
         picker_runner=lambda model, **_: SkillSelectionResult(model.enabled),
         required_skills=("tdd",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         output_fn=[].append,
         error_fn=[].append,
     )
@@ -668,7 +668,7 @@ def test_unavailable_inventory_fails_migration_without_writing(
         ),
         git=FakeGitClient(tmp_path),
         required_skills=("tdd",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         output_fn=[].append,
         error_fn=errors.append,
     )

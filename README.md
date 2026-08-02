@@ -37,9 +37,13 @@ flowchart LR
 
 ## The skills and their purpose
 
-The vendored [skills](.copilot/skills/) are small, composable disciplines rather
-than one monolithic process. Use only the skills the work needs; run
-`/setup-agent-skills` once before the rest.
+These [skills](.copilot/skills/) are small, composable disciplines rather than
+one monolithic process. Use only the skills the work needs; run
+`/setup-agent-skills` once before the rest. They are maintained in
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills);
+`git-loopy init` installs them from a pinned revision of that catalog and every
+Run refreshes the install, so a git-loopy installation never depends on this
+tree ([ADR-0025](docs/adr/0025-installed-skill-catalog.md)).
 
 ### Shape intent and gather evidence
 

@@ -36,7 +36,6 @@ from git_loopy.skill_source import (
     SkillSourceProvenanceError,
     SkillSourceRevisionError,
     acquire_skill_source,
-    compare_with_packaged_fallback,
     main,
     read_skill_source_pin,
     validate_skill_source,
@@ -142,7 +141,7 @@ def test_committed_pin_names_the_external_catalog_at_an_immutable_revision() -> 
 
 
 def test_committed_pin_ships_inside_the_package() -> None:
-    """A released artifact can always say which revision its fallback came from."""
+    """A released artifact can always say which revision it installs."""
     assert skill_source.PIN_PATH.parent.name == "git_loopy"
     assert skill_source.PIN_PATH.is_file()
     # Resolved the way `init` resolves its other package data, so the pin is
@@ -174,14 +173,33 @@ def _doc(relative: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_the_adr_states_the_source_of_record_and_the_packaged_fallback() -> None:
+def test_the_adr_states_the_source_of_record_and_its_validation() -> None:
     adr = _doc("docs/adr/0023-pinned-external-skill-catalog.md")
 
     assert "**Status:** accepted" in adr
     assert "bradcstevens/git-loopy-skills` is the source of record" in adr
-    assert "git_loopy/skills/` inside the wheel" in adr
-    assert "never reaches the network for a Skill" in adr
     assert skill_source.ACQUIRE_COMMAND in adr
+
+
+def test_the_adr_marks_the_vendored_fallback_as_superseded() -> None:
+    """A reader must not follow the retired half as if it still held."""
+    adr = _doc("docs/adr/0023-pinned-external-skill-catalog.md")
+
+    assert "0025-installed-skill-catalog.md" in adr
+    assert "Superseded in part" in adr
+    assert "ships no vendored" in adr
+
+
+def test_the_superseding_adr_states_where_the_catalog_is_installed() -> None:
+    adr = _doc("docs/adr/0025-installed-skill-catalog.md")
+
+    assert "**Status:** accepted" in adr
+    assert "carries **no Skills**" in adr
+    assert "<config-home>/git-loopy/skills/" in adr
+    # The two moments an install happens, and the offline rule.
+    assert "before it collects anything" in adr
+    assert "refreshes the install from the pin" in adr
+    assert "warning, not a failure" in adr
 
 
 def test_the_operator_guidance_documents_the_one_command() -> None:
@@ -190,11 +208,21 @@ def test_the_operator_guidance_documents_the_one_command() -> None:
     assert skill_source.ACQUIRE_COMMAND in guidance
     assert "bradcstevens/git-loopy-skills" in guidance
     assert "adr/0023-pinned-external-skill-catalog.md" in guidance
+    assert "adr/0025-installed-skill-catalog.md" in guidance
     for failure in ("Wrong revision", "Invalid Skill layout", "Missing licence"):
         assert failure in guidance
 
 
-def test_the_redistributed_notice_names_the_pinned_source_of_record() -> None:
+def test_the_operator_guidance_states_the_installed_location() -> None:
+    """An operator can find the catalog that actually runs."""
+    guidance = _doc("docs/skill-catalog-source.md")
+
+    assert "git-loopy ships no Skills" in guidance
+    assert "<config-home>/git-loopy/skills/" in guidance
+    assert "`.copilot/skills/` is **not** read" in guidance
+
+
+def test_the_notice_names_the_pinned_source_of_record() -> None:
     """Provenance points at the pin rather than repeating a revision beside it."""
     notice = _doc("git-loopy/python/git_loopy/THIRD_PARTY_LICENSES.txt")
     pin = read_skill_source_pin()
@@ -205,6 +233,14 @@ def test_the_redistributed_notice_names_the_pinned_source_of_record() -> None:
         "the notice must reference the pin, not copy the revision into a second "
         "place that can drift away from it"
     )
+
+
+def test_the_notice_does_not_claim_to_redistribute_the_catalog() -> None:
+    """Nothing ships, so a redistribution claim would be false."""
+    notice = _doc("git-loopy/python/git_loopy/THIRD_PARTY_LICENSES.txt")
+
+    assert "redistributes no third-party material" in notice
+    assert "vendor" not in notice.lower()
 
 
 @pytest.mark.parametrize(
@@ -631,61 +667,6 @@ def test_content_the_pinned_revision_ignores_still_fails_validation(
 
 
 # ---------------------------------------------------------------------------
-# The boundary: source of record vs packaged fallback
-# ---------------------------------------------------------------------------
-
-
-def test_the_packaged_fallback_is_compared_against_the_source_of_record(
-    tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
-) -> None:
-    _, pin = upstream
-    destination = tmp_path / "checkout"
-    acquire_skill_source(pin, destination)
-    checkout = validate_skill_source(pin, destination)
-    packaged = tmp_path / "packaged"
-    _write_skill(packaged, "tdd")
-    _write_skill(packaged, "retired-skill")
-
-    comparison = compare_with_packaged_fallback(checkout, packaged)
-
-    assert comparison.shared == ("tdd",)
-    assert comparison.upstream_only == ("triage",)
-    assert comparison.packaged_only == ("retired-skill",)
-    assert not comparison.packaged_is_subset
-
-
-def test_a_packaged_subset_of_the_pinned_catalog_is_normal(
-    tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
-) -> None:
-    """Excluding optional integrations from the wheel is a decision, not drift."""
-    _, pin = upstream
-    destination = tmp_path / "checkout"
-    acquire_skill_source(pin, destination)
-    checkout = validate_skill_source(pin, destination)
-    packaged = tmp_path / "packaged"
-    _write_skill(packaged, "tdd")
-
-    comparison = compare_with_packaged_fallback(checkout, packaged)
-
-    assert comparison.packaged_is_subset
-    assert comparison.upstream_only == ("triage",)
-
-
-def test_an_absent_packaged_fallback_compares_as_empty(
-    tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
-) -> None:
-    _, pin = upstream
-    destination = tmp_path / "checkout"
-    acquire_skill_source(pin, destination)
-    checkout = validate_skill_source(pin, destination)
-
-    comparison = compare_with_packaged_fallback(checkout, tmp_path / "absent")
-
-    assert comparison.shared == ()
-    assert comparison.packaged_only == ()
-
-
-# ---------------------------------------------------------------------------
 # The one documented command
 # ---------------------------------------------------------------------------
 
@@ -721,25 +702,15 @@ def test_one_command_acquires_and_validates_the_pinned_revision(
 ) -> None:
     _, pin = upstream
     destination = tmp_path / "checkout"
-    packaged = tmp_path / "packaged"
-    _write_skill(packaged, "tdd")
 
     code = main(
-        [
-            "--pin",
-            str(_pin_file(tmp_path, pin)),
-            "--into",
-            str(destination),
-            "--packaged-skills",
-            str(packaged),
-        ]
+        ["--pin", str(_pin_file(tmp_path, pin)), "--into", str(destination)]
     )
 
     assert code == 0
     out = capsys.readouterr().out
     assert f"acquired {pin.repository} @ {pin.revision}" in out
     assert "2 Skills, licence MIT (LICENSE)" in out
-    assert "packaged fallback: 1 shared, 1 upstream-only, 0 packaged-only" in out
 
 
 def test_the_command_revalidates_an_existing_checkout_offline(
@@ -778,27 +749,3 @@ def test_the_command_reports_a_failure_and_exits_non_zero(
 
     assert code == 1
     assert "Skill source validation failed" in capsys.readouterr().err
-
-
-def test_the_command_warns_when_the_wheel_ships_an_unpinned_skill(
-    tmp_path: Path,
-    upstream: tuple[Path, SkillSourcePin],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _, pin = upstream
-    packaged = tmp_path / "packaged"
-    _write_skill(packaged, "retired-skill")
-
-    code = main(
-        [
-            "--pin",
-            str(_pin_file(tmp_path, pin)),
-            "--into",
-            str(tmp_path / "checkout"),
-            "--packaged-skills",
-            str(packaged),
-        ]
-    )
-
-    assert code == 0
-    assert "retired-skill" in capsys.readouterr().err

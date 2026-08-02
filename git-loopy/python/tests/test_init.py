@@ -16,6 +16,7 @@ import pytest
 
 from git_loopy import init as init_module
 from git_loopy import settings
+from git_loopy import skill_install
 from git_loopy import verification as verification_module
 from git_loopy.interactive.models import ModelChoice
 from git_loopy.skill_catalog import SkillCatalogError
@@ -144,7 +145,7 @@ def _packaged(tmp_path: Path) -> _Wizard:
     )
     return {
         "packaged_prompt": prompt,
-        "packaged_skills": skills,
+        "installed_skills": skills,
         **_policy_seams(tmp_path),
     }
 
@@ -701,12 +702,21 @@ def test_run_init_project_writes_config_and_declines_assets(tmp_path: Path) -> N
         "reasoning_effort": "low",
         "enabled_skills": [],
     }
-    # Declined => no prompt/skills scaffolded.
+    # Declined => no prompt scaffolded. And a Skill is never written into a
+    # project, accepted or not: the catalog is installed machine-wide.
     assert not (cfg.parent / "PROMPT.md").exists()
-    assert not (tmp_path / ".copilot" / "skills").exists()
+    assert not (tmp_path / ".copilot").exists()
 
 
-def test_run_init_project_scaffolds_assets_when_accepted(tmp_path: Path) -> None:
+def test_run_init_project_scaffolds_the_prompt_but_never_a_skill(
+    tmp_path: Path,
+) -> None:
+    """Accepting the scaffold writes the prompt override — and nothing else.
+
+    The Skill catalog is installed machine-wide from the pin (ADR-0025), so a
+    consuming project's own tree is never written to. Copying Skills in would
+    recreate the drifting second copy that ADR removed.
+    """
     pkg = _packaged(tmp_path)
     rc = init_module.run_init(
         scope="project",
@@ -721,8 +731,7 @@ def test_run_init_project_scaffolds_assets_when_accepted(tmp_path: Path) -> None
     assert rc == 0
     prompt = tmp_path / "git-loopy" / "PROMPT.md"
     assert prompt.read_text() == "PACKAGED PROMPT\n"
-    skill = tmp_path / ".copilot" / "skills" / "setup-agent-skills" / "SKILL.md"
-    assert skill.read_text() == "packaged skill\n"
+    assert not (tmp_path / ".copilot").exists()
 
 
 def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
@@ -740,8 +749,9 @@ def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
     assert rc == 0
     assert settings.global_config_path(env).exists()
     assert settings.global_prompt_path(env).exists()
-    # Global skills live under ~/.copilot/skills, NOT the XDG config dir.
-    assert (Path(env["HOME"]) / ".copilot" / "skills" / "setup-agent-skills").is_dir()
+    # Setup writes no Skill anywhere under Copilot's own home either: the
+    # installed catalog is git-loopy's, in git-loopy's config scope.
+    assert not (Path(env["HOME"]) / ".copilot").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -754,8 +764,15 @@ def _scaffold_prompt(inp: _Input) -> str:
     return next(p for p in inp.prompts if "scaffold" in p.lower())
 
 
-def test_scaffold_prompt_names_the_workflow_skill_catalog(tmp_path: Path) -> None:
-    """The combined default-yes prompt names the catalog, not a vague "agent skills"."""
+def test_scaffold_prompt_asks_only_about_the_prompt_override(
+    tmp_path: Path,
+) -> None:
+    """The confirmation covers what it actually writes, and nothing else.
+
+    The Skill catalog is no longer part of this decision: it is installed
+    unconditionally, machine-wide, before the wizard collects anything. Naming
+    it here would offer the operator a choice the wizard does not have.
+    """
     inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
     rc = init_module.run_init(
         scope="project",
@@ -769,16 +786,12 @@ def test_scaffold_prompt_names_the_workflow_skill_catalog(tmp_path: Path) -> Non
     )
     assert rc == 0
     prompt = _scaffold_prompt(inp)
-    assert "workflow skill catalog" in prompt
-    assert "agent skills" not in prompt
-    # Still one combined confirmation, covering the editable PROMPT.md override.
     assert "PROMPT.md" in prompt
+    assert "skill" not in prompt.lower()
 
 
-def test_scaffold_prompt_global_scope_flags_machine_wide_location(
-    tmp_path: Path,
-) -> None:
-    """Global scope warns the operator it writes the shared, machine-wide location."""
+def test_scaffold_prompt_names_the_scope_it_writes_to(tmp_path: Path) -> None:
+    """The operator is told which scope the override lands in."""
     inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
     rc = init_module.run_init(
         scope="global",
@@ -791,30 +804,7 @@ def test_scaffold_prompt_global_scope_flags_machine_wide_location(
         **_packaged(tmp_path),
     )
     assert rc == 0
-    prompt = _scaffold_prompt(inp)
-    assert "workflow skill catalog" in prompt
-    assert "shared, machine-wide" in prompt
-
-
-def test_scaffold_prompt_project_scope_omits_machine_wide_flag(
-    tmp_path: Path,
-) -> None:
-    """The machine-wide caveat is scope-specific — project scope stays unqualified."""
-    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **_packaged(tmp_path),
-    )
-    assert rc == 0
-    prompt = _scaffold_prompt(inp)
-    assert "machine-wide" not in prompt
-    assert "project scope" in prompt
+    assert "global scope" in _scaffold_prompt(inp)
 
 
 def test_run_init_config_round_trips_through_settings_loader(tmp_path: Path) -> None:
@@ -862,9 +852,9 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
         "reasoning_effort": "max",
         "enabled_skills": [],
     }
-    # --yes scaffolds by default.
+    # --yes scaffolds the prompt override by default, and still no Skill.
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
-    assert (tmp_path / ".copilot" / "skills" / "setup-agent-skills").is_dir()
+    assert not (tmp_path / ".copilot").exists()
 
 
 def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
@@ -978,271 +968,59 @@ def test_run_init_fails_closed_when_this_distribution_misses_a_capability(
 
 
 # ---------------------------------------------------------------------------
-# Skill-catalog merge helpers (issue #125)
+# Setup installs the Skill catalog (ADR-0025)
+#
+# The install *semantics* — first install, pin bump, repair, offline, wholesale
+# replacement — belong to `test_skill_install.py`, which exercises them against
+# a real `file://` upstream. What is tested here is the wiring: that setup calls
+# the install, calls it before it can matter, and does the right thing with each
+# outcome it can come back with.
 # ---------------------------------------------------------------------------
 
 
-def test_scaffold_skills_overwrite_false_keeps_existing_adds_missing(
-    tmp_path: Path,
+def _catalog(root: Path, *skills: str) -> skill_install.InstalledCatalog:
+    return skill_install.InstalledCatalog(
+        root=root,
+        repository="bradcstevens/git-loopy-skills",
+        revision="a" * 40,
+        skills=skills,
+        sha256="0" * 64,
+    )
+
+
+def _fake_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: skill_install.RefreshOutcome | Exception,
+    *,
+    calls: list[str] | None = None,
+    label: str = "install",
 ) -> None:
-    """No-overwrite refresh keeps pre-existing skills byte-for-byte and adds the rest."""
-    source = _skill_tree(
-        tmp_path / "src", {"a": "PKG-A\n", "b": "PKG-B\n", "c": "PKG-C\n"}
-    )
-    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n"})
+    """Stand in for the real install so no test opens a connection."""
 
-    added, kept = init_module._scaffold_skills(target, source, overwrite=False)
+    def _refresh(**_kwargs: object) -> skill_install.RefreshOutcome:
+        if calls is not None:
+            calls.append(label)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    assert (added, kept) == (2, 1)
-    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"  # kept untouched
-    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # added
-    assert (target / "c" / "SKILL.md").read_text() == "PKG-C\n"  # added
+    monkeypatch.setattr(init_module, "refresh_installed_catalog", _refresh)
 
 
-def test_scaffold_skills_overwrite_true_refreshes_all(tmp_path: Path) -> None:
-    """Overwrite refreshes every catalog skill from the packaged version (kept == 0)."""
-    source = _skill_tree(tmp_path / "src", {"a": "PKG-A\n", "b": "PKG-B\n"})
-    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n"})
-
-    added, kept = init_module._scaffold_skills(target, source, overwrite=True)
-
-    assert (added, kept) == (2, 0)
-    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
-    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"
-
-
-def test_scaffold_skills_never_touches_non_git_loopy_skills(tmp_path: Path) -> None:
-    """A refresh only iterates the packaged catalog; local-only skills stay untouched."""
-    source = _skill_tree(tmp_path / "src", {"a": "PKG-A\n"})
-    target = _skill_tree(tmp_path / "dst", {"a": "LOCAL-A\n", "mine": "MINE\n"})
-
-    init_module._scaffold_skills(target, source, overwrite=True)
-
-    # A skill git-loopy does not ship is never visited by the refresh.
-    assert (target / "mine" / "SKILL.md").read_text() == "MINE\n"
-
-
-def test_existing_catalog_skills_detects_present_packaged_skills(
-    tmp_path: Path,
+def test_run_init_installs_the_catalog_and_reports_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Detection reports only packaged catalog items present in the target dir."""
-    source = _skill_tree(tmp_path / "src", {"a": "x", "b": "x", "c": "x"})
-    target = _skill_tree(tmp_path / "dst", {"a": "x", "not-shipped": "x"})
-
-    found = init_module._existing_catalog_skills(target, source)
-
-    assert found == ["a"]  # "b"/"c" not present; "not-shipped" is not a catalog skill
-
-
-def test_existing_catalog_skills_empty_when_target_absent(tmp_path: Path) -> None:
-    """A never-scaffolded scope reports no pre-existing catalog skills."""
-    source = _skill_tree(tmp_path / "src", {"a": "x"})
-    assert init_module._existing_catalog_skills(tmp_path / "nope", source) == []
-
-
-# ---------------------------------------------------------------------------
-# run_init — confirm-then-overwrite merge on catalog re-run (issue #125)
-# ---------------------------------------------------------------------------
-
-
-def _pkg_with_skills(tmp_path: Path, skills: Mapping[str, str]) -> _Wizard:
-    """A fake packaged prompt + a catalog of the given skills to scaffold from."""
-    source = _skill_tree(tmp_path / "pkg" / "skills", skills)
-    prompt = tmp_path / "pkg" / "PROMPT.md"
-    prompt.parent.mkdir(parents=True, exist_ok=True)
-    prompt.write_text("PACKAGED PROMPT\n", encoding="utf-8")
-    return {
-        "packaged_prompt": prompt,
-        "packaged_skills": source,
-        **_policy_seams(tmp_path),
-    }
-
-
-def _project_skills_dir(tmp_path: Path) -> Path:
-    return tmp_path / ".copilot" / "skills"
-
-
-def test_run_init_existing_skills_refresh_on_yes(tmp_path: Path) -> None:
-    """Re-run + Yes refreshes every catalog skill and adds the missing ones."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
-    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
+    """Setup is where a machine gets its Skills, and it says so."""
+    root = tmp_path / "config" / "git-loopy" / "skills"
+    _fake_refresh(
+        monkeypatch,
+        skill_install.RefreshOutcome(
+            catalog=_catalog(root, "alpha", "beta", "gamma"),
+            action=skill_install.ACTION_INSTALLED,
+        ),
     )
-
-    assert rc == 0
-    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
-    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # added
-    assert any("refresh" in p.lower() for p in inp.prompts)
-
-
-def test_run_init_existing_skills_keep_on_no(tmp_path: Path) -> None:
-    """Re-run + No keeps existing skills byte-for-byte and adds only the missing ones."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
-    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    inp = _Input("1", "4", "n", "y", "n")  # no routing, scaffold=yes, refresh=no
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
-    )
-
-    assert rc == 0
-    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"  # kept untouched
-    assert (target / "b" / "SKILL.md").read_text() == "PKG-B\n"  # only missing added
-
-
-def test_run_init_yes_overwrites_existing_skills_without_prompt(tmp_path: Path) -> None:
-    """--yes refreshes pre-existing catalog skills non-interactively (no merge prompt)."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n"})
-    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    inp = _Input()  # must never be prompted under --yes
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=True,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        **pkg,
-    )
-
-    assert rc == 0
-    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
-    assert inp.prompts == []  # no prompt of any kind was shown
-
-
-def test_run_init_refresh_leaves_non_git_loopy_skills_untouched(tmp_path: Path) -> None:
-    """A Yes refresh never touches a skill git-loopy does not ship."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n"})
-    target = _skill_tree(
-        _project_skills_dir(tmp_path), {"a": "LOCAL-A\n", "mine": "MINE\n"}
-    )
-    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=_Output(),
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
-    )
-
-    assert rc == 0
-    assert (target / "a" / "SKILL.md").read_text() == "PKG-A\n"  # refreshed
-    assert (target / "mine" / "SKILL.md").read_text() == "MINE\n"  # left untouched
-
-
-def test_run_init_cancel_at_merge_prompt_writes_nothing(tmp_path: Path) -> None:
-    """Cancelling at the up-front merge prompt writes nothing (collect-then-commit)."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
-    target = _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
     out = _Output()
-    inp = _Input("1", "4", "n", "y", "q")  # cancel at the merge prompt
 
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=inp,
-        output_fn=out,
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
-    )
-
-    assert rc != 0
-    assert "cancelled" in out.text.lower()
-    # Nothing written: no config, no PROMPT.md, existing skill unchanged, no new skill.
-    assert not settings.project_config_path(tmp_path).exists()
-    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
-    assert (target / "a" / "SKILL.md").read_text() == "LOCAL-A\n"
-    assert not (target / "b").exists()
-
-
-# ---------------------------------------------------------------------------
-# run_init — success summary: computed count + added/kept split (issue #126)
-# ---------------------------------------------------------------------------
-
-
-def test_run_init_summary_names_catalog_and_reports_computed_count(
-    tmp_path: Path,
-) -> None:
-    """The summary names the catalog and reports a count computed from what shipped."""
-    pkg = _pkg_with_skills(tmp_path, {"alpha": "A\n", "beta": "B\n", "gamma": "C\n"})
-    out = _Output()
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=_Input("1", "4", "n", "y"),  # no routing, scaffold=yes
-        output_fn=out,
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
-    )
-    assert rc == 0
-    assert "workflow skill catalog" in out.text
-    # Count is computed from the 3-skill fake catalog, so it is 3 (never a hardcoded 26).
-    assert "3 skills" in out.text
-    # A fresh scaffold overwrote nothing, so there is no added/kept split.
-    assert "added" not in out.text
-    assert "kept" not in out.text
-
-
-def test_run_init_summary_reports_added_kept_on_declined_overwrite(
-    tmp_path: Path,
-) -> None:
-    """Declining the refresh reports how many skills were added versus kept."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n", "c": "PKG-C\n"})
-    _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})
-    out = _Output()
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        input_fn=_Input("1", "4", "n", "y", "n"),  # no routing, refresh=no
-        output_fn=out,
-        fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
-    )
-    assert rc == 0
-    assert "workflow skill catalog" in out.text
-    assert "3 skills" in out.text  # computed total (1 kept + 2 added)
-    assert "2 added" in out.text
-    assert "1 kept" in out.text
-
-
-def test_run_init_summary_yes_overwrite_reports_count_without_split(
-    tmp_path: Path,
-) -> None:
-    """--yes overwrites, so its summary reports the count with no added/kept split."""
-    pkg = _pkg_with_skills(tmp_path, {"a": "PKG-A\n", "b": "PKG-B\n"})
-    _skill_tree(_project_skills_dir(tmp_path), {"a": "LOCAL-A\n"})  # pre-existing skill
-    out = _Output()
     rc = init_module.run_init(
         scope="project",
         assume_yes=True,
@@ -1251,40 +1029,141 @@ def test_run_init_summary_yes_overwrite_reports_count_without_split(
         input_fn=_Input(),
         output_fn=out,
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        **pkg,
+        packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+        **_policy_seams(tmp_path),
     )
+
     assert rc == 0
-    assert "workflow skill catalog" in out.text
-    assert "2 skills" in out.text
-    # Overwrite (not a declined refresh) => no added/kept split, even with a pre-existing skill.
-    assert "added" not in out.text
-    assert "kept" not in out.text
+    assert "Installed the Skill catalog" in out.text
+    # A computed count, from the catalog that was actually installed.
+    assert "3 Skills" in out.text
+    assert str(root) in out.text
 
 
-def test_run_init_summary_reports_a_count_not_a_skill_roster(tmp_path: Path) -> None:
-    """Runtime output stays a count — it never enumerates skills (or the excluded three)."""
-    pkg = _pkg_with_skills(tmp_path, {"alpha-skill": "A\n", "beta-skill": "B\n"})
-    out = _Output()
+def test_run_init_installs_before_it_collects_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The policy is a choice among the installed catalog, so it must exist first.
+
+    Collecting first would offer an operator an empty picker on a fresh machine,
+    and persist a policy that no Run could satisfy.
+    """
+    order: list[str] = []
+    _fake_refresh(
+        monkeypatch,
+        skill_install.RefreshOutcome(
+            catalog=_catalog(tmp_path / "skills", "alpha"),
+            action=skill_install.ACTION_INSTALLED,
+        ),
+        calls=order,
+    )
+
+    class _RecordingInput(_Input):
+        def __call__(self, prompt: str) -> str:
+            order.append("prompt")
+            return super().__call__(prompt)
+
     rc = init_module.run_init(
         scope="project",
         assume_yes=False,
         repo_root=tmp_path,
         env=_env(tmp_path),
-        input_fn=_Input("1", "4", "n", "y"),
-        output_fn=out,
+        input_fn=_RecordingInput("1", "4", "n", "n"),
+        output_fn=_Output(),
         fetch_choices=lambda: [_choice("claude-opus-4.8")],
-        **pkg,
+        packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+        **_policy_seams(tmp_path),
     )
+
     assert rc == 0
-    assert "2 skills" in out.text
-    # A count, never a roster: the individual scaffolded skill names are not listed.
-    assert "alpha-skill" not in out.text
-    assert "beta-skill" not in out.text
-    # The three excluded integrations are never named in init's runtime output.
-    for excluded in ("microsoft-docs", "microsoft-foundry", "playwright-cli"):
-        assert excluded not in out.text
+    assert order[0] == "install", f"setup prompted before installing: {order}"
+
+
+def test_run_init_fails_and_writes_nothing_when_nothing_can_be_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No catalog means no Run, so setup refuses rather than writing a dead Config."""
+    _fake_refresh(
+        monkeypatch,
+        skill_install.SkillInstallError("upstream unreachable and nothing installed"),
+    )
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        warn=warnings.append,
+        packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+        **_policy_seams(tmp_path),
+    )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
+    assert any("nothing was written" in message for message in warnings)
+    assert any("upstream unreachable" in message for message in warnings)
+
+
+def test_run_init_warns_but_continues_on_a_kept_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreachable upstream must not block setting up an already-equipped machine."""
+    _fake_refresh(
+        monkeypatch,
+        skill_install.RefreshOutcome(
+            catalog=_catalog(tmp_path / "skills", "alpha"),
+            action=skill_install.ACTION_KEPT,
+            warning="could not refresh the Skill catalog: no route to host",
+        ),
+    )
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        warn=warnings.append,
+        packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+        **_policy_seams(tmp_path),
+    )
+
+    assert rc == 0
+    assert settings.project_config_path(tmp_path).exists()
+    assert any("no route to host" in message for message in warnings)
+
+
+def test_run_init_never_installs_when_a_catalog_is_injected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The injected seam is the whole seam: no test can reach the network by accident."""
+
+    def _must_not_install(**_kwargs: object) -> skill_install.RefreshOutcome:
+        raise AssertionError("an injected catalog must not trigger an install")
+
+    monkeypatch.setattr(init_module, "refresh_installed_catalog", _must_not_install)
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+
 
 
 # ---------------------------------------------------------------------------
@@ -1521,8 +1400,7 @@ def test_run_init_collects_the_policy_last_but_before_every_write(
     tmp_path: Path,
 ) -> None:
     """The picker runs after the scaffold decision and before any target changes."""
-    inp = _Input("1", "4", "n", "y", "y")  # no routing, scaffold=yes, refresh=yes
-    _skill_tree(_project_skills_dir(tmp_path), {"setup-agent-skills": "LOCAL\n"})
+    inp = _Input("1", "4", "n", "y")  # no routing, scaffold=yes
     observed: list[tuple[list[str], bool, bool]] = []
 
     def pick(model: SkillSelectionModel, **_kwargs: object) -> SkillSelectionResult:
@@ -1551,12 +1429,11 @@ def test_run_init_collects_the_policy_last_but_before_every_write(
 
     assert rc == 0
     asked, config_written, prompt_written = observed[0]
-    # Every earlier decision is already in hand — including the scaffold and
-    # refresh answers the policy's Required Skills depend on.
+    # Every earlier decision is already in hand — including the scaffold answer
+    # the policy's Required Skills depend on.
     joined = "\n".join(asked).lower()
     assert "routing" in joined
     assert "scaffold" in joined
-    assert "refresh" in joined
     # ...and nothing has been written yet (collect-then-commit).
     assert not config_written
     assert not prompt_written

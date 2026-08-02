@@ -811,18 +811,27 @@ async def test_iteration_session_passes_working_directory_through(
     )
 
 
-async def test_iteration_session_enables_project_and_user_skills(
+async def test_iteration_session_loads_only_the_installed_catalog(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
     renderer_pair: tuple[Renderer, io.StringIO],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """SDK sessions load skills from the active worktree and the user's home."""
+    """SDK sessions load Skills from the installed catalog and nowhere else.
+
+    Not the worktree it is operating on, and not the operator's Copilot home:
+    git-loopy installs one catalog from the pin (ADR-0025), and that is the
+    only Skill root a session is handed. Offering either of the others would
+    make a Run's capabilities depend on the machine or the repository rather
+    than on the pinned revision.
+    """
     renderer, _ = renderer_pair
     worktree = tmp_path / "worktree"
     home = tmp_path / "home"
+    config_home = tmp_path / "xdg"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
     with event_log:
         async with IterationSession(
@@ -839,8 +848,7 @@ async def test_iteration_session_enables_project_and_user_skills(
     create_call = fake_client.create_calls[0]
     assert create_call["enable_skills"] is True
     assert create_call["skill_directories"] == [
-        str(worktree / ".copilot" / "skills"),
-        str(home / ".copilot" / "skills"),
+        str(config_home / "git-loopy" / "skills"),
     ]
     assert "enable_config_discovery" not in create_call
 
@@ -1779,6 +1787,9 @@ def test_session_module_imports_are_constrained() -> None:
         "git_loopy.persist",
         "git_loopy.sinks",
         "git_loopy.skill_exposure",
+        # Where the one installed Skill catalog lives. A pure path resolver:
+        # no I/O, no network, and no dependency back on the loop.
+        "git_loopy.skill_install",
         "git_loopy.skill_policy",
     }
     seen: set[str] = set()

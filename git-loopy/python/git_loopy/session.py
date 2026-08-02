@@ -116,7 +116,6 @@ Design notes
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
@@ -136,6 +135,7 @@ from git_loopy.emit import EventEmitter
 from git_loopy.persist import EventLogWriter
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_exposure import SkillExposure
+from git_loopy.skill_install import installed_catalog_dir
 from git_loopy.skill_policy import (
     EffectiveSkillPolicy,
     SkillCatalog,
@@ -175,14 +175,16 @@ _REASON_SKILL_LEGACY_DENY: str = "skill_legacy_denied"
 
 
 def _skill_directories(working_directory: str | None) -> list[str]:
-    """Return the explicit project and user skill roots for an SDK session."""
-    project_root = Path(working_directory or os.getcwd())
-    home = os.environ.get("HOME")
-    user_home = Path(home) if home and home.strip() else Path.home()
-    return [
-        str(project_root / ".copilot" / "skills"),
-        str(user_home / ".copilot" / "skills"),
-    ]
+    """Return the Skill root an SDK session resolves against.
+
+    git-loopy resolves every Skill from the catalog it installed into its own
+    config scope (ADR-0025). Neither the consumer project's ``.copilot/skills/``
+    nor the operator's ``~/.copilot/skills/`` is offered: a Run executes the
+    pinned catalog this repository stands behind, identical on every machine,
+    rather than whatever the checkout or the host happens to carry.
+    """
+    del working_directory
+    return [str(installed_catalog_dir(os.environ))]
 
 
 # ---------------------------------------------------------------------------

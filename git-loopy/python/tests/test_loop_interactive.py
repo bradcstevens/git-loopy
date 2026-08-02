@@ -93,7 +93,7 @@ def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         return build_skill_catalog(
             (),
             repo_root=Path(str(kwargs["repo_root"])),
-            packaged_skills_dir=Path(str(kwargs["packaged_skills_dir"])),
+            installed_skills_dir=Path(str(kwargs["installed_skills_dir"])),
         )
 
     monkeypatch.setattr(loop_module, "_discover_skill_catalog", discover)

@@ -1,6 +1,6 @@
 # Skills Setup
 
-> Install git-loopy's vendored Copilot CLI skills, configure them for a
+> Install git-loopy's pinned Copilot CLI skill catalog, configure it for a
 > repository, and prepare the human-led planning phase of a loop-engineering
 > workflow.
 
@@ -16,7 +16,7 @@ The single most common point of confusion is treating "install the skills" and "
 
 | Step | Command | Scope | What it changes | Run how often |
 | --- | --- | --- | --- | --- |
-| **1. Install** the workflow skill catalog | `git-loopy init --project` or `git-loopy init --global` | This repo or your machine | Scaffolds the packaged workflow skills into the selected scope so `/intake`, `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest are discoverable. | Once per scope (re-run after a git-loopy upgrade) |
+| **1. Install** the workflow skill catalog | `git-loopy init --project` or `git-loopy init --global` | Your machine, in git-loopy's config home | Installs the pinned workflow skill catalog so `/intake`, `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest are discoverable. | Once per machine; every Run refreshes it against the pin |
 | **2. Configure** the skills for this repo | `/setup-agent-skills` (inside `copilot`) | This repo | Edits **this repo's** `AGENTS.md` `## Agent skills` block and writes **this repo's** `docs/agents/*.md`, telling the other skills which issue tracker, label vocabulary, and context layout this project uses. | Once per repo (re-run to change trackers/labels) |
 
 Step 1 makes the commands _exist_. Step 2 makes them _correct for this project_. You must do both, in order, before any of the planning or implementation skills will behave.
@@ -55,23 +55,39 @@ git init && git add -A && git commit -m "Initialize project from git-loopy"
 ### 1.2 Recommended: install the workflow skill catalog with `git-loopy init`
 
 Install the [`git-loopy` command](../git-loopy/python/README.md#install-run-from-anywhere),
-then scaffold the packaged workflow skill catalog into the scope where you want
-to use it:
+then run setup for the scope whose Config you want to establish:
 
 ```bash
 # Recommended for one repository.
 git-loopy init --project
 
-# User-level equivalent: make the catalog available in every repository.
+# User-level equivalent: configure every repository.
 git-loopy init --global
 ```
 
-Accept the default offer to scaffold the editable `PROMPT.md` override and
-workflow skill catalog. Project scope writes `./.copilot/skills/`; global scope
-writes `~/.copilot/skills/`. On a re-run, `init` asks once whether to refresh
-catalog skills that already exist; declining keeps those copies and adds only
-missing catalog skills. This installs the commands but does not configure their
-issue tracker, labels, or domain layout - that is
+Setup's **first** act is to install the workflow skill catalog, before it
+collects anything from you. It clones
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+at the revision git-loopy pins and writes the Skills into git-loopy's own config
+home — `$XDG_CONFIG_HOME/git-loopy/skills/`, or `~/.config/git-loopy/skills/`
+when that variable is unset. This is machine-wide and scope-independent: both
+commands above install to the same place, and the `--project` / `--global`
+choice only decides which Config the rest of setup writes. Every subsequent Run
+re-checks that install against the pin and repairs it, so the catalog cannot
+drift (see [ADR-0025](adr/0025-installed-skill-catalog.md)).
+
+That install is the only Skill source git-loopy provides for itself. It no
+longer copies Skills into `./.copilot/skills/` or `~/.copilot/skills/`, and it
+no longer reads the repository's `./.copilot/skills/` at all — a repository
+cannot hand a Run a Skill by committing one. Copilot CLI's own sources (your
+personal, plugin, built-in, and custom Skills, including `~/.copilot/skills/`)
+are still in the catalog, still bounded by the Skill policy below, and lose any
+name the installed catalog also provides. See
+[§1.3](#13-also-give-copilot-cli-the-slash-commands) if you want these commands
+available directly in Copilot CLI. Setup still
+offers to scaffold an editable `PROMPT.md` override; accept it if you want to
+tune the Run instructions. This installs the commands but does not configure
+their issue tracker, labels, or domain layout - that is
 [Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
 
 Interactive `init` also establishes the scope's **Skill policy** — the
@@ -146,11 +162,10 @@ lower-scope one, or falls back to the unconfigured default — there is nothing
 for the baseline to already match, so sync says so and offers to save the whole
 baseline as that scope's first policy. It replaces only the Skills Copilot
 actually reports:
-git-loopy's packaged fallbacks — and any configured name Copilot does not know —
-keep their current state rather than being synced away. The proposed policy is
-validated first, so a sync that would disable a Required Skill, enable an
-untracked project Skill, or leave an unresolvable name enabled fails without
-touching the Config. Cancelling writes nothing, and no path ever writes back to
+Skills from git-loopy's installed catalog — and any configured name Copilot does
+not know — keep their current state rather than being synced away. The proposed
+policy is validated first, so a sync that would disable a Required Skill or
+leave an unresolvable name enabled fails without touching the Config. Cancelling writes nothing, and no path ever writes back to
 Copilot's own settings.
 
 #### Upgrading a Config written before Skill policies existed
@@ -188,45 +203,49 @@ asked again.
   the base policy and does not, so the underlying Config is still offered for
   migration.
 
-### 1.3 Alternative: copy the source catalog manually
+### 1.3 Also: give Copilot CLI the slash commands
 
-Use a manual copy when Python or `uv` is not available yet, or when you want
-all 30 skills from the source checkout rather than the 27-skill catalog
-packaged for `init`:
+git-loopy's install is for git-loopy's *own* Runs. Copilot CLI reads a different
+set of directories, so a slash command you want to type yourself has to be
+somewhere Copilot looks. Copy it there once:
 
 ```bash
 mkdir -p ~/.copilot/skills
-cp -R .copilot/skills/* ~/.copilot/skills/
+cp -R ~/.config/git-loopy/skills/* ~/.copilot/skills/
 ```
 
-The difference is three optional tool/vendor integrations:
-`microsoft-docs`, `microsoft-foundry`, and `playwright-cli`. They are excluded
-from the packaged workflow catalog and remain available through
-`/find-skills` or this manual copy. The copy is user-level, touches nothing in
-the target repo, and should be repeated after updating the source checkout.
+This is user-level, touches nothing in the target repo, and is entirely
+optional: skipping it changes nothing about what a Run can do. Repeat it after a
+git-loopy upgrade moves the pin. You can equally clone
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+straight into `~/.copilot/skills/` — the same source of record git-loopy pins —
+if you would rather track the catalog's tip than git-loopy's pinned revision.
 
-Both the packaged catalog and this source checkout are cut from one external
-source of record, [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
-pinned to an immutable revision. Installing skills never contacts it, and
-neither does a Run — see
-[`docs/skill-catalog-source.md`](skill-catalog-source.md) if you maintain the
-catalog or need to audit what a release redistributes.
+See [`docs/skill-catalog-source.md`](skill-catalog-source.md) if you maintain
+the catalog or need to audit what a release contains.
 
 ### 1.4 Verify the skills are discoverable
 
-Launch Copilot CLI from the project root and open the slash-command menu:
+Confirm git-loopy resolved the catalog it just installed:
+
+```bash
+git-loopy skills
+```
+
+You should see `code-review`, `implement`, `tdd`, `setup-agent-skills`, and the
+rest, each attributed to the installed catalog. If the list is empty, re-run
+`git-loopy init` and read the install line it prints — an unreachable network on
+a machine that has never installed the catalog is the one case setup cannot
+recover from on its own.
+
+If you also did [§1.3](#13-also-give-copilot-cli-the-slash-commands), launch
+Copilot CLI from the project root and open the slash-command menu to check the
+copy landed:
 
 ```bash
 copilot
 > /
 ```
-
-You should see `grill-me`, `grill-with-docs`, `wayfinder`, `to-spec`,
-`to-tickets`, `triage`, `implement`, `setup-agent-skills`, and the rest. If
-they are missing, re-run `git-loopy init --project` or
-`git-loopy init --global`, accept the catalog scaffold, and relaunch `copilot`.
-If you used the alternative, confirm the copy landed in
-`~/.copilot/skills/`.
 
 ---
 
@@ -370,7 +389,7 @@ the [manual-copy alternative](#13-alternative-copy-the-source-catalog-manually).
 **Which issue trackers are supported?**
 GitHub, GitLab, local markdown, or "other" (free-form). There's no plugin to hunt for — say what you use during setup and the skill adapts. More detail lives in [`docs/customization.md`](customization.md#setup-agent-skills--the-entry-point-skill).
 
-**How do I discover skills beyond what's vendored?**
+**How do I discover skills beyond the installed catalog?**
 `/find-skills <query>` from inside `copilot`, or `npx skills find <query>` from the shell. See [`docs/customization.md` → Skills reference](customization.md#skills-reference).
 
 ---

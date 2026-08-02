@@ -20,7 +20,7 @@
 │   ├── runners.md
 │   ├── skills-setup.md
 │   └── customization.md
-├── .copilot/skills/                # Vendored, composable planning and execution skills.
+├── .copilot/skills/                # This repo's own copy of the composable workflow skills.
 │   ├── setup-agent-skills/         # Configure tracker, labels, and domain docs first.
 │   ├── intake/                     # Capture a messy request without designing it.
 │   ├── grill-me/                   # Resolve a general plan or decision.
@@ -126,11 +126,14 @@ preflight works without it; this directive adds the interactive auto-trigger.
 
 ## Skills reference
 
-git-loopy vendors its complete workflow catalog under
-[`.copilot/skills/`](../.copilot/skills). The GitHub Copilot CLI marketplace
-contains additional skills for work outside this catalog.
+git-loopy's workflow catalog is maintained in
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+and installed from a pinned revision by `git-loopy init`; this repository keeps
+its own copy under [`.copilot/skills/`](../.copilot/skills) for the agents that
+work on it. The GitHub Copilot CLI marketplace contains additional skills for
+work outside this catalog.
 
-To discover more skills beyond what's vendored:
+To discover more skills beyond the catalog:
 
 ```bash
 # From inside copilot:

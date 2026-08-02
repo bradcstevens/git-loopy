@@ -4778,6 +4778,19 @@ def reconcile_records(
     return _reconcile(request, github)
 
 
+def record_dispatch_result(
+    request: dict[str, Any], github: ContinuationGitHubClient
+) -> dict[str, Any]:
+    """Write one exceptional Dispatch-evidence record, as the native command does.
+
+    Public for the same reason :func:`reconcile_records` is: an execute-frontier
+    Run records its own boundaries, and a Runner with its own writer would be
+    leaving a *different* record on the carrier than the one an operator can write
+    by hand --- including a different answer to who is allowed to write it.
+    """
+    return _record_dispatch_result(request, github)
+
+
 def run_command(
     operation: str,
     *,

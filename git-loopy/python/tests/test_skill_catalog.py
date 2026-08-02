@@ -28,28 +28,36 @@ def _write_skill(root: Path, directory: str, *, name: str, description: str) -> 
     return skill_md
 
 
-def test_catalog_resolves_project_then_copilot_then_packaged_winners(
+def test_catalog_resolves_installed_then_copilot_winners(
     tmp_path: Path,
 ) -> None:
+    """The installed catalog wins; a consumer project's own tree is not read.
+
+    git-loopy resolves every Skill from the one catalog it installed from the
+    pin (ADR-0025), so a same-named Skill sitting in the repository under test
+    must not appear in the catalog at all — not as a winner, and not as an
+    alternate. Anything else would make "which Skills ran" depend on the
+    repository a Run was pointed at.
+    """
     project_skills = tmp_path / "repo" / ".copilot" / "skills"
-    packaged_skills = tmp_path / "packaged"
-    project_path = _write_skill(
+    installed_skills = tmp_path / "installed"
+    _write_skill(
         project_skills,
         "alpha-dir",
         name="alpha",
         description="Project alpha",
     )
-    _write_skill(
-        packaged_skills,
-        "beta",
-        name="beta",
-        description="Packaged beta",
+    installed_alpha = _write_skill(
+        installed_skills,
+        "alpha",
+        name="alpha",
+        description="Installed alpha",
     )
     _write_skill(
-        packaged_skills,
+        installed_skills,
         "gamma",
         name="gamma",
-        description="Packaged gamma",
+        description="Installed gamma",
     )
     copilot_skills = [
         SimpleNamespace(
@@ -75,20 +83,27 @@ def test_catalog_resolves_project_then_copilot_then_packaged_winners(
     catalog = build_skill_catalog(
         copilot_skills,
         repo_root=tmp_path / "repo",
-        packaged_skills_dir=packaged_skills,
+        installed_skills_dir=installed_skills,
     )
 
     assert tuple(catalog.winners) == ("alpha", "beta", "gamma")
-    assert catalog.winners["alpha"].description == "Project alpha"
-    assert catalog.winners["alpha"].source_kind == "project"
+    # The installed copy wins over the machine's own Copilot inventory ...
+    assert catalog.winners["alpha"].description == "Installed alpha"
+    assert catalog.winners["alpha"].source_kind == "packaged"
+    assert catalog.winners["alpha"].path == installed_alpha
     assert catalog.winners["alpha"].copilot_enabled is False
-    assert catalog.winners["alpha"].path == project_path
-    assert catalog.winners["alpha"].project_path == project_path.parent
     assert catalog.winners["beta"].description == "Plugin beta"
     assert catalog.winners["beta"].source_kind == "plugin"
     assert catalog.winners["beta"].plugin_name == "example"
     assert catalog.winners["gamma"].source_kind == "packaged"
     assert catalog.winners["gamma"].copilot_enabled is None
+    # ... and the repository's own tree contributed nothing, anywhere.
+    assert not any(
+        winner.source_kind == "project" for winner in catalog.winners.values()
+    )
+    assert "Project alpha" not in {
+        winner.description for winner in catalog.winners.values()
+    }
 
 
 def test_pinned_sdk_skill_surface_guard_rejects_source_enum_drift() -> None:
@@ -129,9 +144,9 @@ def test_pinned_sdk_skill_surface_guard_rejects_missing_exposure_option() -> Non
 async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
     tmp_path: Path,
 ) -> None:
-    packaged_skills = tmp_path / "packaged"
+    installed_skills = tmp_path / "packaged"
     _write_skill(
-        packaged_skills,
+        installed_skills,
         "fallback",
         name="fallback",
         description="Fallback",
@@ -169,7 +184,7 @@ async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
     catalog = await discover_skill_catalog(
         client,
         repo_root=tmp_path,
-        packaged_skills_dir=packaged_skills,
+        installed_skills_dir=installed_skills,
         discovery_directory=discovery_directory,
         validate_surface=False,
     )

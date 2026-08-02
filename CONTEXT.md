@@ -367,9 +367,8 @@ _Avoid_: child agent, nested session, task (the launching tool's name).
 **Skill**:
 A named capability package whose instructions and resources a **Performer** may load
 when a task matches its purpose. Its canonical name is its policy identity; when
-multiple sources provide that name, git-loopy's explicit project source wins and the
-external agent client's source precedence resolves the remaining candidates before
-git-loopy's packaged fallback.
+multiple sources provide that name, git-loopy's **installed catalog** wins and the
+external agent client's source precedence resolves the remaining candidates.
 _Avoid_: custom instruction, tool.
 
 **Skill baseline**:
@@ -380,10 +379,19 @@ project Skill policy starts from the inherited global policy unless the operator
 explicitly requests another external-client sync.
 _Avoid_: live mirror, source of truth.
 
+**Installed catalog**:
+The Skills git-loopy itself provides: a checkout of the external Skill catalog at the
+immutable revision this release pins, written into git-loopy's own config home rather
+than into any repository or agent-client directory. Setup installs it and every **Run**
+refreshes it against the pin, so it is current without being mutable. It is the only
+Skill source git-loopy reads directly; the consuming repository's own agent-skill
+directory is not one.
+_Avoid_: packaged fallback, vendored skills, bundled catalog.
+
 **Skill catalog**:
 The inventory of Skills an operator may inspect and select for git-loopy, including
 project, personal, plugin, built-in, and custom sources reported by the external agent
-client, plus git-loopy's explicit project and packaged Skill sources. It is refreshed
+client, plus git-loopy's **installed catalog**. It is refreshed
 at Run preflight to resolve each Skill name to its current source, but the external
 client's enabled state has no authority after the **Skill baseline** is established.
 Catalog discovery reads metadata only. Catalog membership does not load a Skill's

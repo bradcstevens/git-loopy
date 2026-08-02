@@ -1,6 +1,15 @@
 # Pin the external Skill catalog as the reproducible source of record
 
-**Status:** accepted
+**Status:** accepted; the redistribution half is superseded by
+[ADR-0025](0025-installed-skill-catalog.md).
+
+> **Superseded in part.** The pin, the acquisition command, and every validation
+> rule below still stand — they are what an install is proved against. What no
+> longer holds is the *destination*: git-loopy ships no vendored
+> `git_loopy/skills/` fallback, does not read the consuming project's
+> `.copilot/skills/`, and does reach the network for its Skills, at setup and at
+> the start of every Run. Read "The three-layer boundary" and the packaged
+> fallback in this ADR as history; ADR-0025 states the current arrangement.
 
 git-loopy's workflow Skill catalog has three copies with no stated relationship:
 `bradcstevens/git-loopy-skills` upstream, the repo-root `.copilot/skills/` a
@@ -25,8 +34,8 @@ immutable revision, and give that pin one command that turns it into evidence.
   abbreviated SHA is refused when the pin is read, so no maintenance or Release
   path can rest on a floating ref.
 - The pin ships as wheel package data. A released artifact can therefore always
-  answer which upstream revision its packaged catalog was cut from, without a
-  source checkout and without the network.
+  answer which upstream revision it installs, without a source checkout and
+  without the network.
 - Moving the pin forward is a reviewed edit to one committed file, made together
   with whatever catalog change it justifies.
 
@@ -110,10 +119,9 @@ immutable revision, and give that pin one command that turns it into evidence.
   committed pin is immutable and exercises the real acquisition path against a
   `file://` remote built in a temporary directory, so the normal Python suite
   covers acquisition and validation with no live network.
-- Refreshing the catalog gains a stated order: acquire and validate the new
-  revision, copy it into `.copilot/skills/`, re-run `scripts/sync_skills.py`, and
-  commit the pin bump together with the regenerated vendored tree.
-- Drift that was previously invisible becomes a reported warning, including
-  Skills the wheel ships that the source of record no longer has.
-- The upstream repository becomes load-bearing for maintenance. It is not
-  load-bearing for a Run, and this ADR is what keeps those two facts separate.
+- Refreshing the catalog is a reviewed edit to one committed file: bump the pin.
+  (ADR-0023 originally required regenerating a vendored tree alongside it; under
+  ADR-0025 there is no vendored tree, so the pin bump is the whole change.)
+- The upstream repository is load-bearing for maintenance, and — since ADR-0025
+  — for a Run's Skills too, with an unreachable upstream degrading to a warning
+  rather than a failure.

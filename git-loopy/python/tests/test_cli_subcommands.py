@@ -390,7 +390,9 @@ def test_main_bare_config_routing_dispatches_shared_walk(
 
 
 def test_main_init_yes_project_writes_config_and_scaffolds(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    installed_skill_catalog: object
 ) -> None:
     """``git-loopy init --yes --project`` writes Config + assets and never runs."""
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
@@ -406,13 +408,14 @@ def test_main_init_yes_project_writes_config_and_scaffolds(
     assert captured == []  # the loop never ran — init writes and exits
     assert (tmp_path / "git-loopy" / "config.toml").is_file()
     assert (tmp_path / "git-loopy" / "PROMPT.md").is_file()
-    assert (
-        tmp_path / ".copilot" / "skills" / "setup-agent-skills" / "SKILL.md"
-    ).is_file()
+    # The Skill catalog is installed machine-wide, never copied into the repo.
+    assert not (tmp_path / ".copilot").exists()
 
 
 def test_main_init_yes_global_writes_to_config_home_outside_repo(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    installed_skill_catalog: object
 ) -> None:
     """``--yes --global`` works with no repo, writing under $XDG_CONFIG_HOME."""
     xdg = tmp_path / "xdg"
@@ -545,7 +548,9 @@ class _RecordingLabelClient:
 
 
 def test_main_init_ensures_the_tracker_label_vocabulary(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    installed_skill_catalog: object,
 ) -> None:
     """``git-loopy init`` in a repo bootstraps the labels a Run reads.
 

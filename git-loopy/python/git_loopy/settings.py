@@ -103,14 +103,15 @@ class ConfigTables:
     global_: Mapping[str, object]
 
 
-def _global_dir(env: Mapping[str, str]) -> Path:
+def global_dir(env: Mapping[str, str]) -> Path:
     """Resolve the global scope directory ``<config-home>/git-loopy/``.
 
     ``$XDG_CONFIG_HOME`` wins when set (and non-blank); otherwise the XDG
     default ``$HOME/.config`` is used. Falls back to :meth:`Path.home` only if
     ``$HOME`` is absent from the mapping (defensive — ``os.environ`` always has
-    it in practice). Both the global ``config.toml`` and the global ``PROMPT.md``
-    override live in this one directory.
+    it in practice). The global ``config.toml``, the global ``PROMPT.md``
+    override, and the installed Skill catalog
+    (:mod:`git_loopy.skill_install`) all live in this one directory.
     """
     xdg = env.get("XDG_CONFIG_HOME")
     if xdg and xdg.strip():
@@ -125,9 +126,9 @@ def global_config_path(env: Mapping[str, str]) -> Path:
     """Resolve the global ``config.toml`` path from an environment mapping.
 
     ``$XDG_CONFIG_HOME`` wins when set (and non-blank); otherwise the XDG
-    default ``$HOME/.config`` is used (see :func:`_global_dir`).
+    default ``$HOME/.config`` is used (see :func:`global_dir`).
     """
-    return _global_dir(env) / CONFIG_FILENAME
+    return global_dir(env) / CONFIG_FILENAME
 
 
 def global_prompt_path(env: Mapping[str, str]) -> Path:
@@ -139,7 +140,7 @@ def global_prompt_path(env: Mapping[str, str]) -> Path:
     (:func:`git_loopy.loop._read_prompt`) resolves **project > this global
     override > the packaged default** (ADR-0006).
     """
-    return _global_dir(env) / PROMPT_FILENAME
+    return global_dir(env) / PROMPT_FILENAME
 
 
 def project_config_path(repo_root: Path) -> Path:

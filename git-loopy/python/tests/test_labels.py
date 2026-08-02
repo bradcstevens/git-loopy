@@ -16,7 +16,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from git_loopy import labels as labels_module
+from git_loopy.skill_source import (
+    ACQUIRE_COMMAND,
+    DEFAULT_CHECKOUT,
+    read_skill_source_pin,
+)
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 
@@ -350,6 +357,29 @@ def test_subprocess_label_client_satisfies_the_bootstrap_seam() -> None:
     assert isinstance(gh.SubprocessLabelClient(), labels_module.LabelBootstrapClient)
 
 
+def _pinned_skill_file(skill: str, name: str) -> Path:
+    """A file from the pinned Skill catalog, from an acquired checkout.
+
+    git-loopy ships no Skills (ADR-0025), so a template a consumer repository
+    receives lives upstream. This reads it from a local acquisition and skips
+    when there is none — the suite never reaches the network.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+            root = parent
+            break
+    else:  # pragma: no cover - installed wheel, no source checkout
+        pytest.skip("no source checkout")
+    pin = read_skill_source_pin()
+    path = root / DEFAULT_CHECKOUT / pin.skills_directory / skill / name
+    if not path.is_file():
+        pytest.skip(
+            f"the pinned catalog is not acquired at {DEFAULT_CHECKOUT}; "
+            f"run `{ACQUIRE_COMMAND}`"
+        )
+    return path
+
+
 def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -> None:
     """A repo set up by ``/setup-agent-skills`` gets *that* template, not ours.
 
@@ -357,14 +387,7 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
     backticked cells rather than the header — otherwise every consumer repo would
     silently fall back to the canonical defaults.
     """
-    template = (
-        Path(__file__).resolve().parents[1]
-        / "git_loopy"
-        / "skills"
-        / "setup-agent-skills"
-        / "triage-labels.md"
-    )
-    assert template.is_file()
+    template = _pinned_skill_file("setup-agent-skills", "triage-labels.md")
     doc = tmp_path / "docs" / "agents"
     doc.mkdir(parents=True)
     (doc / "triage-labels.md").write_text(

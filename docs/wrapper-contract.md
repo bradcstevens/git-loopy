@@ -657,9 +657,13 @@ A Skill is identified by **canonical name** — never by absolute path or conten
 project policy stays portable. Canonical names match `[a-z][a-z0-9]*(-[a-z0-9]+)*`. The
 `source_kind` vocabulary is exactly `project`, `inherited`, `personal`, `plugin`, `custom`,
 `builtin`, and `packaged`. Source precedence when resolving a catalog winner is: the
-Orchestrator's explicit project source (`<repo>/.copilot/skills`), then the Copilot CLI's own
-project/personal/plugin/built-in/custom precedence, then the packaged fallback catalog. Enabling a
-plugin-provided Skill MUST NOT activate the rest of its owning plugin.
+Orchestrator's **installed catalog** — the pinned external Skill catalog it installs into its own
+config home at setup and refreshes at the start of every Run, reported as `packaged` — then the
+Copilot CLI's own project/personal/plugin/built-in/custom precedence. The consuming repository's
+`<repo>/.copilot/skills` is **not** an Orchestrator Skill source, so no winner an Orchestrator
+resolves carries `source_kind` `project`; the value remains in the vocabulary for older Event
+streams (ADR-0025). Enabling a plugin-provided Skill MUST NOT activate the rest of its owning
+plugin.
 
 ### 17.2 Source precedence and scope replacement
 
@@ -697,11 +701,11 @@ Resolution MUST fail before any work begins, and MUST NOT rewrite persisted poli
 | Inventory unavailable | The catalog could not be resolved and the policy was explicitly configured. |
 | Missing enabled Skills | An enabled name has no catalog winner. |
 | Missing Required Skills | A Required Skill is not in the effective enabled set. |
-| Untracked project Skills | An enabled winner whose `source_kind` is `project` is not git-tracked. |
+| Untracked project Skills | An enabled winner whose `source_kind` is `project` is not git-tracked. Unreachable since ADR-0025, which removed the project Skill source; retained so an Orchestrator that still exposes one keeps failing closed. |
 
 Each failure MUST name the offending canonical names, sorted and deduplicated. A Run with **no**
 explicit policy still resolves the Minimal Skill policy even when external inventory is
-unavailable, because Required Skills come from the packaged catalog.
+unavailable, because Required Skills come from the installed catalog.
 
 ### 17.4 Freeze semantics (MUST)
 

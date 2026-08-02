@@ -68,7 +68,7 @@ async def test_configured_run_resolves_and_materializes_one_frozen_exposure(
         git=FakeGitClient(repo, tracked_paths=(project_skill,)),
         prompt_text="---\nrequired-skills:\n  - required\n---\n",
         repo_root=repo,
-        packaged_skills_dir=packaged,
+        installed_skills_dir=packaged,
         workspace=tmp_path / "workspace",
         discoverer=discoverer,
     )
@@ -130,7 +130,7 @@ async def test_unconfigured_run_uses_only_packaged_minimal_winners(
         git=FakeGitClient(repo),
         prompt_text="---\nrequired-skills:\n  - required\n---\n",
         repo_root=repo,
-        packaged_skills_dir=packaged,
+        installed_skills_dir=packaged,
         workspace=tmp_path / "workspace",
         discoverer=discoverer,
     )
@@ -163,7 +163,7 @@ async def test_unavailable_inventory_fails_only_an_explicit_policy(
             git=FakeGitClient(repo),
             prompt_text="---\nrequired-skills:\n  - required\n---\n",
             repo_root=repo,
-            packaged_skills_dir=packaged,
+            installed_skills_dir=packaged,
             workspace=tmp_path / "configured-workspace",
             discoverer=unavailable,
         )
@@ -176,7 +176,7 @@ async def test_unavailable_inventory_fails_only_an_explicit_policy(
         git=FakeGitClient(repo),
         prompt_text="---\nrequired-skills:\n  - required\n---\n",
         repo_root=repo,
-        packaged_skills_dir=packaged,
+        installed_skills_dir=packaged,
         workspace=tmp_path / "fallback-workspace",
         discoverer=unavailable,
     )

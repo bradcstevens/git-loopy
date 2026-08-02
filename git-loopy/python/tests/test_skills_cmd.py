@@ -248,7 +248,7 @@ def test_skills_edit_without_an_injected_picker_resolves_one_at_the_seam(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=("alpha",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -301,7 +301,7 @@ def test_skills_edit_first_global_policy_seeds_from_copilot_and_packaged_fallbac
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=("alpha",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -357,7 +357,7 @@ def test_skills_edit_new_project_policy_inherits_global_without_catalog_addition
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -410,7 +410,7 @@ def test_skills_edit_rejects_untracked_project_winner_without_writing(
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append((path, dict(table))),
     )
 
@@ -449,7 +449,7 @@ def test_skills_edit_rejects_picker_result_missing_required_skill(
         picker_runner=lambda model, **kwargs: SkillSelectionResult(()),
         git=FakeGitClient(tmp_path),
         required_skills=("required",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append((path, table)),
     )
 
@@ -487,7 +487,7 @@ def test_skills_edit_projects_missing_required_skill_as_blocked_row(
         picker_runner=cancel,
         git=FakeGitClient(tmp_path),
         required_skills=("required",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert seen[0].rows == (
@@ -526,7 +526,7 @@ def test_skills_edit_cancellation_writes_nothing(tmp_path: Path) -> None:
         picker_runner=lambda model, **kwargs: None,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append((path, table)),
     )
 
@@ -594,7 +594,7 @@ def test_skills_list_prints_stable_path_free_policy_rows(tmp_path: Path) -> None
         discoverer=fake_discover,
         enabled_skills=("alpha",),
         required_skills=("beta",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -640,7 +640,7 @@ def test_skills_list_preserves_explicit_empty_project_policy(tmp_path: Path) -> 
         client_factory=FakeClient,
         discoverer=fake_discover,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -679,7 +679,7 @@ def test_skills_list_preserves_explicit_empty_environment_replacement(
         client_factory=FakeClient,
         discoverer=fake_discover,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -712,7 +712,7 @@ def test_skills_list_surfaces_unavailable_inventory_and_stops_client(
         discoverer=unavailable,
         enabled_skills=(),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 1
@@ -743,7 +743,7 @@ def test_skills_list_surfaces_invalid_required_metadata_before_client_start(
         env={"HOME": str(tmp_path / "home")},
         error_fn=errors.append,
         client_factory=unexpected_client,
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 1
@@ -782,7 +782,7 @@ def test_skills_edit_without_repository_resolves_the_global_scope(
         discoverer=discover,
         picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -855,7 +855,7 @@ def test_skills_list_without_repository_reports_the_global_policy(
         client_factory=FakeClient,
         discoverer=discover,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -911,7 +911,7 @@ def test_skills_edit_global_takes_a_skill_baseline_over_a_project_policy(
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -966,7 +966,7 @@ def test_skills_edit_leaves_new_catalog_names_unselected_at_the_edited_scope(
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -1017,7 +1017,7 @@ def test_skills_edit_preserves_an_explicitly_empty_policy_as_the_seed(
         picker_runner=pick,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -1077,7 +1077,7 @@ def test_skills_commands_never_reach_a_copilot_settings_mutation_api(
         client_factory=factory,
         discoverer=discover,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
     edited = run_skills_edit(
         scope="global",
@@ -1089,7 +1089,7 @@ def test_skills_commands_never_reach_a_copilot_settings_mutation_api(
         picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
     synced = skillscmd.run_skills_sync(
         scope="global",
@@ -1100,7 +1100,7 @@ def test_skills_commands_never_reach_a_copilot_settings_mutation_api(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert (listed, edited, synced) == (0, 0, 0)
@@ -1165,7 +1165,7 @@ def test_skills_edit_writes_nothing_when_the_workspace_cleanup_fails(
         picker_runner=lambda model, **kwargs: SkillSelectionResult(model.enabled),
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append((path, table)),
     )
 
@@ -1198,7 +1198,7 @@ def test_skills_list_reports_an_unusable_workspace_as_a_diagnostic(
         error_fn=errors.append,
         client_factory=unexpected_client,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 1
@@ -1249,7 +1249,7 @@ def test_skills_list_without_repository_drops_ancestry_derived_winners(
         discoverer=discover,
         enabled_skills=(),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -1284,7 +1284,7 @@ def test_skills_edit_without_repository_drops_ancestry_derived_winners(
         discoverer=discover,
         picker_runner=pick,
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
     )
 
     assert result == 0
@@ -1371,7 +1371,7 @@ def test_skills_sync_shows_the_delta_and_confirms_before_writing(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=write,
     )
 
@@ -1410,7 +1410,7 @@ def test_skills_sync_cancellation_writes_nothing(tmp_path: Path) -> None:
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1459,7 +1459,7 @@ def test_skills_sync_reports_an_already_matching_policy_without_writing(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1496,7 +1496,7 @@ def test_skills_sync_refuses_to_disable_a_required_skill(tmp_path: Path) -> None
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=("tdd",),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1539,7 +1539,7 @@ def test_skills_sync_refuses_to_enable_an_untracked_project_winner(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1569,7 +1569,7 @@ def test_skills_sync_refuses_an_unavailable_skill_inventory(tmp_path: Path) -> N
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1614,7 +1614,7 @@ def test_skills_sync_never_silently_drops_a_name_with_no_catalog_winner(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=lambda path, table: writes.append(path),
     )
 
@@ -1661,7 +1661,7 @@ def test_skills_sync_establishes_a_policy_when_the_scope_has_none(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=settings.write_config,
     )
 
@@ -1707,7 +1707,7 @@ def test_skills_sync_shows_removals_against_an_inherited_global_policy(
         discoverer=discover,
         git=FakeGitClient(tmp_path),
         required_skills=(),
-        packaged_skills_dir=tmp_path / "packaged",
+        installed_skills_dir=tmp_path / "packaged",
         writer=settings.write_config,
     )
 

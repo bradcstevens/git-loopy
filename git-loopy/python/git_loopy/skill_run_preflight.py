@@ -45,13 +45,13 @@ class RunSkillPreflight:
         }
 
 
-def _minimal_catalog(packaged_skills_dir: Path, workspace: Path) -> SkillCatalog:
+def _minimal_catalog(installed_skills_dir: Path, workspace: Path) -> SkillCatalog:
     root = workspace / "minimal-catalog-root"
     root.mkdir(parents=True, exist_ok=True)
     return build_skill_catalog(
         (),
         repo_root=root,
-        packaged_skills_dir=packaged_skills_dir,
+        installed_skills_dir=installed_skills_dir,
     )
 
 
@@ -62,7 +62,7 @@ async def resolve_run_skill_preflight(
     git: Any,
     prompt_text: str,
     repo_root: Path,
-    packaged_skills_dir: Path,
+    installed_skills_dir: Path,
     workspace: Path,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
 ) -> RunSkillPreflight:
@@ -75,7 +75,7 @@ async def resolve_run_skill_preflight(
         discovered = await discoverer(
             client,
             repo_root=repo_root,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
             discovery_directory=discovery_directory,
         )
     except (
@@ -85,7 +85,7 @@ async def resolve_run_skill_preflight(
         SkillCatalogError,
         SdkSkillSurfaceError,
     ):
-        minimal = _minimal_catalog(packaged_skills_dir, workspace)
+        minimal = _minimal_catalog(installed_skills_dir, workspace)
         discovered = SkillCatalog(
             winners=minimal.winners,
             inventory_available=False,
@@ -98,7 +98,7 @@ async def resolve_run_skill_preflight(
         or inputs.environment.present
         or bool(inputs.enable_skills)
     )
-    catalog = discovered if configured else _minimal_catalog(packaged_skills_dir, workspace)
+    catalog = discovered if configured else _minimal_catalog(installed_skills_dir, workspace)
     tracked = collect_project_skill_tracking(catalog, git)
     policy = resolve_skill_policy(
         inputs,

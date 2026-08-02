@@ -1,79 +1,40 @@
 Third-Party Licenses
 ====================
 
-git-loopy redistributes a workflow Skill catalog inside its distributions as
-package data, so `git-loopy init` can scaffold it and a Run can resolve its
-Skills from disk -- with no source checkout and no network.
+git-loopy redistributes no third-party material. This file names the third-party
+work a git-loopy *installation* obtains, so an operator can see what will land on
+their machine and under what terms before it does.
 
-That catalog is not authored here. It is *generated* from one external source of
-record, `bradcstevens/git-loopy-skills`, at the exact immutable revision recorded
-in `git_loopy/skill_source.json`, under the inclusion policy recorded in
-`git_loopy/skill_fallback.json`. Both records ship beside this file, so a
-released artifact can always name the revision its catalog was cut from, the
-Skills that revision contributed, and the Skills the inclusion policy withheld
-(ADR-0023, ADR-0025). Nothing in a git-loopy Run reaches that upstream; the
-packaged catalog here is the offline fallback a Run actually reads.
+Workflow Skill catalog
+----------------------
 
-The upstream licence is redistributed byte-for-byte as
-`git_loopy/SKILL_CATALOG_LICENSE.txt` and reproduced verbatim below. It carries
-both applicable notices: the source of record's own, and the retained notice of
+git-loopy ships no Skills. Its workflow Skill catalog is installed at setup, and
+refreshed at the start of every Run, from one external source of record:
+
+    bradcstevens/git-loopy-skills
+    https://github.com/bradcstevens/git-loopy-skills
+
+at the exact immutable revision recorded in `git_loopy/skill_source.json`, which
+ships beside this file. That pin is what a released artifact resolves against, so
+it can always name the revision an install came from without a source checkout
+(ADR-0023, ADR-0025). The installed catalog lands in git-loopy's own config scope
+(`<config-home>/git-loopy/skills/`), never inside a distribution and never inside
+a consuming project.
+
+That upstream is MIT-licensed, and its own `LICENSE` -- which git-loopy validates
+byte-for-byte against the digest in the pin before installing anything -- carries
+two applicable notices: the source of record's own, and the retained notice of
 `mattpocock/skills` (https://github.com/mattpocock/skills), from which most of
-the workflow catalog is derived. `python git-loopy/python/scripts/sync_skills.py
---check` refuses a distribution whose redistributed licence is not the notice its
-pin names, or whose aggregate notice below no longer reproduces it.
+the workflow catalog is derived. Both travel with the installed catalog, in the
+`LICENSE` file at its root, which is the copy that governs the Skills on disk.
 
-===============================================================================
-bradcstevens/git-loopy-skills - https://github.com/bradcstevens/git-loopy-skills
-(MIT License, reproduced verbatim from the pinned revision's LICENSE)
-===============================================================================
+`uv run --project git-loopy/python python -m git_loopy.skill_source` acquires and
+proves that revision on demand; the same validation runs on every install.
 
-MIT License
+Runtime dependencies
+--------------------
 
-Copyright (c) 2026 Brad Stevens
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
----
-
-## Third-party attribution
-
-Portions of this repository are derived from https://github.com/mattpocock/skills,
-distributed under the MIT License. The original notice is retained below.
-
-MIT License
-
-Copyright (c) 2026 Matt Pocock
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+git-loopy's Python runtime dependencies are declared in
+`git-loopy/python/pyproject.toml` and installed by the operator's package
+manager, which records each package's own licence metadata. They are not
+redistributed here either.

@@ -1,4 +1,4 @@
-"""The pinned external Skill catalog git-loopy's packaged fallback is cut from.
+"""The pinned external Skill catalog git-loopy installs its Skills from.
 
 `bradcstevens/git-loopy-skills` is the source of record for git-loopy's workflow
 Skill catalog. This module is the one place that says *which* revision of it
@@ -13,24 +13,26 @@ Three properties are load-bearing:
   commit SHA, never a branch or a tag. A floating ref would make "the catalog
   git-loopy 0.2.0 was cut from" a question with a different answer every day,
   which is the opposite of what a provenance record is for.
-* **Nothing here runs during a Run.** Acquisition is a maintainer command that
-  reaches the network exactly once, deliberately, to refresh the canonical
-  catalog. Released artifacts carry a *packaged fallback* (`git_loopy/skills/`)
-  vendored inside the wheel, so an Iteration resolves its Skills from disk and
-  an offline operator is never blocked by an unreachable upstream (ADR-0023).
+* **Acquisition is the only thing here that reaches the network.** This module
+  fetches and proves a revision; it never decides where the result lives or
+  when to go looking. `skill_install` owns that policy — install at setup,
+  refresh at the start of every Run, and keep what is already installed when the
+  network is unreachable (ADR-0025).
 * **Validation fails closed.** A wrong revision, a checkout carrying content the
   revision does not, a symlink pointing off the checkout, a malformed Skill
   directory, and a licence that is not byte-for-byte the pinned notice are each
   their own named failure, so "we could not check" never reads as "it checked
-  out".
+  out". Nothing unproven is ever installed.
 
 The boundary this draws:
 
 | Layer | Where it lives | Who owns it |
 | --- | --- | --- |
-| External catalog (source of record) | `bradcstevens/git-loopy-skills` @ the pinned revision | upstream, refreshed by an explicit maintainer command |
-| Packaged fallback | `git_loopy/skills/` inside the wheel | this repo's release, no network at Run time |
-| Consumer project Skills | `<repo>/.copilot/skills/` | the consuming project, and it wins (ADR-0015) |
+| External catalog (source of record) | `bradcstevens/git-loopy-skills` @ the pinned revision | upstream |
+| Installed catalog | `<config>/git-loopy/skills/` on the operator's machine | git-loopy, replaced wholesale from the pin (ADR-0025) |
+
+A git-loopy distribution carries no Skills of its own. What it carries is the
+pin, which is what an install resolves against.
 """
 
 from __future__ import annotations
@@ -48,11 +50,8 @@ from typing import Any, Callable, Sequence
 from .skill_catalog import SkillCatalogError, read_skill_metadata
 
 #: The committed pin, packaged as wheel data so a released artifact can always
-#: say which upstream revision its packaged fallback was cut from.
+#: say which upstream revision the catalog it installs comes from.
 PIN_PATH = Path(__file__).resolve().parent / "skill_source.json"
-
-#: git-loopy's packaged fallback: the vendored catalog that ships in the wheel.
-PACKAGED_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 #: Where the documented command lands an acquisition unless told otherwise.
 DEFAULT_CHECKOUT = Path(".git-loopy") / "skill-source"
@@ -147,27 +146,6 @@ class SkillSourceCheckout:
     root: Path
     revision: str
     skills: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class PackagedFallbackComparison:
-    """How the packaged fallback relates to the upstream catalog it was cut from.
-
-    Drift is reported, not judged: the packaged fallback is a deliberate subset
-    (the optional tool/vendor integrations are excluded by
-    ``scripts/sync_skills.py``), so ``upstream_only`` names are normal and
-    ``packaged_only`` names are the interesting ones — a Skill the wheel ships
-    that the source of record no longer has.
-    """
-
-    shared: tuple[str, ...]
-    upstream_only: tuple[str, ...]
-    packaged_only: tuple[str, ...]
-
-    @property
-    def packaged_is_subset(self) -> bool:
-        """True when every packaged Skill still exists upstream at the pin."""
-        return not self.packaged_only
 
 
 def _text(mapping: dict[str, Any], key: str, *, where: str) -> str:
@@ -536,34 +514,12 @@ def validate_skill_source(
     return SkillSourceCheckout(root=root, revision=revision, skills=skills)
 
 
-def compare_with_packaged_fallback(
-    checkout: SkillSourceCheckout,
-    packaged_skills_dir: Path = PACKAGED_SKILLS_DIR,
-) -> PackagedFallbackComparison:
-    """Name the boundary between the source of record and the packaged fallback."""
-    packaged = (
-        {
-            child.name
-            for child in packaged_skills_dir.iterdir()
-            if child.is_dir() and (child / "SKILL.md").is_file()
-        }
-        if packaged_skills_dir.is_dir()
-        else set()
-    )
-    upstream = set(checkout.skills)
-    return PackagedFallbackComparison(
-        shared=tuple(sorted(upstream & packaged)),
-        upstream_only=tuple(sorted(upstream - packaged)),
-        packaged_only=tuple(sorted(packaged - upstream)),
-    )
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m git_loopy.skill_source",
         description=(
             "Acquire and validate the pinned revision of git-loopy's external "
-            "Skill catalog (the source of record for the packaged fallback)."
+            "Skill catalog (the source of record an install is cut from)."
         ),
     )
     parser.add_argument(
@@ -589,12 +545,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=PIN_PATH,
         help=f"the pin to enforce (default: {PIN_PATH.name} beside this module)",
     )
-    parser.add_argument(
-        "--packaged-skills",
-        type=Path,
-        default=PACKAGED_SKILLS_DIR,
-        help="the packaged fallback to compare the acquired catalog against",
-    )
     return parser
 
 
@@ -618,18 +568,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{len(checkout.skills)} Skills, licence {pin.license.spdx_id} "
         f"({pin.license.path}), provenance {', '.join(pin.provenance_paths)}"
     )
-    comparison = compare_with_packaged_fallback(checkout, args.packaged_skills)
-    print(
-        f"packaged fallback: {len(comparison.shared)} shared, "
-        f"{len(comparison.upstream_only)} upstream-only, "
-        f"{len(comparison.packaged_only)} packaged-only"
-    )
-    if comparison.packaged_only:
-        print(
-            "warning: the packaged fallback ships Skills the pinned source of "
-            f"record does not have: {', '.join(comparison.packaged_only)}",
-            file=sys.stderr,
-        )
     return 0
 
 

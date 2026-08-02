@@ -230,30 +230,33 @@ def build_skill_catalog(
     copilot_skills: Iterable[Any],
     *,
     repo_root: Path,
-    packaged_skills_dir: Path,
+    installed_skills_dir: Path,
 ) -> SkillCatalog:
-    """Resolve project, Copilot, and packaged metadata into stable winners."""
+    """Resolve Copilot and installed-catalog metadata into stable winners.
+
+    git-loopy resolves every Skill from the catalog installed in its own config
+    scope (ADR-0025). A consumer project's ``.copilot/skills/`` is deliberately
+    *not* a source here: the catalog a Run executes is the pinned one this
+    repository stands behind, identical on every machine, rather than whatever
+    the checkout happens to carry.
+
+    ``repo_root`` is retained because a caller identifies a Run by it, and the
+    winners it returns are reported against it.
+    """
+    del repo_root
     copilot = _copilot_winners(copilot_skills)
-    project = _filesystem_skills(repo_root / ".copilot" / "skills")
-    packaged = _filesystem_skills(packaged_skills_dir)
+    installed = _filesystem_skills(installed_skills_dir)
     winners = dict(copilot)
 
-    for name, metadata in packaged.items():
-        winners.setdefault(
-            name,
-            SkillCatalogWinner(
-                name=name,
-                source_kind="packaged",
-                description=metadata.description,
-                user_invocable=metadata.user_invocable,
-                path=metadata.path,
-            ),
-        )
-    for name, metadata in project.items():
+    for name, metadata in installed.items():
         copilot_winner = copilot.get(name)
         winners[name] = SkillCatalogWinner(
             name=name,
-            source_kind="project",
+            # The Conformance vocabulary's ``packaged`` kind, which every member
+            # of the Runner family shares, now means "from the catalog git-loopy
+            # installed" rather than "from inside the wheel". Renaming the token
+            # would be a cross-language contract change for no behavioural gain.
+            source_kind="packaged",
             description=metadata.description,
             copilot_enabled=(
                 copilot_winner.copilot_enabled if copilot_winner is not None else None
@@ -264,7 +267,6 @@ def build_skill_catalog(
                 else metadata.user_invocable
             ),
             path=metadata.path,
-            project_path=metadata.path.parent,
         )
     return SkillCatalog(winners=winners)
 
@@ -273,7 +275,7 @@ async def discover_skill_catalog(
     client: Any,
     *,
     repo_root: Path,
-    packaged_skills_dir: Path,
+    installed_skills_dir: Path,
     discovery_directory: Path,
     validate_surface: bool = True,
 ) -> SkillCatalog:
@@ -296,7 +298,7 @@ async def discover_skill_catalog(
         return build_skill_catalog(
             result.skills,
             repo_root=repo_root,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
         )
     finally:
         await session.disconnect()

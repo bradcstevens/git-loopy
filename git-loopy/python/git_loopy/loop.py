@@ -105,6 +105,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import re
@@ -115,7 +116,15 @@ from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Coroutine, Iterable, Mapping, Protocol
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Protocol,
+    Sequence,
+)
 
 from copilot import CopilotClient
 from rich.console import Console
@@ -132,6 +141,7 @@ from git_loopy.config import RunConfig, resolve_iteration_model
 from git_loopy.continuation import (
     CapabilityUnsupported as ContinuationCapabilityUnsupported,
 )
+from git_loopy import continuation_frontier
 from git_loopy.continuation_report import ContinuationReporter
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
@@ -143,6 +153,12 @@ from git_loopy.persist import (
 from git_loopy.pricing import Pricing, PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.skill_install import (
+    SkillInstallError,
+    describe_refresh,
+    installed_catalog_dir,
+    refresh_installed_catalog,
+)
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.session import IterationSession
@@ -157,7 +173,7 @@ from git_loopy.sources import (
     RollingIssueSource,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
-from git_loopy.skill_exposure import SkillExposureError
+from git_loopy.skill_exposure import SkillExposure, SkillExposureError
 from git_loopy.skill_policy import SkillPolicyResolutionError
 from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
@@ -255,20 +271,18 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     return gh_module.SubprocessGitHubClient()
 
 
-def _make_continuation_reporter(
+def _resolve_continuation_authority(
     config: RunConfig, diag: logging.Logger
-) -> ContinuationReporter | None:
-    """Resolve this Run's Continuation authority and build its observer, or `None`.
+) -> dict[str, Any] | None:
+    """Resolve this Run's §10 Continuation authority, or `None` for mode `off`.
 
-    `None` is mode `off`: an unconfigured Run never constructs a reporter, never
-    resolves an authority and never touches the tracker on Continuation's behalf,
-    so "preserve current Pool behavior, output, retries, Strikes, and exits
-    without invoking Continuation" is a property of the wiring rather than a
-    promise made by code that ran anyway.
-
-    Raises :class:`~git_loopy.continuation.CapabilityUnsupported` when the
-    configured mode is one this distribution does not advertise. The caller turns
-    that into the Wrapper contract's `preflight_failed`.
+    `None` is mode `off`: an unconfigured Run never resolves an authority and
+    never touches the tracker on Continuation's behalf, so "preserve current Pool
+    behavior, output, retries, Strikes, and exits without invoking Continuation"
+    is a property of the wiring rather than a promise made by code that ran
+    anyway. A configured mode that §10 then narrows away is also `None`, said out
+    loud, because a Run that went quiet for a reason nobody printed looks exactly
+    like one that is working.
     """
     sources = config.continuation.declared_sources()
     if not sources:
@@ -278,9 +292,6 @@ def _make_continuation_reporter(
 
     authority = continuation_module.resolve_authority({"sources": sources})
     if not authority["participates"]:
-        # Configured, then narrowed away — by a ceiling, an empty coverage or an
-        # empty trusted-Producer set. Said out loud, because a Run that went quiet
-        # for a reason nobody printed looks exactly like one that is working.
         diag.info(
             "continuation authority resolved to off (declared %s): %s",
             authority["declared_mode"],
@@ -290,6 +301,28 @@ def _make_continuation_reporter(
             or "no narrowing recorded",
         )
         return None
+    return authority
+
+
+def _make_continuation_reporter(
+    config: RunConfig, diag: logging.Logger
+) -> ContinuationReporter | None:
+    """Build this Run's read-only Continuation observer, or `None`.
+
+    `None` covers both mode `off` and mode `execute-frontier`: an executing Run
+    reconciles on its own schedule around each Dispatch, and a reporter observing
+    the same project on the Iteration boundary would reconcile the same records
+    twice and print guidance the Run had already acted on.
+
+    Raises :class:`~git_loopy.continuation.CapabilityUnsupported` when the
+    configured mode is one this distribution does not advertise. The caller turns
+    that into the Wrapper contract's `preflight_failed`.
+    """
+    authority = _resolve_continuation_authority(config, diag)
+    if authority is None or authority["mode"] == continuation_frontier.MODE:
+        return None
+
+    from git_loopy import continuation as continuation_module
 
     client = continuation_module.make_github_client()
     return ContinuationReporter(
@@ -299,6 +332,129 @@ def _make_continuation_reporter(
         ),
         on_guidance=lambda line: print(line, file=sys.stderr),
     )
+
+
+def _runner_satisfied_requirements(
+    authority: Mapping[str, Any], exposure: SkillExposure
+) -> tuple[tuple[str, str], ...]:
+    """State, in §9's typed vocabulary, what this Run actually holds.
+
+    Both halves are derived rather than asserted, because §9 reads the posture as
+    a closed world: a claim made here that the host cannot honour turns into a
+    session that fails at the Instruction instead of an Action §9 declines to
+    authorize.
+
+    - `skill/<name>` comes from the Skill policy this Run resolved. A Skill that
+      was disabled or absent is one the session genuinely cannot invoke.
+    - `access/<kind>` comes from the operator's own `effect_scopes` ceiling. §10
+      is where an operator says which durable effects this Run may produce, so
+      the access claim is theirs to grant and never widens past it.
+    """
+    ceilings = authority.get("ceilings") or {}
+    return tuple(
+        sorted(
+            {("skill", name) for name in exposure.policy.enabled}
+            | {("access", kind) for kind in (ceilings.get("effect_scopes") or ())}
+        )
+    )
+
+
+def _make_continuation_plan(
+    config: RunConfig, diag: logging.Logger, exposure: SkillExposure
+) -> continuation_frontier.FrontierPlan | None:
+    """Build this Run's execute-frontier posture, or `None` for every other mode.
+
+    Preflight, deliberately: :func:`~git_loopy.continuation_frontier.plan_frontier`
+    raises when the resolved authority names a ceiling this distribution cannot
+    enforce or omits the actor an execute-frontier Run has to write Dispatch
+    evidence as. A Run that discovered that at the moment it had to record a
+    safety-case violation would lose the one record a human needs.
+    """
+    authority = _resolve_continuation_authority(config, diag)
+    if authority is None or authority["mode"] != continuation_frontier.MODE:
+        return None
+    if config.parallel > 1:
+        # `concurrent_dispatch` is advertised false. A Run that accepted the
+        # Parallel flag and then dispatched serially anyway would have quietly
+        # served a narrower thing than the operator asked for.
+        raise ContinuationCapabilityUnsupported(
+            "continuation mode execute-frontier does not support parallel dispatch"
+        )
+    return continuation_frontier.plan_frontier(
+        authority,
+        satisfied_requirements=_runner_satisfied_requirements(authority, exposure),
+    )
+
+
+def _dispatch_refs(dispatch: continuation_frontier.Dispatch) -> tuple[int | str, ...]:
+    """The issue refs one Dispatch may bind as its Active issue.
+
+    Only its own Target and workstream anchor. A session that could bind
+    something else would be reporting work against an Action nobody authorized.
+    """
+    refs: list[int | str] = []
+    for ref in (dispatch.target, dispatch.workstream_anchor):
+        number = ref.get("number") if isinstance(ref, Mapping) else None
+        if isinstance(number, int) and number not in refs:
+            refs.append(number)
+    return tuple(refs)
+
+
+def _dispatch_prompt(dispatch: continuation_frontier.Dispatch) -> str:
+    """Render the one Instruction this session runs, and nothing beyond it.
+
+    The published Instruction is the whole task --- it is what a Producer wrote
+    down as the exact thing to do --- so the preamble adds only the two facts the
+    session cannot infer: when it is done, and that it must stop there. Naming the
+    successor would hand a noninteractive session the chaining decision §9 keeps.
+    """
+    condition = json.dumps(dict(dispatch.completion_condition), sort_keys=True)
+    return (
+        "You are running one authorized Continuation Action, noninteractively.\n"
+        f"Action: {dispatch.summary}\n"
+        f"Completion condition: {condition}\n"
+        "Run this Instruction and stop. Do not start follow-up work, do not ask "
+        "questions, and do not wait for approval: nobody is watching this "
+        "session. If the Instruction cannot be completed without a human "
+        "decision, stop and say so.\n\n"
+        f"{dispatch.instruction.get('value', '')}"
+    )
+
+
+def _frontier_exit_code(
+    runs: Sequence[continuation_frontier.FrontierRun], *, diag: logging.Logger
+) -> int:
+    """Map every repository's typed stop onto the Wrapper contract's exit vocabulary.
+
+    The contract has five exit reasons and Continuation adds none, so the mapping
+    is by *disposition* rather than by reason: a boundary the Run was always going
+    to reach is a clean stop, and anything a human has to look at is not.
+
+    - `complete` and `expected-boundary` --- the Run may do no more, which is what
+      `empty_pool` already means for a Pool Run.
+    - `attention-required` --- a safety-case violation, an uncertain effect state
+      or a guidance fault. Exit non-zero, like `stuck`.
+    - an ordinary execution failure --- no §9 stop at all, and still not success.
+    """
+    attention = False
+    for run in runs:
+        if run.execution_failed:
+            attention = True
+            diag.error(
+                "continuation frontier run for %s ended on an execution failure",
+                run.repository,
+            )
+            continue
+        stop = run.stop or {}
+        if stop.get("disposition") == "attention-required":
+            attention = True
+        diag.info(
+            "continuation frontier run for %s stopped: %s (%d dispatched)",
+            run.repository,
+            stop.get("reason", "unreported"),
+            len(run.dispatches),
+        )
+    return exit_code_for("stuck" if attention else "empty_pool")
 
 
 def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
@@ -470,9 +626,9 @@ def _packaged_prompt_path() -> Path:
     return Path(str(files("git_loopy") / "PROMPT.md"))
 
 
-def _packaged_skills_path() -> Path:
-    """Resolve the packaged fallback Skill catalog."""
-    return Path(str(files("git_loopy") / "skills"))
+def _installed_skills_path() -> Path:
+    """Resolve the Skill catalog installed in the global config scope (ADR-0025)."""
+    return installed_catalog_dir(os.environ)
 
 
 def _read_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
@@ -623,6 +779,7 @@ class _Loop:
         include_prs: bool = False,
         usage_observer: _EventObserver | None = None,
         continuation: ContinuationReporter | None = None,
+        frontier_plan: continuation_frontier.FrontierPlan | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -640,6 +797,10 @@ class _Loop:
         # the default, and the reason an unconfigured Run cannot reach any of
         # this code at all rather than reaching a Continuation that declines.
         self._continuation = continuation
+        # Execute-frontier's frozen posture, or `None` in every other mode. When
+        # it is set the Run drives the frontier instead of the Pool; the two are
+        # never both live, because §10 resolves exactly one mode.
+        self._frontier_plan = frontier_plan
         self._rollup = IterationRollupAccumulator(pricing=pricing)
         if self._continuation is not None:
             self._continuation.bind_emit(self._emit)
@@ -1261,6 +1422,165 @@ class _Loop:
             )
         return event
 
+    # -- fixed-frontier Run ------------------------------------------------
+
+    async def _perform_dispatch(
+        self, dispatch: continuation_frontier.Dispatch, *, iter_num: int
+    ) -> continuation_frontier.DispatchOutcome:
+        """Run exactly one authorized Action in exactly one Performer session.
+
+        The session is handed one Instruction and one completion condition and is
+        never told what comes next, because what comes next is a decision §9 makes
+        after observing what this Dispatch did. There is no loop here for the same
+        reason: the successor is chosen by the next Reconciliation, not by this
+        session and not by this method.
+        """
+        binding = self._new_active_issue_binding(
+            iter_num, allowed_refs=_dispatch_refs(dispatch)
+        )
+        prompt = _dispatch_prompt(dispatch)
+        send_timeout = self._config.send_timeout_seconds
+        failure: str | None = None
+        with telemetry.span("git_loopy.session"):
+            try:
+                async with IterationSession(
+                    self._client,
+                    config=self._config,
+                    event_log=self._writers.event_log,
+                    sinks=self._sinks,
+                    run_id=self._writers.run_id,
+                    iter_num=iter_num,
+                    model=self._config.model,
+                    reasoning_effort=self._config.reasoning_effort,
+                    issue_binding=binding,
+                    skill_exposure=self._skill_exposure,
+                    event_observer=self._session_observer,
+                ) as sdk_session:
+                    try:
+                        await sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                    except asyncio.TimeoutError:
+                        failure = f"session timed out after {send_timeout}s"
+                    except Exception as exc:  # noqa: BLE001 - reported as failure
+                        failure = f"{type(exc).__name__}: {exc}"
+            except Exception as exc:  # noqa: BLE001 - reported as failure
+                failure = f"session lifecycle failed: {type(exc).__name__}: {exc}"
+        if failure is not None:
+            # An ordinary Runner failure, not a Continuation boundary: it never
+            # becomes durable Dispatch evidence and never earns a typed §9 stop.
+            self._diag.warning(
+                "continuation dispatch %s failed: %s", dispatch.action_identity, failure
+            )
+            return continuation_frontier.DispatchOutcome(outcome="failed")
+        return continuation_frontier.DispatchOutcome(outcome="complete")
+
+    async def _drive_frontier(
+        self,
+        plan: continuation_frontier.FrontierPlan,
+        *,
+        client: Any | None = None,
+    ) -> int:
+        """Drive the frozen frontier instead of the Pool, then map its stop to an exit.
+
+        The driver is synchronous and the Performer is a coroutine, so the Run is
+        handed to a worker thread and each session is scheduled back onto this
+        event loop. That keeps the sequencing rules --- one freeze, one Action per
+        session, one Reconciliation after every Dispatch --- in one synchronous
+        place that can be pinned without an event loop.
+        """
+        from git_loopy import continuation as continuation_module
+
+        loop = asyncio.get_running_loop()
+        dispatches = 0
+        if client is None:
+            client = continuation_module.make_github_client()
+
+        def perform(
+            dispatch: continuation_frontier.Dispatch,
+        ) -> continuation_frontier.DispatchOutcome:
+            nonlocal dispatches
+            dispatches += 1
+            return asyncio.run_coroutine_threadsafe(
+                self._perform_dispatch(dispatch, iter_num=dispatches), loop
+            ).result()
+
+        def record(body: dict[str, Any]) -> Any:
+            # The record is written onto the Producer carrier that published the
+            # Action, so the carrier --- not the Run --- names the repository it
+            # lands in. §9 validates that the two agree.
+            return continuation_module.record_dispatch_result(
+                {
+                    "repository": body["carrier"]["repository"],
+                    "trusted_producers": list(plan.trusted_producers),
+                    "dispatch": body,
+                },
+                client,
+            )
+
+        driver = continuation_frontier.FrontierDriver(
+            plan,
+            reconcile=lambda request: continuation_module.reconcile_records(
+                request, client
+            ),
+            perform=perform,
+            record_evidence=record,
+            emit=self._emit,
+            on_guidance=lambda line: print(line, file=sys.stderr),
+            diagnose=lambda line: self._diag.warning("%s", line),
+        )
+        runs = await asyncio.to_thread(driver.run_all)
+        return _frontier_exit_code(runs, diag=self._diag)
+
+    async def _drive_frontier_run(
+        self, plan: continuation_frontier.FrontierPlan
+    ) -> int:
+        """Wrap one fixed-frontier Run in the same Run envelope the Pool emits.
+
+        `iterations_run` is 0 rather than the Dispatch count: an Iteration is a
+        Pool concept with its own rollup, Strike accounting and cap, and a
+        Dispatch is none of those. The Dispatches are reported by their own three
+        Events instead.
+        """
+        self._emit(
+            events_module.WRAPPER_RUN_START,
+            iter_num=None,
+            issue_source=self._config.issue_source,
+            release_version=self._release_version,
+            schema_version=events_module.EVENT_SCHEMA_VERSION,
+            insight_capabilities=dict(events_module.PYTHON_INSIGHT_CAPABILITIES),
+            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
+            max_iterations=self._config.max_iterations,
+            max_nmt_strikes=self._config.max_nmt_strikes,
+        )
+        outcome_label = "empty_pool"
+        exit_code = 1
+        try:
+            exit_code = await self._drive_frontier(plan)
+            outcome_label = (
+                "empty_pool"
+                if exit_code == exit_code_for("empty_pool")
+                else "stuck"
+            )
+        except Exception as exc:
+            outcome_label = "crashed"
+            exit_code = 1
+            self._diag.error(
+                "git-loopy continuation frontier run crashed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            raise
+        finally:
+            try:
+                self._emit(
+                    events_module.WRAPPER_RUN_END,
+                    iter_num=None,
+                    outcome=outcome_label,
+                    iterations_run=0,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                self._diag.warning("wrapper.run.end emit failed: %s", exc)
+        return exit_code
+
     # -- public driver -----------------------------------------------------
 
     async def drive(self) -> int:
@@ -1272,6 +1592,9 @@ class _Loop:
         rc = self._source.preflight()
         if rc is not None:
             return rc
+
+        if self._frontier_plan is not None:
+            return await self._drive_frontier_run(self._frontier_plan)
 
         # Capture the base branch once, before any iteration can run
         # `gh pr checkout`, so PR iterations can return to it (see the
@@ -3050,7 +3373,32 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
         return 1
 
-    # 5) SDK client (lazy via the factory the tests monkeypatch). If
+    # 5) Skill catalog. git-loopy ships no Skills; it installs them from the
+    #    pinned external repository and refreshes that install at the start of
+    #    every Run (ADR-0025), so a Run always executes the revision this
+    #    distribution stands behind rather than whatever was left on disk. An
+    #    unreachable upstream is a warning, not a failure — the Run continues on
+    #    the installed catalog. Only a machine with *no* catalog at all stops
+    #    here, because that Run has no Skills to expose and would otherwise
+    #    discover it one Iteration later.
+    try:
+        skill_refresh = refresh_installed_catalog()
+    except SkillInstallError as exc:
+        diag.error("Skill catalog install failed: %s", exc)
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        return exit_code_for("preflight_failed")
+    if skill_refresh.warning:
+        diag.warning("Skill catalog refresh: %s", skill_refresh.warning)
+        print(f"git-loopy: {skill_refresh.warning}", file=sys.stderr)
+    if skill_refresh.changed:
+        diag.info("%s", describe_refresh(skill_refresh))
+        print(f"git-loopy: {describe_refresh(skill_refresh)}", file=sys.stderr)
+
+    # 6) SDK client (lazy via the factory the tests monkeypatch). If
     #    construction itself raises (SDK install broken, port already
     #    held by another process, etc.) we must surface a clean error
     #    rather than letting the traceback escape ``asyncio.run``.
@@ -3084,11 +3432,14 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             git=git,
             prompt_text=prompt_text,
             repo_root=repo_root,
-            packaged_skills_dir=_packaged_skills_path(),
+            installed_skills_dir=_installed_skills_path(),
             workspace=Path(skill_workspace.name),
             discoverer=_discover_skill_catalog,
         )
         continuation_reporter = _make_continuation_reporter(config, diag)
+        frontier_plan = _make_continuation_plan(
+            config, diag, skill_preflight.exposure
+        )
     except (
         OSError,
         PromptMetadataError,
@@ -3201,6 +3552,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             diag=diag,
             include_prs=include_prs,
             continuation=continuation_reporter,
+            frontier_plan=frontier_plan,
         )
 
     exit_code = 1

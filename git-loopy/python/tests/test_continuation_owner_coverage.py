@@ -17,7 +17,6 @@ advertisement may not be switched on while any of it is incomplete.
 
 from __future__ import annotations
 
-import filecmp
 import importlib
 import re
 
@@ -25,7 +24,6 @@ import pytest
 
 from git_loopy import continuation
 from tests.skill_templates import (
-    PACKAGED_SKILLS_DIR,
     PROJECT_SKILLS_DIR,
     skill_text,
     template,
@@ -340,27 +338,20 @@ def test_a_read_only_consumer_publishes_nothing(skill: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The packaged distribution ships what the project sources document
+# What this suite does and does not prove about an adopter
+#
+# Every guard above reads this checkout's own `.copilot/skills/`. Under
+# ADR-0025 git-loopy ships no Skills and copies none into a consuming project:
+# an adopter runs the catalog installed from the pinned external repository. So
+# these guards prove the contract is coherent *here*; they say nothing about
+# what an adopter's session is told to publish. The comparison that used to
+# bridge the two — a byte-for-byte check against the vendored mirror in the
+# wheel — has no subject any more, because there is no mirror.
+#
+# Carrying the Continuation contract into the pinned catalog is separate work
+# with its own issue; when it lands, the bridge to rebuild is a guard over the
+# acquired revision (see `test_prompt_metadata` for the offline-safe shape).
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("skill", sorted(OWNER_SKILLS | set(READ_ONLY_CONSUMERS)))
-def test_the_packaged_catalog_carries_the_same_requests(skill: str) -> None:
-    """An adopter runs the packaged Skill, not this checkout's.
-
-    ``test_packaged_skills`` already compares the trees byte for byte. This asserts
-    the consequence that matters here: the requests an adopter's session is told to
-    publish are the ones these suites executed.
-    """
-    project = PROJECT_SKILLS_DIR / skill / "SKILL.md"
-    packaged = PACKAGED_SKILLS_DIR / skill / "SKILL.md"
-
-    assert packaged.is_file(), f"{skill} is not in the packaged catalog"
-    assert filecmp.cmp(str(project), str(packaged), shallow=False), (
-        f"{skill} drifted between the project source and the packaged mirror; "
-        "run scripts/sync_skills.py"
-    )
-    assert templates(skill, skills_dir=PACKAGED_SKILLS_DIR) == templates(skill)
 
 
 # ---------------------------------------------------------------------------

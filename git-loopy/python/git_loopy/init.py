@@ -1,23 +1,30 @@
 """``git_loopy.init`` — the first-run setup wizard (issue #53, ADR-0006/0007).
 
-``git-loopy init`` writes persisted **Config** (and, default-yes, an editable
-``PROMPT.md`` override plus git-loopy's workflow skill catalog) into a chosen **scope**
-(global or project), then exits — it never starts the loop. This is the explicit
-scaffold entry point; the auto-run-on-first-run behaviour is a separate slice
-(#55), and the ``config`` subcommand group is #56.
+``git-loopy init`` installs the Skill catalog this machine runs on, then writes
+persisted **Config** (and, default-yes, an editable ``PROMPT.md`` override) into a
+chosen **scope** (global or project) and exits — it never starts the loop. This is
+the explicit scaffold entry point; the auto-run-on-first-run behaviour is a
+separate slice (#55), and the ``config`` subcommand group is #56.
+
+Setup is where the Skills come from. git-loopy ships none: the catalog is
+installed from the pinned external repository into git-loopy's own config scope
+(:mod:`git_loopy.skill_install`, ADR-0025), and every later Run refreshes it from
+the same pin. That install happens **before** anything is collected, because the
+Skill policy the operator is about to choose is a choice among the installed
+catalog — an empty one would offer nothing and leave every Run without Skills.
+It is also the one thing here that writes outside the chosen scope: the catalog
+is machine-wide by construction, so a project scope never gets a copy of it.
 
 Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
 
 * **Fully injectable.** :func:`run_init` takes its ``input_fn`` / ``output_fn``,
   its scaffold **target dirs** (derived from an injected ``repo_root`` + ``env``),
-  and its live-model ``fetch_choices`` seam, so no test touches the real TTY,
-  ``~/.config``, ``~/.copilot``, or a live backend (prior art:
+  its installed Skill catalog, and its live-model ``fetch_choices`` seam, so no
+  test touches the real TTY, ``~/.config``, or a live backend (prior art:
   ``tests/test_cli_interactive.py``).
 * **Collect-then-commit.** Every decision (scope, model, effort, the closed-world
-  **Skill policy**, whether to scaffold assets, and — on a re-run — whether to
-  refresh pre-existing catalog skills) is gathered *first*; the target skills dir
-  is resolved during collect so existing catalog skills are detected before
-  anything is written. Nothing is written until all prompts succeed, so
+  **Skill policy**, and whether to scaffold the prompt override) is gathered
+  *first*. Nothing in the chosen scope is written until all prompts succeed, so
   **cancelling writes nothing, runs nothing, and exits non-zero** (``q`` /
   ``quit`` / EOF / Ctrl-C at any prompt). The write itself merges into any
   existing Config at that scope, so keys the wizard does not own survive.
@@ -41,6 +48,7 @@ CLI flag / env var still overrides it (ADR-0006's chain is unchanged).
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from importlib.resources import files
@@ -55,6 +63,12 @@ from git_loopy.config import (
     gate_reasoning_effort,
 )
 from git_loopy.prompt import PromptMetadataError, resolve_required_skills
+from git_loopy.skill_install import (
+    SkillInstallError,
+    describe_refresh,
+    installed_catalog_dir,
+    refresh_installed_catalog,
+)
 from git_loopy.verification import (
     ContinuationVerification,
     verify_this_distribution,
@@ -161,27 +175,24 @@ def _ask_yes_no(
 
 @dataclass(frozen=True)
 class _Targets:
-    """Where the chosen scope writes: config, prompt override, and skills dir."""
+    """Where the chosen scope writes: Config and the editable prompt override.
+
+    The Skill catalog is deliberately absent. Scope decides where an operator's
+    *settings* live; it has no say over where Skills live, because a Run always
+    resolves them from the one installed catalog in git-loopy's own config scope
+    (ADR-0025). Setup copies no Skill into a project or a home directory.
+    """
 
     config_path: Path
     prompt_path: Path
-    skills_dir: Path
-
-
-def _home(env: Mapping[str, str]) -> Path:
-    """The machine's home dir (for ``~/.copilot/skills``), from the injected env."""
-    home = env.get("HOME")
-    return Path(home) if home and home.strip() else Path.home()
 
 
 def _resolve_targets(scope: str, repo_root: Path | None, env: Mapping[str, str]) -> _Targets:
-    """Resolve the scope's config / prompt / skills targets.
+    """Resolve the scope's config / prompt targets.
 
-    * **project** — ``<repo>/git-loopy/config.toml``, ``<repo>/git-loopy/PROMPT.md``,
-      ``<repo>/.copilot/skills/``.
+    * **project** — ``<repo>/git-loopy/config.toml``, ``<repo>/git-loopy/PROMPT.md``.
     * **global** — ``$XDG_CONFIG_HOME/git-loopy/{config.toml,PROMPT.md}`` (else
-      ``~/.config/git-loopy/...``) and ``~/.copilot/skills/`` (Copilot's skills
-      home, *not* the XDG config dir).
+      ``~/.config/git-loopy/...``).
     """
     if scope == "project":
         assert repo_root is not None  # guarded by the caller
@@ -189,12 +200,10 @@ def _resolve_targets(scope: str, repo_root: Path | None, env: Mapping[str, str])
         return _Targets(
             config_path=project_config,
             prompt_path=project_config.parent / settings.PROMPT_FILENAME,
-            skills_dir=repo_root / ".copilot" / "skills",
         )
     return _Targets(
         config_path=settings.global_config_path(env),
         prompt_path=settings.global_prompt_path(env),
-        skills_dir=_home(env) / ".copilot" / "skills",
     )
 
 
@@ -414,9 +423,14 @@ def _packaged_prompt_path() -> Path:
     return Path(str(files("git_loopy") / settings.PROMPT_FILENAME))
 
 
-def _packaged_skills_path() -> Path:
-    """git-loopy's workflow skill catalog shipped inside the wheel (scaffolded by ``init``)."""
-    return Path(str(files("git_loopy") / "skills"))
+def _installed_skills_path() -> Path:
+    """The Skill catalog installed in the global config scope (ADR-0025).
+
+    git-loopy ships no Skills: the catalog is installed from the pinned external
+    repository into ``<config-home>/git-loopy/skills/``
+    (:mod:`git_loopy.skill_install`), which is what every Run resolves against.
+    """
+    return installed_catalog_dir(os.environ)
 
 
 def _scaffold_prompt(prompt_path: Path, source: Path) -> None:
@@ -425,81 +439,9 @@ def _scaffold_prompt(prompt_path: Path, source: Path) -> None:
     shutil.copyfile(source, prompt_path)
 
 
-def _scaffold_skills(
-    skills_dir: Path, source: Path, *, overwrite: bool
-) -> tuple[int, int]:
-    """Copy git-loopy's packaged workflow skill catalog into the scope's ``.copilot/skills``.
-
-    Returns ``(added, kept)``. With ``overwrite`` every catalog item is refreshed from the
-    packaged version (``added`` counts the whole catalog, ``kept`` is ``0``); without it a
-    pre-existing catalog item is left byte-for-byte untouched (``kept``) and only the missing
-    ones are written (``added``). Either way, only the packaged catalog is iterated, so a
-    skill git-loopy does not ship is never visited and stays untouched.
-    """
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    added = kept = 0
-    for child in sorted(source.iterdir()):
-        target = skills_dir / child.name
-        if target.exists() and not overwrite:
-            kept += 1
-            continue
-        if child.is_dir():
-            shutil.copytree(child, target, dirs_exist_ok=True)
-        else:
-            shutil.copyfile(child, target)
-        added += 1
-    return added, kept
-
-
-def _existing_catalog_skills(skills_dir: Path, source: Path) -> list[str]:
-    """Names of packaged catalog items already present in the target skills dir.
-
-    Read-only detection used during the *collect* phase so a re-run can ask about
-    refreshing before anything is written. A name git-loopy does not ship (present
-    in the target but absent from ``source``) is never reported — only the catalog's
-    own items count — so non-git-loopy skills stay out of the merge decision.
-    """
-    if not source.is_dir() or not skills_dir.is_dir():
-        return []
-    return [
-        child.name
-        for child in sorted(source.iterdir())
-        if (skills_dir / child.name).exists()
-    ]
-
-
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-
-
-def _collect_skill_overwrite(
-    input_fn: Callable[[str], str],
-    *,
-    scaffold: bool,
-    skills_dir: Path,
-    skills_source: Path,
-) -> bool:
-    """Ask once, up front, whether to refresh pre-existing catalog skills.
-
-    Returns the overwrite decision (default **Yes**). Only asks when the operator
-    opted into scaffolding *and* the target scope already holds catalog skills;
-    otherwise there is nothing to merge and it returns ``True`` (a fresh scaffold
-    overwrites nothing). Resolving the target skills dir happens in the *collect*
-    phase, so this detection runs before anything is written. ``q`` / EOF cancels.
-    """
-    if not scaffold:
-        return True
-    existing = _existing_catalog_skills(skills_dir, skills_source)
-    if not existing:
-        return True
-    return _ask_yes_no(
-        input_fn,
-        f"{len(existing)} workflow skill catalog skill(s) already exist in "
-        f"{skills_dir}; refresh them with the packaged versions? "
-        "(No keeps your existing skills and adds only the missing ones)",
-        default=True,
-    )
 
 
 class _SkillPolicyUnavailable(Exception):
@@ -576,7 +518,7 @@ def _collect_skill_policy(
     picker_runner: Any,
     git: Any,
     required_skills: Sequence[str] | None,
-    packaged_skills_dir: Path,
+    installed_skills_dir: Path,
 ) -> tuple[str, ...]:
     """Collect one Skill policy through the shared ``skills edit`` seam.
 
@@ -600,7 +542,7 @@ def _collect_skill_policy(
             client_factory=client_factory,
             git=git,
             required_skills=required_skills,
-            packaged_skills_dir=packaged_skills_dir,
+            installed_skills_dir=installed_skills_dir,
             **options,
         )
     except skillscmd.SkillPolicyCancelled as exc:
@@ -662,7 +604,7 @@ def run_init(
     output_fn: Callable[[str], None] = print,
     fetch_choices: Callable[[], Sequence[ModelChoice]] = _default_fetch_choices,
     packaged_prompt: Path | None = None,
-    packaged_skills: Path | None = None,
+    installed_skills: Path | None = None,
     default_model: str | None = None,
     default_effort: object = _UNSET,
     warn: Callable[[str], None] | None = None,
@@ -703,6 +645,24 @@ def run_init(
         return 1
     output_fn(verification.render())
 
+    # Setup is where git-loopy acquires the Skills it runs on, and it happens
+    # before anything is collected: the Skill policy the operator is about to
+    # choose is a choice *among the installed catalog*, so an empty catalog would
+    # make setup offer nothing and every later Run fail. This writes only inside
+    # git-loopy's own config scope, never into the operator's project.
+    if installed_skills is not None:
+        skills_source = installed_skills
+    else:
+        try:
+            outcome = refresh_installed_catalog(env=env)
+        except SkillInstallError as exc:
+            warn(f"{exc}; nothing was written.")
+            return 1
+        skills_source = outcome.catalog.root
+        if outcome.warning:
+            warn(outcome.warning)
+        output_fn(describe_refresh(outcome))
+
     try:
         resolved_scope = _resolve_scope(
             scope,
@@ -718,10 +678,9 @@ def run_init(
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
 
-    # Resolve the write targets + packaged sources up front so the collect phase can
-    # detect pre-existing catalog skills BEFORE anything is written (collect-then-commit).
+    # Resolve the write targets + packaged sources up front so the collect phase
+    # reads the same paths the commit phase will write (collect-then-commit).
     targets = _resolve_targets(resolved_scope, repo_root, env)
-    skills_source = packaged_skills or _packaged_skills_path()
     prompt_source = packaged_prompt or _packaged_prompt_path()
 
     try:
@@ -730,7 +689,6 @@ def run_init(
             effort = _gate_default_effort(default_model, default_effort)  # type: ignore[arg-type]
             routing = None
             scaffold = True
-            overwrite_skills = True
             # The Minimal Skill policy: exactly the Required Skills, and never a
             # machine-specific Copilot import (ADR-0015). No client is built.
             enabled_skills = tuple(
@@ -770,22 +728,11 @@ def run_init(
                 )
                 else None
             )
-            destination = (
-                "the global scope (the shared, machine-wide skills location)"
-                if resolved_scope == "global"
-                else f"the {resolved_scope} scope"
-            )
             scaffold = _ask_yes_no(
                 input_fn,
-                "Also scaffold an editable PROMPT.md override and git-loopy's "
-                f"workflow skill catalog into {destination}?",
+                "Also scaffold an editable PROMPT.md override into the "
+                f"{resolved_scope} scope?",
                 default=True,
-            )
-            overwrite_skills = _collect_skill_overwrite(
-                input_fn,
-                scaffold=scaffold,
-                skills_dir=targets.skills_dir,
-                skills_source=skills_source,
             )
             # Last, because the policy must answer to the Run instructions this
             # setup will leave behind — which the scaffold decision determines.
@@ -807,7 +754,7 @@ def run_init(
                     scaffold=scaffold,
                     required_skills=required_skills,
                 ),
-                packaged_skills_dir=skills_source,
+                installed_skills_dir=skills_source,
             )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
@@ -842,19 +789,6 @@ def run_init(
     if scaffold:
         _scaffold_prompt(targets.prompt_path, prompt_source)
         output_fn(f"Wrote {targets.prompt_path}")
-        if skills_source.is_dir():
-            added, kept = _scaffold_skills(
-                targets.skills_dir, skills_source, overwrite=overwrite_skills
-            )
-            summary = (
-                f"Scaffolded the workflow skill catalog "
-                f"({added + kept} skills) into {targets.skills_dir}"
-            )
-            if not overwrite_skills:
-                summary += f" ({added} added, {kept} kept)"
-            output_fn(summary)
-        else:  # pragma: no cover - the wheel always ships skills
-            warn(f"packaged skills not found at {skills_source}; skipped.")
 
     _bootstrap_tracker_labels(
         repo_root=repo_root,
