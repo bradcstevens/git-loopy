@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import events as events_module
 from git_loopy.interactive import state as state_module
 from git_loopy.interactive.state import (
@@ -89,6 +90,11 @@ _PRICING = Pricing(
         )
     }
 )
+
+#: The Queue's Cost denomination — the one seam a Queue row's Cost resolves
+#: through (#328), and the same one the Summary is given below so the two
+#: remain reconcilable.
+_DENOM = ListPriceDenomination(pricing=_PRICING)
 
 
 # ---------------------------------------------------------------------------
@@ -563,10 +569,10 @@ def test_queue_row_carries_usage_tally_and_derives_cost() -> None:
     )
     # The per-issue Cost derives from the tally's own guard: 1000 * 15/1e6 +
     # 200 * 75/1e6 = 0.0300 for the priced model (the widget renders "$0.0300").
-    assert worked.usage.cost(_PRICING) == Decimal("0.0300")
+    assert _DENOM.cost(worked.usage) == Decimal("0.0300")
     # A still-queued issue carries a default tally (None model) whose cost is
     # None — the em-dash source the widget renders, never zero.
-    assert by_ref[56].usage.cost(_PRICING) is None
+    assert _DENOM.cost(by_ref[56].usage) is None
 
 
 def test_usage_sums_across_iterations_for_one_issue() -> None:
@@ -680,7 +686,7 @@ def test_unknown_model_cost_is_none_not_a_crash() -> None:
     # The unknown model yields None cost (not zero, not a crash) — the em-dash
     # source. UsageTally.cost now owns the guard (issue #42), and it agrees with
     # the underlying estimate_cost oracle.
-    assert row.usage.cost(_PRICING) is None
+    assert _DENOM.cost(row.usage) is None
     assert (
         estimate_cost(
             row.usage.model, row.usage.tokens_in, row.usage.tokens_out, _PRICING
@@ -696,7 +702,7 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
     iteration), and the totals agree."""
     clock = _FakeClock()
     state = _make_state(clock)
-    summary = RunSummary(pricing=_PRICING)
+    summary = RunSummary(denomination=_DENOM)
 
     # Three iterations: #100 worked twice, #101 once, each with its own usage.
     plan = [
@@ -728,7 +734,7 @@ def test_per_issue_usage_reconciles_with_run_summary_totals() -> None:
     per_issue_cost = Decimal(0)
     for r in rows:
         assert r.usage.model is not None  # every worked issue recorded its model
-        per_issue_cost += r.usage.cost(_PRICING) or Decimal(0)
+        per_issue_cost += _DENOM.cost(r.usage) or Decimal(0)
     assert per_issue_cost == totals.cost_usd
 
 

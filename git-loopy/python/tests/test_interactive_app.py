@@ -29,6 +29,7 @@ pytest.importorskip("textual")
 from rich.text import Text  # noqa: E402
 from textual.widgets import ContentSwitcher, DataTable, Static  # noqa: E402
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import events as events_module  # noqa: E402
 from git_loopy.interactive.app import (  # noqa: E402
     GitLoopyApp,
@@ -362,7 +363,11 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
         }
     )
 
-    app = GitLoopyApp(state, summary=RunSummary(pricing=pricing), refresh_interval=3600)
+    app = GitLoopyApp(
+        state,
+        summary=RunSummary(denomination=ListPriceDenomination(pricing=pricing)),
+        refresh_interval=3600,
+    )
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
         # Columns: Issue | Status | Started | Active | Tokens in | out | Cost.
@@ -434,7 +439,11 @@ async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> No
         }
     )
 
-    app = GitLoopyApp(state, summary=RunSummary(pricing=pricing), refresh_interval=3600)
+    app = GitLoopyApp(
+        state,
+        summary=RunSummary(denomination=ListPriceDenomination(pricing=pricing)),
+        refresh_interval=3600,
+    )
     async with app.run_test():
         row = app.query_one("#queue", DataTable).get_row_at(0)
 

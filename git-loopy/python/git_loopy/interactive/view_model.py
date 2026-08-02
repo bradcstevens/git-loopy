@@ -16,7 +16,7 @@ from git_loopy.interactive.state import (
 )
 
 if TYPE_CHECKING:
-    from git_loopy.pricing import Pricing
+    from git_loopy.denomination import CostDenomination
     from git_loopy.ui.summary import IterationSnapshot, RunSummary
 
 __all__ = ["project_run_view"]
@@ -56,7 +56,7 @@ def project_run_view(
             "summary": {
                 "rows": (
                     [
-                        _summary_row(snapshot, pricing=summary.pricing)
+                        _summary_row(snapshot, denomination=summary.denomination)
                         for snapshot in summary.completed
                     ]
                     if summary is not None
@@ -136,9 +136,9 @@ def _queue_row(row: QueueRow) -> dict[str, Any]:
 def _summary_row(
     snapshot: IterationSnapshot,
     *,
-    pricing: Pricing,
+    denomination: CostDenomination,
 ) -> dict[str, Any]:
-    cost_value = snapshot.cost_usd(pricing)
+    cost_value = snapshot.cost_usd(denomination)
     unavailable = snapshot.unavailable_measurements
 
     def observed(key: str, value: Any) -> Any:

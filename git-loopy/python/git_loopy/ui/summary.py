@@ -55,7 +55,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from git_loopy.pricing import Pricing
+from git_loopy.denomination import CostDenomination
 from git_loopy.usage import UsageTally
 
 from .console import STYLES
@@ -225,17 +225,18 @@ class IterationSnapshot:
             return 0.0
         return (self.ended_at - self.started_at).total_seconds()
 
-    def cost_usd(self, pricing: Pricing) -> Optional[Decimal]:
-        """Compute the iteration's estimated cost, or ``None`` for unknown model.
+    def cost_usd(self, denomination: CostDenomination) -> Optional[Decimal]:
+        """The iteration's Cost, or ``None`` when the denomination cannot say.
 
-        Delegates to :meth:`~git_loopy.usage.UsageTally.cost`, which carries
-        the ``None``/unknown-model guard so callers render the em dash.
+        Delegates to :meth:`~git_loopy.denomination.CostDenomination.cost`,
+        which owns the unknown-model guard so callers render the em dash rather
+        than silently understating Cost.
         """
         if self.has_normalized_rollup:
             return self.normalized_cost_usd
-        return self.usage.cost(pricing)
+        return denomination.cost(self.usage)
 
-    def to_counters_kwargs(self, *, pricing: Pricing) -> dict:
+    def to_counters_kwargs(self, *, denomination: CostDenomination) -> dict:
         """Return a kwargs dict suitable for constructing
         :class:`git_loopy.persist.IterationCounters`.
 
@@ -244,7 +245,9 @@ class IterationSnapshot:
         ``git_loopy.persist``. Compatibility callers may do::
 
             from git_loopy.persist import IterationCounters
-            counters = IterationCounters(**snap.to_counters_kwargs(pricing=p))
+            counters = IterationCounters(
+                **snap.to_counters_kwargs(denomination=d)
+            )
 
         Production persistence instead uses
         :meth:`git_loopy.persist.IterationCounters.from_rollup`.
@@ -256,7 +259,7 @@ class IterationSnapshot:
             "tokens_in": self.usage.tokens_in,
             "tokens_out": self.usage.tokens_out,
             "context_used": self.context_used,
-            "est_cost_usd": self.cost_usd(pricing),
+            "est_cost_usd": self.cost_usd(denomination),
             "tool_count": self.tool_count,
             "skill_count": self.skill_count,
             "skills_consulted": tuple(sorted(self.skills_consulted)),
@@ -316,17 +319,18 @@ class RunSummary:
     are renderer projections of the normalized Iteration-end records.
 
     Attributes:
-        pricing: :class:`git_loopy.pricing.Pricing` table used for cost
-            estimation and context-utilisation thresholding.
-        pricing_date: Optional ISO date label (e.g. ``"2026-05-16"``)
-            surfaced alongside the cost line. ``None`` omits the suffix.
+        denomination: The injected
+            :class:`~git_loopy.denomination.CostDenomination` every Cost figure
+            on this Summary resolves through — the one seam, so the Summary and
+            the Queue cannot disagree about what an issue cost. Its
+            :attr:`~git_loopy.denomination.CostDenomination.provenance` supplies
+            the caveat printed beside a per-Iteration cost line.
         current: The in-progress :class:`IterationSnapshot`, or ``None``
             between iterations.
         completed: Frozen snapshots in iteration order.
     """
 
-    pricing: Pricing
-    pricing_date: Optional[str] = None
+    denomination: CostDenomination
     current: Optional[IterationSnapshot] = None
     completed: list[IterationSnapshot] = field(default_factory=list)
 
@@ -487,8 +491,8 @@ class RunSummary:
     def totals(self) -> RunTotals:
         """Aggregate counters across :attr:`completed` iterations.
 
-        Cost only sums iterations whose model was in the pricing table —
-        unknown-model iterations contribute ``None`` and are skipped, so
+        Cost only sums iterations the denomination could price —
+        unpriceable iterations contribute ``None`` and are skipped, so
         the totals row never silently understates cost by treating
         unknown as zero.
 
@@ -515,7 +519,7 @@ class RunSummary:
         auto_closures = sum(s.auto_closures for s in self.completed)
         pr_advances = sum(s.pr_advances for s in self.completed)
         priced_costs = [
-            s.cost_usd(self.pricing)
+            s.cost_usd(self.denomination)
             for s in self.completed
         ]
         defined_costs = [c for c in priced_costs if c is not None]
@@ -712,7 +716,7 @@ class RunSummary:
         )
 
         for snap in self.completed:
-            cost = snap.cost_usd(self.pricing)
+            cost = snap.cost_usd(self.denomination)
             cost_str = f"${cost:.4f}" if cost is not None else "—"
             issue_str = f"#{snap.issue_num}" if snap.issue_num is not None else "—"
             model_str = snap.model if snap.model is not None else "—"
@@ -801,17 +805,18 @@ class RunSummary:
         return text
 
     def _format_cost_line(self, snap: IterationSnapshot) -> Text:
-        """Render the cost line with date label or em dash."""
+        """Render the cost line with the denomination's provenance, or the em dash."""
         text = Text()
-        cost = snap.cost_usd(self.pricing)
+        cost = snap.cost_usd(self.denomination)
         if cost is None:
             text.append("—  ", style=STYLES["meta"])
             text.append("(model not in pricing table)", style=STYLES["meta"])
             return text
         text.append(f"${cost:.4f} USD")
-        if self.pricing_date is not None:
+        provenance = self.denomination.provenance
+        if provenance is not None:
             text.append(
-                f"  (provider list, as of {self.pricing_date})",
+                f"  ({provenance})",
                 style=STYLES["meta"],
             )
         return text

@@ -15,38 +15,18 @@ Covered here:
   token summation.
 * :meth:`UsageTally.merge` — composes two tallies via the same rule.
 * :attr:`UsageTally.total_tokens` — ``tokens_in + tokens_out``.
-* :meth:`UsageTally.cost` — a :class:`~decimal.Decimal` for a known model,
-  ``None`` for an unknown model, and ``None`` for a ``None`` model (the guard).
-* The module imports only stdlib + ``git_loopy.pricing`` (enforced via AST).
+* The module imports only stdlib (enforced via AST) — since #328 deriving Cost
+  from a tally belongs to ``git_loopy.denomination``, covered by
+  ``tests/test_denomination.py``.
 """
 
 from __future__ import annotations
 
 import ast
-from decimal import Decimal
 from pathlib import Path
 
 from git_loopy import usage as usage_module
-from git_loopy.pricing import ModelPricing, Pricing, estimate_cost
 from git_loopy.usage import UsageTally
-
-
-# ---------------------------------------------------------------------------
-# Test helpers
-# ---------------------------------------------------------------------------
-
-
-def _pricing() -> Pricing:
-    """A tiny two-model pricing table with round prices for exact assertions."""
-    return Pricing(
-        models={
-            "known-model": ModelPricing(
-                input_per_mtok=Decimal("10"),
-                output_per_mtok=Decimal("30"),
-                context_window=200_000,
-            ),
-        }
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,60 +136,24 @@ def test_total_tokens_is_sum_of_in_and_out() -> None:
 
 
 # ---------------------------------------------------------------------------
-# cost — Decimal for a known model, None otherwise
+# Module purity — stdlib only (enforced structurally)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_known_model_returns_decimal() -> None:
-    pricing = _pricing()
-    tally = UsageTally(model="known-model", tokens_in=1000, tokens_out=2000)
-    # 1000 * 10 / 1e6  +  2000 * 30 / 1e6  =  0.01 + 0.06
-    assert tally.cost(pricing) == Decimal("0.07")
+def test_usage_module_imports_only_stdlib() -> None:
+    """``usage.py`` MUST import only stdlib — not even the price table.
 
-
-def test_cost_delegates_to_estimate_cost() -> None:
-    """``cost`` is exactly ``estimate_cost`` for an established model."""
-    pricing = _pricing()
-    tally = UsageTally(model="known-model", tokens_in=1234, tokens_out=5678)
-    assert tally.cost(pricing) == estimate_cost(
-        "known-model", 1234, 5678, pricing
-    )
-
-
-def test_cost_unknown_model_returns_none() -> None:
-    """An unknown model yields ``None`` (not zero) so callers render the em dash."""
-    pricing = _pricing()
-    tally = UsageTally(model="not-in-table", tokens_in=1000, tokens_out=2000)
-    assert tally.cost(pricing) is None
-
-
-def test_cost_none_model_returns_none() -> None:
-    """A ``None`` model short-circuits before ``estimate_cost`` — no crash, no cost."""
-    pricing = _pricing()
-    tally = UsageTally(model=None, tokens_in=1000, tokens_out=2000)
-    assert tally.cost(pricing) is None
-
-
-# ---------------------------------------------------------------------------
-# Module purity — stdlib + git_loopy.pricing only (enforced structurally)
-# ---------------------------------------------------------------------------
-
-
-def test_usage_module_imports_only_stdlib_and_pricing() -> None:
-    """``usage.py`` MUST import only stdlib + ``git_loopy.pricing``.
-
-    Preserves the repo's import-guard posture (ADR-0001): the Consumption value
-    object stays a pure leaf — no Textual, no SDK, no other first-party module,
-    and it reaches pricing through ``git_loopy.pricing`` (itself stdlib-only),
-    never a heavier peer.
+    Preserves the repo's import-guard posture (ADR-0001), and tightens it: since
+    #328 the Consumption value object no longer knows what denominates Cost.
+    Deriving Cost from Consumption belongs to
+    :class:`~git_loopy.denomination.CostDenomination`, so ``usage.py`` is a pure
+    leaf with no first-party import at all.
     """
     source = Path(usage_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     allow = {
         "__future__",
         "dataclasses",
-        "decimal",
-        "git_loopy.pricing",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):

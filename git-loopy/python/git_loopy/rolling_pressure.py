@@ -53,13 +53,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
+from git_loopy.denomination import CostDenomination
 from git_loopy.gh import RateLimitReporting
-from git_loopy.pricing import Pricing, estimate_cost
 from git_loopy.rolling_concurrency import (
     OBSERVATION_WINDOW,
     ConcurrencyController,
     LimitChange,
 )
+from git_loopy.usage import UsageTally
 
 __all__ = [
     "ENV_ADAPTIVE",
@@ -249,13 +250,13 @@ class RunCostMeter:
     from Lane sessions and serial **Iterations** alike without either path
     having to report it a second way.
 
-    A Run that meets one unpriceable model latches :attr:`priceable` off and
-    reports ``None`` from then on. ADR-0018 and #219 §11 point the same way
-    here: understating burn is an estimate, and an estimate is exactly what a
-    contraction may not be made on.
+    A Run whose **Cost denomination** cannot price one sample latches
+    :attr:`priceable` off and reports ``None`` from then on. ADR-0018 and #219
+    §11 point the same way here: understating burn is an estimate, and an
+    estimate is exactly what a contraction may not be made on.
     """
 
-    pricing: Pricing
+    denomination: CostDenomination
     _spent: Decimal = field(default_factory=lambda: Decimal(0))
     _priceable: bool = True
 
@@ -264,11 +265,12 @@ class RunCostMeter:
         if event.get("type") != _USAGE_TOKENS:
             return
         model = event.get("model")
-        cost = estimate_cost(
-            str(model) if isinstance(model, str) and model else None,
-            _nonnegative_int(event.get("input")),
-            _nonnegative_int(event.get("output")),
-            self.pricing,
+        cost = self.denomination.cost(
+            UsageTally(
+                model=str(model) if isinstance(model, str) and model else None,
+                tokens_in=_nonnegative_int(event.get("input")),
+                tokens_out=_nonnegative_int(event.get("output")),
+            )
         )
         if cost is None:
             self._priceable = False

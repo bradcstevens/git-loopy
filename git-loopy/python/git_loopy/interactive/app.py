@@ -62,7 +62,7 @@ from git_loopy.interactive.state import (
     queue_rows,
 )
 from git_loopy.interactive.view_model import project_run_view
-from git_loopy.pricing import Pricing
+from git_loopy.denomination import CostDenomination
 
 if TYPE_CHECKING:
     from git_loopy.ui.summary import RunSummary
@@ -99,32 +99,32 @@ _ACTIVITY_PLACEHOLDER = "Waiting for the agent..."
 
 def _format_queue_cost(
     usage: UsageTally,
-    pricing: Pricing | None,
+    denomination: CostDenomination | None,
     *,
     normalized_cost: float | None = None,
     has_contributions: bool = False,
     has_open_contribution: bool = False,
 ) -> str:
-    """Render a Queue row's normalized or live-estimated **Cost** cell.
+    """Render a Queue row's normalized or live **Cost** cell.
 
     Finalized contributions carry the Orchestrator-owned normalized Cost. Before
     finalization, derive the live figure from the row's shared
-    :class:`~git_loopy.usage.UsageTally` via :meth:`UsageTally.cost`, which owns
-    the one unknown-model guard every Cost figure shares: a model absent from
-    the pricing table — or one no usage event has named yet (``model is None``)
-    — yields ``None`` → the em-dash placeholder rather than crashing or silently
-    understating cost. Only the *no pricing table at all* case (``pricing is
-    None``, e.g. no Summary attached) is still guarded here, since
-    :meth:`UsageTally.cost` requires a concrete pricing table. This is the same
-    unknown-model treatment the Summary band / run-end table use.
+    :class:`~git_loopy.usage.UsageTally` through the injected **Cost
+    denomination** (#328), which owns the one unknown guard every Cost figure
+    shares: Consumption the denomination cannot price — or that no usage event
+    has named a model for yet — yields ``None`` → the em-dash placeholder rather
+    than crashing or silently understating cost. Only the *no denomination at
+    all* case (``denomination is None``, e.g. no Summary attached) is still
+    guarded here. This is the same unknown treatment the Summary band / run-end
+    table use, because it is literally the same seam.
     """
     if has_open_contribution and has_contributions:
         return "—"
     if has_contributions:
         return f"${normalized_cost:.4f}" if normalized_cost is not None else "—"
-    if pricing is None:
+    if denomination is None:
         return "—"
-    cost = usage.cost(pricing)
+    cost = denomination.cost(usage)
     return f"${cost:.4f}" if cost is not None else "—"
 
 
@@ -557,11 +557,12 @@ class GitLoopyApp(App[None]):
     def _sync_queue(self) -> None:
         table = self.query_one("#queue", DataTable)
         rows = queue_rows(self._state)
-        # The per-issue Cost reuses the Summary's pricing table (issue #36), so
-        # the Queue costs and the Summary band cost share one source — keeping
-        # the two reconcilable. ``None`` (no summary attached) renders the em
-        # dash, the same unknown-model treatment as a missing price.
-        pricing = getattr(self._summary, "pricing", None)
+        # The per-issue Cost resolves through the Summary's own Cost
+        # denomination (issue #36, #328), so the Queue costs and the Summary
+        # band cost share one seam — keeping the two reconcilable by
+        # construction. ``None`` (no summary attached) renders the em dash, the
+        # same unknown treatment as an unpriceable model.
+        denomination = getattr(self._summary, "denomination", None)
         new_refs = [str(row.ref) for row in rows]
         if new_refs != self._displayed_refs:
             saved = self._cursor_ref(table)
@@ -578,7 +579,7 @@ class GitLoopyApp(App[None]):
                     f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
                     _format_queue_cost(
                         row.usage,
-                        pricing,
+                        denomination,
                         normalized_cost=row.cost_usd,
                         has_contributions=row.iteration_count > 0,
                         has_open_contribution=row.is_active,
@@ -611,7 +612,7 @@ class GitLoopyApp(App[None]):
                     "cost",
                     _format_queue_cost(
                         row.usage,
-                        pricing,
+                        denomination,
                         normalized_cost=row.cost_usd,
                         has_contributions=row.iteration_count > 0,
                         has_open_contribution=row.is_active,

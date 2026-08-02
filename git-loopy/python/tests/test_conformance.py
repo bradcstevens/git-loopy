@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import pytest
 from rich.console import Console
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
@@ -219,7 +220,7 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
     assert case["input"]["pricing"] == {"models": {}}
     clock = _FixtureClock()
     rollup = IterationRollupAccumulator(
-        pricing=Pricing(models={}),
+        denomination=ListPriceDenomination(pricing=Pricing(models={})),
         monotonic=clock,
     )
     actual = []
@@ -1190,7 +1191,9 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
             monotonic=clock,
             wall_clock=wall,
         )
-        summary = RunSummary(pricing=Pricing(models={}))
+        summary = RunSummary(
+            denomination=ListPriceDenomination(pricing=Pricing(models={}))
+        )
         renderer = Renderer(
             console=Console(file=StringIO(), force_terminal=False),
             summary=summary,
@@ -1826,7 +1829,7 @@ _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")
     ids=lambda case: case["id"],
 )
 def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
-    summary = RunSummary(pricing=Pricing(models={}))
+    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
     snap = summary.on_iteration_start(iter_num=1)
     for tool_call in case["tool_calls"]:
         summary.record_tool_call(**tool_call)
@@ -1839,7 +1842,7 @@ def test_skill_consultation_fixture(case: dict[str, Any]) -> None:
 
 
 def test_skill_adoption_rolls_up_replay_derived_iterations() -> None:
-    summary = RunSummary(pricing=Pricing(models={}))
+    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
     for iter_num, case in enumerate(_SKILL_CONSULTATION["cases"], start=1):
         summary.on_iteration_start(iter_num=iter_num)
         for tool_call in case["tool_calls"]:
@@ -2257,7 +2260,7 @@ def test_run_skill_policy_and_iteration_consultation_stay_separate_facts() -> No
         migration_warning=False,
     ).event_payload
 
-    summary = RunSummary(pricing=Pricing(models={}))
+    summary = RunSummary(denomination=ListPriceDenomination(pricing=Pricing(models={})))
     snap = summary.on_iteration_start(iter_num=1)
     summary.record_tool_call(tool_name="skill", arguments={"skill": "tdd"})
 

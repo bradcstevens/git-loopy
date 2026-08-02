@@ -29,6 +29,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import events as events_module
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
@@ -102,6 +103,12 @@ def _fixed_pricing() -> Pricing:
     )
 
 
+
+def _fixed_denomination() -> ListPriceDenomination:
+    """The list-price Cost denomination over :func:`_fixed_pricing`."""
+    return ListPriceDenomination(pricing=_fixed_pricing())
+
+
 def _ts() -> datetime:
     return datetime(2026, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -116,7 +123,9 @@ def _make_renderer(
 ) -> tuple[Renderer, RunSummary, io.StringIO]:
     """Construct a Renderer wired to a fresh capture buffer + RunSummary."""
     pricing = pricing if pricing is not None else _fixed_pricing()
-    summary = RunSummary(pricing=pricing, pricing_date=pricing_date)
+    summary = RunSummary(
+        denomination=ListPriceDenomination(pricing=pricing, as_of=pricing_date)
+    )
     console, buf = _capture_console(width=width)
     renderer = Renderer(
         console=console,
@@ -1068,7 +1077,7 @@ def test_iteration_snapshot_to_counters_kwargs_conversion() -> None:
         auto_closures=1,
         strikes=0,
     )
-    kwargs = snap.to_counters_kwargs(pricing=_fixed_pricing())
+    kwargs = snap.to_counters_kwargs(denomination=_fixed_denomination())
     assert kwargs["iter"] == 2
     assert kwargs["duration_seconds"] == pytest.approx(30.0, rel=1e-3)
     assert kwargs["model"] == "claude-opus-4.7-xhigh"
@@ -1101,23 +1110,25 @@ def test_iteration_snapshot_to_counters_kwargs_unknown_model_yields_none_cost() 
         ended_at=_ts(),
         usage=UsageTally(model="unknown-model", tokens_in=100, tokens_out=20),
     )
-    kwargs = snap.to_counters_kwargs(pricing=_fixed_pricing())
+    kwargs = snap.to_counters_kwargs(denomination=_fixed_denomination())
     assert kwargs["est_cost_usd"] is None
 
 
 def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
     """#40: an IterationSnapshot's Consumption lives in a shared ``UsageTally``.
 
-    The per-iteration accrual rule (*first non-None model wins; tokens sum*) and
-    the unknown-model cost guard are the ``UsageTally``'s — not a second copy in
-    ``summary.py``. ``record_usage`` folds through :meth:`UsageTally.add`, and
-    ``context_used`` / ``cost_usd`` read straight off the tally.
+    The per-iteration accrual rule (*first non-None model wins; tokens sum*) is
+    the ``UsageTally``'s and the unknown guard is the **Cost denomination**'s —
+    not a second copy in ``summary.py``. ``record_usage`` folds through
+    :meth:`UsageTally.add`; ``context_used`` reads straight off the tally and
+    ``cost_usd`` is exactly what the injected denomination says the tally cost.
     """
     # The snapshot carries a real UsageTally, default-constructed.
     snap = IterationSnapshot(iter_num=1)
     assert isinstance(snap.usage, UsageTally)
 
-    summary = RunSummary(pricing=_fixed_pricing())
+    denomination = _fixed_denomination()
+    summary = RunSummary(denomination=denomination)
     summary.on_iteration_start(iter_num=1, issue_num=7)
     # A leading None model, then the authoritative model, then a *different*
     # non-None model that must NOT overwrite it (first non-None wins absolutely).
@@ -1132,7 +1143,7 @@ def test_iteration_snapshot_embeds_usage_tally_and_delegates() -> None:
     assert cur.usage.tokens_out == 11
     # context_used / cost_usd delegate to the tally (no independent arithmetic).
     assert cur.context_used == cur.usage.total_tokens == 42
-    assert cur.cost_usd(_fixed_pricing()) == cur.usage.cost(_fixed_pricing())
+    assert cur.cost_usd(denomination) == denomination.cost(cur.usage)
 
 
 # ---------------------------------------------------------------------------
@@ -1582,10 +1593,13 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         "rich.padding",
         # First-party deep modules
         "git_loopy.events",
-        "git_loopy.pricing",
+        # git_loopy.denomination — the one Cost-denomination seam (#328). The UI
+        # asks it what Consumption cost; it never holds price data itself, which
+        # is why git_loopy.pricing is deliberately NOT on this list.
+        "git_loopy.denomination",
         # git_loopy.usage — the shared Consumption value object (issue #40).
-        # Deep and pure (stdlib + git_loopy.pricing); summary.py folds its
-        # per-Iteration Consumption onto it. Not a shell/CLI/persist coupling.
+        # Deep and pure (stdlib only); summary.py folds its per-Iteration
+        # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
     }
 )

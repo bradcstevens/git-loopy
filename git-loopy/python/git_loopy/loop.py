@@ -150,7 +150,8 @@ from git_loopy.persist import (
     WritersBundle,
     create_writers,
 )
-from git_loopy.pricing import Pricing, PricingError, load_pricing
+from git_loopy.denomination import CostDenomination, ListPriceDenomination
+from git_loopy.pricing import PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_install import (
@@ -825,7 +826,7 @@ class _Loop:
         release_version: str,
         git: git_module.GitClient,
         prompt_text: str,
-        pricing: Pricing,
+        denomination: CostDenomination,
         writers: WritersBundle,
         sinks: SinkFanout,
         summary: RunSummary,
@@ -858,7 +859,7 @@ class _Loop:
         # it is set the Run drives the frontier instead of the Pool; the two are
         # never both live, because §10 resolves exactly one mode.
         self._frontier_plan = frontier_plan
-        self._rollup = IterationRollupAccumulator(pricing=pricing)
+        self._rollup = IterationRollupAccumulator(denomination=denomination)
         if self._continuation is not None:
             self._continuation.bind_emit(self._emit)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -1914,7 +1915,7 @@ class _ParallelLoop:
         release_version: str,
         git: git_module.GitClient,
         prompt_text: str,
-        pricing: Pricing,
+        denomination: CostDenomination,
         writers: WritersBundle,
         sinks: SinkFanout,
         summary: RunSummary,
@@ -1965,7 +1966,7 @@ class _ParallelLoop:
         # observation cadence and the operator's budgets; the policy it builds
         # is handed to the scheduler, which supplies the pipeline half of every
         # observation from its own state.
-        self._cost_meter = rolling_pressure.RunCostMeter(pricing=pricing)
+        self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
         self._pressure = _make_pressure_monitor(
             lane_cap=config.parallel,
             diag=diag,
@@ -2035,7 +2036,7 @@ class _ParallelLoop:
             release_version=release_version,
             git=git,
             prompt_text=prompt_text,
-            pricing=pricing,
+            denomination=denomination,
             writers=writers,
             sinks=sinks,
             summary=summary,
@@ -3396,10 +3397,14 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
         print(f"git-loopy: {exc}", file=sys.stderr)
         return 1
 
-    # 2) Pricing — bail out loudly on a malformed override (rubber-duck
-    #    feedback: silent fallback hides operator intent).
+    # 2) Cost denomination — resolved once per Run and threaded as one seam
+    #    (#328), so every Cost-bearing surface denominates identically. Bails
+    #    out loudly on a malformed override (rubber-duck feedback: silent
+    #    fallback hides operator intent).
     try:
-        pricing = load_pricing(config.pricing_file)
+        denomination = ListPriceDenomination(
+            pricing=load_pricing(config.pricing_file)
+        )
     except PricingError as exc:
         print(f"git-loopy: pricing load failed: {exc}", file=sys.stderr)
         return 1
@@ -3414,7 +3419,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             file=sys.stderr,
         )
         return 1
-    summary = RunSummary(pricing=pricing)
+    summary = RunSummary(denomination=denomination)
     console = get_console()
     renderer = Renderer(
         console=console,
@@ -3631,7 +3636,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             release_version=release_version,
             git=git,
             prompt_text=prompt_text,
-            pricing=pricing,
+            denomination=denomination,
             writers=writers,
             sinks=sinks,
             summary=summary,
@@ -3650,7 +3655,7 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             release_version=release_version,
             git=git,
             prompt_text=prompt_text,
-            pricing=pricing,
+            denomination=denomination,
             writers=writers,
             sinks=sinks,
             summary=summary,

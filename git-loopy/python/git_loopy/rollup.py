@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from git_loopy.pricing import Pricing
+from git_loopy.denomination import CostDenomination
 from git_loopy.usage import UsageTally
 
 __all__ = ["IterationRollupAccumulator"]
@@ -62,10 +62,10 @@ class IterationRollupAccumulator:
     def __init__(
         self,
         *,
-        pricing: Pricing,
+        denomination: CostDenomination,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._pricing = pricing
+        self._denomination = denomination
         self._monotonic = monotonic
         self._current: _Iteration | None = None
         self._cumulative_active: dict[int | str, float] = {}
@@ -220,7 +220,7 @@ class IterationRollupAccumulator:
                 "tokens_in": current.usage.tokens_in,
                 "tokens_out": current.usage.tokens_out,
                 "observed_tokens": current.usage.total_tokens,
-                "cost_usd": _cost_value(current.usage, self._pricing),
+                "cost_usd": _cost_value(current.usage, self._denomination),
                 "tool_count": current.tool_count,
                 "skill_call_count": current.skill_call_count,
                 "skills_consulted": sorted(current.skills_consulted),
@@ -290,7 +290,7 @@ class IterationRollupAccumulator:
                 "tokens_in": contribution.usage.tokens_in,
                 "tokens_out": contribution.usage.tokens_out,
             },
-            "cost_usd": _cost_value(contribution.usage, self._pricing),
+            "cost_usd": _cost_value(contribution.usage, self._denomination),
             "peak_context_window": contribution.peak_context_window,
         }
 
@@ -350,8 +350,8 @@ def _higher_peak_or_none(
     return _higher_peak(previous, sample)
 
 
-def _cost_value(usage: UsageTally, pricing: Pricing) -> float | None:
-    cost = usage.cost(pricing)
+def _cost_value(usage: UsageTally, denomination: CostDenomination) -> float | None:
+    cost = denomination.cost(usage)
     return float(cost) if cost is not None else None
 
 

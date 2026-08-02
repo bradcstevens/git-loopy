@@ -52,6 +52,7 @@ from copilot.generated.session_events import (
 from copilot.session import PermissionRequestResult
 from rich.console import Console
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import events as events_module
 from git_loopy import session as session_module
 from git_loopy.active_issue import ActiveIssueBinding
@@ -237,7 +238,7 @@ def _make_renderer() -> tuple[Renderer, io.StringIO]:
             ),
         }
     )
-    summary = RunSummary(pricing=pricing)
+    summary = RunSummary(denomination=ListPriceDenomination(pricing=pricing))
     console, buf = _capture_console()
     renderer = Renderer(console=console, summary=summary, verbosity=0)
     return renderer, buf

@@ -15,8 +15,8 @@ def test_view_model_module_has_no_renderer_dependency() -> None:
         "__future__",
         "decimal",
         "typing",
+        "git_loopy.denomination",
         "git_loopy.interactive.state",
-        "git_loopy.pricing",
         "git_loopy.ui.summary",
     }
     seen: set[str] = set()

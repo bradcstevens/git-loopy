@@ -34,6 +34,7 @@ from typing import Any
 import pytest
 from rich.console import Console
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import sinks as sinks_module
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
@@ -118,7 +119,11 @@ def _fixed_pricing() -> Pricing:
 
 
 def _make_renderer() -> tuple[Renderer, io.StringIO]:
-    summary = RunSummary(pricing=_fixed_pricing(), pricing_date="2026-05-16")
+    summary = RunSummary(
+        denomination=ListPriceDenomination(
+            pricing=_fixed_pricing(), as_of="2026-05-16"
+        )
+    )
     console, buf = _capture_console()
     return Renderer(console=console, summary=summary, verbosity=0), buf
 

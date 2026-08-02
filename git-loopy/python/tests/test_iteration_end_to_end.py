@@ -61,6 +61,7 @@ from copilot.generated.session_events import (
     ToolExecutionStartData,
 )
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy import cli
 from git_loopy import events as events_module
 from git_loopy import gh as gh_module
@@ -1952,16 +1953,16 @@ def _make_loop(
     inert stand-ins the constructor merely stores.
     """
     writers = create_writers(repo_root)
-    pricing = Pricing(models={})
+    denomination = ListPriceDenomination(pricing=Pricing(models={}))
     loop = loop_module._Loop(
         config=RunConfig(),
         release_version=EXPECTED_RELEASE_VERSION,
         git=FakeGitClient(repo_root),
         prompt_text="",
-        pricing=pricing,
+        denomination=denomination,
         writers=writers,
         sinks=sinks,
-        summary=RunSummary(pricing=pricing),
+        summary=RunSummary(denomination=denomination),
         client=cast(CopilotClient, None),
         skill_preflight=cast(
             Any,

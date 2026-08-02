@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from git_loopy.denomination import ListPriceDenomination
 from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.rollup import IterationRollupAccumulator
 
@@ -28,7 +29,9 @@ def _pricing() -> Pricing:
 
 def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:
     clock = _Clock()
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=clock
+    )
     rollup.observe(
         {
             "type": "wrapper.iteration.start",
@@ -134,7 +137,9 @@ def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:
 
 
 def test_rollup_extracts_skills_before_tool_arguments_are_scrubbed() -> None:
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=_Clock()
+    )
     rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
     rollup.observe(
         {
@@ -164,7 +169,9 @@ def test_rollup_extracts_skills_from_deep_tool_arguments_without_recursion() -> 
     arguments: object = "/repo/.copilot/skills/tdd/SKILL.md"
     for _ in range(1_500):
         arguments = [arguments]
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=_Clock()
+    )
     rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
 
     rollup.observe(
@@ -181,7 +188,9 @@ def test_rollup_extracts_skills_from_deep_tool_arguments_without_recursion() -> 
 
 def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> None:
     clock = _Clock()
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=clock
+    )
     rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
     clock.value = 101.0
     rollup.observe(
@@ -239,7 +248,9 @@ def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> N
 
 def test_parallel_wave_produces_one_contribution_per_lane() -> None:
     clock = _Clock()
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=clock
+    )
     rollup.observe({"type": "wrapper.iteration.start", "iter": 3})
     for issue in (42, 43):
         rollup.observe(
@@ -292,7 +303,9 @@ def test_parallel_wave_produces_one_contribution_per_lane() -> None:
 
 def test_pr_advance_is_progress_without_authoritative_closure_fields() -> None:
     clock = _Clock()
-    rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
+    rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=clock
+    )
     rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
     rollup.observe(
         {
@@ -323,7 +336,9 @@ def test_pr_advance_is_progress_without_authoritative_closure_fields() -> None:
 
 def test_empty_rollup_normalizes_to_no_progress() -> None:
     for outcome in (None, "empty_pool"):
-        rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=_Clock())
+        rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=_Clock()
+    )
         rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
 
         payload = rollup.finish(iter_num=1, strikes=1, outcome=outcome)
@@ -350,7 +365,9 @@ def test_empty_rollup_normalizes_to_no_progress() -> None:
 def test_outer_abort_or_gone_marks_unclosed_issue_contribution() -> None:
     for outcome in ("aborted", "gone"):
         clock = _Clock()
-        rollup = IterationRollupAccumulator(pricing=_pricing(), monotonic=clock)
+        rollup = IterationRollupAccumulator(
+        denomination=ListPriceDenomination(pricing=_pricing()), monotonic=clock
+    )
         rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
         rollup.observe(
             {
