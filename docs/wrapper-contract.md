@@ -247,8 +247,10 @@ observations only and never carry authoritative fragments, secrets, or runnable 
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
 Run-scoped record of the frozen **Effective Skill policy** (§17). `wrapper.dashboard.fault` is
-the Run-scoped record of a **Dashboard fault** — a Dashboard that raised, which the Run survives
-as an involuntary **Detach** (ADR-0024). It carries `error_type` and the scrubbed `error` text,
+the Run-scoped record of a **Dashboard fault** — a Dashboard that raised, either while running or
+while coming up, which the Run survives as an involuntary **Detach** (ADR-0024). One event covers
+both, because a replay needs to tell a fault from a voluntary Detach, not one fault from another.
+It carries `error_type` and the scrubbed `error` text,
 so a replay can tell a Run the operator walked away from apart from one whose live view crashed
 out from under them; a voluntary Detach records no fault, which is the distinction. Only an
 Orchestrator that hosts a Dashboard can emit it — the shell and PowerShell Orchestrators host

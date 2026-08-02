@@ -957,3 +957,165 @@ def test_the_operator_notice_survives_a_fault_message_full_of_markup() -> None:
     printed = buf.getvalue()
     assert "live view" in printed
     assert "[/not-open]" in printed
+
+
+# ---------------------------------------------------------------------------
+# A Dashboard that fails at startup degrades to the line printer (issue #326)
+# ---------------------------------------------------------------------------
+
+
+class _StartupFailure(RuntimeError):
+    """What a Dashboard that cannot be constructed raises."""
+
+
+def _factory_failing_at_startup(
+    exc: BaseException,
+) -> Callable[..., object]:
+    """An app factory that raises before there is ever a Dashboard to run."""
+
+    def factory(state: LiveRunState, **kwargs: object) -> object:
+        raise exc
+
+    return factory
+
+
+def test_a_dashboard_that_fails_at_startup_leaves_the_run_going() -> None:
+    """The live view failing to come up must not abort the work.
+
+    A fault *after* the Dashboard is up is survivable (#325); a fault *while it
+    is coming up* aborted the Run before any work was done. Observability is
+    not a precondition for doing work.
+    """
+    state = LiveRunState()
+    tracker = {"cancelled": False, "completed": False}
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        state,
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+    )
+    exit_code = asyncio.run(driver.run(_drive_reaching_its_outcome(tracker, 0)))
+
+    assert tracker["completed"] is True
+    assert tracker["cancelled"] is False
+    assert state.status != "stopped"
+    assert exit_code == 0
+
+
+def test_a_startup_failure_tells_the_operator_the_view_could_not_start() -> None:
+    """The notice has to describe what actually happened.
+
+    A live view that never came up has not "gone" — the operator would go
+    looking for a Dashboard they never had. Same fault, same seam, accurate
+    words.
+    """
+    buf = io.StringIO()
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(),
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+    )
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=buf, force_terminal=False, width=200),
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    printed = buf.getvalue()
+    assert "could not start" in printed
+    assert "_StartupFailure" in printed
+    assert "no terminal" in printed
+
+
+def test_a_startup_failure_is_recorded_on_the_same_footing_as_any_fault() -> None:
+    """One fault, one event — whether the Dashboard fell over or never rose.
+
+    A replay must be able to tell an involuntary **Detach** from a voluntary
+    one, and a startup failure is involuntary. Recording it through a second
+    event would give the same fact two names for a distinction the replay does
+    not need.
+    """
+    record = _RecordingRunRecord()
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(),
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+    )
+    driver.attach_detach(
+        sinks=SinkFanout(),
+        line_printer=_RecordingSink(),
+        console=Console(file=io.StringIO(), force_terminal=False),
+        record=record,
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert [t for t, _ in record.emitted] == [WRAPPER_DASHBOARD_FAULT]
+    assert record.emitted[0][1]["error_type"] == "_StartupFailure"
+    assert record.emitted[0][1]["error"] == "no terminal"
+
+
+def test_a_startup_failure_prints_the_whole_run_to_the_line_printer() -> None:
+    """Degrading is only real if the run's events actually reach scrollback.
+
+    The swap happens before the loop task exists, so *every* event of the run
+    — including the first — lands on the parked line printer; none is handed to
+    a Dashboard that was never there.
+    """
+    fanout = SinkFanout()
+    live = _RecordingSink()
+    line_printer = _RecordingSink()
+    fanout.set_sinks([live])
+
+    async def drive() -> int:
+        fanout.render({"type": "e1"})
+        fanout.render({"type": "e2"})
+        return 0
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(),
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+    )
+    driver.attach_panes(summary=_MarkerSummary(), log_source=lambda: "")  # type: ignore[arg-type]
+    driver.attach_detach(
+        sinks=fanout,
+        line_printer=line_printer,
+        console=Console(file=io.StringIO(), force_terminal=False),
+    )
+
+    asyncio.run(driver.run(drive))
+
+    assert live.events == []
+    assert [e["type"] for e in line_printer.events] == ["e1", "e2"]
+    assert fanout.sinks == (line_printer,)
+
+
+def test_a_startup_failure_leaves_the_terminal_owner_a_no_op() -> None:
+    """A live view that never started cannot be why the terminal needed fixing.
+
+    Acquisition happens between constructing the Dashboard and starting it, so
+    a Dashboard that fails to construct never reaches one — and the owner has
+    nothing captured to restore and nothing to release.
+    """
+    terminal = FakeTerminal()
+    owner = TerminalOwner(terminal)
+
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(),
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+        terminal=owner,
+    )
+    asyncio.run(driver.run(_drive_returning(0)))
+
+    assert owner.acquired is False
+    assert terminal.writes == []
+
+
+def test_a_loop_crash_after_a_startup_failure_still_propagates() -> None:
+    """Degrading to the line printer never swallows the work's own failure."""
+    driver = InteractiveDriver(  # type: ignore[arg-type]
+        LiveRunState(),
+        app_factory=_factory_failing_at_startup(_StartupFailure("no terminal")),
+    )
+
+    with pytest.raises(RuntimeError, match="loop exploded"):
+        asyncio.run(driver.run(_drive_raising(RuntimeError("loop exploded"))))

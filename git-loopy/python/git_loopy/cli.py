@@ -1874,9 +1874,21 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
             config, model=model, reasoning_effort=reasoning_effort
         )
 
-    from git_loopy.interactive.driver import build_interactive_driver
+    # The Dashboard's own module is the earliest thing that can fail on the way
+    # up (#326). The [tui] gate probed Textual with ``find_spec``, which does
+    # not import it, so a present-but-broken Textual passes the gate and fails
+    # here. Observability is not a precondition for doing work: degrade to the
+    # line printer exactly as the extra being absent already does, and run.
+    try:
+        from git_loopy.interactive.driver import build_interactive_driver
 
-    driver = build_interactive_driver(config)
+        driver = build_interactive_driver(config)
+    except Exception as exc:
+        _warn(
+            "the live view could not start — the Dashboard failed to load "
+            f"({type(exc).__name__}: {exc}); falling back to the line printer."
+        )
+        return await _loop.run(config)
     return await _loop.run(config, driver=driver)
 
 

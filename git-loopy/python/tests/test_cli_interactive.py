@@ -351,3 +351,48 @@ def test_main_non_interactive_without_select_model_is_silent(
     cli_module.main([])
 
     assert "ModelSelectionMode" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# A Dashboard that fails at startup degrades to the line printer (issue #326)
+# ---------------------------------------------------------------------------
+
+
+def test_main_interactive_unloadable_dashboard_falls_back_to_line_printer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Dashboard that cannot even be loaded still leaves the Run to run.
+
+    The ``[tui]`` gate probes Textual with ``find_spec``, which does not import
+    it — so a Textual that is present but broken (a partial install, an
+    incompatible dependency) passes the gate and then fails on the real import.
+    That is the earliest possible startup failure, and it must degrade exactly
+    like the extra being absent rather than abort the Run.
+    """
+    import sys
+    import types
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
+
+    # A driver module that imports but cannot supply the Dashboard entry point
+    # — what a half-loaded Textual leaves behind.
+    monkeypatch.setitem(
+        sys.modules,
+        "git_loopy.interactive.driver",
+        types.ModuleType("git_loopy.interactive.driver"),
+    )
+
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    rc = cli_module.main([])
+
+    assert rc == 0
+    assert len(captured) == 1
+    _cfg, driver = captured[0]
+    assert driver is None
+    warning = capsys.readouterr().err
+    assert "live view could not start" in warning
+    assert "line printer" in warning
