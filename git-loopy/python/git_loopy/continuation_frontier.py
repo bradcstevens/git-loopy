@@ -515,8 +515,12 @@ class FrontierDriver:
                     # because the quarantine that makes a boundary visible to the
                     # next Reconciliation is exactly what just failed to be
                     # written. This Run is the last place it can still be said.
-                    if self._on_guidance is not None:
-                        self._on_guidance(_render_lost(dispatch, record))
+                    self._stopped(
+                        _lost_stop(dispatch, record),
+                        repository=repository,
+                        dispatched=dispatched,
+                        iter_num=iter_num,
+                    )
                     return FrontierRun(
                         repository=repository,
                         frontier=frontier,
@@ -906,6 +910,31 @@ def _ended_payload(
     return payload
 
 
+def _lost_stop(dispatch: Dispatch, record: DispatchRecord) -> dict[str, Any]:
+    """The Runner's own refusal, stated without borrowing a typed §9 reason.
+
+    §9 never issued a stop here --- the Reconciliation that would have seen the
+    boundary is the one that will now never see it. Naming this `runner_refusal`
+    instead of a §9 `reason` keeps the two apart for anyone reading the stream.
+    """
+    return {
+        "disposition": "attention-required",
+        "reason": "",
+        "runner_refusal": "dispatch-evidence-not-recorded",
+        "nonterminal_status": "",
+        "evidence": [],
+        "secondary_barriers": [],
+        "report_only_successors": [],
+        "outcomes": [],
+        "successor_executed": False,
+        "statement": (
+            f"{record.outcome} was not recorded for {dispatch.action_identity}. "
+            "The Run stopped rather than continue against a project whose "
+            "Dispatch evidence is incomplete."
+        ),
+    }
+
+
 def _stopped_payload(
     stop: Mapping[str, Any],
     *,
@@ -945,6 +974,9 @@ def _stopped_payload(
         "successor_executed": False,
         "statement": str(stop.get("statement", "")),
     }
+    refusal = str(stop.get("runner_refusal", ""))
+    if refusal:
+        payload["runner_refusal"] = refusal
     following = stop.get("next")
     if isinstance(following, Mapping):
         # Identity, readiness and the condition *kind* say which Action is next
@@ -961,7 +993,18 @@ def _stopped_payload(
 
 
 def _render(stop: Mapping[str, Any], *, repository: str) -> str:
-    """One operator-facing line per stop, in the locked vocabulary."""
+    """One operator-facing line per stop, in the locked vocabulary.
+
+    A Runner-owned refusal is rendered from the same place as a §9 stop rather
+    than beside it, so an operator reads one line per stop whichever kind it is.
+    """
+    refusal = str(stop.get("runner_refusal", ""))
+    if refusal:
+        return (
+            f"git-loopy continuation (execute-frontier, {repository}): "
+            f"attention-required; {refusal}. {stop.get('statement', '')} "
+            "No successor Action was executed."
+        )
     line = (
         f"git-loopy continuation (execute-frontier, {repository}): "
         f"{stop.get('disposition', 'unknown')}; {stop.get('reason', 'unknown')}"
@@ -993,17 +1036,6 @@ def _guidance_fault(observed: Mapping[str, Any]) -> bool:
     return any(
         isinstance(entry, Mapping) and entry.get("code") in GUIDANCE_FAULT_CODES
         for entry in _sequence(diagnostics)
-    )
-
-
-def _render_lost(dispatch: Dispatch, record: DispatchRecord) -> str:
-    """The one operator line for a boundary whose durable record was not written."""
-    return (
-        f"git-loopy continuation (execute-frontier, {dispatch.repository}): "
-        f"attention-required; {record.outcome} was not recorded for "
-        f"{dispatch.action_identity}. The Run stopped rather than continue "
-        "against a project whose Dispatch evidence is incomplete. No successor "
-        "Action was executed."
     )
 
 

@@ -14,6 +14,7 @@ pinning the transport instead.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -1612,6 +1613,9 @@ def test_a_boundary_whose_record_was_lost_stops_the_run_instead_of_draining() ->
     assert run.stop is None
     assert guidance and "not recorded" in guidance[0]
     assert guidance[0].endswith("No successor Action was executed.")
+    # One stop, one line. A refusal reported twice reads like two problems, and
+    # the second line would carry no §9 reason to state.
+    assert len(guidance) == 1
 
 
 def test_a_run_with_no_evidence_writer_at_all_stops_on_its_first_boundary() -> None:
@@ -1925,3 +1929,127 @@ def test_a_stop_event_names_the_next_action_without_quoting_it() -> None:
     assert stopped["next"]["identity"] == hitl["identity"]
     assert "summary" not in stopped["next"]
     assert secret not in json.dumps(emitter.events)
+
+
+# ---------------------------------------------------------------------------
+# A trigger ends the Dispatch, and a refusal is still reported as a stop
+# ---------------------------------------------------------------------------
+
+
+class _KeepsWorkingAfterTrigger(_FakeSession):
+    """Reaches for a human, then tries to keep going for a long time."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(
+            [{"type": events.WRAPPER_ASK_USER_ATTEMPTED, "tool_name": "ask_user"}],
+            **kwargs,
+        )
+        self.kept_working = False
+
+    async def send_and_wait(self, prompt: str, *, timeout: float | None = None) -> None:
+        await super().send_and_wait(prompt, timeout=timeout)
+        await asyncio.sleep(30)
+        self.kept_working = True
+
+
+@pytest.mark.asyncio
+async def test_an_observed_trigger_ends_the_dispatch_then_and_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§9 says a trigger *ends* the Dispatch, so the session does not run on.
+
+    Denying the `ask_user` call is not enough on its own: the agent is still
+    live and can spend more of the authorization's effects afterwards, against a
+    safety case it has already contradicted.
+    """
+    sessions: list[_KeepsWorkingAfterTrigger] = []
+
+    def make_session(*args: Any, **kwargs: Any) -> _KeepsWorkingAfterTrigger:
+        sessions.append(_KeepsWorkingAfterTrigger(**kwargs))
+        return sessions[-1]
+
+    bare = _dispatch_loop(monkeypatch, [])
+    monkeypatch.setattr(loop, "IterationSession", make_session)
+
+    outcome = await asyncio.wait_for(
+        bare._perform_dispatch(_bound_dispatch(), iter_num=1), timeout=5
+    )
+
+    assert outcome.outcome == "safety-case-violation"
+    assert sessions[0].kept_working is False
+
+
+def test_a_lost_record_is_still_reported_as_a_stop() -> None:
+    """The Run refused; a Dashboard reading only Events must be told so.
+
+    The refusal is the Runner's own, so it borrows no typed §9 reason --- but a
+    stop that appears nowhere in the Event stream is a Run that looks like it
+    simply ended.
+    """
+    emitter = _RecordingEmitter()
+    driver = _driver(
+        _ScriptedReconciler((_action("first"),)),
+        _ScriptedPerformer(
+            continuation_frontier.DispatchOutcome(
+                outcome="safety-case-violation",
+                reason="human-decision",
+                summary="needed a human",
+                evidence=({"kind": "issue", "repository": REPOSITORY, "number": 7},),
+            )
+        ),
+        emitter=emitter,
+        no_evidence_writer=True,
+    )
+
+    run = driver.run(REPOSITORY, iter_num=1)
+
+    assert run.evidence_lost is True
+    [stopped] = emitter.of(events.WRAPPER_CONTINUATION_STOPPED)
+    assert stopped["runner_refusal"] == "dispatch-evidence-not-recorded"
+    assert stopped["disposition"] == "attention-required"
+    assert stopped["reason"] == ""
+    assert stopped["successor_executed"] is False
+
+
+class _CancelsTheRunAfterTrigger(_FakeSession):
+    """Reaches for a human, then the whole Run is cancelled out from under it."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(
+            [{"type": events.WRAPPER_ASK_USER_ATTEMPTED, "tool_name": "ask_user"}],
+            **kwargs,
+        )
+        self.outer: asyncio.Task[Any] | None = None
+
+    async def send_and_wait(self, prompt: str, *, timeout: float | None = None) -> None:
+        await super().send_and_wait(prompt, timeout=timeout)
+        assert self.outer is not None
+        self.outer.cancel()
+        await asyncio.sleep(30)
+
+
+@pytest.mark.asyncio
+async def test_a_shutdown_is_not_swallowed_by_a_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ending the Dispatch must not also absorb a cancellation aimed at the Run.
+
+    Both arrive as `CancelledError`. Treating every one of them as the Dispatch's
+    own would let a Run that an operator stopped carry on reconciling, which is
+    the opposite of what stopping it meant.
+    """
+    sessions: list[_CancelsTheRunAfterTrigger] = []
+
+    def make_session(*args: Any, **kwargs: Any) -> _CancelsTheRunAfterTrigger:
+        sessions.append(_CancelsTheRunAfterTrigger(**kwargs))
+        return sessions[-1]
+
+    bare = _dispatch_loop(monkeypatch, [])
+    monkeypatch.setattr(loop, "IterationSession", make_session)
+
+    outer = asyncio.ensure_future(bare._perform_dispatch(_bound_dispatch(), iter_num=1))
+    await asyncio.sleep(0)
+    sessions[0].outer = outer
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(outer, timeout=5)

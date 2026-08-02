@@ -411,10 +411,17 @@ class _TriggerWatch:
 
     def __init__(self) -> None:
         self.reached_for_a_human = False
+        #: Called once, the moment the trigger is seen, so the Dispatch can be
+        #: ended rather than merely classified after the fact.
+        self.on_reached: Callable[[], None] | None = None
 
     def observe(self, event: Mapping[str, Any]) -> None:
-        if event.get("type") == events_module.WRAPPER_ASK_USER_ATTEMPTED:
-            self.reached_for_a_human = True
+        if event.get("type") != events_module.WRAPPER_ASK_USER_ATTEMPTED:
+            return
+        already = self.reached_for_a_human
+        self.reached_for_a_human = True
+        if not already and self.on_reached is not None:
+            self.on_reached()
 
 
 def _human_boundary_outcome(
@@ -1511,6 +1518,7 @@ class _Loop:
         # Dispatch they never saw is a Dispatch nobody bills.
         watch = _TriggerWatch()
         observer = _ChainedObserver(observers=(self._session_observer, watch))
+        running = asyncio.get_running_loop()
         with telemetry.span("git_loopy.session"):
             try:
                 async with IterationSession(
@@ -1526,8 +1534,28 @@ class _Loop:
                     skill_exposure=self._skill_exposure,
                     event_observer=observer,
                 ) as sdk_session:
+                    send = asyncio.ensure_future(
+                        sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                    )
+                    # §9: a trigger *ends* the Dispatch. Denying the `ask_user`
+                    # call only stops the agent hearing an answer --- it stays
+                    # live and can keep spending the authorization's effects
+                    # against a safety case it has already contradicted.
+                    watch.on_reached = lambda: running.call_soon_threadsafe(send.cancel)
+                    if watch.reached_for_a_human:
+                        send.cancel()
                     try:
-                        await sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                        await send
+                    except asyncio.CancelledError:
+                        # Two different cancellations arrive as one exception. Ours
+                        # ends the Dispatch and is absorbed; a cancellation aimed at
+                        # *this* task is a shutdown, and swallowing it would let the
+                        # driver reconcile on into a Run nobody wants any more.
+                        outer = asyncio.current_task()
+                        if not watch.reached_for_a_human or (
+                            outer is not None and outer.cancelling() > 0
+                        ):
+                            raise
                     except asyncio.TimeoutError:
                         failure = f"session timed out after {send_timeout}s"
                     except Exception as exc:  # noqa: BLE001 - reported as failure
