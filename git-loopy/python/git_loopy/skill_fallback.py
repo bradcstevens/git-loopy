@@ -80,18 +80,39 @@ EXCLUDED_SKILLS: frozenset[str] = frozenset(
     }
 )
 
-#: Skills git-loopy owns rather than adopts. Each one documents a
-#: ``git-loopy continuation publish`` request template, which is this project's
-#: interface and not the generic catalog's, so the pinned source of record is
-#: not where its content comes from — this repository's ``.copilot/skills/`` is.
-#: The membership test is not "we edited it": generation refuses a project-owned
-#: Skill that carries no Continuation request template, so the clause cannot
-#: become a general licence to hand-maintain the packaged tree.
-PROJECT_OWNED_SKILLS: frozenset[str] = frozenset({"push", "research"})
+#: Skills git-loopy owns rather than adopts. Each one carries this project's
+#: Continuation contract — the ``git-loopy continuation publish`` request an
+#: owner documents, or, for the two read-only consumers, the boundary that says
+#: they may *not* publish. That contract is git-loopy's interface, not the
+#: generic catalog's: the pinned source of record carries no part of it, so
+#: cutting these from the pin would ship Skills that no longer tell a session
+#: how this project's workflow is recorded. Their content comes from this
+#: repository's ``.copilot/skills/`` instead, and ``test_continuation_owner_
+#: coverage`` (#262) holds the packaged copies byte-identical to it.
+PROJECT_OWNED_SKILLS: frozenset[str] = frozenset(
+    {
+        "code-review",
+        "grill-with-docs",
+        "handoff",
+        "implement",
+        "next",
+        "prototype",
+        "push",
+        "research",
+        "resolving-merge-conflicts",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wayfinder",
+    }
+)
 
-#: The marker a Skill uses to document a Continuation request, and therefore the
-#: evidence that git-loopy — not the source of record — owns it.
-_CONTINUATION_REQUEST_MARKER = "<!-- continuation-request:"
+#: The evidence a Skill is git-loopy's rather than the catalog's: it names this
+#: project's Continuation command. Owners document a request template; the
+#: read-only consumers name the command to say they do not publish it. A Skill
+#: that says neither is an adopted one, so generation refuses to cut it from the
+#: project — the clause cannot become a licence to hand-maintain the wheel.
+_CONTRACT_MARKERS = ("<!-- continuation-request:", "git-loopy continuation")
 
 #: This repository's own canonical Skills, where the project-owned clause reads
 #: from. Generation is a maintainer step in a source checkout; nothing at Run

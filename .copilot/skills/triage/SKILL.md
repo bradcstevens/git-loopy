@@ -73,7 +73,7 @@ Show counts and a one-line summary per item. Let the maintainer pick.
 
 3. **Verify the claim.** Before any grilling, check that the claim holds up. For a bug, reproduce it from the reporter's steps. For a PR, confirm the diff does what it claims — check it out, run the relevant tests or commands. Report what happened: confirmed (with code path), failed, or insufficient detail (a strong `needs-info` signal). A confirmed verification makes a much stronger agent brief.
 
-4. **Grill (if needed).** If the request needs fleshing out, run the `/grilling` and `/domain-modeling` skills together — grill it into shape a round of questions at a time, sharpening domain terms and updating `CONTEXT.md`/ADRs inline as decisions land.
+4. **Grill (if needed).** If the request needs fleshing out, run the `/grilling` and `/domain-modeling` skills together — grill it into shape one question at a time, sharpening domain terms and updating `CONTEXT.md`/ADRs inline as decisions land.
 
 5. **Apply the outcome:**
    - `ready-for-agent` — post an agent brief comment ([AGENT-BRIEF.md](AGENT-BRIEF.md)).
@@ -84,6 +84,387 @@ Show counts and a one-line summary per item. Let the maintainer pick.
      - **Rejected (bug)** — polite explanation, then close.
      - **Rejected (enhancement)** — write to `.out-of-scope/`, link to it from a comment, then close ([OUT-OF-SCOPE.md](OUT-OF-SCOPE.md)).
    - `needs-triage` — apply the role. Optional comment if there's partial progress.
+
+6. **Publish the transition** (see below). Applying a state role is a durable workflow transition, and this skill owns it.
+
+## Publish the triage transition
+
+Triage decides what happens to an item next, so the next session — human or agent — should read
+that decision as a record rather than reconstruct it from labels. Hand a typed completion request
+to the native command:
+
+```bash
+git-loopy continuation publish --input /tmp/publish-triage.json
+```
+
+**Only publish after the transition is durable.** In order:
+
+1. Apply the state role and post the outcome comment from step 5 — the agent brief, the
+   ready-for-human brief, or the triage notes. That comment *is* the transition evidence.
+2. Capture its comment id from the URL `gh issue comment` printed, or with
+   `gh api repos/<owner>/<repo>/issues/comments --jq '.[-1].id'`.
+3. Build the request below and run the command. Never write the Continuation record, its
+   `<!-- git-loopy-continuation... -->` marker, or its index label yourself — the command owns
+   the carrier comment, and a hand-written one is not a record.
+
+`<producer-login>` is the authenticated tracker account (`gh api user --jq .login`), and
+`<agent-ready-label>` is *this* repo's label string for the `ready-for-agent` role.
+
+### `ready-for-agent`
+
+Replace every `<placeholder>` with the durable identifier it names:
+
+<!-- continuation-request: triage-agent-ready -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<triaged-issue>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<triaged-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "triage",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<triaged-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<triaged-issue>"
+    },
+    "actions": [
+      {
+        "key": "implement",
+        "summary": "Implement issue <triaged-issue> from its agent brief",
+        "kind": "Implement ticket",
+        "occurrence": "v1",
+        "instruction": {"mode": "skill", "value": "/implement <triaged-issue>"},
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<triaged-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<triaged-issue>",
+            "comment_id": "<evidence-comment>"
+          }
+        ],
+        "prerequisites": [
+          {
+            "kind": "issue-label-present",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<triaged-issue>"
+            },
+            "label": "<agent-ready-label>"
+          }
+        ],
+        "interaction": {
+          "classification": "AFK-safe",
+          "evidence": {
+            "kind": "transition-owner-attestation",
+            "noninteractive": true,
+            "owner": "triage"
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-closed",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<triaged-issue>"
+          }
+        },
+        "safety_case": {
+          "version": "1",
+          "instruction": {"mode": "skill", "value": "/implement <triaged-issue>"},
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<triaged-issue>"
+          },
+          "completion_condition": {
+            "kind": "issue-closed",
+            "target": {
+              "kind": "issue",
+              "repository": "<repository>",
+              "number": "<triaged-issue>"
+            }
+          },
+          "assumptions": [
+            {
+              "kind": "durable-inputs-fixed",
+              "statement": "The agent brief this Action reads is already durable."
+            },
+            {
+              "kind": "no-human-decision",
+              "statement": "Triage already made every state and scope decision this item needed."
+            },
+            {
+              "kind": "objective-completion",
+              "statement": "The item is done exactly when it closes."
+            }
+          ],
+          "effects": [
+            {"kind": "repository-write", "scope": "<repository>"},
+            {"kind": "tracker-write", "scope": "issue:<repository>#<triaged-issue>"}
+          ],
+          "requirements": [
+            {"kind": "skill", "name": "implement"},
+            {"kind": "access", "name": "tracker-write"}
+          ],
+          "retry": {"kind": "resumable"},
+          "triggers": []
+        }
+      }
+    ]
+  }
+}
+```
+
+The `issue-label-present` prerequisite is what keeps the record honest: `ready-for-agent` is the
+role that authorizes unattended work, so if a maintainer moves the item back off that role the
+Action goes **Blocked** rather than staying dispatchable.
+
+### `ready-for-human`
+
+Publish the same record with two changes: the Action's `interaction` becomes
+
+```json
+{
+  "classification": "HITL-required",
+  "evidence": {
+    "kind": "human-boundary",
+    "reason": "human-decision",
+    "resolution_condition": {
+      "kind": "issue-closed",
+      "target": {"kind": "issue", "repository": "<repository>", "number": "<triaged-issue>"}
+    }
+  }
+}
+```
+
+and the `safety_case` is dropped along with it — an unattended claim you cannot argue for is
+worse than no claim. `ready-for-human` exists precisely because *this* item needs a person, so
+say that in the record rather than leaving an AFK-safe Action a runner would dispatch.
+
+### `needs-info`
+
+`needs-info` is a question aimed at a human, and the item cannot be re-triaged until they answer.
+So the record carries both steps: the reporter's answer, and the re-triage that waits behind it.
+`<needs-triage-label>` is this repo's label string for the `needs-triage` role — the role the item
+returns to once the reporter replies, which is exactly what makes "they answered" a durable fact.
+
+<!-- continuation-request: triage-needs-info -->
+```json
+{
+  "repository": "<repository>",
+  "trusted_producers": ["<producer-login>"],
+  "completion": {
+    "continuation_contract_version": "1.2",
+    "record_format": 1,
+    "publication": "shared",
+    "disposition": "continue",
+    "workstream": {
+      "anchor": {
+        "kind": "issue",
+        "repository": "<repository>",
+        "number": "<triaged-issue>"
+      },
+      "destination": {
+        "kind": "issue-closed",
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<triaged-issue>"
+        }
+      }
+    },
+    "transition": {
+      "owner": "triage",
+      "evidence": [
+        {
+          "kind": "issue-comment",
+          "repository": "<repository>",
+          "issue": "<triaged-issue>",
+          "comment_id": "<evidence-comment>"
+        }
+      ]
+    },
+    "producer": {"login": "<producer-login>", "role": "planning"},
+    "carrier": {
+      "kind": "issue",
+      "repository": "<repository>",
+      "number": "<triaged-issue>"
+    },
+    "actions": [
+      {
+        "key": "answer-triage-notes",
+        "summary": "Answer the outstanding triage questions on issue <triaged-issue>",
+        "kind": "Provide information",
+        "occurrence": "v1",
+        "instruction": {
+          "mode": "manual",
+          "value": "Answer the open questions in the triage notes on issue <triaged-issue>, then move it back to <needs-triage-label>."
+        },
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<triaged-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<triaged-issue>",
+            "comment_id": "<evidence-comment>"
+          }
+        ],
+        "prerequisites": [],
+        "interaction": {
+          "classification": "HITL-required",
+          "evidence": {
+            "kind": "human-boundary",
+            "reason": "scope-ambiguity",
+            "resolution_condition": {
+              "kind": "issue-label-present",
+              "target": {
+                "kind": "issue",
+                "repository": "<repository>",
+                "number": "<triaged-issue>"
+              },
+              "label": "<needs-triage-label>"
+            }
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-label-present",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<triaged-issue>"
+          },
+          "label": "<needs-triage-label>"
+        }
+      },
+      {
+        "key": "retriage",
+        "summary": "Re-triage issue <triaged-issue> once the reporter has answered",
+        "kind": "Triage item",
+        "occurrence": "v1",
+        "instruction": {"mode": "skill", "value": "/triage <triaged-issue>"},
+        "target": {
+          "kind": "issue",
+          "repository": "<repository>",
+          "number": "<triaged-issue>"
+        },
+        "basis": [
+          {
+            "kind": "issue-comment",
+            "repository": "<repository>",
+            "issue": "<triaged-issue>",
+            "comment_id": "<evidence-comment>"
+          }
+        ],
+        "prerequisites": [
+          {"kind": "action-completed", "action_key": "answer-triage-notes"}
+        ],
+        "interaction": {
+          "classification": "HITL-required",
+          "evidence": {
+            "kind": "human-boundary",
+            "reason": "human-decision",
+            "resolution_condition": {
+              "kind": "issue-label-present",
+              "target": {
+                "kind": "issue",
+                "repository": "<repository>",
+                "number": "<triaged-issue>"
+              },
+              "label": "<agent-ready-label>"
+            }
+          }
+        },
+        "completion_condition": {
+          "kind": "issue-label-present",
+          "target": {
+            "kind": "issue",
+            "repository": "<repository>",
+            "number": "<triaged-issue>"
+          },
+          "label": "<agent-ready-label>"
+        }
+      }
+    ]
+  }
+}
+```
+
+`Triage item` is `HITL-required` here even though the kind allows either: `/triage` is
+`disable-model-invocation: true`, so a maintainer drives it. Its completion condition names the
+agent-ready role because that is the landing this record is routing toward; if re-triage instead
+lands on `ready-for-human` or `wontfix`, publish *that* outcome's record — the `wontfix` one is
+terminal (below) and retires this Workstream's Actions with it.
+
+### `wontfix`
+
+A closed `wontfix` item has no successor, so publish a terminal record instead of Actions:
+replace `"disposition": "continue"` and the `actions` array with
+
+```json
+"disposition": "terminal",
+"outcome": {
+  "kind": "rejected",
+  "destination_satisfied": false,
+  "effective_at": "<rfc3339-utc>",
+  "summary": "Triage rejected this request; it is closed wontfix.",
+  "evidence": [
+    {
+      "kind": "issue-comment",
+      "repository": "<repository>",
+      "issue": "<triaged-issue>",
+      "comment_id": "<evidence-comment>"
+    }
+  ]
+}
+```
+
+`destination_satisfied` is `false` because closing `wontfix` is not the item being delivered.
+Publish nothing at all for `needs-triage`: an item still awaiting evaluation has no decided
+successor, and a record that says otherwise is a guess.
+
+**If `publish` fails, the work is repair-required, not done.** The role and its comment are
+already durable, so an exit-`1` result carrying `"code": "repair_required"` means the transition
+happened but its record did not. Say so plainly, quote the message, and stop — do not retry
+blindly, invent a record, or report the session as complete.
 
 ## Quick state override
 
@@ -110,5 +491,3 @@ Capture everything resolved during grilling under "established so far" so the wo
 ## Resuming a previous session
 
 If prior triage notes exist on the issue or PR, read them, check whether the reporter has answered any outstanding questions, and present an updated picture before continuing. Don't re-ask resolved questions.
-
-At the conclusion of a `/triage` session, run the `/next` skill.
