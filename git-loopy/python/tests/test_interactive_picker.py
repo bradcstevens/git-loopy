@@ -258,3 +258,50 @@ def test_picker_module_does_not_import_textual_at_top() -> None:
             top_level_imports.add(node.module.split(".")[0])
     assert "textual" not in top_level_imports
     assert "copilot" not in top_level_imports
+
+
+# ---------------------------------------------------------------------------
+# The default fetch is resolved at call time (#331)
+# ---------------------------------------------------------------------------
+
+
+async def test_the_default_fetch_is_resolved_at_call_time(monkeypatch) -> None:
+    """The listing's fetch moved modules; the seam must still be substitutable.
+
+    ``fetch_live_models`` now lives in :mod:`git_loopy.model_listing` (#331), and
+    the suite's network guard patches it *there*. Binding it as a default
+    argument would capture the original function object at import time, so a
+    ``resolve_run_model`` call that takes the default would spawn the pinned
+    harness in a suite that promises never to — the one place the guard is meant
+    to cover and the one place it would not reach.
+    """
+    import sys
+    from types import ModuleType
+
+    from git_loopy import model_listing
+
+    # So that a regression fails rather than hangs: if the default is ever bound
+    # at import time again the *real* fetch runs, and this makes it fail
+    # immediately instead of spawning the harness and waiting on a live backend.
+    stub = ModuleType("copilot")
+
+    def _refuse() -> object:
+        raise AssertionError("the real fetch spawned a client")
+
+    stub.CopilotClient = _refuse  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "copilot", stub)
+
+    called = False
+
+    async def _substitute() -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", _substitute)
+
+    model, effort = await resolve_run_model(_config(), warn=lambda _: None)
+
+    assert called is True
+    # An empty list is a fallback, not a failure: the env/default survives.
+    assert (model, effort) == ("claude-opus-4.8", "max")

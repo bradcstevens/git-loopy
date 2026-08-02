@@ -44,6 +44,7 @@ from git_loopy.interactive.models import (
     default_cursor_index,
     to_model_choices,
 )
+from git_loopy import model_listing
 from git_loopy.model_listing import ClientFactory, ModelFetcher, fetch_live_models
 
 __all__ = ["resolve_run_model", "fetch_live_models", "ClientFactory", "ModelFetcher"]
@@ -68,7 +69,7 @@ async def resolve_run_model(
     config: RunConfig,
     *,
     warn: Callable[[str], None],
-    fetch: ModelFetcher = fetch_live_models,
+    fetch: ModelFetcher | None = None,
     run_app: PickerRunner = _run_picker_app,
 ) -> tuple[str | None, str | None]:
     """Resolve the run's ``(model, effort)`` via the live picker, with fallback.
@@ -78,15 +79,22 @@ async def resolve_run_model(
             ``reasoning_effort`` are the fallback (and the pre-highlight cursor
             target) when the live picker can't run or is quit.
         warn: Non-fatal warning sink (the kit's stderr ``git-loopy: warning:``).
-        fetch: Live model fetch (default: :func:`fetch_live_models`).
+        fetch: Live model fetch. Defaults to
+            :func:`git_loopy.model_listing.fetch_live_models`, looked up on the
+            module **at call time** rather than bound here, so that substituting
+            it — as the suite's network guard does — actually reaches this
+            default. In production the CLI injects the Run's shared
+            :class:`~git_loopy.model_listing.LiveModelListing`, so the picker
+            and the **Rate card** share one round trip (#331).
         run_app: Picker runner (default: the real Textual app).
 
     Returns:
         ``(model, effort)`` — the picker's selection, or the env/default on any
         failure / empty list / quit.
     """
+    fetcher = fetch if fetch is not None else model_listing.fetch_live_models
     try:
-        models = await fetch()
+        models = await fetcher()
     except Exception as exc:  # offline / unauthed / list_models error
         warn(_fallback_message(config, f"{type(exc).__name__}: {exc}"))
         return config.model, config.reasoning_effort
