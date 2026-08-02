@@ -2254,13 +2254,21 @@ _git_loopy_frontier_satisfied_requirements() {
   actions="$(jq -ce '.actions' <<<"$result")" || return 1
   covered="$(_git_loopy_frontier_in_coverage_actions "$actions" "$repositories")" ||
     return 1
-  jq -ce --argjson effect_kinds "$effect_kinds" '
+  local denied_skills
+  denied_skills="$(
+    _git_loopy_string_array_json \
+      ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}
+  )" || return 1
+  jq -ce \
+    --argjson denied_skills "$denied_skills" \
+    --argjson effect_kinds "$effect_kinds" '
     (
       [$effect_kinds[] | {kind: "access", name: .}]
       + [
           .[]
           | (.safety_case.requirements // [])[]
           | select(.kind == "skill")
+          | select(.name as $name | $denied_skills | index($name) == null)
           | {kind, name}
         ]
     )

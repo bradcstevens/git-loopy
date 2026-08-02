@@ -2531,4 +2531,65 @@ jq -se '
 assert_equal "6" "$(<"$scripted_github_state")" \
   "execute-frontier re-reconciles after its Dispatch"
 
+# A denied Skill is not honestly available to the Performer. The native
+# posture therefore stops at performer-ineligible before a session can be
+# created with a contradictory `--deny-tool skill(...)` option.
+repo="$temp_dir/execute-frontier-denied-skill"
+fake_bin="$temp_dir/execute-frontier-denied-skill-bin"
+make_repo "$repo"
+write_frontier_dispatch_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/execute-frontier-denied-skill-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-denied-skill-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+export FAKE_COPILOT_CALLS="$temp_dir/execute-frontier-denied-skill-copilot.calls"
+export FAKE_COPILOT_FRONTIER_ARGS="$temp_dir/execute-frontier-denied-skill-copilot.args"
+scripted_github_log="$temp_dir/execute-frontier-denied-skill-scripted.log"
+scripted_github_script="$temp_dir/execute-frontier-denied-skill-script.json"
+scripted_github_state="$temp_dir/execute-frontier-denied-skill-script.state"
+export GIT_LOOPY_SCRIPTED_GITHUB_LOG="$scripted_github_log"
+export GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$scripted_github_script"
+export GIT_LOOPY_SCRIPTED_GITHUB_STATE="$scripted_github_state"
+jq '
+  [.scenarios[]
+   | select(.id == "automation-binds-one-dispatch")
+   | .github_script[]] as $steps
+  | $steps + $steps
+' "$port_dir/../conformance/continuation-scenarios.json" \
+  >"$GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"
+export GIT_LOOPY_CONTINUATION_MODE="execute-frontier"
+export GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS="planner"
+export GIT_LOOPY_CONTINUATION_ACTOR="runner"
+export GIT_LOOPY_CONTINUATION_REPOSITORIES="octo/example"
+export GIT_LOOPY_CONTINUATION_EFFECT_SCOPES="tracker-write"
+export GIT_LOOPY_DENY_SKILLS="to-spec"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier-denied-skill.stdout" \
+  "$temp_dir/execute-frontier-denied-skill.stderr"; then
+  fail "denied-skill execute-frontier lifecycle failed: $(<"$temp_dir/execute-frontier-denied-skill.stderr")"
+fi
+unset GIT_LOOPY_CONTINUATION_MODE GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS \
+  GIT_LOOPY_CONTINUATION_ACTOR GIT_LOOPY_CONTINUATION_REPOSITORIES \
+  GIT_LOOPY_CONTINUATION_EFFECT_SCOPES GIT_LOOPY_DENY_SKILLS \
+  GIT_LOOPY_SCRIPTED_GITHUB_LOG GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT \
+  GIT_LOOPY_SCRIPTED_GITHUB_STATE
+
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "a denied Skill still created a Continuation Dispatch session"
+jq -se '
+  [.[].type] == [
+    "wrapper.run.start",
+    "wrapper.continuation.stopped",
+    "wrapper.run.end"
+  ]
+  and .[1].reason == "performer-ineligible"
+  and .[1].successor_executed == false
+  and .[2].outcome == "empty_pool"
+' "$temp_dir/execute-frontier-denied-skill.stdout" >/dev/null ||
+  fail "a denied Skill was not excluded from the frozen Performer posture"
+assert_equal "4" "$(<"$scripted_github_state")" \
+  "denied Skill runs no dispatch before its stop"
+
 printf 'shell Orchestrator boundary: ok\n'
