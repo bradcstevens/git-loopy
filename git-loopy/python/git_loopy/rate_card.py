@@ -67,6 +67,18 @@ class TierPrices:
     cache_write_price: float | None = None
     max_prompt_tokens: int | None = None
 
+    def has_price(self) -> bool:
+        """Whether this tier published any price at all."""
+        return any(
+            price is not None
+            for price in (
+                self.input_price,
+                self.output_price,
+                self.cache_read_price,
+                self.cache_write_price,
+            )
+        )
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "input_price": self.input_price,
@@ -94,6 +106,25 @@ class ModelPrices:
     cache_write_price: float | None = None
     max_prompt_tokens: int | None = None
     long_context: TierPrices | None = None
+
+    def has_price(self) -> bool:
+        """Whether this block published any price at all.
+
+        The listing can answer with a block whose every field is absent, and a
+        published *shape* is not a published *price*: nothing can be audited
+        against it, so it must not be mistaken for a card. ``batch_size`` and
+        ``max_prompt_tokens`` do not count — they describe how a price is
+        denominated, not what it is.
+        """
+        return any(
+            price is not None
+            for price in (
+                self.input_price,
+                self.output_price,
+                self.cache_read_price,
+                self.cache_write_price,
+            )
+        ) or (self.long_context is not None and self.long_context.has_price())
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -221,9 +252,14 @@ def _is_priced(card: RateCard) -> bool:
 
     A listing that answers with no priced model at all is the "the listing
     simply does not carry it" case: there is nothing to audit a **Run** against,
-    so it is *no card* rather than an empty one.
+    so it is *no card* rather than an empty one. A model whose price block is
+    present but empty counts as unpriced for the same reason — the block's
+    presence is a shape, not a rate.
     """
-    return any(rate.prices is not None for rate in card.models.values())
+    return any(
+        rate.prices is not None and rate.prices.has_price()
+        for rate in card.models.values()
+    )
 
 
 async def resolve_rate_card(

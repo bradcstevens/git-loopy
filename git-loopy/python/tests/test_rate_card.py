@@ -271,3 +271,60 @@ def test_the_card_is_resolved_once_and_held_fixed_across_a_run() -> None:
     assert first is not None and second is not None
     assert first.models["m"].multiplier == 1.0
     assert second.models["m"].multiplier == 1.0
+
+
+def test_a_price_block_carrying_no_price_is_not_a_card() -> None:
+    """A published *shape* is not a published *price*.
+
+    The listing can answer with a token-prices block whose every field is
+    absent. Treating the block's mere presence as "this Run has prices" would
+    declare the rate-card **Insight capability** ``true`` over a record that
+    can audit nothing — the same lie as an empty card, arriving through a
+    different door.
+    """
+    listing = LiveModelListing(
+        fetch=_listing(
+            [
+                _FakeModel(
+                    id="shaped-but-unpriced",
+                    billing=_FakeBilling(multiplier=1.0, token_prices=_FakeTokenPrices()),
+                )
+            ]
+        )
+    )
+    warnings: list[str] = []
+
+    card = asyncio.run(resolve_rate_card(listing, warn=warnings.append))
+
+    assert card is None
+    assert len(warnings) == 1
+    assert "carries no prices" in warnings[0]
+
+
+def test_a_long_context_price_alone_is_enough_to_be_a_card() -> None:
+    """The tier prices are prices too.
+
+    A listing that publishes only the extended-context tier still records
+    something a **Long-context** Run can be audited against, so refusing it
+    would throw away the very rates that Run was billed at.
+    """
+    listing = LiveModelListing(
+        fetch=_listing(
+            [
+                _FakeModel(
+                    id="tier-only",
+                    billing=_FakeBilling(
+                        multiplier=1.0,
+                        token_prices=_FakeTokenPrices(
+                            long_context=_FakeLongContext(input_price=2.0)
+                        ),
+                    ),
+                )
+            ]
+        )
+    )
+
+    card = asyncio.run(resolve_rate_card(listing, warn=lambda _: None))
+
+    assert card is not None
+    assert card.models["tier-only"].prices is not None

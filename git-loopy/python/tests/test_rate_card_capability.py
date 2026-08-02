@@ -117,3 +117,48 @@ def test_the_fixture_pins_the_published_card_shape_the_python_runner_emits() -> 
         == run_scoped["tier_fields"]
     )
     assert run_scoped["payload_key"] == "rate_card"
+
+
+def _serialization_case(case_id: str) -> dict:
+    return next(
+        case
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["id"] == case_id
+    )
+
+
+def test_the_fixture_pins_a_run_start_that_declares_and_carries_a_card() -> None:
+    """Other producers need a record to match, not a field list to interpret.
+
+    The ``run_scoped`` descriptor says which fields exist; only a concrete
+    ``wrapper.run.start`` says what one looks like on the wire. Pinning the
+    Insight manifest against the production composer is what stops the fixture
+    from agreeing only with itself.
+    """
+    case = _serialization_case("run-start-resolved-rate-card")
+
+    assert case["event"]["insight_capabilities"] == (
+        events_module.python_insight_capabilities(rate_card=True)
+    )
+    prices = case["event"]["rate_card"]["models"]["claude-haiku-4.5"]["prices"]
+    # Read as published: the four prices and the nested tier all travel.
+    assert prices["cache_read_price"] != prices["input_price"]
+    assert prices["long_context"]["input_price"] != prices["input_price"]
+
+
+def test_the_fixture_pins_the_absent_card_as_an_explicit_null() -> None:
+    """An omitted key and a declared absence are different facts.
+
+    A reader that finds no ``rate_card`` key cannot tell a Run whose listing
+    failed from a producer that has no concept of a card. The pinned pair is
+    what makes the distinction checkable — and ``cost`` staying ``true`` beside
+    the ``false`` is the fixture's record that an absent card costs no figure.
+    """
+    case = _serialization_case("run-start-absent-rate-card")
+
+    assert case["event"]["rate_card"] is None
+    assert "rate_card" in case["event"]
+    assert case["event"]["insight_capabilities"] == (
+        events_module.python_insight_capabilities(rate_card=False)
+    )
+    assert case["event"]["insight_capabilities"]["cost"] is True

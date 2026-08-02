@@ -90,3 +90,61 @@ def test_a_failed_fetch_is_remembered_rather_than_retried() -> None:
     asyncio.run(read_twice())
 
     assert calls == 1
+
+
+def test_concurrent_readers_still_make_one_round_trip() -> None:
+    """"At most once" has to hold when the readings actually overlap.
+
+    Two consumers that both await before either fetch has returned each find an
+    empty cache, so a memoisation that only records the *result* fetches twice —
+    and the second answer overwrites the first, which is precisely the mid-Run
+    reprice this listing exists to make impossible. The in-flight fetch itself
+    must be what later readers join.
+    """
+    calls = 0
+
+    async def fetch() -> list[object]:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return [calls]
+
+    listing = LiveModelListing(fetch=fetch)
+
+    async def read_together() -> tuple[object, object]:
+        first, second = await asyncio.gather(listing.models(), listing.models())
+        return first, second
+
+    first, second = asyncio.run(read_together())
+
+    assert calls == 1
+    assert first == [1]
+    assert second == [1]
+
+
+def test_concurrent_readers_all_see_the_same_failure() -> None:
+    """A failure joined mid-flight is still the listing's one and only answer.
+
+    Otherwise the reader that lost the race would retry the fetch — paying a
+    second timeout against a backend already known to be unreachable, which is
+    the cost this object exists to bound.
+    """
+    calls = 0
+
+    async def fetch() -> list[object]:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        raise RuntimeError("offline")
+
+    listing = LiveModelListing(fetch=fetch)
+
+    async def read_together() -> list[BaseException | object]:
+        return await asyncio.gather(
+            listing.models(), listing.models(), return_exceptions=True
+        )
+
+    outcomes = asyncio.run(read_together())
+
+    assert calls == 1
+    assert all(isinstance(outcome, RuntimeError) for outcome in outcomes)
