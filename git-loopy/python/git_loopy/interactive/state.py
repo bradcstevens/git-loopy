@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
-from git_loopy.usage import UsageTally
+from git_loopy.usage import BillingSample, UsageTally
 
 __all__ = [
     "LiveRunState",
@@ -558,6 +558,7 @@ class LiveRunState:
                 event.get("model"),
                 event.get("input"),
                 event.get("output"),
+                BillingSample.from_event(event),
             )
         elif etype == _USAGE_CONTEXT_WINDOW:
             snapshot = _context_window_snapshot(event)
@@ -755,7 +756,13 @@ class LiveRunState:
 
     # -- per-issue consumption (issue #36) ---------------------------------
 
-    def _record_usage(self, model: Any, tokens_in: Any, tokens_out: Any) -> None:
+    def _record_usage(
+        self,
+        model: Any,
+        tokens_in: Any,
+        tokens_out: Any,
+        billing: BillingSample | None = None,
+    ) -> None:
         """Attribute one ``usage.tokens`` event to the Active issue's tally.
 
         While an issue is active the tokens accrue to its own entry (summing
@@ -771,16 +778,20 @@ class LiveRunState:
         if self.active_ref is not None:
             entry = self.ledger.get(self.active_ref)
             if entry is not None:
-                self._accrue_usage(entry, name, tin, tout)
+                self._accrue_usage(entry, name, tin, tout, billing)
                 entry.usage_observed = True
             return
         # Pre-marker: hold until the active issue is known (flushed in _activate).
-        self._pending_usage.add(name, tin, tout)
+        self._pending_usage.add(name, tin, tout, billing)
         self._pending_usage_observed = True
 
     @staticmethod
     def _accrue_usage(
-        entry: IssueLedgerEntry, model: str | None, tokens_in: int, tokens_out: int
+        entry: IssueLedgerEntry,
+        model: str | None,
+        tokens_in: int,
+        tokens_out: int,
+        billing: BillingSample | None = None,
     ) -> None:
         """Fold a token sample into ``entry``'s tally via the shared rule.
 
@@ -789,7 +800,7 @@ class LiveRunState:
         run-level Summary's per-iteration basis, keeping the two reconcilable by
         construction rather than by a duplicated rule.
         """
-        entry.usage.add(model, tokens_in, tokens_out)
+        entry.usage.add(model, tokens_in, tokens_out, billing)
 
     def _flush_pending_usage(self, entry: IssueLedgerEntry) -> None:
         """Drain the pending pre-marker token tally onto ``entry`` and reset.
@@ -1376,13 +1387,17 @@ class LiveRunState:
                 tokens_in = _optional_nonnegative_int(consumption.get("tokens_in"))
                 tokens_out = _optional_nonnegative_int(consumption.get("tokens_out"))
                 usage_observed = tokens_in is not None or tokens_out is not None
-                if usage_observed:
-                    model = consumption.get("model")
-                    usage.add(
-                        str(model) if isinstance(model, str) and model else None,
-                        tokens_in or 0,
-                        tokens_out or 0,
-                    )
+                model = consumption.get("model") if usage_observed else None
+                # #329: the producer's own billed figures ride the same accrual,
+                # so a normalized contribution answers the denomination seam on
+                # the same terms a live one does. A producer that reported none
+                # latches them to unknown rather than to a zero.
+                usage.add(
+                    str(model) if isinstance(model, str) and model else None,
+                    tokens_in or 0,
+                    tokens_out or 0,
+                    BillingSample.from_event(consumption),
+                )
             cost = payload.get("cost_usd")
             cost_usd = float(cost) if isinstance(cost, (int, float)) else None
             is_lane = key in self._iter_lane_refs

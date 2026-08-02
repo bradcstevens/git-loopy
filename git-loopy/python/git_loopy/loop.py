@@ -150,7 +150,11 @@ from git_loopy.persist import (
     WritersBundle,
     create_writers,
 )
-from git_loopy.denomination import CostDenomination, ListPriceDenomination
+from git_loopy.denomination import (
+    BilledCreditsDenomination,
+    CostDenomination,
+    ListPriceDenomination,
+)
 from git_loopy.pricing import PricingError, load_pricing
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
@@ -3408,6 +3412,11 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
     except PricingError as exc:
         print(f"git-loopy: pricing load failed: {exc}", file=sys.stderr)
         return 1
+    # The primary Cost figure: **AI Credits** as the harness reported billing
+    # them (ADR-0026, #329). Injected as its own seam beside the estimate it
+    # will replace, so #330 retires the estimate by deleting a parameter here
+    # rather than by a pass over every Cost-bearing surface.
+    credits_denomination = BilledCreditsDenomination()
 
     # 3) Writers + diagnostics logger + renderer + sink fan-out.
     try:
@@ -3419,7 +3428,9 @@ async def run(config: RunConfig, *, driver: InteractiveDriver | None = None) -> 
             file=sys.stderr,
         )
         return 1
-    summary = RunSummary(denomination=denomination)
+    summary = RunSummary(
+        denomination=denomination, credits_denomination=credits_denomination
+    )
     console = get_console()
     renderer = Renderer(
         console=console,

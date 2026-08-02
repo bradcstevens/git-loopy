@@ -336,6 +336,31 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "peak_context_window",
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
+            # #329: the harness's reported billing, declared optional rather
+            # than required. An Orchestrator that cannot observe it omits the
+            # keys or reports them null; making them required would oblige the
+            # shell and PowerShell ports to fabricate a figure neither can see.
+            "summary_optional": [
+                "credits",
+                "premium_requests",
+                "cache_read",
+                "cache_write",
+            ],
+            "consumption_optional": [
+                "credits",
+                "premium_requests",
+                "cache_read",
+                "cache_write",
+            ],
+            "billing": (
+                "The harness's reported billing, added additively. An "
+                "Orchestrator that observes it reports it; one that cannot "
+                "omits the keys entirely or reports them null. Null is "
+                "unknown, never a zero that would read as free work, and "
+                "never an estimate recomputed from tokens. cache_read and "
+                "cache_write are components of tokens_in, not figures beside "
+                "it: summing them into a token total double-counts."
+            ),
         },
         "wrapper.skill_policy.resolved": {
             "required_when_present": [
@@ -840,6 +865,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Iters",
         "Tokens in",
         "Tokens out",
+        "Credits",
+        "Premium",
         "Cost",
     ]
     assert [column["key"] for column in contract["queue_columns"]] == [
@@ -851,6 +878,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "iteration_count",
         "tokens_in",
         "tokens_out",
+        "credits",
+        "premium_requests",
         "cost_usd",
     ]
     assert [column["label"] for column in contract["iteration_breakdown_columns"]] == [
@@ -861,6 +890,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Active",
         "Tokens in",
         "Tokens out",
+        "Credits",
+        "Premium",
         "Cost",
         "Peak Context fill",
     ]
@@ -927,6 +958,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "iteration_count": 0,
         "tokens_in": None,
         "tokens_out": None,
+        "credits": None,
+        "premium_requests": None,
         "cost_usd": None,
     }
 
@@ -1024,7 +1057,9 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             _resolve_field(sample_breakdown, path)
     # Every declared queue field is rendered by exactly one column; the
     # breakdown additionally carries `consumption.model`, which names the model
-    # behind the token counts rather than occupying a column of its own.
+    # behind the token counts rather than occupying a column of its own, and the
+    # cache-read/cache-write split, which is projected for a consumer to read
+    # (#335) but does not reach a column until #333 surfaces it.
     assert sorted(
         path for column in contract["queue_columns"] for path in column["fields"]
     ) == sorted(fields["queue_row"])
@@ -1033,9 +1068,14 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         for column in contract["iteration_breakdown_columns"]
         for path in column["fields"]
     }
-    assert breakdown_paths | {"consumption", "consumption.model"} == set(
-        fields["iteration_breakdown_row"]
-    ) | {f"consumption.{name}" for name in fields["consumption"]}
+    assert breakdown_paths | {
+        "consumption",
+        "consumption.model",
+        "consumption.cache_read",
+        "consumption.cache_write",
+    } == set(fields["iteration_breakdown_row"]) | {
+        f"consumption.{name}" for name in fields["consumption"]
+    }
 
 
 def test_dashboard_fixture_covers_every_family_semantic_dimension() -> None:
@@ -1982,6 +2022,8 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
             "tokens_out",
             "observed_tokens",
             "cost_usd",
+            "credits",
+            "premium_requests",
             "tool_count",
             "skill_call_count",
             "skills_consulted",
@@ -1998,7 +2040,14 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
         ("closed", 19),
     ]
     assert all(
-        row["consumption"] == {"model": None, "tokens_in": None, "tokens_out": None}
+        row["consumption"]
+        == {
+            "model": None,
+            "tokens_in": None,
+            "tokens_out": None,
+            "cache_read": None,
+            "cache_write": None,
+        }
         for row in breakdown
     )
 

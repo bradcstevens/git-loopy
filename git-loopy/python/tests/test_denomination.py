@@ -28,9 +28,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from git_loopy import denomination as denomination_module
-from git_loopy.denomination import CostDenomination, ListPriceDenomination
+from git_loopy import loop as loop_module
+from git_loopy.denomination import (
+    BilledCreditsDenomination,
+    CostDenomination,
+    ListPriceDenomination,
+)
 from git_loopy.pricing import ModelPricing, Pricing
-from git_loopy.usage import UsageTally
+from git_loopy.usage import BillingSample, UsageTally
 
 
 def _pricing() -> Pricing:
@@ -299,3 +304,101 @@ def test_a_lane_contributions_cost_resolves_through_the_same_seam() -> None:
 
     assert [issue["cost_usd"] for issue in payload["issues"]] == [2.5]
     assert payload["summary"]["cost_usd"] == 2.5
+
+
+# ---------------------------------------------------------------------------
+# BilledCreditsDenomination (#329) — the harness is the author
+# ---------------------------------------------------------------------------
+
+
+def test_billed_credits_reads_what_the_harness_billed() -> None:
+    """Credits come off the tally, never from tokens and a price (ADR-0026)."""
+    usage = UsageTally()
+    usage.add(
+        "gpt-5.6-terra",
+        13312,
+        5,
+        billing=BillingSample(credits=Decimal("3.33385")),
+    )
+    usage.add(
+        "gpt-5.6-terra",
+        13388,
+        44,
+        billing=BillingSample(credits=Decimal("0.33858")),
+    )
+
+    assert BilledCreditsDenomination().cost(usage) == Decimal("3.67243")
+
+
+def test_billed_credits_is_unknown_without_billing_telemetry() -> None:
+    """No billing telemetry is unknown, never zero — and never an estimate.
+
+    The tally carries a priceable model and real tokens, so a denomination that
+    fell back to tokens-times-a-price would answer here. ADR-0026 forbids that
+    fallback outright: an absent billed figure is unknown.
+    """
+    usage = UsageTally()
+    usage.add("gpt-5.6-terra", 13312, 5)
+
+    assert BilledCreditsDenomination().cost(usage) is None
+
+
+def test_billed_credits_provenance_names_the_harness_not_a_price_list() -> None:
+    """The run-end caveat says who authored the figure."""
+    provenance = BilledCreditsDenomination().provenance
+    assert provenance is not None
+    assert "billed" in provenance
+    assert "list" not in provenance
+
+
+def test_billed_credits_satisfies_the_seam() -> None:
+    """A second production adapter is what makes the seam real (#328)."""
+    assert isinstance(BilledCreditsDenomination(), CostDenomination)
+
+
+def test_the_run_injects_the_billed_credits_denomination_at_one_site() -> None:
+    """``loop.py`` constructs the Credits denomination and hands it to the Summary.
+
+    The point of the seam (#328) is that *what denominates Cost* is chosen once,
+    at the Run's own wiring, and threaded — never resolved from module state by a
+    consumer. #329 adds a second denomination alongside the estimate, so the
+    guarantee is now that **both** reach :class:`~git_loopy.ui.summary.RunSummary`
+    from that one place. Read out of the source rather than by running a Run,
+    because the assertion is about where the choice is made, not about what the
+    arithmetic yields.
+    """
+    source = (
+        Path(loop_module.__file__).read_text(encoding="utf-8")
+    )
+    tree = ast.parse(source)
+    summary_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "RunSummary"
+    ]
+    assert summary_calls, "loop.py must construct the Run's Summary"
+    for call in summary_calls:
+        keywords = {kw.arg for kw in call.keywords}
+        assert "denomination" in keywords
+        assert "credits_denomination" in keywords, (
+            "the Credits denomination must be injected explicitly, not left to "
+            "the constructor default that exists only to spare #328's suites a "
+            "mechanical edit"
+        )
+    assert "BilledCreditsDenomination()" in source
+
+
+def test_the_summary_default_is_the_billed_credits_denomination() -> None:
+    """A Summary built without one still denominates Credits from billing.
+
+    The default exists so the ten suites #328 already threaded did not need a
+    second mechanical edit, and so a Dashboard attached to a Summary someone else
+    built is never silently Credit-less. It must be the *production* adapter, not
+    a null object that would render the em dash forever.
+    """
+    from git_loopy.ui.summary import RunSummary
+
+    summary = RunSummary(denomination=ListPriceDenomination(pricing=_pricing()))
+    assert isinstance(summary.credits_denomination, BilledCreditsDenomination)

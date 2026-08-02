@@ -70,7 +70,7 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// Identity comes first and is never given up. Then lifecycle, then the
 /// accounting an operator steers by, and last the wide Consumption counters —
 /// the numbers worth a second look rather than a glance.
-const QUEUE_COLUMNS: [Column; 9] = [
+const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
     fixed("Status", 12, 1),
     fixed("Started", 12, 4),
@@ -79,6 +79,8 @@ const QUEUE_COLUMNS: [Column; 9] = [
     fixed("Iters", 6, 3),
     fixed("Tokens in", 11, 6),
     fixed("Tokens out", 11, 7),
+    fixed("Credits", 11, 9),
+    fixed("Premium", 9, 10),
     fixed("Cost", 10, 5),
 ];
 
@@ -401,6 +403,8 @@ fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], glyphs: &Glyphs)
                 row.iteration_count.to_string(),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
+                credits(row.credits, glyphs),
+                premium(row.premium_requests, glyphs),
                 cost(row.cost_usd, glyphs),
             ]
         }),
@@ -419,6 +423,35 @@ fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
 
 fn cost(value: Option<f64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), |usd| format!("${usd:.4}"))
+}
+
+/// Billed **AI Credits** to four places, or the unknown placeholder.
+///
+/// A missing bill is unknown, never zero: rendering it as `0` would say the
+/// work was free rather than that nobody reported what it cost.
+fn credits(value: Option<f64>, glyphs: &Glyphs) -> String {
+    value.map_or_else(
+        || glyphs.unknown.to_string(),
+        |amount| format!("{amount:.4}"),
+    )
+}
+
+/// A premium-request count, or the unknown placeholder.
+///
+/// Whole counts read without a decimal point — the ordinary case, one request
+/// per call — and a fractional multiplier to two places so it is not rounded
+/// away into a wrong whole number.
+fn premium(value: Option<f64>, glyphs: &Glyphs) -> String {
+    value.map_or_else(
+        || glyphs.unknown.to_string(),
+        |count| {
+            if count.fract() == 0.0 {
+                format!("{count:.0}")
+            } else {
+                format!("{count:.2}")
+            }
+        },
+    )
 }
 
 /// `1234567` as `1,234,567`, matching the family's one number format.
@@ -503,7 +536,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Gl
 }
 
 /// The locked Iteration-breakdown columns, in the locked order.
-const BREAKDOWN_COLUMNS: [Column; 9] = [
+const BREAKDOWN_COLUMNS: [Column; 11] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
@@ -511,6 +544,8 @@ const BREAKDOWN_COLUMNS: [Column; 9] = [
     fixed("Active", 9, 3),
     fixed("Tokens in", 11, 6),
     fixed("Tokens out", 11, 7),
+    fixed("Credits", 11, 9),
+    fixed("Premium", 9, 10),
     fixed("Cost", 10, 5),
     filling("Peak Context fill", 19, 8),
 ];
@@ -639,6 +674,8 @@ fn draw_breakdown(frame: &mut Frame, area: Rect, rows: &[ContributionRow], glyph
                 duration(row.active_seconds),
                 tokens(row.consumption.tokens_in, glyphs),
                 tokens(row.consumption.tokens_out, glyphs),
+                credits(row.credits, glyphs),
+                premium(row.premium_requests, glyphs),
                 cost(row.cost_usd, glyphs),
                 peak_context(row.peak_context_window.as_ref(), glyphs),
             ]

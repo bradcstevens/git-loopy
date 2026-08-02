@@ -499,6 +499,10 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "tokens_out": 567,
         "observed_tokens": 1801,
         "cost_usd": None,
+        "credits": None,
+        "premium_requests": None,
+        "cache_read": None,
+        "cache_write": None,
         "tool_count": 1,
         "skill_call_count": 0,
         "skills_consulted": ["tdd"],
@@ -523,6 +527,10 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "model": "claude-opus-4.7-xhigh",
         "tokens_in": 1234,
         "tokens_out": 567,
+        "credits": None,
+        "premium_requests": None,
+        "cache_read": None,
+        "cache_write": None,
     }
     assert issue_contribution["peak_context_window"] == iteration_end["summary"][
         "peak_context_window"

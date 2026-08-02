@@ -2041,3 +2041,150 @@ def test_concurrency_change_shows_the_cap_it_may_never_exceed() -> None:
         }
     )
     assert "2 of 6" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Billed Cost (#329) — AI Credits is the primary figure
+# ---------------------------------------------------------------------------
+
+
+def _billed_usage_event(
+    *, credits: float, premium: float, cache_read: int, cache_write: int
+) -> dict:
+    """A ``usage.tokens`` Event carrying the harness's billed figures.
+
+    Figures are in the shape the harness reports billing in; the exact digits
+    of the Run replay recorded on #329 are pinned at the mapper
+    (``test_events``) and at the tally (``test_usage``).
+    """
+    return {
+        "type": USAGE_TOKENS,
+        "model": "gpt-5.6-terra",
+        "input": 13312,
+        "output": 5,
+        "credits": credits,
+        "premium_requests": premium,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+    }
+
+
+def test_run_table_leads_with_billed_credits_and_premium_requests() -> None:
+    """Credits is the primary Cost column; premium requests sit beside it.
+
+    Credits is the number closest to the telemetry and the budget an operator
+    exhausts mid-Run, so both precede the list-price estimate — which this ticket
+    leaves rendering unchanged (#330 retires it).
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
+    renderer.render(
+        _billed_usage_event(credits=3.33385, premium=1.0, cache_read=0, cache_write=13309)
+    )
+    renderer.render(
+        _billed_usage_event(
+            credits=0.33858, premium=1.0, cache_read=13309, cache_write=76
+        )
+    )
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1, "outcome": "closed"})
+
+    table = summary.build_run_table()
+    headers = [str(column.header) for column in table.columns]
+    assert headers.index("Credits") < headers.index("Cost USD")
+    assert headers.index("Premium") < headers.index("Cost USD")
+
+    credits_column = table.columns[headers.index("Credits")]
+    premium_column = table.columns[headers.index("Premium")]
+    assert list(credits_column.cells) == ["3.6724"]
+    assert credits_column.footer == "3.6724"
+    assert list(premium_column.cells) == ["2"]
+    assert premium_column.footer == "2"
+
+
+def test_run_table_renders_unreported_credits_as_unknown_not_zero() -> None:
+    """No billing telemetry is the em dash — a zero would read as free work."""
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
+    renderer.render(
+        {
+            "type": USAGE_TOKENS,
+            "model": "gpt-5.4",
+            "input": 1000,
+            "output": 500,
+        }
+    )
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1, "outcome": "closed"})
+
+    table = summary.build_run_table()
+    headers = [str(column.header) for column in table.columns]
+    credits_column = table.columns[headers.index("Credits")]
+    assert list(credits_column.cells) == ["—"]
+    assert credits_column.footer == "—"
+    # The estimate this ticket leaves alone still renders from the same tokens.
+    assert list(table.columns[headers.index("Cost USD")].cells) != ["—"]
+
+
+def test_iteration_panel_states_billed_credits_and_names_the_harness() -> None:
+    """The frozen Iteration panel leads with Credits and says who billed them."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
+    renderer.render(
+        _billed_usage_event(credits=3.33385, premium=1.0, cache_read=0, cache_write=13309)
+    )
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1, "outcome": "closed"})
+
+    out = buf.getvalue()
+    # Decimal's ROUND_HALF_EVEN: 3.33385 -> 3.3338, not 3.3339.
+    assert "3.3338 credits" in out
+    assert "1 premium request" in out
+    assert "billed AI Credits, reported by the harness" in out
+
+
+def test_the_two_reasons_credits_are_unavailable_read_differently() -> None:
+    """An absent figure and an Orchestrator that has none are different facts.
+
+    Collapsing them into one em dash is what stops an operator acting on the one
+    that is actionable: a Python **Run** that simply saw no billing on the stream
+    may be a harness that stopped reporting, while a native shell or PowerShell
+    **Orchestrator** is telling the truth about a capability it never had. Both
+    are unknown and neither is a zero, but they say so in their own words.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 329})
+    renderer.render(
+        {"type": USAGE_TOKENS, "model": "gpt-5.4", "input": 1000, "output": 500}
+    )
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1, "outcome": "closed"})
+    live = buf.getvalue()
+    assert "no billing telemetry reported" in live
+    assert "this Orchestrator cannot report Cost" not in live
+
+    # A native Orchestrator's normalized rollup: every measurement declared null.
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 2, "issue": 329})
+    summary.on_iteration_end(
+        {
+            "summary": {
+                "model": None,
+                "tokens_in": None,
+                "tokens_out": None,
+                "observed_tokens": None,
+                "cost_usd": None,
+                "tool_count": None,
+                "skill_call_count": None,
+                "skills_consulted": None,
+                "peak_context_window": None,
+                "credits": None,
+                "premium_requests": None,
+                "cache_read": None,
+                "cache_write": None,
+            },
+            "issues": [],
+        }
+    )
+    console, native_buf = _capture_console(width=120)
+    console.print(summary.build_iteration_panel(summary.completed[-1]))
+    native = native_buf.getvalue()
+    assert "this Orchestrator cannot report Cost" in native
+    assert "no billing telemetry reported" not in native
+

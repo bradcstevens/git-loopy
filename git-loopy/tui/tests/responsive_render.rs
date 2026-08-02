@@ -86,7 +86,7 @@ fn cells(row: &str) -> Vec<String> {
 }
 
 /// The locked Queue headings, in the locked order.
-const QUEUE_HEADINGS: [&str; 9] = [
+const QUEUE_HEADINGS: [&str; 11] = [
     "Issue",
     "Status",
     "Started",
@@ -95,6 +95,8 @@ const QUEUE_HEADINGS: [&str; 9] = [
     "Iters",
     "Tokens in",
     "Tokens out",
+    "Credits",
+    "Premium",
     "Cost",
 ];
 

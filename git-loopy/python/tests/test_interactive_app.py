@@ -262,6 +262,8 @@ async def test_dashboard_queue_uses_canonical_contribution_columns() -> None:
             "Iters",
             "Tokens in",
             "Tokens out",
+            "Credits",
+            "Premium",
             "Cost",
         ]
         assert "Waiting" not in labels
@@ -326,6 +328,8 @@ async def test_dashboard_queue_localizes_normalized_closure_and_accounting() -> 
         "1",
         "100",
         "50",
+        "—",
+        "—",
         "$0.0004",
     ]
 
@@ -370,19 +374,26 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
     )
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
-        # Columns: Issue | Status | Started | Active | Tokens in | out | Cost.
+        # Columns: Issue | Status | Started | Active | Closed | Iters |
+        # Tokens in | out | Credits | Cost.
         active_row = table.get_row_at(0)
         assert active_row[0] == "#26"
         assert active_row[6] == "1,000"
         assert active_row[7] == "200"
+        # No billing telemetry rode the sample, so Credits is the em dash while
+        # the token-derived estimate beside it still renders (#329).
+        assert active_row[8] == "—"
+        assert active_row[9] == "—"
         # 1000 * 15/1e6 + 200 * 75/1e6 = 0.015 + 0.015 = 0.0300.
-        assert active_row[8] == "$0.0300"
+        assert active_row[10] == "$0.0300"
         # The still-queued #27 has no observed token sample or known cost.
         queued_row = table.get_row_at(1)
         assert queued_row[0] == "#27"
         assert queued_row[6] == "—"
         assert queued_row[7] == "—"
         assert queued_row[8] == "—"
+        assert queued_row[9] == "—"
+        assert queued_row[10] == "—"
 
 
 async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> None:
@@ -689,6 +700,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "Active",
         "Tokens in",
         "Tokens out",
+        "Credits",
+        "Premium",
         "Cost",
         "Peak Context fill",
     ]
@@ -700,6 +713,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "0:00:04",
         "100",
         "50",
+        "—",
+        "—",
         "$0.0004",
         "12,000/32,000 38%",
     ]
@@ -929,8 +944,10 @@ async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -
         "—",
         "—",
         "—",
+        "—",
+        "—",
     ]
-    assert queue.get_row_at(0)[6:9] == ["—", "—", "—"]
+    assert queue.get_row_at(0)[6:11] == ["—", "—", "—", "—", "—"]
 
 
 async def test_band_order_matches_the_language_neutral_semantic_contract() -> None:
@@ -991,3 +1008,53 @@ async def test_band_order_matches_the_language_neutral_semantic_contract() -> No
     assert breakdown_columns == [
         column["label"] for column in contract["iteration_breakdown_columns"]
     ]
+
+
+async def test_dashboard_queue_shows_billed_credits_and_premium_requests() -> None:
+    """The Queue leads with what the harness billed, not with an estimate (#329).
+
+    Two usage samples ride the harness's own Credits and premium-request counts;
+    the Queue accrues them onto the **Active issue** and renders the sum. A
+    still-queued issue that no sample reached shows the em dash — unknown, never
+    a zero that would read as free work.
+
+    Figures are two calls' worth of billing in the shape the harness reports
+    it — the exact digits of the Run replay recorded on #329 are pinned at the
+    mapper (``test_events``) and at the tally (``test_usage``); what this test
+    owns is that the Queue accrues and renders them.
+    """
+    state = LiveRunState(run_id="01U", model="claude-opus-4.8", reasoning_effort="x")
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [26, 27]}
+    )
+    state.stream_message("<working issue=26>")
+    for credits in ("3.33385", "0.33858"):
+        state.render(
+            {
+                "type": events_module.USAGE_TOKENS,
+                "model": "claude-opus-4.8",
+                "input": 13_388,
+                "output": 44,
+                "credits": credits,
+                "premium_requests": 1.0,
+                "cache_read": 13_309,
+                "cache_write": 76,
+            }
+        )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test():
+        table = app.query_one("#queue", DataTable)
+        active_row = table.get_row_at(0)
+        queued_row = table.get_row_at(1)
+
+    assert active_row[0] == "#26"
+    # 3.33385 + 0.33858 = 3.67243, summed as Decimal so the replay's own digits
+    # survive rather than a binary float's expansion.
+    assert active_row[8] == "3.6724"
+    assert active_row[9] == "2"
+    assert queued_row[0] == "#27"
+    assert queued_row[8] == "—"
+    assert queued_row[9] == "—"

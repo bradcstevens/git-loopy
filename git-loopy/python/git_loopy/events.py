@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from copilot.generated.session_events import SessionEvent, SessionEventType
@@ -698,12 +699,14 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             result["result_size_chars"] = len(data.result.content)
         return result
     if et is SessionEventType.ASSISTANT_USAGE:
-        return {
+        usage_payload: dict[str, Any] = {
             "type": USAGE_TOKENS,
             "model": data.model,
             "input": int(data.input_tokens) if data.input_tokens is not None else 0,
             "output": int(data.output_tokens) if data.output_tokens is not None else 0,
         }
+        usage_payload.update(_billed_usage(data))
+        return usage_payload
     if et is SessionEventType.SESSION_USAGE_INFO:
         raw_limit = data.token_limit
         token_limit = int(raw_limit) if raw_limit is not None and raw_limit > 0 else None
@@ -728,6 +731,59 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+#: Nano-**AI Credits** per AI Credit. ``copilotUsage.totalNanoAiu`` is the
+#: harness's billed figure scaled by 10^-9; the Run replay recorded on #329
+#: reconciled it exactly, to the nano-Credit, against the same datum's per-call
+#: ``tokenDetails`` breakdown (``costPerBatch`` x ``tokenCount`` / ``batchSize``,
+#: summed over the four billing categories) on every call observed, so the scale
+#: is the only conversion applied and no quantity the harness billed is
+#: recomputed (ADR-0026).
+_NANO_AIU_PER_CREDIT = 1_000_000_000
+
+
+def _billed_usage(data: Any) -> dict[str, Any]:
+    """Project the harness's reported billing off one ``ASSISTANT_USAGE`` datum.
+
+    **Additive by omission.** A figure the harness withheld contributes no key at
+    all, rather than a zero: existing consumers are unaffected, and
+    :class:`~git_loopy.usage.UsageTally` latches the corresponding total to
+    *unknown* so an absent figure renders as unavailable instead of as free work.
+
+    ``cost`` is read as the **premium-request** count, not as money. The Run
+    replay recorded on #329 observed it fixed at ``0.33`` across four consecutive
+    ``claude-haiku-4.5`` calls whose billed Credits ranged over a factor of four
+    — a constant per call, matching that model's published premium-request
+    multiplier and independent of the work done, which rules out its being
+    proportional to usage in any currency. That is why reading it does not
+    violate ADR-0026's rule that git-loopy never infers a currency from an
+    unlabelled float: the field is not being read as a currency.
+
+    ``cache_read_tokens`` and ``cache_write_tokens`` are recorded as reported.
+    The same replay established that they are *components* of the reported
+    ``input_tokens`` rather than figures beside it — on every call
+    ``input_tokens`` equalled ``cache_read + cache_write`` plus the breakdown's
+    uncached ``input`` count exactly — so a consumer must never add them to the
+    token total. Nothing here does: they ride their own keys.
+    """
+    billed: dict[str, Any] = {}
+    copilot_usage = getattr(data, "copilot_usage", None)
+    nano_aiu = getattr(copilot_usage, "total_nano_aiu", None)
+    if nano_aiu is not None:
+        billed["credits"] = float(
+            Decimal(str(nano_aiu)) / Decimal(_NANO_AIU_PER_CREDIT)
+        )
+    premium_requests = getattr(data, "cost", None)
+    if premium_requests is not None:
+        billed["premium_requests"] = float(premium_requests)
+    cache_read = getattr(data, "cache_read_tokens", None)
+    if cache_read is not None:
+        billed["cache_read"] = int(cache_read)
+    cache_write = getattr(data, "cache_write_tokens", None)
+    if cache_write is not None:
+        billed["cache_write"] = int(cache_write)
+    return billed
 
 
 def _format_ts(dt: datetime) -> str:

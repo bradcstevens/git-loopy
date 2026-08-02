@@ -126,7 +126,10 @@
         "cost_usd",
         "peak_context_window"
       ],
-      "consumption_required": ["model", "tokens_in", "tokens_out"]
+      "consumption_required": ["model", "tokens_in", "tokens_out"],
+      "summary_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
+      "consumption_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
+      "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts."
     },
     "wrapper.skill_policy.resolved": {
       "required_when_present": [
@@ -468,6 +471,10 @@
             "tokens_out": 0,
             "observed_tokens": 0,
             "cost_usd": null,
+            "credits": null,
+            "premium_requests": null,
+            "cache_read": null,
+            "cache_write": null,
             "tool_count": 1,
             "skill_call_count": 1,
             "skills_consulted": ["tdd"],
@@ -494,7 +501,11 @@
               "consumption": {
                 "model": "new-model",
                 "tokens_in": 0,
-                "tokens_out": 0
+                "tokens_out": 0,
+                "credits": null,
+                "premium_requests": null,
+                "cache_read": null,
+                "cache_write": null
               },
               "cost_usd": null,
               "peak_context_window": {
@@ -575,6 +586,10 @@
             "tokens_out": 0,
             "observed_tokens": 0,
             "cost_usd": null,
+            "credits": null,
+            "premium_requests": null,
+            "cache_read": null,
+            "cache_write": null,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -596,7 +611,11 @@
               "consumption": {
                 "model": null,
                 "tokens_in": 0,
-                "tokens_out": 0
+                "tokens_out": 0,
+                "credits": null,
+                "premium_requests": null,
+                "cache_read": null,
+                "cache_write": null
               },
               "cost_usd": null,
               "peak_context_window": null
@@ -612,6 +631,10 @@
             "tokens_out": 0,
             "observed_tokens": 0,
             "cost_usd": null,
+            "credits": null,
+            "premium_requests": null,
+            "cache_read": null,
+            "cache_write": null,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -633,7 +656,11 @@
               "consumption": {
                 "model": null,
                 "tokens_in": 0,
-                "tokens_out": 0
+                "tokens_out": 0,
+                "credits": null,
+                "premium_requests": null,
+                "cache_read": null,
+                "cache_write": null
               },
               "cost_usd": null,
               "peak_context_window": null

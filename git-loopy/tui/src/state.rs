@@ -63,6 +63,55 @@ pub(crate) struct LogLine {
     pub(crate) text: String,
 }
 
+/// A running billed total that latches to *unknown* the moment a term is
+/// missing.
+///
+/// Mirrors the Python `UsageTally`'s latched totals: a sum missing one of its
+/// terms understates the work rather than describing it. Reporting a zero would
+/// say the Iteration was free rather than that nobody reported what it cost, so
+/// a single missing term latches the whole total to unknown, permanently, and
+/// it projects as `null`. A total that was never observed at all is likewise
+/// unknown.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BilledTotal {
+    total: f64,
+    observed: bool,
+    unknown: bool,
+}
+
+impl BilledTotal {
+    /// Fold one reported term in, or latch to unknown when the term is missing.
+    fn add(&mut self, sample: Option<f64>) {
+        match sample {
+            Some(value) => {
+                self.total += value;
+                self.observed = true;
+            }
+            None => self.unknown = true,
+        }
+    }
+
+    /// Fold another latched total in, carrying its unknown across.
+    fn merge(&mut self, other: BilledTotal) {
+        if other.unknown {
+            self.unknown = true;
+        }
+        if other.observed {
+            self.total += other.total;
+            self.observed = true;
+        }
+    }
+
+    /// The total, or `None` when unknown or never observed.
+    pub(crate) fn value(&self) -> Option<f64> {
+        if self.unknown || !self.observed {
+            None
+        } else {
+            Some(self.total)
+        }
+    }
+}
+
 /// One finalized Iteration or Lane contribution for an issue.
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
@@ -78,6 +127,10 @@ pub(crate) struct IssueContribution {
     pub(crate) tokens_out: i64,
     pub(crate) usage_observed: bool,
     pub(crate) cost_usd: Option<f64>,
+    pub(crate) credits: Option<f64>,
+    pub(crate) premium_requests: Option<f64>,
+    pub(crate) cache_read: Option<i64>,
+    pub(crate) cache_write: Option<i64>,
     pub(crate) peak_context_window: Option<ContextWindowSample>,
 }
 
@@ -96,6 +149,11 @@ pub(crate) struct IssueLedgerEntry {
     pub(crate) tokens_in: i64,
     pub(crate) tokens_out: i64,
     pub(crate) normalized_cost_usd: Option<f64>,
+    /// Billed **AI Credits** accrued across this issue's work, latched to
+    /// unknown the moment a sample or contribution failed to report one.
+    pub(crate) credits: BilledTotal,
+    /// Premium requests accrued across this issue's work, latched likewise.
+    pub(crate) premium_requests: BilledTotal,
     pub(crate) log: Vec<LogLine>,
 }
 
@@ -113,6 +171,8 @@ impl IssueLedgerEntry {
             tokens_in: 0,
             tokens_out: 0,
             normalized_cost_usd: None,
+            credits: BilledTotal::default(),
+            premium_requests: BilledTotal::default(),
             log: Vec::new(),
         }
     }
@@ -172,6 +232,11 @@ pub struct DashboardState {
     pending_usage: (i64, i64),
     /// Whether any pre-marker Consumption was truthfully observed.
     pending_usage_observed: bool,
+    /// Billed **AI Credits** observed before the Active marker, latched to
+    /// unknown when a pre-marker sample failed to report one.
+    pending_credits: BilledTotal,
+    /// Premium requests observed before the Active marker, latched likewise.
+    pending_premium_requests: BilledTotal,
     /// The issues this Iteration worked as Lanes (issue #66, ADR-0008).
     iteration_lane_refs: BTreeSet<IssueRef>,
     /// Whether the open Iteration has an authoritative activation binding.
@@ -206,6 +271,8 @@ impl DashboardState {
             pending_log: Vec::new(),
             pending_usage: (0, 0),
             pending_usage_observed: false,
+            pending_credits: BilledTotal::default(),
+            pending_premium_requests: BilledTotal::default(),
             iteration_lane_refs: BTreeSet::new(),
             authoritative_binding: false,
             iteration_open: false,
@@ -300,9 +367,7 @@ impl DashboardState {
                     self.context_window = Some(*sample);
                 }
             }
-            EventPayload::UsageTokens(usage) => {
-                self.record_usage(usage.input.unwrap_or(0), usage.output.unwrap_or(0))
-            }
+            EventPayload::UsageTokens(usage) => self.record_usage(usage),
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
             }
@@ -366,6 +431,8 @@ impl DashboardState {
                     entry.tokens_in += usage.input.unwrap_or(0).max(0);
                     entry.tokens_out += usage.output.unwrap_or(0).max(0);
                     entry.usage_observed = true;
+                    entry.credits.add(usage.credits);
+                    entry.premium_requests.add(usage.premium_requests);
                 }
             }
             _ => {}
@@ -421,6 +488,8 @@ impl DashboardState {
         self.pending_log.clear();
         self.pending_usage = (0, 0);
         self.pending_usage_observed = false;
+        self.pending_credits = BilledTotal::default();
+        self.pending_premium_requests = BilledTotal::default();
         self.iteration_lane_refs.clear();
         self.authoritative_binding = false;
         self.context_window = None;
@@ -459,6 +528,8 @@ impl DashboardState {
         let pending = std::mem::take(&mut self.pending_log);
         let (pending_in, pending_out) = std::mem::take(&mut self.pending_usage);
         let pending_observed = std::mem::take(&mut self.pending_usage_observed);
+        let pending_credits = std::mem::take(&mut self.pending_credits);
+        let pending_premium = std::mem::take(&mut self.pending_premium_requests);
         let entry = self
             .ledger
             .get_mut(issue)
@@ -478,6 +549,8 @@ impl DashboardState {
         entry.tokens_in += pending_in;
         entry.tokens_out += pending_out;
         entry.usage_observed = entry.usage_observed || pending_observed;
+        entry.credits.merge(pending_credits);
+        entry.premium_requests.merge(pending_premium);
         self.active_ref = Some(issue.clone());
     }
 
@@ -502,20 +575,24 @@ impl DashboardState {
     /// pending bucket and are flushed on [`Self::activate`], so a late
     /// `Closes #N` or single-member-Pool backstop attributes the whole
     /// Iteration's Consumption too.
-    fn record_usage(&mut self, tokens_in: i64, tokens_out: i64) {
-        let tokens_in = tokens_in.max(0);
-        let tokens_out = tokens_out.max(0);
+    fn record_usage(&mut self, usage: &crate::event::UsageTokens) {
+        let tokens_in = usage.input.unwrap_or(0).max(0);
+        let tokens_out = usage.output.unwrap_or(0).max(0);
         if let Some(active) = self.active_ref.clone() {
             if let Some(entry) = self.ledger.get_mut(&active) {
                 entry.tokens_in += tokens_in;
                 entry.tokens_out += tokens_out;
                 entry.usage_observed = true;
+                entry.credits.add(usage.credits);
+                entry.premium_requests.add(usage.premium_requests);
             }
             return;
         }
         self.pending_usage.0 += tokens_in;
         self.pending_usage.1 += tokens_out;
         self.pending_usage_observed = true;
+        self.pending_credits.add(usage.credits);
+        self.pending_premium_requests.add(usage.premium_requests);
     }
 
     fn finalize_iteration(&mut self, now_monotonic: Option<f64>) {
@@ -622,6 +699,17 @@ impl DashboardState {
             } else {
                 None
             };
+            // The Queue total follows the same all-or-nothing rule as
+            // normalized_cost_usd: a billed total missing one contribution's
+            // term latches to unknown rather than understating the work.
+            let mut credits = BilledTotal::default();
+            let mut premium_requests = BilledTotal::default();
+            for contribution in &entry.contributions {
+                credits.add(contribution.credits);
+                premium_requests.add(contribution.premium_requests);
+            }
+            entry.credits = credits;
+            entry.premium_requests = premium_requests;
         }
     }
 
@@ -786,6 +874,10 @@ fn contribution_from(
         },
         usage_observed,
         cost_usd: row.cost_usd,
+        credits: consumption.credits,
+        premium_requests: consumption.premium_requests,
+        cache_read: consumption.cache_read.map(|value| value.max(0)),
+        cache_write: consumption.cache_write.map(|value| value.max(0)),
         peak_context_window: row.peak_context_window,
     }
 }

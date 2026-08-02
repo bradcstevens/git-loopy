@@ -21,7 +21,7 @@ use crate::state::{
 use crate::timestamp::{Timestamp, Zone};
 
 /// The canonical Queue columns, in order.
-const QUEUE_COLUMNS: [&str; 9] = [
+const QUEUE_COLUMNS: [&str; 11] = [
     "issue",
     "status",
     "started_at",
@@ -30,6 +30,8 @@ const QUEUE_COLUMNS: [&str; 9] = [
     "iteration_count",
     "tokens_in",
     "tokens_out",
+    "credits",
+    "premium_requests",
     "cost_usd",
 ];
 
@@ -150,6 +152,8 @@ pub struct QueueRow {
     pub iteration_count: usize,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
+    pub credits: Option<f64>,
+    pub premium_requests: Option<f64>,
     pub cost_usd: Option<f64>,
 }
 
@@ -182,6 +186,8 @@ pub struct SummaryRow {
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub observed_tokens: Option<i64>,
+    pub credits: Option<f64>,
+    pub premium_requests: Option<f64>,
     pub cost_usd: Option<f64>,
     pub tool_count: Option<i64>,
     pub skill_call_count: Option<i64>,
@@ -227,6 +233,8 @@ pub struct ContributionRow {
     pub status: String,
     pub active_seconds: f64,
     pub consumption: ConsumptionView,
+    pub credits: Option<f64>,
+    pub premium_requests: Option<f64>,
     pub cost_usd: Option<f64>,
     pub peak_context_window: Option<PeakContext>,
 }
@@ -236,6 +244,8 @@ pub struct ConsumptionView {
     pub model: Option<String>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
+    pub cache_read: Option<i64>,
+    pub cache_write: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -344,6 +354,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     iteration_count: entry.contributions.len(),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
+                    credits: entry.credits.value(),
+                    premium_requests: entry.premium_requests.value(),
                     cost_usd: entry.normalized_cost_usd,
                 },
             )
@@ -375,6 +387,8 @@ fn summary_row(row: &IterationRow) -> SummaryRow {
         tokens_in: reported_or(&summary.tokens_in, 0),
         tokens_out: reported_or(&summary.tokens_out, 0),
         observed_tokens: reported(&summary.observed_tokens).copied().flatten(),
+        credits: reported(&summary.credits).copied().flatten(),
+        premium_requests: reported(&summary.premium_requests).copied().flatten(),
         cost_usd: reported(&summary.cost_usd).copied().flatten(),
         tool_count: reported_or(&summary.tool_count, 0),
         skill_call_count: reported_or(&summary.skill_call_count, 0),
@@ -476,7 +490,11 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
             tokens_out: contribution
                 .usage_observed
                 .then_some(contribution.tokens_out),
+            cache_read: contribution.cache_read,
+            cache_write: contribution.cache_write,
         },
+        credits: contribution.credits,
+        premium_requests: contribution.premium_requests,
         cost_usd: contribution.cost_usd,
         peak_context_window: contribution
             .peak_context_window

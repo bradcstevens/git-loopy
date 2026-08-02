@@ -36,6 +36,7 @@ from copilot.generated.session_events import (
     AssistantMessageData,
     AssistantReasoningData,
     AssistantReasoningDeltaData,
+    AssistantUsageCopilotUsage,
     AssistantUsageData,
     PermissionApproved,
     PermissionCompletedData,
@@ -1027,6 +1028,130 @@ def test_map_sdk_event_assistant_usage_returns_usage_tokens() -> None:
     assert out["output"] == 200
 
 
+def test_map_sdk_event_assistant_usage_carries_the_harness_billing() -> None:
+    """The billed figures the harness reports ride the event the runner reads.
+
+    Payload is verbatim from the Run replay recorded on #329 (CLI 1.0.67,
+    ``github-copilot-sdk==1.0.5``, ``claude-haiku-4.5``): the per-call billing
+    fields *do* populate on the stream the runner subscribes to.
+    ``copilotUsage.totalNanoAiu`` is nano-**AI Credits** — 849545000 nano is
+    0.849545 Credits, which reconciles to the nano-Credit with that same call's
+    ``tokenDetails`` breakdown — and the Experimental ``cost`` float is the
+    premium-request count, fixed at 0.33 across four consecutive calls whose
+    Credits ranged over a factor of four, so it is not money.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model="claude-haiku-4.5",
+            input_tokens=13512.0,
+            output_tokens=223.0,
+            cache_read_tokens=8267,
+            cache_write_tokens=5235,
+            copilot_usage=AssistantUsageCopilotUsage(total_nano_aiu=849545000.0),
+            cost=0.33,
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert out["credits"] == 0.849545
+    assert out["premium_requests"] == 0.33
+    assert out["cache_read"] == 8267
+    assert out["cache_write"] == 5235
+    # The harness-reported model rides verbatim, un-normalised. It is a third,
+    # observed thing: neither the run-wide setting nor the Routed pair git-loopy
+    # resolved at Pickup, both of which survive on their own Events.
+    assert out["model"] == "claude-haiku-4.5"
+
+
+def test_the_harness_reported_model_never_displaces_the_resolved_one() -> None:
+    """Both models survive: what git-loopy asked for, and what actually ran.
+
+    The **Routed pair** git-loopy resolved at **Pickup** reaches the stream as
+    ``session.created``'s ``model``; the model the harness reports having billed
+    reaches it as ``usage.tokens``'s ``model``, verbatim and un-normalised. They
+    are different facts on different Events, so a configured tier that failed to
+    take effect leaves evidence rather than being silently overwritten by — or
+    silently overwriting — the other.
+    """
+    resolved = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.SESSION_START,
+            SessionStartData(
+                copilot_version="1.0.0",
+                producer="cli",
+                session_id="sess-329",
+                start_time=_fixed_ts(),
+                version=1.0,
+                selected_model="claude-opus-4.7-xhigh",
+            ),
+        )
+    )
+    billed = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.ASSISTANT_USAGE,
+            AssistantUsageData(
+                model="claude-opus-4.7",
+                input_tokens=1.0,
+                output_tokens=2.0,
+                copilot_usage=AssistantUsageCopilotUsage(total_nano_aiu=1000.0),
+            ),
+        )
+    )
+    assert resolved is not None and billed is not None
+    assert resolved["model"] == "claude-opus-4.7-xhigh"
+    assert billed["model"] == "claude-opus-4.7"
+
+
+def test_reported_input_tokens_already_include_the_cache_split() -> None:
+    """The cache split is *inside* the reported input count, not beside it.
+
+    The finding the ticket asked for, pinned so it cannot be forgotten: on every
+    call of the #329 Run replay the harness's ``input_tokens`` equalled
+    ``cache_read + cache_write`` plus the uncached input the same datum's
+    ``tokenDetails`` breakdown reported. A consumer that adds the split to the
+    token total therefore double-counts by more than an order of magnitude, which
+    is exactly the class of error this arc exists to remove. The mapper keeps the
+    split on its own keys and never folds it into ``input``.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model="claude-haiku-4.5",
+            input_tokens=13512.0,
+            output_tokens=223.0,
+            cache_read_tokens=8267,
+            cache_write_tokens=5235,
+            copilot_usage=AssistantUsageCopilotUsage(total_nano_aiu=849545000.0),
+            cost=0.33,
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    uncached_input = 10  # tokenDetails["input"].token_count, same call
+    assert out["input"] == out["cache_read"] + out["cache_write"] + uncached_input
+    assert out["input"] == 13512
+
+
+def test_map_sdk_event_assistant_usage_omits_billing_the_harness_withheld() -> None:
+    """A harness that reports no billing adds no key — additive, never zero.
+
+    An absent key is what makes the new fields additive for existing consumers,
+    and it is what keeps ``UsageTally`` latching those totals to *unknown* rather
+    than to a zero an operator would read as free work.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(model="m", input_tokens=1.0, output_tokens=2.0),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert "credits" not in out
+    assert "premium_requests" not in out
+    assert "cache_read" not in out
+    assert "cache_write" not in out
+
+
 def test_map_sdk_usage_info_returns_live_context_window_snapshot() -> None:
     sdk = _wrap_sdk(
         SessionEventType.SESSION_USAGE_INFO,
@@ -1155,6 +1280,9 @@ def test_events_module_imports_are_constrained() -> None:
         "json",
         "re",
         "datetime",
+        # #329: nano-AI-Credits scale exactly in Decimal; the scale is the only
+        # conversion applied to a figure the harness already billed.
+        "decimal",
         "typing",
         "copilot.generated.session_events",
     }

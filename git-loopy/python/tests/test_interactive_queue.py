@@ -821,3 +821,79 @@ def test_observed_zero_normalized_consumption_stays_zero() -> None:
     row = queue_rows(state)[0]
     assert row.usage_observed is True
     assert row.usage == UsageTally(model="claude-opus-4.8", tokens_in=0, tokens_out=0)
+
+
+# ---------------------------------------------------------------------------
+# Billed Cost (#329) — the Queue and the Summary agree by construction
+# ---------------------------------------------------------------------------
+
+
+def test_active_issue_accrues_the_harness_billed_credits() -> None:
+    """Credits accrue to the **Active issue** across every Iteration that worked it.
+
+    Figures are in the shape the harness reports billing in; the exact digits
+    of the Run replay recorded on #329 are pinned at the mapper
+    (``test_events``) and at the tally (``test_usage``).
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    _collect(state, 329)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 329})
+    for credits, premium in ((3.33385, 1.0), (0.33858, 1.0)):
+        state.render(
+            {
+                "type": events_module.USAGE_TOKENS,
+                "model": "gpt-5.6-terra",
+                "input": 13312,
+                "output": 5,
+                "credits": credits,
+                "premium_requests": premium,
+                "cache_read": 0,
+                "cache_write": 13309,
+            }
+        )
+
+    entry = state.ledger[329]
+    assert entry.usage.credits == Decimal("3.67243")
+    assert entry.usage.premium_requests == Decimal("2")
+    assert entry.usage.cache_write == 26618
+
+
+def test_pre_marker_billing_flushes_onto_the_issue_it_belonged_to() -> None:
+    """Billing seen before the working marker lands on the issue, not nowhere.
+
+    The pending buffer is the same path the tokens take; a billed figure the
+    buffer dropped would understate the issue that actually incurred it.
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    _collect(state, 329)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "gpt-5.6-terra",
+            "input": 13312,
+            "output": 5,
+            "credits": 3.33385,
+            "premium_requests": 1.0,
+            "cache_read": 0,
+            "cache_write": 13309,
+        }
+    )
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 329})
+
+    assert state.ledger[329].usage.credits == Decimal("3.33385")
+
+
+def test_unbilled_usage_leaves_the_issue_credits_unknown_not_zero() -> None:
+    """A stream with no billing telemetry reports unknown, never a free issue."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    _collect(state, 329)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 329})
+    _usage(state, model="claude-opus-4.8", tin=1000, tout=500)
+
+    assert state.ledger[329].usage.credits is None

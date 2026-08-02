@@ -244,6 +244,18 @@ pub struct IterationSummary {
     /// Estimated Cost.
     #[serde(default, deserialize_with = "reported")]
     pub cost_usd: Option<Option<f64>>,
+    /// Billed **AI Credits**, the harness's own figure.
+    #[serde(default, deserialize_with = "reported")]
+    pub credits: Option<Option<f64>>,
+    /// Premium requests billed.
+    #[serde(default, deserialize_with = "reported")]
+    pub premium_requests: Option<Option<f64>>,
+    /// Cache-read tokens billed.
+    #[serde(default, deserialize_with = "reported")]
+    pub cache_read: Option<Option<i64>>,
+    /// Cache-write tokens billed.
+    #[serde(default, deserialize_with = "reported")]
+    pub cache_write: Option<Option<i64>>,
     /// Tool calls.
     #[serde(default, deserialize_with = "reported")]
     pub tool_count: Option<Option<i64>>,
@@ -316,6 +328,18 @@ pub struct Consumption {
     /// Output tokens.
     #[serde(default)]
     pub tokens_out: Option<i64>,
+    /// Billed **AI Credits** attributed to this issue. `None` means unknown.
+    #[serde(default)]
+    pub credits: Option<f64>,
+    /// Premium requests attributed to this issue. `None` means unknown.
+    #[serde(default)]
+    pub premium_requests: Option<f64>,
+    /// Cache-read tokens attributed to this issue. `None` means unknown.
+    #[serde(default)]
+    pub cache_read: Option<i64>,
+    /// Cache-write tokens attributed to this issue. `None` means unknown.
+    #[serde(default)]
+    pub cache_write: Option<i64>,
 }
 
 /// One truthful Consumption sample for the Active issue (or Lane).
@@ -330,6 +354,19 @@ pub struct UsageTokens {
     /// Output tokens.
     #[serde(default, deserialize_with = "lenient_i64")]
     pub output: Option<i64>,
+    /// Billed **AI Credits**, the harness's own figure. Absent decodes as
+    /// `None` (unknown) — a missing bill is never a zero bill.
+    #[serde(default)]
+    pub credits: Option<f64>,
+    /// Premium requests billed. Absent decodes as `None` (unknown).
+    #[serde(default)]
+    pub premium_requests: Option<f64>,
+    /// Cache-read tokens billed. Absent decodes as `None` (unknown).
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub cache_read: Option<i64>,
+    /// Cache-write tokens billed. Absent decodes as `None` (unknown).
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub cache_write: Option<i64>,
 }
 
 /// One recorded commit.

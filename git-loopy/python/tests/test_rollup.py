@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from git_loopy.denomination import ListPriceDenomination
 from git_loopy.pricing import ModelPricing, Pricing
 from git_loopy.rollup import IterationRollupAccumulator
@@ -25,6 +27,11 @@ def _pricing() -> Pricing:
             )
         }
     )
+
+
+def _denomination() -> ListPriceDenomination:
+    """The estimate this ticket leaves untouched; billing is read, not priced."""
+    return ListPriceDenomination(pricing=_pricing())
 
 
 def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:
@@ -96,6 +103,10 @@ def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:
             "tokens_out": 50,
             "observed_tokens": 150,
             "cost_usd": 0.0002,
+            "credits": None,
+            "premium_requests": None,
+            "cache_read": None,
+            "cache_write": None,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -123,6 +134,10 @@ def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:
                     "model": "test-model",
                     "tokens_in": 100,
                     "tokens_out": 50,
+                    "credits": None,
+                    "premium_requests": None,
+                    "cache_read": None,
+                    "cache_write": None,
                 },
                 "cost_usd": 0.0002,
                 "peak_context_window": {
@@ -243,6 +258,10 @@ def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> N
         "model": "test-model",
         "tokens_in": 25,
         "tokens_out": 5,
+        "credits": None,
+        "premium_requests": None,
+        "cache_read": None,
+        "cache_write": None,
     }
 
 
@@ -351,6 +370,10 @@ def test_empty_rollup_normalizes_to_no_progress() -> None:
             "tokens_out": 0,
             "observed_tokens": 0,
             "cost_usd": None,
+            "credits": None,
+            "premium_requests": None,
+            "cache_read": None,
+            "cache_write": None,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -386,3 +409,129 @@ def test_outer_abort_or_gone_marks_unclosed_issue_contribution() -> None:
         assert payload["issues"][0]["status"] == outcome
         assert payload["issues"][0]["closed_at"] is None
         assert payload["issues"][0]["issue_elapsed_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# Billed Consumption (#329)
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_carries_billed_consumption_per_iteration_and_per_issue() -> None:
+    """The harness's billed figures reach the rollup payload, additively.
+
+    Two samples with the replay's real figures, one issue: the Iteration summary
+    and the issue's Consumption must agree by construction, because both total
+    the same ``UsageTally``.
+    """
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "iter": 1,
+            "issue": 329,
+            "activated_at": "2026-08-02T00:00:00.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    for credits, premium, c_read, c_write in (
+        (3.33385, 1.0, 0, 13309),
+        (0.33858, 1.0, 13309, 76),
+    ):
+        rollup.observe(
+            {
+                "type": "usage.tokens",
+                "iter": 1,
+                "model": "gpt-5.6-terra",
+                "input": 13312,
+                "output": 5,
+                "credits": credits,
+                "premium_requests": premium,
+                "cache_read": c_read,
+                "cache_write": c_write,
+            }
+        )
+    payload = rollup.finish(iter_num=1, strikes=0, outcome="ok")
+
+    summary = payload["summary"]
+    assert summary["credits"] == pytest.approx(3.67243)
+    assert summary["premium_requests"] == pytest.approx(2.0)
+    assert summary["cache_read"] == 13309
+    assert summary["cache_write"] == 13385
+    # The harness-reported model rides verbatim in Consumption.
+    assert summary["model"] == "gpt-5.6-terra"
+
+    consumption = payload["issues"][0]["consumption"]
+    assert consumption["credits"] == pytest.approx(3.67243)
+    assert consumption["premium_requests"] == pytest.approx(2.0)
+    assert consumption["cache_read"] == 13309
+    assert consumption["cache_write"] == 13385
+
+
+def test_rollup_reports_billing_it_never_saw_as_unknown_not_zero() -> None:
+    """An Orchestrator with no billing telemetry publishes ``null``, never ``0``.
+
+    ``null`` is the fixture's pinned *unknown*; a zero would read as a free
+    Iteration, which is the collapse this arc exists to end.
+    """
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "gpt-5.6-terra",
+            "input": 10,
+            "output": 5,
+        }
+    )
+    summary = rollup.finish(iter_num=1, strikes=0, outcome="ok")["summary"]
+
+    assert summary["credits"] is None
+    assert summary["premium_requests"] is None
+    assert summary["cache_read"] is None
+    assert summary["cache_write"] is None
+    assert summary["tokens_in"] == 10
+
+
+def test_rollup_never_sums_a_subagent_s_self_reported_totals() -> None:
+    """Only ``usage.tokens`` feeds Consumption (ADR-0022).
+
+    A **Subagent**'s own totals arrive on their own event; the parent stream's
+    harness-reported billing stays the sole source of Consumption, so a fan-out
+    can never be counted twice.
+    """
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "gpt-5.6-terra",
+            "input": 10,
+            "output": 5,
+            "credits": 1.5,
+            "premium_requests": 1.0,
+            "cache_read": 0,
+            "cache_write": 0,
+        }
+    )
+    rollup.observe(
+        {
+            "type": "subagent.completed",
+            "iter": 1,
+            "model": "claude-haiku-4.5",
+            "input": 9_000,
+            "output": 900,
+            "credits": 99.0,
+            "premium_requests": 7.0,
+            "cache_read": 5_000,
+            "cache_write": 5_000,
+        }
+    )
+    summary = rollup.finish(iter_num=1, strikes=0, outcome="ok")["summary"]
+
+    assert summary["credits"] == pytest.approx(1.5)
+    assert summary["premium_requests"] == pytest.approx(1.0)
+    assert summary["tokens_in"] == 10
+    assert summary["model"] == "gpt-5.6-terra"

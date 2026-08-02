@@ -40,6 +40,7 @@ optional ``[tui]`` extra is importable. The pure model lives in
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING, Callable
 
 from rich.text import Text
@@ -61,7 +62,10 @@ from git_loopy.interactive.state import (
     log_line_views,
     queue_rows,
 )
-from git_loopy.interactive.view_model import project_run_view
+from git_loopy.interactive.view_model import (
+    credits_denomination_for,
+    project_run_view,
+)
 from git_loopy.denomination import CostDenomination
 
 if TYPE_CHECKING:
@@ -128,6 +132,37 @@ def _format_queue_cost(
     return f"${cost:.4f}" if cost is not None else "—"
 
 
+def _format_queue_credits(
+    usage: UsageTally, denomination: CostDenomination | None
+) -> str:
+    """Render a Queue row's billed **AI Credits** cell (#329).
+
+    Unlike the estimate beside it there is no normalized-versus-live split to
+    make: a finalized contribution folded the producer's own billed figures into
+    the very tally this reads, so one path serves both. An unknown figure is the
+    em dash — never a zero, and never a figure derived from tokens.
+    """
+    if denomination is None:
+        return "—"
+    credits = denomination.cost(usage)
+    return f"{credits:.4f}" if credits is not None else "—"
+
+
+def _format_premium_requests(value: Decimal | float | None) -> str:
+    """Render a billed premium-request count, or the unknown em dash (#329).
+
+    Whole counts lose the decimal point — one premium request per call is the
+    ordinary case — while a fractional multiplier keeps two places rather than
+    rounding into a wrong whole number.
+    """
+    if value is None:
+        return "—"
+    count = Decimal(str(value))
+    if count == count.to_integral_value():
+        return f"{count.to_integral_value():f}"
+    return f"{count:.2f}"
+
+
 def _format_optional_tokens(value: int | None) -> str:
     """Render a token counter, or the unknown em dash when unavailable."""
     return f"{value:,}" if value is not None else "—"
@@ -152,6 +187,8 @@ class _Dashboard(Vertical):
         table.add_column("Iters", key="iters")
         table.add_column("Tokens in", key="tokens_in")
         table.add_column("Tokens out", key="tokens_out")
+        table.add_column("Credits", key="credits")
+        table.add_column("Premium", key="premium_requests")
         table.add_column("Cost", key="cost")
 
 
@@ -253,6 +290,8 @@ class _IterationBreakdown(DataTable):
         self.add_column("Active", key="active")
         self.add_column("Tokens in", key="tokens_in")
         self.add_column("Tokens out", key="tokens_out")
+        self.add_column("Credits", key="credits")
+        self.add_column("Premium", key="premium_requests")
         self.add_column("Cost", key="cost")
         self.add_column("Peak Context fill", key="peak_context")
 
@@ -563,6 +602,7 @@ class GitLoopyApp(App[None]):
         # construction. ``None`` (no summary attached) renders the em dash, the
         # same unknown treatment as an unpriceable model.
         denomination = getattr(self._summary, "denomination", None)
+        credits_denomination = credits_denomination_for(self._summary)
         new_refs = [str(row.ref) for row in rows]
         if new_refs != self._displayed_refs:
             saved = self._cursor_ref(table)
@@ -577,6 +617,8 @@ class GitLoopyApp(App[None]):
                     str(row.iteration_count),
                     f"{row.usage.tokens_in:,}" if row.usage_observed else "—",
                     f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
+                    _format_queue_credits(row.usage, credits_denomination),
+                    _format_premium_requests(row.usage.premium_requests),
                     _format_queue_cost(
                         row.usage,
                         denomination,
@@ -606,6 +648,16 @@ class GitLoopyApp(App[None]):
                     key,
                     "tokens_out",
                     f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
+                )
+                table.update_cell(
+                    key,
+                    "credits",
+                    _format_queue_credits(row.usage, credits_denomination),
+                )
+                table.update_cell(
+                    key,
+                    "premium_requests",
+                    _format_premium_requests(row.usage.premium_requests),
                 )
                 table.update_cell(
                     key,
@@ -670,6 +722,12 @@ class GitLoopyApp(App[None]):
                 format_duration(contribution["active_seconds"]),
                 _format_optional_tokens(contribution["consumption"]["tokens_in"]),
                 _format_optional_tokens(contribution["consumption"]["tokens_out"]),
+                (
+                    f"{contribution['credits']:.4f}"
+                    if contribution["credits"] is not None
+                    else "—"
+                ),
+                _format_premium_requests(contribution["premium_requests"]),
                 (
                     f"${contribution['cost_usd']:.4f}"
                     if contribution["cost_usd"] is not None

@@ -46,7 +46,7 @@ from git_loopy.pricing import Pricing, estimate_cost
 from git_loopy.usage import UsageTally
 
 
-__all__ = ["CostDenomination", "ListPriceDenomination"]
+__all__ = ["BilledCreditsDenomination", "CostDenomination", "ListPriceDenomination"]
 
 
 @runtime_checkable
@@ -101,3 +101,34 @@ class ListPriceDenomination:
         return estimate_cost(
             usage.model, usage.tokens_in, usage.tokens_out, self.pricing
         )
+
+
+@dataclass(frozen=True)
+class BilledCreditsDenomination:
+    """Denominate Cost in the **AI Credits** the harness reported billing.
+
+    The primary, un-derived figure (ADR-0026): it is what the telemetry reports
+    and what the quota is drawn against, so the number closest to the telemetry
+    is the number the operator sees first.
+
+    There is nothing to configure — the harness authors both the prices and the
+    arithmetic, and git-loopy never recomputes a figure it has already billed.
+    The adapter exists so Credits reach the **Summary**, the **Queue** and the
+    per-issue **Iteration breakdown** through the same one seam the estimate
+    reaches them by, which is what stops those surfaces disagreeing about what an
+    issue cost while the estimate is retired (#330).
+    """
+
+    @property
+    def provenance(self) -> Optional[str]:
+        """Names the harness as the author, since it is no longer an estimate."""
+        return "billed AI Credits, reported by the harness"
+
+    def cost(self, usage: UsageTally) -> Optional[Decimal]:
+        """The billed Credits, or ``None`` when the harness reported none.
+
+        Never falls back to tokens and a price. An absent billed figure is
+        unknown, and an estimate wearing a billed figure's clothes is the defect
+        this arc exists to remove.
+        """
+        return usage.credits

@@ -221,6 +221,8 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "0:00:04",
             "100",
             "50",
+            "—",
+            "—",
             "$0.0004",
             "12,000/32,000",
         ],
@@ -250,7 +252,7 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
         let drawn = cells(row);
         assert_eq!(
             &drawn[5..],
-            ["—", "—", "—", "—"],
+            ["—", "—", "—", "—", "—", "—"],
             "an unavailable measurement never renders as an observed zero"
         );
     }

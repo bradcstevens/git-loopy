@@ -176,6 +176,8 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "Iters",
             "Tokens in",
             "Tokens out",
+            "Credits",
+            "Premium",
             "Cost",
         ],
         "the locked Queue columns, in the locked order"
@@ -191,6 +193,8 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "1",
             "100",
             "50",
+            "—",
+            "—",
             "$0.0004",
         ],
     );
@@ -206,7 +210,7 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     // queued, so it precedes the closed #7 even though #7 was seen first.
     assert_eq!(
         cells(&queue[1]),
-        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "—"],
+        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "—", "—", "—"],
         "an Orchestrator that cannot measure Consumption never renders a zero"
     );
     assert_eq!(
@@ -218,6 +222,8 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
             "0:00:48",
             "5:30:50 AM",
             "2",
+            "—",
+            "—",
             "—",
             "—",
             "—",
@@ -489,6 +495,8 @@ fn end_of_input_draws_a_final_frame_and_hands_the_terminal_back() {
             "1",
             "100",
             "50",
+            "—",
+            "—",
             "$0.0004",
         ],
         "the final frame is the whole terminal Run, not the last delta"

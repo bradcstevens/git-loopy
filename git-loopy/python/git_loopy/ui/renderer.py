@@ -69,6 +69,8 @@ from git_loopy.events import (
     WRAPPER_STRIKE,
 )
 
+from git_loopy.usage import BillingSample
+
 from .console import STYLES
 from .summary import RunSummary
 
@@ -586,6 +588,7 @@ class Renderer:
             model=model if isinstance(model, str) else None,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            billing=BillingSample.from_event(event),
         )
         # No live ticker — accumulated silently. The frozen iteration
         # Panel surfaces the totals at iteration end.

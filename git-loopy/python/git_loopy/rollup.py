@@ -6,8 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from git_loopy.denomination import CostDenomination
-from git_loopy.usage import UsageTally
+from git_loopy.denomination import BilledCreditsDenomination, CostDenomination
+from git_loopy.usage import BillingSample, UsageTally
 
 __all__ = ["IterationRollupAccumulator"]
 
@@ -18,6 +18,11 @@ _USAGE_CONTEXT_WINDOW = "usage.context_window"
 _TOOL_CALL = "tool.call"
 _COMMIT_RECORDED = "wrapper.commit.recorded"
 _AUTO_CLOSE = "wrapper.auto_close"
+
+#: Credits reach the payload through the same seam the estimate does (#328), so
+#: the rollup, the Summary and the Queue cannot disagree about what an issue
+#: cost. The adapter is stateless, which is why one instance serves the module.
+_BILLED_CREDITS = BilledCreditsDenomination()
 _PR_ADVANCED = "wrapper.pr.advanced"
 _SKILL_PATH_PREFIX = ".copilot/skills/"
 _SKILL_PATH_SUFFIX = "/SKILL.md"
@@ -130,11 +135,12 @@ class IterationRollupAccumulator:
             model_name = str(model) if isinstance(model, str) and model else None
             tokens_in = _nonnegative_int(event.get("input"))
             tokens_out = _nonnegative_int(event.get("output"))
-            current.usage.add(model_name, tokens_in, tokens_out)
+            billing = BillingSample.from_event(event)
+            current.usage.add(model_name, tokens_in, tokens_out, billing)
             if contribution is not None:
-                contribution.usage.add(model_name, tokens_in, tokens_out)
+                contribution.usage.add(model_name, tokens_in, tokens_out, billing)
             elif event.get("lane_issue") is None:
-                current.pending_usage.add(model_name, tokens_in, tokens_out)
+                current.pending_usage.add(model_name, tokens_in, tokens_out, billing)
         elif event_type == _USAGE_CONTEXT_WINDOW:
             snapshot = _context_snapshot(event)
             if snapshot is not None:
@@ -221,6 +227,7 @@ class IterationRollupAccumulator:
                 "tokens_out": current.usage.tokens_out,
                 "observed_tokens": current.usage.total_tokens,
                 "cost_usd": _cost_value(current.usage, self._denomination),
+                **_billed_payload(current.usage),
                 "tool_count": current.tool_count,
                 "skill_call_count": current.skill_call_count,
                 "skills_consulted": sorted(current.skills_consulted),
@@ -289,6 +296,7 @@ class IterationRollupAccumulator:
                 "model": contribution.usage.model,
                 "tokens_in": contribution.usage.tokens_in,
                 "tokens_out": contribution.usage.tokens_out,
+                **_billed_payload(contribution.usage),
             },
             "cost_usd": _cost_value(contribution.usage, self._denomination),
             "peak_context_window": contribution.peak_context_window,
@@ -353,6 +361,25 @@ def _higher_peak_or_none(
 def _cost_value(usage: UsageTally, denomination: CostDenomination) -> float | None:
     cost = denomination.cost(usage)
     return float(cost) if cost is not None else None
+
+
+def _billed_payload(usage: UsageTally) -> dict[str, Any]:
+    """Project the harness's billed **Consumption** onto the rollup payload.
+
+    Every key is always present and ``None`` when unknown, which is the fixture's
+    pinned *unknown* (``value_semantics.unknown``). A zero here would say the
+    Iteration was free rather than that nobody reported what it cost.
+    """
+    return {
+        "credits": _cost_value(usage, _BILLED_CREDITS),
+        "premium_requests": (
+            float(usage.premium_requests)
+            if usage.premium_requests is not None
+            else None
+        ),
+        "cache_read": usage.cache_read,
+        "cache_write": usage.cache_write,
+    }
 
 
 def _argument_strings(value: Any) -> Iterator[str]:

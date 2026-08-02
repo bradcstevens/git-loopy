@@ -15,6 +15,8 @@ from git_loopy.interactive.state import (
     queue_rows,
 )
 
+from git_loopy.denomination import BilledCreditsDenomination
+
 if TYPE_CHECKING:
     from git_loopy.denomination import CostDenomination
     from git_loopy.ui.summary import IterationSnapshot, RunSummary
@@ -31,8 +33,28 @@ _QUEUE_COLUMNS = [
     "iteration_count",
     "tokens_in",
     "tokens_out",
+    "credits",
+    "premium_requests",
     "cost_usd",
 ]
+
+
+def credits_denomination_for(summary: RunSummary | None) -> CostDenomination:
+    """The seam a Run's billed **AI Credits** resolve through (#329).
+
+    One rule, shared by the renderer-neutral projection and the Dashboard's own
+    Queue, so the two cannot disagree about what an issue cost. Unlike the
+    list-price estimate beside it, a missing **Summary** does *not* cost the
+    figure: there is no per-Run price table that could be absent — the harness
+    already billed it and the tally already holds it, so the default adapter
+    reads it out. A Summary-shaped object that carries no denomination is the
+    same absence, so a Dashboard attached to one still renders rather than
+    raising on a missing attribute.
+    """
+    resolved = getattr(summary, "credits_denomination", None)
+    if resolved is not None:
+        return resolved
+    return BilledCreditsDenomination()
 
 
 def project_run_view(
@@ -42,12 +64,16 @@ def project_run_view(
     issue: int | str,
 ) -> dict[str, Any]:
     """Project one complete renderer-neutral Dashboard and issue drill-in."""
+    credits_denomination = credits_denomination_for(summary)
     return {
         "dashboard": {
             "header": _header(state),
             "queue": {
                 "columns": list(_QUEUE_COLUMNS),
-                "rows": [_queue_row(row) for row in queue_rows(state)],
+                "rows": [
+                    _queue_row(row, denomination=credits_denomination)
+                    for row in queue_rows(state)
+                ],
             },
             "activity": {
                 "issue": state.active_ref,
@@ -56,7 +82,11 @@ def project_run_view(
             "summary": {
                 "rows": (
                     [
-                        _summary_row(snapshot, denomination=summary.denomination)
+                        _summary_row(
+                            snapshot,
+                            denomination=summary.denomination,
+                            credits_denomination=credits_denomination,
+                        )
                         for snapshot in summary.completed
                     ]
                     if summary is not None
@@ -64,7 +94,7 @@ def project_run_view(
                 ),
             },
         },
-        "drill_in": _drill_in(state, issue),
+        "drill_in": _drill_in(state, issue, denomination=credits_denomination),
     }
 
 
@@ -119,7 +149,7 @@ def _context_fill(
     }
 
 
-def _queue_row(row: QueueRow) -> dict[str, Any]:
+def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, Any]:
     return {
         "issue": row.ref,
         "status": row.status,
@@ -129,6 +159,8 @@ def _queue_row(row: QueueRow) -> dict[str, Any]:
         "iteration_count": row.iteration_count,
         "tokens_in": row.usage.tokens_in if row.usage_observed else None,
         "tokens_out": row.usage.tokens_out if row.usage_observed else None,
+        "credits": _decimal_float(denomination.cost(row.usage)),
+        "premium_requests": _decimal_float(row.usage.premium_requests),
         "cost_usd": row.cost_usd,
     }
 
@@ -137,6 +169,7 @@ def _summary_row(
     snapshot: IterationSnapshot,
     *,
     denomination: CostDenomination,
+    credits_denomination: CostDenomination,
 ) -> dict[str, Any]:
     cost_value = snapshot.cost_usd(denomination)
     unavailable = snapshot.unavailable_measurements
@@ -155,6 +188,8 @@ def _summary_row(
         "tokens_in": observed("tokens_in", snapshot.tokens_in),
         "tokens_out": observed("tokens_out", snapshot.tokens_out),
         "observed_tokens": observed("observed_tokens", snapshot.context_used),
+        "credits": _decimal_float(snapshot.credits(credits_denomination)),
+        "premium_requests": _decimal_float(snapshot.premium_requests),
         "cost_usd": _decimal_float(cost_value),
         "tool_count": observed("tool_count", snapshot.tool_count),
         "skill_call_count": observed("skill_call_count", snapshot.skill_count),
@@ -169,7 +204,9 @@ def _summary_row(
     }
 
 
-def _drill_in(state: LiveRunState, issue: int | str) -> dict[str, Any]:
+def _drill_in(
+    state: LiveRunState, issue: int | str, *, denomination: CostDenomination
+) -> dict[str, Any]:
     detail = issue_detail(state, issue)
     return {
         "detail_header": {
@@ -183,7 +220,7 @@ def _drill_in(state: LiveRunState, issue: int | str) -> dict[str, Any]:
         },
         "iteration_breakdown": {
             "rows": [
-                _contribution_row(contribution)
+                _contribution_row(contribution, denomination=denomination)
                 for contribution in detail.contributions
             ],
         },
@@ -194,7 +231,9 @@ def _drill_in(state: LiveRunState, issue: int | str) -> dict[str, Any]:
     }
 
 
-def _contribution_row(contribution: IssueContribution) -> dict[str, Any]:
+def _contribution_row(
+    contribution: IssueContribution, *, denomination: CostDenomination
+) -> dict[str, Any]:
     peak = contribution.peak_context_window
     return {
         "kind": contribution.kind,
@@ -212,7 +251,13 @@ def _contribution_row(contribution: IssueContribution) -> dict[str, Any]:
             "tokens_out": (
                 contribution.usage.tokens_out if contribution.usage_observed else None
             ),
+            # Recorded here rather than given a column: #333 surfaces the split
+            # in the Iteration breakdown, on the figures this ticket records.
+            "cache_read": contribution.usage.cache_read,
+            "cache_write": contribution.usage.cache_write,
         },
+        "credits": _decimal_float(denomination.cost(contribution.usage)),
+        "premium_requests": _decimal_float(contribution.usage.premium_requests),
         "cost_usd": contribution.cost_usd,
         "peak_context_window": (
             {
