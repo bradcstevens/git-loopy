@@ -178,6 +178,13 @@ _COVERAGE_UNCERTAINTY_CODES = frozenset(
         "revision_fork",
     }
 )
+#: Every diagnostic code that makes the *coverage* untrustworthy rather than one
+#: Action. Public because a Run that freezes a frontier has to apply the same
+#: rule §9 applies, and a second copy of this set is a second answer to "is this
+#: description of the project trustworthy?".
+GUIDANCE_FAULT_CODES = _COVERAGE_UNCERTAINTY_CODES | frozenset(
+    {"action_conflict", "prerequisite_cycle"}
+)
 # The complete `reconcile` diagnostic vocabulary for the whole Runner family.
 # Registered here and pinned by the shared Conformance fixture so a new code
 # lands as one deliberate contract change rather than a silent addition. Every
@@ -3271,9 +3278,7 @@ def _automation_projection(
     # one Action. It must still stop the Run: the frontier it froze is not a
     # trustworthy description of the project.
     guidance_fault = any(
-        diagnostic.get("code") in _COVERAGE_UNCERTAINTY_CODES
-        or diagnostic.get("code") in {"action_conflict", "prerequisite_cycle"}
-        for diagnostic in diagnostics
+        diagnostic.get("code") in GUIDANCE_FAULT_CODES for diagnostic in diagnostics
     )
 
     eligibility: list[dict[str, Any]] = []

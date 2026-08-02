@@ -400,6 +400,45 @@ def _dispatch_refs(dispatch: continuation_frontier.Dispatch) -> tuple[int | str,
     return tuple(refs)
 
 
+class _TriggerWatch:
+    """Notices the one safety-case trigger a Runner can observe by itself.
+
+    A `wrapper.ask_user.attempted` Event means a session that swore it needed no
+    human reached for one anyway. Every other trigger a case declares is about
+    the world the Instruction touches, which only the Performer can see --- this
+    watches the single one that surfaces as a Runner-owned Event.
+    """
+
+    def __init__(self) -> None:
+        self.reached_for_a_human = False
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        if event.get("type") == events_module.WRAPPER_ASK_USER_ATTEMPTED:
+            self.reached_for_a_human = True
+
+
+def _human_boundary_outcome(
+    dispatch: continuation_frontier.Dispatch,
+) -> continuation_frontier.DispatchOutcome:
+    """Turn an observed trigger into the record §9 quarantines the Action on.
+
+    The reason is `human-decision` and nothing narrower on purpose: the Runner
+    saw that a human was needed, not *which* kind of human boundary it was, and
+    inventing a more specific typed reason would put a guess into a durable
+    record. The carrier is the evidence because it is the durable artifact the
+    record is written against and the one a human already watches.
+    """
+    return continuation_frontier.DispatchOutcome(
+        outcome="safety-case-violation",
+        reason="human-decision",
+        summary=(
+            f"noninteractive Dispatch of an {dispatch.kind} Action "
+            "reached for a human decision"
+        ),
+        evidence=(dict(dispatch.carrier),),
+    )
+
+
 def _dispatch_prompt(dispatch: continuation_frontier.Dispatch) -> str:
     """Render the one Instruction this session runs, and nothing beyond it.
 
@@ -434,27 +473,38 @@ def _frontier_exit_code(
       `empty_pool` already means for a Pool Run.
     - `attention-required` --- a safety-case violation, an uncertain effect state
       or a guidance fault. Exit non-zero, like `stuck`.
-    - an ordinary execution failure --- no §9 stop at all, and still not success.
+    - the three Runner-owned refusals --- an ordinary execution failure, a lost
+      Dispatch record, an untrustworthy freeze. No §9 stop at all, and still not
+      success.
+
+    One repository is enough. Coverage is one Run, so a clean stop elsewhere never
+    hides the one a human has to look at.
     """
     attention = False
     for run in runs:
-        if run.execution_failed:
+        if not run.healthy:
             attention = True
-            diag.error(
-                "continuation frontier run for %s ended on an execution failure",
-                run.repository,
-            )
-            continue
         stop = run.stop or {}
-        if stop.get("disposition") == "attention-required":
-            attention = True
-        diag.info(
-            "continuation frontier run for %s stopped: %s (%d dispatched)",
+        diag.log(
+            logging.ERROR if not run.healthy else logging.INFO,
+            "continuation frontier run for %s stopped: %s (%d dispatched%s)",
             run.repository,
-            stop.get("reason", "unreported"),
+            stop.get("reason") or _frontier_refusal(run),
             len(run.dispatches),
+            ", evidence lost" if run.evidence_lost else "",
         )
     return exit_code_for("stuck" if attention else "empty_pool")
+
+
+def _frontier_refusal(run: continuation_frontier.FrontierRun) -> str:
+    """Name a Runner-owned refusal without borrowing a typed §9 reason for it."""
+    if run.coverage_fault:
+        return "runner-refusal/untrustworthy-freeze"
+    if run.evidence_lost:
+        return "runner-refusal/dispatch-evidence-not-recorded"
+    if run.execution_failed:
+        return "runner-refusal/execution-failed"
+    return "unreported"
 
 
 def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
@@ -1434,6 +1484,21 @@ class _Loop:
         after observing what this Dispatch did. There is no loop here for the same
         reason: the successor is chosen by the next Reconciliation, not by this
         session and not by this method.
+
+        `complete` claims exactly one thing: the session ran to the end without
+        raising. It does not claim the completion condition was met, and nothing
+        downstream reads it as that claim --- the next Reconciliation re-derives
+        readiness and currency from the tracker, so an Action whose condition did
+        not hold is described by §9 rather than by this return value.
+
+        One safety-case trigger *is* enforced here, because one is observable
+        without the Performer's cooperation: a session that reaches for
+        `ask_user` has contradicted the case that called the Action AFK-safe, so
+        the Dispatch ends as a `safety-case-violation` and becomes durable
+        evidence. `uncertain-effect-state`, and every trigger about the world the
+        Instruction touches, still need the Performer to say so; until it does,
+        such a boundary reaches a human through the unmet completion condition on
+        the next Reconciliation rather than through a record.
         """
         binding = self._new_active_issue_binding(
             iter_num, allowed_refs=_dispatch_refs(dispatch)
@@ -1441,6 +1506,11 @@ class _Loop:
         prompt = _dispatch_prompt(dispatch)
         send_timeout = self._config.send_timeout_seconds
         failure: str | None = None
+        # Joined to the Run's own accounting rather than substituted for it: the
+        # Consumption meter and the Summary rollup read this same stream, and a
+        # Dispatch they never saw is a Dispatch nobody bills.
+        watch = _TriggerWatch()
+        observer = _ChainedObserver(observers=(self._session_observer, watch))
         with telemetry.span("git_loopy.session"):
             try:
                 async with IterationSession(
@@ -1454,7 +1524,7 @@ class _Loop:
                     reasoning_effort=self._config.reasoning_effort,
                     issue_binding=binding,
                     skill_exposure=self._skill_exposure,
-                    event_observer=self._session_observer,
+                    event_observer=observer,
                 ) as sdk_session:
                     try:
                         await sdk_session.send_and_wait(prompt, timeout=send_timeout)
@@ -1464,6 +1534,16 @@ class _Loop:
                         failure = f"{type(exc).__name__}: {exc}"
             except Exception as exc:  # noqa: BLE001 - reported as failure
                 failure = f"session lifecycle failed: {type(exc).__name__}: {exc}"
+        if watch.reached_for_a_human:
+            # Ranked above `failure` deliberately. A session that asked for a
+            # human and *then* fell over still contradicted its safety case, and
+            # reporting the later failure would downgrade the one outcome that
+            # becomes durable evidence into an ordinary retryable one.
+            self._diag.warning(
+                "continuation dispatch %s reached for a human decision",
+                dispatch.action_identity,
+            )
+            return _human_boundary_outcome(dispatch)
         if failure is not None:
             # An ordinary Runner failure, not a Continuation boundary: it never
             # becomes durable Dispatch evidence and never earns a typed §9 stop.

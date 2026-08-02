@@ -42,6 +42,11 @@ GIT_LOOPY_POOL_JSON='[]'
 GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
 # Tri-state interactive request: "on", "off", or empty for "no flag given".
 GIT_LOOPY_INTERACTIVE_FLAG=""
+# Continuation authority is collected as three uncombined sources and resolved
+# by the native Continuation module during preflight. An empty value preserves
+# the pre-Continuation Pool lifecycle byte-for-byte.
+GIT_LOOPY_CONTINUATION_SOURCES_JSON='[]'
+GIT_LOOPY_CONTINUATION_AUTHORITY_JSON=''
 
 git_loopy_usage() {
   cat <<'EOF'
@@ -272,6 +277,253 @@ git_loopy_detect_skill_policy_surfaces() {
   done
 
   return 0
+}
+
+# Read a top-level Continuation key from the limited TOML surface this
+# Orchestrator supports. Continuation settings are scalar strings or arrays of
+# strings written by the shared config writer; tables are deliberately ignored.
+_git_loopy_continuation_toml_value() {
+  local path="$1" key="$2"
+  [[ -f "$path" && -r "$path" ]] || return 1
+
+  local line trimmed in_table=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(_git_loopy_trim "$line")"
+    [[ -n "$trimmed" && "${trimmed:0:1}" != "#" ]] || continue
+    if [[ "$trimmed" == \[* ]]; then
+      in_table=1
+      continue
+    fi
+    ((in_table == 0)) || continue
+    if [[ "$trimmed" =~ ^$key[[:space:]]*=(.*)$ ]]; then
+      _git_loopy_trim "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <"$path"
+  return 1
+}
+
+_git_loopy_continuation_toml_string() {
+  local raw
+  raw="$(_git_loopy_trim "$1")"
+  if [[ "$raw" =~ ^\".*\"$ ]]; then
+    jq -er 'if type == "string" then . else empty end' <<<"$raw"
+    return
+  fi
+  if [[ "$raw" =~ ^\'(.*)\'$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return
+  fi
+  printf 'git-loopy: Continuation configuration must be a quoted string.\n' >&2
+  return 1
+}
+
+_git_loopy_continuation_toml_string_array() {
+  local raw
+  raw="$(_git_loopy_trim "$1")"
+  jq -ce '
+    if type == "array" and all(.[]; type == "string") then . else empty end
+  ' <<<"$raw" || {
+    printf 'git-loopy: Continuation configuration must be an array of strings.\n' >&2
+    return 1
+  }
+}
+
+_git_loopy_continuation_csv_array() {
+  local raw="${1:-}"
+  local -a values=()
+  local value
+  IFS=',' read -r -a values <<<"$raw"
+  local -a trimmed=()
+  for value in "${values[@]}"; do
+    value="$(_git_loopy_trim "$value")"
+    [[ -n "$value" ]] && trimmed+=("$value")
+  done
+  _git_loopy_string_array_json "${trimmed[@]}"
+}
+
+_git_loopy_continuation_source_from_toml() {
+  local source="$1" path="$2"
+  local raw mode
+  if ! raw="$(_git_loopy_continuation_toml_value "$path" continuation_mode)"; then
+    printf ''
+    return 0
+  fi
+  mode="$(_git_loopy_continuation_toml_string "$raw")" || return 1
+
+  local actor_json='null'
+  if raw="$(_git_loopy_continuation_toml_value "$path" continuation_actor)"; then
+    local actor
+    actor="$(_git_loopy_continuation_toml_string "$raw")" || return 1
+    actor_json="$(jq -cn --arg actor "$actor" '$actor')" || return 1
+  fi
+
+  local field values
+  local -a arrays=()
+  for field in trusted_producers maintainers repositories targets \
+    action_kinds instruction_modes effect_scopes; do
+    if raw="$(_git_loopy_continuation_toml_value \
+      "$path" "continuation_$field")"; then
+      values="$(_git_loopy_continuation_toml_string_array "$raw")" || return 1
+    else
+      values='[]'
+    fi
+    arrays+=("$values")
+  done
+
+  jq -cn \
+    --arg source "$source" \
+    --arg mode "$mode" \
+    --argjson actor "$actor_json" \
+    --argjson trusted_producers "${arrays[0]}" \
+    --argjson maintainers "${arrays[1]}" \
+    --argjson repositories "${arrays[2]}" \
+    --argjson targets "${arrays[3]}" \
+    --argjson action_kinds "${arrays[4]}" \
+    --argjson instruction_modes "${arrays[5]}" \
+    --argjson effect_scopes "${arrays[6]}" \
+    '{
+      source: $source,
+      mode: $mode,
+      trusted_producers: $trusted_producers,
+      ceilings: {
+        repositories: $repositories,
+        targets: $targets,
+        action_kinds: $action_kinds,
+        instruction_modes: $instruction_modes,
+        effect_scopes: $effect_scopes
+      }
+    }
+    + (if $actor == null then {} else {actor: $actor} end)
+    + (if $maintainers == [] then {} else {maintainers: $maintainers} end)'
+}
+
+_git_loopy_continuation_source_from_environment() {
+  local mode
+  mode="$(_git_loopy_trim "${GIT_LOOPY_CONTINUATION_MODE:-}")"
+  [[ -n "$mode" ]] || {
+    printf ''
+    return 0
+  }
+
+  local actor_json='null'
+  local actor
+  actor="$(_git_loopy_trim "${GIT_LOOPY_CONTINUATION_ACTOR:-}")"
+  [[ -z "$actor" ]] ||
+    actor_json="$(jq -cn --arg actor "$actor" '$actor')" || return 1
+
+  local field env_name values
+  local -a arrays=()
+  for field in trusted_producers maintainers repositories targets \
+    action_kinds instruction_modes effect_scopes; do
+    env_name="GIT_LOOPY_CONTINUATION_${field^^}"
+    values="$(_git_loopy_continuation_csv_array "${!env_name:-}")" || return 1
+    arrays+=("$values")
+  done
+
+  jq -cn \
+    --argjson actor "$actor_json" \
+    --arg mode "$mode" \
+    --argjson trusted_producers "${arrays[0]}" \
+    --argjson maintainers "${arrays[1]}" \
+    --argjson repositories "${arrays[2]}" \
+    --argjson targets "${arrays[3]}" \
+    --argjson action_kinds "${arrays[4]}" \
+    --argjson instruction_modes "${arrays[5]}" \
+    --argjson effect_scopes "${arrays[6]}" \
+    '{
+      source: "runtime",
+      mode: $mode,
+      trusted_producers: $trusted_producers,
+      ceilings: {
+        repositories: $repositories,
+        targets: $targets,
+        action_kinds: $action_kinds,
+        instruction_modes: $instruction_modes,
+        effect_scopes: $effect_scopes
+      }
+    }
+    + (if $actor == null then {} else {actor: $actor} end)
+    + (if $maintainers == [] then {} else {maintainers: $maintainers} end)'
+}
+
+git_loopy_collect_continuation_sources() {
+  local repo_root="$1"
+  local config_home global_path project_path source
+  config_home="$(_git_loopy_config_home)"
+  global_path="${config_home:+$config_home/git-loopy/config.toml}"
+  project_path="$repo_root/git-loopy/config.toml"
+  local -a sources=()
+
+  if source="$(_git_loopy_continuation_source_from_toml global "$global_path")"; then
+    [[ -z "$source" ]] || sources+=("$source")
+  else
+    return 1
+  fi
+  if source="$(_git_loopy_continuation_source_from_toml project "$project_path")"; then
+    [[ -z "$source" ]] || sources+=("$source")
+  else
+    return 1
+  fi
+  if source="$(_git_loopy_continuation_source_from_environment)"; then
+    [[ -z "$source" ]] || sources+=("$source")
+  else
+    return 1
+  fi
+
+  GIT_LOOPY_CONTINUATION_SOURCES_JSON="$(
+    _git_loopy_json_object_array "${sources[@]}"
+  )" || return 1
+}
+
+git_loopy_resolve_continuation_authority() {
+  local repo_root="$1"
+  GIT_LOOPY_CONTINUATION_AUTHORITY_JSON=''
+  git_loopy_collect_continuation_sources "$repo_root" || return 1
+  [[ "$(jq -r 'length' <<<"$GIT_LOOPY_CONTINUATION_SOURCES_JSON")" != "0" ]] ||
+    return 0
+
+  local request response
+  request="$(jq -cn --argjson sources "$GIT_LOOPY_CONTINUATION_SOURCES_JSON" \
+    '{sources: $sources}')" || return 1
+  response="$(_git_loopy_continuation_resolve_authority "$request")" ||
+    return 1
+  GIT_LOOPY_CONTINUATION_AUTHORITY_JSON="$(
+    jq -ce '.result' <<<"$response"
+  )" || return 1
+}
+
+git_loopy_prepare_continuation_frontier() {
+  [[ -n "$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON" ]] || return 0
+  local mode
+  mode="$(jq -r '.mode' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON")" ||
+    return 1
+  [[ "$mode" == "execute-frontier" ]] || return 0
+
+  [[ -n "$(jq -r '.actor // ""' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON")" ]] || {
+    printf '%s\n' \
+      'git-loopy: continuation mode execute-frontier requires a configured actor.' \
+      >&2
+    return 1
+  }
+  local axis
+  for axis in action_kinds targets; do
+    if [[ "$(jq -r --arg axis "$axis" '.ceilings[$axis] | length' \
+      <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON")" != "0" ]]; then
+      printf 'git-loopy: continuation ceiling %s cannot be enforced by the shell Orchestrator.\n' \
+        "$axis" >&2
+      return 1
+    fi
+  done
+  if ! jq -e '
+    (.ceilings.instruction_modes | length == 0)
+    or (.ceilings.instruction_modes | index("skill") != null)
+  ' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON" >/dev/null; then
+    printf '%s\n' \
+      'git-loopy: continuation ceiling instruction_modes excludes every Instruction mode this distribution handles.' \
+      >&2
+    return 1
+  fi
 }
 
 git_loopy_resolve_config() {
@@ -801,6 +1053,8 @@ git_loopy_preflight() {
     printf 'git-loopy: jq is required by the shell Orchestrator.\n' >&2
     return 1
   }
+  git_loopy_resolve_continuation_authority "$repo_root" || return 1
+  git_loopy_prepare_continuation_frontier || return 1
   git_loopy_assert_parallel_supported || return 1
   command -v copilot >/dev/null 2>&1 || {
     printf 'git-loopy: copilot is required on PATH.\n' >&2
@@ -1934,6 +2188,446 @@ git_loopy_ensure_gitignore_entry() {
   printf '.git-loopy/\n' >>"$gitignore"
 }
 
+# ---------------------------------------------------------------------------
+# Serial execute-frontier Continuation lifecycle
+#
+# The native Continuation module remains the authority for Reconciliation and
+# Automation projection. This layer freezes its first read, binds one returned
+# authorization to one noninteractive Copilot process, and asks the native
+# module again before deciding whether anything else may run.
+# ---------------------------------------------------------------------------
+
+_git_loopy_frontier_reconcile() {
+  local request="$1" response
+  response="$(_git_loopy_continuation_reconcile "$request")" || return 1
+  jq -ce '.result' <<<"$response"
+}
+
+_git_loopy_frontier_in_coverage_actions() {
+  local actions="$1" repositories="$2"
+  jq -ce --argjson repositories "$repositories" '
+    [
+      .[]
+      | select(
+          (
+            [
+              (.workstream_anchor.repository // empty),
+              (.target.repository // empty)
+            ] - $repositories
+            | length
+          ) == 0
+        )
+    ]
+  ' <<<"$actions"
+}
+
+_git_loopy_frontier_freeze() {
+  local result="$1" repositories="$2"
+  local actions covered
+  actions="$(jq -ce '.actions' <<<"$result")" || return 1
+  covered="$(_git_loopy_frontier_in_coverage_actions "$actions" "$repositories")" ||
+    return 1
+  jq -ce '[.[] | {identity, semantic_fingerprint}]' <<<"$covered"
+}
+
+_git_loopy_frontier_grants() {
+  local result="$1" repositories="$2" effect_kinds="$3"
+  local actions covered
+  actions="$(jq -ce '.actions' <<<"$result")" || return 1
+  covered="$(_git_loopy_frontier_in_coverage_actions "$actions" "$repositories")" ||
+    return 1
+  jq -ce --argjson effect_kinds "$effect_kinds" '
+    [
+      .[]
+      | (.safety_case.effects // [])[]
+      | select(.kind as $kind | $effect_kinds | index($kind) != null)
+      | {kind, scope}
+    ]
+    | unique_by([.kind, .scope])
+    | sort_by(.kind, .scope)
+  ' <<<"$covered"
+}
+
+_git_loopy_frontier_satisfied_requirements() {
+  local result="$1" repositories="$2" effect_kinds="$3"
+  local actions covered
+  actions="$(jq -ce '.actions' <<<"$result")" || return 1
+  covered="$(_git_loopy_frontier_in_coverage_actions "$actions" "$repositories")" ||
+    return 1
+  jq -ce --argjson effect_kinds "$effect_kinds" '
+    (
+      [$effect_kinds[] | {kind: "access", name: .}]
+      + [
+          .[]
+          | (.safety_case.requirements // [])[]
+          | select(.kind == "skill")
+          | {kind, name}
+        ]
+    )
+    | unique_by([.kind, .name])
+    | sort_by(.kind, .name)
+  ' <<<"$covered"
+}
+
+_git_loopy_frontier_request() {
+  local repository="$1" frontier="$2" grants="$3" dispatched="$4" prior="$5"
+  local satisfied="$6"
+  local authority="$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON"
+  jq -cn \
+    --arg repository "$repository" \
+    --arg performer "$(jq -r '.actor' <<<"$authority")" \
+    --argjson repositories "$(jq -c '.ceilings.repositories' <<<"$authority")" \
+    --argjson trusted_producers "$(jq -c '.trusted_producers' <<<"$authority")" \
+    --argjson frontier "$frontier" \
+    --argjson grants "$grants" \
+    --argjson dispatched "$dispatched" \
+    --argjson prior "$prior" \
+    --argjson satisfied "$satisfied" \
+    '{
+      repository: $repository,
+      trusted_producers: $trusted_producers,
+      automation: {
+        performer: {
+          id: $performer,
+          posture: {
+            noninteractive: true,
+            satisfied_requirements: $satisfied,
+            instruction_modes: ["skill"]
+          }
+        },
+        scope: {
+          ceilings: [{
+            source: "project",
+            coverage: {repositories: $repositories},
+            grants: $grants,
+            denials: []
+          }],
+          revocations: []
+        },
+        frontier: {actions: $frontier},
+        dispatched: $dispatched
+      }
+    }
+    | if $prior == null then .
+      else .automation.scope.prior = {
+        coverage: $prior.coverage,
+        grants: $prior.grants,
+        denials: $prior.denials
+      }
+      end'
+}
+
+_git_loopy_frontier_bind_dispatch() {
+  local result="$1" repository="$2"
+  jq -ce --arg repository "$repository" '
+    .automation.authorization as $authorization
+    | (.actions
+       | map(select(.identity == $authorization.action_identity))
+       | first) as $action
+    | if $action == null then
+        error("authorized Action is absent from the Reconciliation")
+      else
+        {
+          repository: $repository,
+          action_identity: $authorization.action_identity,
+          semantic_fingerprint: $authorization.semantic_fingerprint,
+          performer: $authorization.performer,
+          kind: ($action.kind // ""),
+          instruction: $action.instruction,
+          workstream_anchor: $authorization.workstream_anchor,
+          target: $authorization.target,
+          carrier: ($action.producer.carrier // $authorization.workstream_anchor),
+          safety_case_version: $authorization.safety_case_version,
+          completion_condition: $authorization.completion_condition,
+          effects: $authorization.effects,
+          requirements: $authorization.requirements,
+          retry: $authorization.retry,
+          triggers: $authorization.triggers
+        }
+      end
+  ' <<<"$result"
+}
+
+_git_loopy_frontier_emit_dispatch_started() {
+  local dispatch="$1" index="$2" payload
+  payload="$(
+    jq -cn --argjson dispatch "$dispatch" --argjson index "$index" '
+      {
+        mode: "execute-frontier",
+        repository: $dispatch.repository,
+        performer: $dispatch.performer,
+        dispatch_index: $index,
+        action_identity: $dispatch.action_identity,
+        semantic_fingerprint: $dispatch.semantic_fingerprint,
+        kind: $dispatch.kind,
+        instruction_mode: ($dispatch.instruction.mode // ""),
+        safety_case_version: $dispatch.safety_case_version,
+        retry: ($dispatch.retry.kind // ""),
+        effects: $dispatch.effects,
+        requirements: $dispatch.requirements,
+        triggers: [$dispatch.triggers[] | .kind],
+        target: $dispatch.target,
+        workstream_anchor: $dispatch.workstream_anchor,
+        noninteractive: true
+      }
+    '
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_CONTINUATION_DISPATCH_STARTED]}" \
+    "null" "$payload"
+}
+
+_git_loopy_frontier_emit_dispatch_ended() {
+  local dispatch="$1" index="$2" outcome="$3" duration_ms="$4" payload
+  payload="$(
+    jq -cn \
+      --argjson dispatch "$dispatch" \
+      --argjson index "$index" \
+      --arg outcome "$outcome" \
+      --argjson duration_ms "$duration_ms" \
+      '{
+        mode: "execute-frontier",
+        repository: $dispatch.repository,
+        performer: $dispatch.performer,
+        dispatch_index: $index,
+        action_identity: $dispatch.action_identity,
+        semantic_fingerprint: $dispatch.semantic_fingerprint,
+        outcome: $outcome,
+        boundary: false,
+        evidence_recorded: false,
+        duration_ms: $duration_ms
+      }'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_CONTINUATION_DISPATCH_ENDED]}" \
+    "null" "$payload"
+}
+
+_git_loopy_frontier_emit_stopped() {
+  local repository="$1" stop="$2" dispatched="$3"
+  local performer payload
+  performer="$(jq -r '.actor' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON")" ||
+    return 1
+  payload="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --arg performer "$performer" \
+      --argjson stop "$stop" \
+      --argjson dispatched "$dispatched" \
+      '{
+        mode: "execute-frontier",
+        repository: $repository,
+        performer: $performer,
+        disposition: ($stop.disposition // ""),
+        reason: ($stop.reason // ""),
+        terminal: (($stop.reason // "") == "workstreams-terminal"),
+        nonterminal_status: ($stop.nonterminal_status // ""),
+        secondary_barriers: [
+          ($stop.secondary_barriers // [])[]
+          | {
+              identity: (.identity // ""),
+              reasons: (.reasons // [])
+            }
+        ],
+        report_only_successors: [
+          ($stop.report_only_successors // [])[]
+          | {
+              identity: (.identity // ""),
+              semantic_fingerprint: (.semantic_fingerprint // ""),
+              reason: (.reason // "")
+            }
+        ],
+        evidence: ($stop.evidence // []),
+        dispatched: $dispatched,
+        successor_executed: false,
+        statement: ($stop.statement // "")
+      }
+      + (
+          if ($stop.next | type) == "object" then
+            {
+              next: {
+                identity: ($stop.next.identity // ""),
+                summary: ($stop.next.summary // ""),
+                readiness: ($stop.next.readiness // "")
+              }
+              + (
+                  if ($stop.next.condition | type) == "object"
+                  then {condition: ($stop.next.condition.kind // "")}
+                  else {}
+                  end
+                )
+            }
+          else {}
+          end
+        )'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_CONTINUATION_STOPPED]}" \
+    "null" "$payload"
+}
+
+_git_loopy_frontier_render_stop() {
+  local repository="$1" stop="$2"
+  local line reason
+  reason="$(jq -r '.reason // "unknown"' <<<"$stop")" || return 1
+  line="git-loopy continuation (execute-frontier, $repository): $(jq -r '.disposition // "unknown"' <<<"$stop"); $reason"
+  if [[ "$reason" != "workstreams-terminal" ]]; then
+    line+="; status $(jq -r '.nonterminal_status // "unknown" | if . == "" then "unknown" else . end' <<<"$stop")"
+    local next_summary barriers successors
+    next_summary="$(jq -r '.next.summary // .next.identity // ""' <<<"$stop")" ||
+      return 1
+    [[ -z "$next_summary" ]] || line+="; next $next_summary"
+    barriers="$(jq -r '(.secondary_barriers // []) | length' <<<"$stop")" ||
+      return 1
+    successors="$(jq -r '(.report_only_successors // []) | length' <<<"$stop")" ||
+      return 1
+    line+="; $barriers secondary barrier(s); $successors report-only successor(s)"
+  fi
+  printf '%s. No successor Action was executed.\n' "$line" >&2
+}
+
+_git_loopy_frontier_run_dispatch() {
+  local dispatch="$1"
+  local condition prompt
+  condition="$(jq -cS '.completion_condition' <<<"$dispatch")" || return 1
+  prompt="$(
+    printf '%s\n' \
+      'You are running one authorized Continuation Action, noninteractively.'
+    printf 'Action: %s\n' "$(jq -r '.kind // ""' <<<"$dispatch")"
+    printf 'Completion condition: %s\n' "$condition"
+    printf '%s\n\n' \
+      'Run this Instruction and stop. Do not start follow-up work, do not ask questions, and do not wait for approval: nobody is watching this session. If the Instruction cannot be completed without a human decision, stop and say so.'
+    jq -r '.instruction.value' <<<"$dispatch"
+  )" || return 1
+
+  local -a argv=(copilot --yolo -p "$prompt" --model "$GIT_LOOPY_MODEL" --no-color)
+  [[ -z "$GIT_LOOPY_REASONING_EFFORT" ]] ||
+    argv+=(--reasoning-effort "$GIT_LOOPY_REASONING_EFFORT")
+  local tool skill
+  for tool in ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; do
+    argv+=(--deny-tool "$tool")
+  done
+  for skill in ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}; do
+    argv+=(--deny-tool "skill($skill)")
+  done
+
+  _GIT_LOOPY_FRONTIER_DISPATCH_OUTCOME="complete"
+  local started_seconds="$SECONDS" status=0
+  git_loopy_run_bounded_turn "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "${argv[@]}" ||
+    status=$?
+  _GIT_LOOPY_FRONTIER_DISPATCH_DURATION_MS=$(( (SECONDS - started_seconds) * 1000 ))
+  if ((status != 0)); then
+    _GIT_LOOPY_FRONTIER_DISPATCH_OUTCOME="failed"
+    printf 'git-loopy: continuation dispatch %s failed with status %s.\n' \
+      "$(jq -r '.action_identity' <<<"$dispatch")" "$status" >&2
+  fi
+}
+
+git_loopy_run_continuation_frontier_repository() {
+  local repository="$1"
+  local authority="$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON"
+  local repositories effect_kinds trusted_producers observation
+  repositories="$(jq -c '.ceilings.repositories' <<<"$authority")" || return 1
+  effect_kinds="$(jq -c '.ceilings.effect_scopes' <<<"$authority")" || return 1
+  trusted_producers="$(jq -c '.trusted_producers' <<<"$authority")" || return 1
+
+  local observation_request
+  observation_request="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson trusted_producers "$trusted_producers" \
+      '{repository: $repository, trusted_producers: $trusted_producers}'
+  )" || return 1
+  observation="$(_git_loopy_frontier_reconcile "$observation_request")" ||
+    return 1
+
+  local frontier grants satisfied
+  frontier="$(_git_loopy_frontier_freeze "$observation" "$repositories")" ||
+    return 1
+  grants="$(_git_loopy_frontier_grants \
+    "$observation" "$repositories" "$effect_kinds")" || return 1
+  satisfied="$(_git_loopy_frontier_satisfied_requirements \
+    "$observation" "$repositories" "$effect_kinds")" || return 1
+
+  local dispatched='[]' prior='null' refreshed=0 index=0
+  while true; do
+    local request result automation
+    request="$(_git_loopy_frontier_request \
+      "$repository" "$frontier" "$grants" "$dispatched" "$prior" "$satisfied")" ||
+      return 1
+    result="$(_git_loopy_frontier_reconcile "$request")" || return 1
+    automation="$(jq -ce '.automation' <<<"$result")" || return 1
+    prior="$(jq -ce '.scope' <<<"$automation")" || return 1
+
+    if jq -e 'has("authorization")' <<<"$automation" >/dev/null; then
+      local dispatch
+      dispatch="$(_git_loopy_frontier_bind_dispatch "$result" "$repository")" ||
+        return 1
+      index=$((index + 1))
+      _git_loopy_frontier_emit_dispatch_started "$dispatch" "$index" || return 1
+      _git_loopy_frontier_run_dispatch "$dispatch" || return 1
+      _git_loopy_frontier_emit_dispatch_ended \
+        "$dispatch" "$index" "$_GIT_LOOPY_FRONTIER_DISPATCH_OUTCOME" \
+        "$_GIT_LOOPY_FRONTIER_DISPATCH_DURATION_MS" || return 1
+      dispatched="$(
+        jq -cn --argjson dispatched "$dispatched" \
+          --arg identity "$(jq -r '.action_identity' <<<"$dispatch")" \
+          '$dispatched + [$identity]'
+      )" || return 1
+      refreshed=0
+      if [[ "$_GIT_LOOPY_FRONTIER_DISPATCH_OUTCOME" == "failed" ]]; then
+        _GIT_LOOPY_FRONTIER_EXECUTION_FAILED=1
+        return 0
+      fi
+      continue
+    fi
+
+    local stop reason
+    stop="$(jq -ce '.stop' <<<"$automation")" || return 1
+    reason="$(jq -r '.reason' <<<"$stop")" || return 1
+    if [[ "$reason" == "awaiting-prerequisites" ]] && ((refreshed == 0)); then
+      refreshed=1
+      continue
+    fi
+    _git_loopy_frontier_emit_stopped "$repository" "$stop" "$dispatched" ||
+      return 1
+    _git_loopy_frontier_render_stop "$repository" "$stop" || return 1
+    if [[ "$(jq -r '.disposition' <<<"$stop")" == "attention-required" ]]; then
+      _GIT_LOOPY_FRONTIER_ATTENTION_REQUIRED=1
+    fi
+    return 0
+  done
+}
+
+git_loopy_run_continuation_frontier() {
+  local authority="$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON"
+  local repository
+  _GIT_LOOPY_FRONTIER_EXECUTION_FAILED=0
+  _GIT_LOOPY_FRONTIER_ATTENTION_REQUIRED=0
+  local failed=0
+  while IFS= read -r repository; do
+    [[ -n "$repository" ]] || continue
+    git_loopy_run_continuation_frontier_repository "$repository" || {
+      failed=1
+      break
+    }
+  done < <(jq -r '.ceilings.repositories[]' <<<"$authority")
+
+  local outcome="empty_pool" exit_code=0
+  if ((failed || _GIT_LOOPY_FRONTIER_EXECUTION_FAILED ||
+    _GIT_LOOPY_FRONTIER_ATTENTION_REQUIRED)); then
+    outcome="stuck"
+    exit_code=1
+  fi
+  local payload
+  payload="$(jq -cn --arg outcome "$outcome" \
+    '{outcome: $outcome, iterations_run: 0}')" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_RUN_END]}" \
+    "null" "$payload" || return 1
+  return "$exit_code"
+}
+
 git_loopy_run_discovery() {
   local release_version
   release_version="$(
@@ -2004,6 +2698,12 @@ git_loopy_run_discovery() {
     "${GIT_LOOPY_EVENT_TYPES[WRAPPER_RUN_START]}" \
     "null" \
     "$run_start_payload" || return 1
+
+  if [[ -n "$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON" ]] &&
+    [[ "$(jq -r '.mode' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON")" == "execute-frontier" ]]; then
+    git_loopy_run_continuation_frontier
+    return $?
+  fi
 
   local iteration=0
   local iterations_run=0

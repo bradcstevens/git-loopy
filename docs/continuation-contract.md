@@ -135,8 +135,9 @@ Contract 1.3 is the revision that satisfies this precondition and advertises
 `continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
 implication in the direction it was written: coverage gates the advertisement, and the suite fails
 if `report` is advertised while any locked area is unowned. `default` remains `off` — an adopter
-opts in per §10 — and `execute-frontier` remains `false` in every distribution until it can
-actually dispatch one.
+opts in per §10. `execute-frontier` is advertised by the Python Runner and shell
+Orchestrator, which can each dispatch a serial fixed frontier; PowerShell remains
+`false` until it can actually dispatch one.
 
 ## 5. Event observations
 

@@ -30,6 +30,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from git_loopy.continuation import (
     AUTOMATION_STOP_REASONS,
     DISPATCH_EVIDENCE_CLASSES,
+    GUIDANCE_FAULT_CODES,
     HUMAN_BOUNDARY_REASONS,
     CapabilityUnsupported,
 )
@@ -262,10 +263,14 @@ class DispatchRecord:
 class FrontierRun:
     """One repository's serial fixed-frontier Run, after it stopped.
 
-    `stop` is `None` for exactly one reason: an ordinary execution failure is not
-    a Continuation stop. It belongs to the Runner's own Strike and retry
-    accounting, and inventing a typed §9 reason for it would put a Runner problem
-    into the vocabulary an operator reads as a statement about their project.
+    `stop` is `None` for exactly three reasons, and all three are the Runner's own
+    rather than §9's. An ordinary execution failure belongs to the Runner's Strike
+    and retry accounting; a lost durable record and an untrustworthy freeze are
+    refusals this Run makes about itself. Inventing a typed §9 reason for any of
+    them would put a Runner problem into the vocabulary an operator reads as a
+    statement about their project.
+
+    None of the three may exit clean, which is what :func:`healthy` is for.
     """
 
     repository: str
@@ -275,10 +280,46 @@ class FrontierRun:
     reconciliations: int
     refreshes: int
     execution_failed: bool
+    #: A recordable boundary happened and its durable record was not written. The
+    #: quarantine that would have surfaced it on the next Reconciliation does not
+    #: exist, so this Run is the last place it can still be reported.
+    evidence_lost: bool = False
+    #: The observation this Run froze from was already an untrustworthy
+    #: description of the project, so nothing was dispatched on the strength of it.
+    coverage_fault: bool = False
 
     @property
     def terminal(self) -> bool:
         return bool(self.stop) and self.stop.get("reason") == TERMINAL_STOP_REASON
+
+    @property
+    def healthy(self) -> bool:
+        """Whether this Run may end the process cleanly."""
+        if self.execution_failed or self.integrity_refused:
+            return False
+        return (self.stop or {}).get("disposition") != "attention-required"
+
+    @property
+    def integrity_refused(self) -> bool:
+        """Whether this Run can no longer describe itself honestly.
+
+        The distinction that matters to coverage: a lost record or an
+        untrustworthy freeze means what the Run *says* about the project is
+        wrong, so no further repository may be dispatched into. An ordinary
+        execution failure only means some work did not land.
+        """
+        return self.evidence_lost or self.coverage_fault
+
+
+@dataclass(frozen=True)
+class _Frozen:
+    """One repository's initial stable Reconciliation, as this Run will replay it."""
+
+    repository: str
+    frontier: tuple[Mapping[str, str], ...]
+    grants: tuple[Mapping[str, str], ...]
+    actions: Mapping[str, Mapping[str, Any]]
+    guidance_fault: bool
 
 
 class FrontierDriver:
@@ -347,22 +388,79 @@ class FrontierDriver:
     # -- the Run ------------------------------------------------------------
 
     def run_all(self, *, iter_num: int | None = None) -> tuple[FrontierRun, ...]:
-        """Drive every repository in the frozen coverage, one at a time."""
-        return tuple(
-            self.run(repository, iter_num=iter_num)
-            for repository in self._plan.repositories
+        """Freeze every covered repository, *then* dispatch into them one at a time.
+
+        Both halves are load-bearing. Freezing all of them first is what makes the
+        freeze a property of the *Run* rather than of each repository's turn: a
+        Run that froze repository two only once repository one had finished would
+        let work published during repository one's Dispatches authorize itself.
+        Dispatching one at a time afterwards is `concurrent_dispatch: False`.
+
+        Coverage is one Run, so an integrity refusal is one too. A guidance fault
+        anywhere condemns every repository before the first Dispatch, and a lost
+        Dispatch record stops the ones that have not run yet --- in both cases
+        what the Run says about the project is already wrong, and dispatching
+        further would only make it wrong somewhere else as well.
+        """
+        frozen = [self._freeze(repository) for repository in self._plan.repositories]
+        if any(state.guidance_fault for state in frozen):
+            return tuple(
+                self._refuse(state.repository, state.frontier, iter_num=iter_num)
+                for state in frozen
+            )
+        runs: list[FrontierRun] = []
+        for index, state in enumerate(frozen):
+            run = self._drive(state, iter_num=iter_num)
+            runs.append(run)
+            if run.integrity_refused:
+                self._abandon(tuple(state.repository for state in frozen[index + 1 :]))
+                break
+        return tuple(runs)
+
+    def _abandon(self, repositories: tuple[str, ...]) -> None:
+        """Say which covered repositories this Run never reached, and why."""
+        if not repositories or self._on_guidance is None:
+            return
+        self._on_guidance(
+            "git-loopy continuation (execute-frontier): not dispatched because "
+            "the Run could no longer describe itself honestly: "
+            + ", ".join(repositories)
         )
 
     def run(self, repository: str, *, iter_num: int | None = None) -> FrontierRun:
         """Freeze once, then dispatch serially until exactly one stop is reached."""
+        return self._drive(self._freeze(repository), iter_num=iter_num)
+
+    def _freeze(self, repository: str) -> _Frozen:
+        """Take the one initial stable Reconciliation this Run replays forever."""
         observed = self._observe(repository)
-        frontier = _freeze_frontier(observed, repositories=self._plan.repositories)
-        grants = _freeze_grants(
-            observed,
-            repositories=self._plan.repositories,
-            effect_kinds=self._plan.effect_kinds,
+        return _Frozen(
+            repository=repository,
+            frontier=_freeze_frontier(
+                observed, repositories=self._plan.repositories
+            ),
+            grants=_freeze_grants(
+                observed,
+                repositories=self._plan.repositories,
+                effect_kinds=self._plan.effect_kinds,
+            ),
+            actions={action["identity"]: action for action in _actions(observed)},
+            guidance_fault=_guidance_fault(observed),
         )
-        actions = {action["identity"]: action for action in _actions(observed)}
+
+    def _drive(self, state: _Frozen, *, iter_num: int | None) -> FrontierRun:
+        """Dispatch the frozen frontier serially until exactly one stop is reached."""
+        repository = state.repository
+        frontier = state.frontier
+        grants = state.grants
+        actions = dict(state.actions)
+
+        if state.guidance_fault:
+            # The freeze itself is untrustworthy. §9 refuses to authorize while a
+            # fault is visible, but a fault that clears before the next
+            # Reconciliation would leave this Run dispatching against a frontier
+            # frozen from a description of the project nobody could verify.
+            return self._refuse(repository, frontier, iter_num=iter_num)
 
         dispatched: list[str] = []
         records: list[DispatchRecord] = []
@@ -410,6 +508,24 @@ class FrontierDriver:
                         reconciliations=reconciliations,
                         refreshes=refreshes,
                         execution_failed=True,
+                    )
+                if record.outcome in BOUNDARY_OUTCOMES and not record.evidence_recorded:
+                    # The boundary happened and the record of it did not. Carrying
+                    # on would reach a clean `frontier-drained` and exit zero,
+                    # because the quarantine that makes a boundary visible to the
+                    # next Reconciliation is exactly what just failed to be
+                    # written. This Run is the last place it can still be said.
+                    if self._on_guidance is not None:
+                        self._on_guidance(_render_lost(dispatch, record))
+                    return FrontierRun(
+                        repository=repository,
+                        frontier=frontier,
+                        dispatches=tuple(records),
+                        stop=None,
+                        reconciliations=reconciliations,
+                        refreshes=refreshes,
+                        execution_failed=False,
+                        evidence_lost=True,
                     )
                 continue
 
@@ -567,6 +683,46 @@ class FrontierDriver:
             return False
         return True
 
+    def _refuse(
+        self,
+        repository: str,
+        frontier: tuple[Mapping[str, str], ...],
+        *,
+        iter_num: int | None,
+    ) -> FrontierRun:
+        """Report an untrustworthy freeze without dispatching anything.
+
+        The reason and disposition are §9's own --- `guidance-fault` is in the
+        locked precedence table and is always `attention-required` --- because an
+        operator reads one vocabulary, not one per component that noticed.
+        """
+        stop = {
+            "disposition": "attention-required",
+            "reason": "guidance-fault",
+            "nonterminal_status": "coverage-unverifiable",
+            "evidence": [],
+            "secondary_barriers": [],
+            "report_only_successors": [],
+            "outcomes": [],
+            "successor_executed": False,
+            "statement": (
+                "The initial stable Reconciliation reported a guidance fault, so "
+                "the frozen frontier is not a trustworthy description of the "
+                "project and no Action was dispatched."
+            ),
+        }
+        self._stopped(stop, repository=repository, dispatched=(), iter_num=iter_num)
+        return FrontierRun(
+            repository=repository,
+            frontier=frontier,
+            dispatches=(),
+            stop=None,
+            reconciliations=1,
+            refreshes=0,
+            execution_failed=False,
+            coverage_fault=True,
+        )
+
     # -- the stop -----------------------------------------------------------
 
     def _stopped(
@@ -708,14 +864,15 @@ def _started_payload(
         "semantic_fingerprint": dispatch.semantic_fingerprint,
         "kind": dispatch.kind,
         "instruction_mode": str(dispatch.instruction.get("mode", "")),
-        "safety_case_version": dispatch.safety_case_version,
         "retry": str(dispatch.retry.get("kind", "")),
-        "effects": [
-            {"kind": kind, "scope": scope} for kind, scope in dispatch.effects
-        ],
-        "requirements": [
-            {"kind": kind, "name": name} for kind, name in dispatch.requirements
-        ],
+        # Kinds and counts, never the free-form halves. A safety case's effect
+        # `scope` and requirement `name` are Producer-controlled strings that no
+        # schema constrains, so an Event stream that carried them would be
+        # relaying arbitrary text out of the tracker and into an archive.
+        "effect_kinds": sorted({kind for kind, _scope in dispatch.effects}),
+        "effects": len(dispatch.effects),
+        "requirement_kinds": sorted({kind for kind, _name in dispatch.requirements}),
+        "requirements": len(dispatch.requirements),
         "triggers": list(dispatch.triggers),
         "target": dict(dispatch.target),
         "workstream_anchor": dict(dispatch.workstream_anchor),
@@ -790,11 +947,11 @@ def _stopped_payload(
     }
     following = stop.get("next")
     if isinstance(following, Mapping):
-        # The one place prose survives: a stop exists to be acted on by a person,
-        # and "the primary next Action" is not actionable as a bare digest.
+        # Identity, readiness and the condition *kind* say which Action is next
+        # without repeating its Producer-controlled prose, which no scrubber can
+        # sanitize. The durable locator a human opens is already in `evidence`.
         payload["next"] = {
             "identity": str(following.get("identity", "")),
-            "summary": str(following.get("summary", "")),
             "readiness": str(following.get("readiness", "")),
         }
         condition = following.get("condition")
@@ -823,6 +980,31 @@ def _render(stop: Mapping[str, Any], *, repository: str) -> str:
 # ---------------------------------------------------------------------------
 # Reading one Reconciliation answer
 # ---------------------------------------------------------------------------
+
+
+def _guidance_fault(observed: Mapping[str, Any]) -> bool:
+    """Whether the observation this Run froze from could be verified at all.
+
+    Applies §9's own rule, from §9's own exported code set. A second copy of it
+    here would be a second answer to "is this description of the project
+    trustworthy?", and the two would eventually disagree.
+    """
+    diagnostics = _result(observed).get("diagnostics")
+    return any(
+        isinstance(entry, Mapping) and entry.get("code") in GUIDANCE_FAULT_CODES
+        for entry in _sequence(diagnostics)
+    )
+
+
+def _render_lost(dispatch: Dispatch, record: DispatchRecord) -> str:
+    """The one operator line for a boundary whose durable record was not written."""
+    return (
+        f"git-loopy continuation (execute-frontier, {dispatch.repository}): "
+        f"attention-required; {record.outcome} was not recorded for "
+        f"{dispatch.action_identity}. The Run stopped rather than continue "
+        "against a project whose Dispatch evidence is incomplete. No successor "
+        "Action was executed."
+    )
 
 
 def _result(answer: Mapping[str, Any]) -> Mapping[str, Any]:

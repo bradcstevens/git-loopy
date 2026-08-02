@@ -400,7 +400,8 @@ run_capability_verification_gate() {
     [[ -n "$profile_name" ]] || continue
     local fixture_profile declared
     fixture_profile="$(
-      jq -S -c ".capability_verification.profiles.$profile_name" "$fixture"
+      jq -S -c --arg profile "$profile_name" \
+        '.capability_verification.profiles[$profile]' "$fixture"
     )"
     declared="$(
       # shellcheck disable=SC1091
@@ -414,7 +415,8 @@ run_capability_verification_gate() {
     # the chain runs real manifest -> setup verdict with no hand-asserted link.
     local expected_verdict actual_verdict
     expected_verdict="$(
-      jq -S -c ".capability_verification.verdicts.$profile_name.shell" "$fixture"
+      jq -S -c --arg profile "$profile_name" \
+        '.capability_verification.verdicts[$profile].shell' "$fixture"
     )"
     actual_verdict="$(
       # shellcheck disable=SC1091
@@ -475,10 +477,9 @@ run_capability_verification_gate() {
       "refusal $id was not refused as pinned:"$'\n'"actual:   $actual"$'\n'"expected: $expected"
   done
 
-  # An unknown profile is refused rather than silently widened: `execute-frontier`
-  # is a requirement set the fixture attributes to Python alone until #265, and
-  # answering it here would let a pass be read as readiness for a mode this
-  # distribution does not advertise.
+  # Execute-frontier is a profile this distribution now declares. Keeping this
+  # explicit makes a fixture update and a native-profile update inseparable:
+  # neither can falsely describe readiness on its own.
   local declares_execute_frontier
   declares_execute_frontier="$(
     jq -r '
@@ -486,15 +487,15 @@ run_capability_verification_gate() {
       | index("shell") != null
     ' "$fixture"
   )"
-  [[ "$declares_execute_frontier" == "false" ]] || fail \
-    "the fixture attributes execute-frontier to shell, which does not declare it"
-  local unknown_status=0
+  [[ "$declares_execute_frontier" == "true" ]] || fail \
+    "the fixture omits shell from the execute-frontier profile"
+  local execute_status=0
   (
     # shellcheck disable=SC1091
     source "$port_dir/lib/continuation.sh"
     git_loopy_continuation_profile execute-frontier
-  ) >/dev/null 2>&1 || unknown_status=$?
-  ((unknown_status != 0)) || fail "an unknown capability profile was answered"
+  ) >/dev/null 2>&1 || execute_status=$?
+  ((execute_status == 0)) || fail "the execute-frontier capability profile was not answered"
 }
 
 run_capability_coverage_gate

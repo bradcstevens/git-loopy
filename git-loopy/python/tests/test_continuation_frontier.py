@@ -18,6 +18,7 @@ import copy
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -256,25 +257,26 @@ def _action(
     safety_case: bool = True,
     number: int = 239,
     unsatisfied: tuple[dict[str, Any], ...] = (),
+    repository: str = REPOSITORY,
 ) -> dict[str, Any]:
     """One derived Action, in the shape `reconcile` returns it."""
-    target = _target(number)
+    target = {"kind": "issue", "repository": repository, "number": number}
     instruction = {"mode": instruction_mode, "value": instruction_value}
     completion_condition = {"kind": "issue-closed", "target": target}
     action: dict[str, Any] = {
         "identity": _digest(f"identity:{name}"),
         "semantic_fingerprint": _digest(f"semantics:{name}:{revision}"),
-        "workstream_anchor": _target(237),
+        "workstream_anchor": {"kind": "issue", "repository": repository, "number": 237},
         "summary": f"Do {name}.",
         "kind": "Write spec",
         "readiness": readiness,
         "instruction": instruction,
         "target": target,
-        "basis": [_target(237)],
+        "basis": [{"kind": "issue", "repository": repository, "number": 237}],
         "producer": {
             "login": "planner",
             "type": "User",
-            "carrier": CARRIER,
+            "carrier": {"kind": "issue", "repository": repository, "number": 237},
             "revision_id": _digest(revision),
             "comment_id": 9001,
             "comment_url": f"https://github.com/{REPOSITORY}/issues/237#issuecomment-1",
@@ -291,7 +293,10 @@ def _action(
             "instruction": dict(instruction),
             "target": dict(target),
             "completion_condition": dict(completion_condition),
-            "effects": [{"kind": kind, "scope": scope} for kind, scope in effects],
+            "effects": [
+                {"kind": kind, "scope": scope.replace(REPOSITORY, repository)}
+                for kind, scope in effects
+            ],
             "assumptions": [
                 {
                     "kind": "durable-inputs-fixed",
@@ -337,7 +342,15 @@ class _ScriptedReconciler:
         self.requests.append(copy.deepcopy(request))
         if self.before is not None:
             self.before(self, len(self.requests))
-        actions = copy.deepcopy(self.actions)
+        # `reconcile` reads one repository's carriers, so an Action published
+        # elsewhere is not in this answer at all. Faithful here because a Run may
+        # cover several repositories and the freeze has to be per repository.
+        repository = request["repository"]
+        actions = [
+            copy.deepcopy(action)
+            for action in self.actions
+            if action["producer"]["carrier"]["repository"] == repository
+        ]
         diagnostics = copy.deepcopy(self.diagnostics)
         result: dict[str, Any] = {
             "status": self.status,
@@ -411,21 +424,27 @@ def _driver(
     emitter: _RecordingEmitter | None = None,
     evidence: _RecordingEvidenceWriter | None = None,
     plan: continuation_frontier.FrontierPlan | None = None,
+    repositories: tuple[str, ...] = (REPOSITORY,),
     **overrides: Any,
 ) -> continuation_frontier.FrontierDriver:
     return continuation_frontier.FrontierDriver(
         plan
         or continuation_frontier.plan_frontier(
-            _authority(effect_scopes=("tracker-write",)),
+            _authority(effect_scopes=("tracker-write",), repositories=repositories),
             satisfied_requirements=(("skill", "to-spec"), ("access", "tracker-write")),
         ),
         trusted_producers=("planner",),
         reconcile=reconciler,
         perform=performer,
-        record_evidence=evidence or _RecordingEvidenceWriter(),
+        record_evidence=(
+            evidence
+            if evidence is not None or "no_evidence_writer" in overrides
+            else _RecordingEvidenceWriter()
+        ),
         emit=emitter or _RecordingEmitter(),
         clock=iter(range(0, 2000)).__next__,
-        **overrides,
+        **{key: value for key, value in overrides.items()
+           if key != "no_evidence_writer"},
     )
 
 
@@ -906,13 +925,20 @@ def test_the_dispatch_events_carry_no_runnable_instruction() -> None:
     assert started["mode"] == "execute-frontier"
     assert started["action_identity"] == ready["identity"]
     assert started["instruction_mode"] == "skill"
-    assert started["effects"] == [{"kind": "tracker-write", "scope": GRANTED_SCOPE}]
     assert started["triggers"] == ["human-decision"]
     assert started["retry"] == "idempotent"
+    # Kinds and counts survive; the Producer-controlled halves of a safety case
+    # --- an effect `scope`, a requirement `name` --- are arbitrary strings no
+    # schema constrains, so the stream carries neither.
+    assert started["effect_kinds"] == ["tracker-write"]
+    assert started["effects"] == 1
+    assert started["requirement_kinds"] == ["access", "skill"]
+    assert started["requirements"] == 2
     rendered = json.dumps(emitter.events)
     assert "/to-spec" not in rendered
     assert "planner" not in rendered
     assert "issuecomment" not in rendered
+    assert GRANTED_SCOPE not in rendered
 
     [ended] = emitter.of(events.WRAPPER_CONTINUATION_DISPATCH_ENDED)
     assert ended["action_identity"] == ready["identity"]
@@ -1449,3 +1475,453 @@ async def test_a_failed_session_ends_the_run_without_a_typed_stop() -> None:
         for event in bare._emitted
         if event["type"] == events.WRAPPER_CONTINUATION_STOPPED
     ]
+
+
+# ---------------------------------------------------------------------------
+# Three refusals the Runner owns, and one freeze that covers the whole Run
+# ---------------------------------------------------------------------------
+
+
+def test_every_covered_repository_freezes_before_any_of_them_dispatches() -> None:
+    """The freeze is a property of the Run, not of each repository's turn.
+
+    A Run that froze the second repository only once the first had finished would
+    let an Action published *during* the first repository's Dispatches authorize
+    itself --- the exact mid-Run widening the freeze exists to prevent.
+    """
+    first = _action("first")
+    reconciler = _ScriptedReconciler((first,))
+    published: list[dict[str, Any]] = []
+
+    def publish_during_the_first_dispatch(
+        _dispatch: continuation_frontier.Dispatch,
+    ) -> continuation_frontier.DispatchOutcome:
+        late = _action("late", repository="octo/other")
+        reconciler.actions.append(late)
+        published.append(late)
+        return continuation_frontier.DispatchOutcome(outcome="complete")
+
+    driver = _driver(
+        reconciler,
+        publish_during_the_first_dispatch,
+        repositories=(REPOSITORY, "octo/other"),
+    )
+
+    runs = driver.run_all()
+
+    assert [run.repository for run in runs] == [REPOSITORY, "octo/other"]
+    assert published, "the Performer must have run at least once"
+    # The late Action is outside the second repository's frozen frontier, so it
+    # is report-only for the rest of the Run rather than dispatched.
+    assert [record.action_identity for run in runs for record in run.dispatches] == [
+        first["identity"]
+    ]
+    assert runs[1].dispatches == ()
+    assert all(run.healthy for run in runs)
+
+
+def test_an_untrustworthy_freeze_dispatches_nothing_even_if_the_fault_clears() -> None:
+    """A fault that vanished still invalidates the coverage this Run froze.
+
+    §9 refuses to authorize while a fault is *visible*. The gap this closes is
+    the fault that clears before the next Reconciliation: the frontier was still
+    frozen from a description of the project nobody could verify.
+    """
+    reconciler = _ScriptedReconciler(
+        (_action("ready"),),
+        diagnostics=({"code": "action_conflict", "identities": ["a", "b"]},),
+    )
+
+    def clear_the_fault(scripted: _ScriptedReconciler, call: int) -> None:
+        if call > 1:  # the freeze saw it; every later Reconciliation does not
+            scripted.diagnostics = []
+
+    reconciler.before = clear_the_fault
+    performer = _ScriptedPerformer()
+    emitter = _RecordingEmitter()
+
+    run = _driver(reconciler, performer, emitter=emitter).run(REPOSITORY)
+
+    assert performer.dispatches == []
+    assert run.coverage_fault is True
+    assert run.healthy is False
+    assert run.stop is None
+    [stopped] = emitter.of(events.WRAPPER_CONTINUATION_STOPPED)
+    assert stopped["reason"] == "guidance-fault"
+    assert stopped["disposition"] == "attention-required"
+    assert stopped["successor_executed"] is False
+
+
+@pytest.mark.parametrize(
+    "code", ["action_conflict", "prerequisite_cycle", "revision_fork"]
+)
+def test_the_freeze_applies_the_same_guidance_fault_rule_section_nine_applies(
+    code: str,
+) -> None:
+    """One code set, exported by §9. A second copy would eventually disagree."""
+    reconciler = _ScriptedReconciler(
+        (_action("ready"),), diagnostics=({"code": code},)
+    )
+
+    run = _driver(reconciler, _ScriptedPerformer()).run(REPOSITORY)
+
+    assert run.coverage_fault is True
+
+
+def test_an_ordinary_diagnostic_is_not_a_guidance_fault() -> None:
+    """Only codes that make the *coverage* unverifiable refuse the Run."""
+    reconciler = _ScriptedReconciler(
+        (_action("ready"),),
+        diagnostics=({"code": "dispatch_evidence_quarantine", "comment_id": 1},),
+    )
+
+    run = _driver(reconciler, _ScriptedPerformer()).run(REPOSITORY)
+
+    assert run.coverage_fault is False
+    assert len(run.dispatches) == 1
+
+
+def test_a_boundary_whose_record_was_lost_stops_the_run_instead_of_draining() -> None:
+    """Losing the record must not turn a violation into a clean exit.
+
+    The quarantine that makes a boundary visible to the next Reconciliation *is*
+    the record that failed to be written. Carrying on would reach
+    `frontier-drained` and exit zero with a safety-case violation unreported.
+    """
+    reconciler = _ScriptedReconciler((_action("first"), _action("second")))
+    performer = _ScriptedPerformer(
+        continuation_frontier.DispatchOutcome(
+            outcome="safety-case-violation",
+            summary="The Instruction reached a human decision.",
+            reason="human-decision",
+            evidence=(_EVIDENCE,),
+        )
+    )
+    writer = _RecordingEvidenceWriter()
+    writer.fail = True
+    guidance: list[str] = []
+    driver = _driver(reconciler, performer, evidence=writer)
+    driver._on_guidance = guidance.append
+
+    run = driver.run(REPOSITORY)
+
+    assert len(run.dispatches) == 1
+    assert run.dispatches[0].evidence_recorded is False
+    assert run.evidence_lost is True
+    assert run.healthy is False
+    assert run.stop is None
+    assert guidance and "not recorded" in guidance[0]
+    assert guidance[0].endswith("No successor Action was executed.")
+
+
+def test_a_run_with_no_evidence_writer_at_all_stops_on_its_first_boundary() -> None:
+    """A record nobody can write is a record that was lost, not one not needed."""
+    reconciler = _ScriptedReconciler((_action("first"),))
+    performer = _ScriptedPerformer(
+        continuation_frontier.DispatchOutcome(
+            outcome="uncertain-effect-state",
+            summary="The durable effect could not be confirmed.",
+            evidence=(_EVIDENCE,),
+        )
+    )
+
+    run = _driver(
+        reconciler, performer, evidence=None, no_evidence_writer=True
+    ).run(REPOSITORY)
+
+    assert run.evidence_lost is True
+    assert run.healthy is False
+
+
+def test_a_recorded_boundary_leaves_the_run_free_to_keep_going() -> None:
+    """The write succeeded, so §9 will see the quarantine and own the decision."""
+    reconciler = _ScriptedReconciler((_action("first"),))
+    performer = _ScriptedPerformer(
+        continuation_frontier.DispatchOutcome(
+            outcome="safety-case-violation",
+            summary="The Instruction reached a human decision.",
+            reason="human-decision",
+            evidence=(_EVIDENCE,),
+        )
+    )
+
+    run = _driver(reconciler, performer).run(REPOSITORY)
+
+    assert run.dispatches[0].evidence_recorded is True
+    assert run.evidence_lost is False
+    assert run.stop is not None
+
+
+# ---------------------------------------------------------------------------
+# The noninteractive Performer reports the one boundary it can actually see
+# ---------------------------------------------------------------------------
+
+
+class _FakeSession:
+    """An `IterationSession` stand-in that replays chosen Events at the observer.
+
+    The real session denies `ask_user` deep inside the SDK permission handler.
+    What reaches the Runner is the Event, so the Event is what this replays ---
+    stubbing the denial itself would pin the SDK rather than the Runner.
+    """
+
+    def __init__(self, events_to_replay: Sequence[Mapping[str, Any]], **kwargs: Any):
+        self._events = events_to_replay
+        self._observer = kwargs["event_observer"]
+
+    async def __aenter__(self) -> "_FakeSession":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def send_and_wait(self, prompt: str, *, timeout: float | None = None) -> None:
+        for event in self._events:
+            self._observer.observe(event)
+
+
+def _dispatch_loop(monkeypatch: pytest.MonkeyPatch, events_to_replay: Any) -> Any:
+    """A `_Loop` carrying only what `_perform_dispatch` reads."""
+    bare = _bare_loop(logging.getLogger("test.continuation.frontier"))
+    bare._client = object()
+    bare._config = SimpleNamespace(
+        send_timeout_seconds=5,
+        model="test-model",
+        reasoning_effort="low",
+    )
+    bare._writers = SimpleNamespace(event_log=None, run_id="run-1")
+    bare._sinks = None
+    bare._skill_exposure = None
+    bare._session_observer = _RecordingObserver()
+    bare._new_active_issue_binding = lambda iter_num, *, allowed_refs: None
+    monkeypatch.setattr(
+        loop,
+        "IterationSession",
+        lambda *args, **kwargs: _FakeSession(events_to_replay, **kwargs),
+    )
+    return bare
+
+
+class _RecordingObserver:
+    def __init__(self) -> None:
+        self.observed: list[Mapping[str, Any]] = []
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        self.observed.append(event)
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_asks_a_human_ends_as_a_recordable_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `ask_user` attempt is the safety case's own trigger firing.
+
+    The case swore the Action was AFK-safe. A noninteractive session that reaches
+    for a human has contradicted it, and §9 says a trigger *ends* the Dispatch ---
+    so this is the one exceptional outcome a Runner can honestly report, and it
+    has to become durable evidence rather than a clean `complete`.
+    """
+    bare = _dispatch_loop(
+        monkeypatch,
+        [{"type": events.WRAPPER_ASK_USER_ATTEMPTED, "tool_name": "ask_user"}],
+    )
+    outcome = await bare._perform_dispatch(_bound_dispatch(), iter_num=1)
+
+    assert outcome.outcome == "safety-case-violation"
+    assert outcome.reason == "human-decision"
+    assert outcome.evidence
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_session_is_still_an_ordinary_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No trigger, no boundary: the watch must not fire on ordinary traffic."""
+    bare = _dispatch_loop(
+        monkeypatch,
+        [
+            {"type": "tool.permission_denied", "tool_name": "shell"},
+            {"type": "assistant.message"},
+        ],
+    )
+    outcome = await bare._perform_dispatch(_bound_dispatch(), iter_num=1)
+
+    assert outcome.outcome == "complete"
+    assert outcome.reason is None
+
+
+@pytest.mark.asyncio
+async def test_the_run_accounting_still_sees_every_dispatch_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Watching for a trigger must not steal the stream from Run accounting.
+
+    The Consumption meter and the Summary rollup read the same Events. A watch
+    that replaced the Run's observer instead of joining it would silently stop
+    billing every fixed-frontier Dispatch.
+    """
+    replayed = [
+        {"type": events.WRAPPER_ASK_USER_ATTEMPTED, "tool_name": "ask_user"},
+        {"type": "assistant.message"},
+    ]
+    bare = _dispatch_loop(monkeypatch, replayed)
+    await bare._perform_dispatch(_bound_dispatch(), iter_num=1)
+
+    assert bare._session_observer.observed == replayed
+
+
+
+# ---------------------------------------------------------------------------
+# An integrity refusal is a property of the Run, not of one repository
+# ---------------------------------------------------------------------------
+
+
+class _FaultyInOneRepository(_ScriptedReconciler):
+    """Reports a guidance fault for one repository and a clean answer elsewhere."""
+
+    def __init__(self, actions: tuple[dict[str, Any], ...], *, faulty: str) -> None:
+        super().__init__(actions)
+        self._faulty = faulty
+
+    def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.diagnostics = (
+            [{"code": "action_conflict"}] if request["repository"] == self._faulty else []
+        )
+        return super().__call__(request)
+
+
+def test_a_guidance_fault_anywhere_refuses_the_whole_run() -> None:
+    """Coverage is one Run, so one untrustworthy freeze condemns all of it.
+
+    §9 refuses to authorize while a fault is visible because the description of
+    the project cannot be trusted. A Run that dispatched into the clean
+    repository because only the other one was faulty would be acting on the same
+    untrustworthy Reconciliation, one repository further along.
+    """
+    other = "octo/other"
+    reconciler = _FaultyInOneRepository(
+        (_action("first"), _action("second", repository=other)), faulty=other
+    )
+    driver = _driver(
+        reconciler, _ScriptedPerformer(), repositories=(REPOSITORY, other)
+    )
+
+    runs = driver.run_all(iter_num=1)
+
+    assert [run.coverage_fault for run in runs] == [True, True]
+    assert not [record for run in runs for record in run.dispatches]
+
+
+def test_a_lost_dispatch_record_stops_every_remaining_repository() -> None:
+    """The Run stops where the evidence stopped, not one repository later.
+
+    `_render_lost` tells the operator no successor executed. A Run that carried
+    on into the next repository would make that statement false while the
+    quarantine that should have made the boundary visible is still missing.
+    """
+    other = "octo/other"
+    reconciler = _ScriptedReconciler(
+        (_action("first"), _action("second", repository=other))
+    )
+    driver = _driver(
+        reconciler,
+        _ScriptedPerformer(
+            continuation_frontier.DispatchOutcome(
+                outcome="safety-case-violation",
+                reason="human-decision",
+                summary="needed a human",
+                evidence=({"kind": "issue", "repository": REPOSITORY, "number": 7},),
+            )
+        ),
+        repositories=(REPOSITORY, other),
+        no_evidence_writer=True,
+    )
+
+    runs = driver.run_all(iter_num=1)
+
+    assert [run.repository for run in runs] == [REPOSITORY]
+    assert runs[0].evidence_lost is True
+
+
+def test_an_ordinary_execution_failure_leaves_the_other_repositories_alone() -> None:
+    """An Action that failed to run corrupts nothing, so coverage keeps going.
+
+    This is the line between the two kinds of bad news: a lost record or an
+    untrustworthy freeze means the Run can no longer describe itself honestly,
+    while a failed Instruction is ordinary work that did not land.
+    """
+    other = "octo/other"
+    reconciler = _ScriptedReconciler(
+        (_action("first"), _action("second", repository=other))
+    )
+    driver = _driver(
+        reconciler,
+        _ScriptedPerformer(
+            continuation_frontier.DispatchOutcome(outcome="failed"),
+            continuation_frontier.DispatchOutcome(outcome="complete"),
+        ),
+        repositories=(REPOSITORY, other),
+    )
+
+    runs = driver.run_all(iter_num=1)
+
+    assert [run.repository for run in runs] == [REPOSITORY, other]
+    assert runs[0].execution_failed is True
+    assert len(runs[1].dispatches) == 1
+
+
+class _FailingAfterTrigger(_FakeSession):
+    """Replays the trigger, then raises the way a broken session would."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(
+            [{"type": events.WRAPPER_ASK_USER_ATTEMPTED, "tool_name": "ask_user"}],
+            **kwargs,
+        )
+
+    async def send_and_wait(self, prompt: str, *, timeout: float | None = None) -> None:
+        await super().send_and_wait(prompt, timeout=timeout)
+        raise RuntimeError("session died after the trigger fired")
+
+
+@pytest.mark.asyncio
+async def test_an_observed_trigger_outranks_a_later_session_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that asked for a human and *then* fell over still violated the case.
+
+    Reporting the later failure instead would downgrade the one outcome that
+    becomes durable evidence into an ordinary retryable failure, and the
+    quarantine a human depends on would never be written.
+    """
+    bare = _dispatch_loop(monkeypatch, [])
+    monkeypatch.setattr(
+        loop, "IterationSession", lambda *args, **kwargs: _FailingAfterTrigger(**kwargs)
+    )
+
+    outcome = await bare._perform_dispatch(_bound_dispatch(), iter_num=1)
+
+    assert outcome.outcome == "safety-case-violation"
+
+
+def test_a_stop_event_names_the_next_action_without_quoting_it() -> None:
+    """The durable Event identifies the next Action; it does not repeat its prose.
+
+    A summary is Producer-controlled free text, so it can carry a secret no
+    scrubber recognizes. Identity, readiness and the condition kind say which
+    Action is next, and the stop's own evidence already carries the validated
+    durable locator a human opens.
+    """
+    secret = "correct-horse-battery-staple"
+    ready = _action("ready")
+    hitl = _action(secret, number=240, classification="HITL-required")
+    emitter = _RecordingEmitter()
+
+    _driver(
+        _ScriptedReconciler((ready, hitl)), _ScriptedPerformer(), emitter=emitter
+    ).run(REPOSITORY)
+
+    [stopped] = emitter.of(events.WRAPPER_CONTINUATION_STOPPED)
+    assert stopped["next"]["identity"] == hitl["identity"]
+    assert "summary" not in stopped["next"]
+    assert secret not in json.dumps(emitter.events)

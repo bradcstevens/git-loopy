@@ -189,7 +189,7 @@ git_loopy_continuation_capabilities() {
   release_version="$(
     git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
-  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2","1.3"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"resolve-authority":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":true,"execute-frontier":false}}}\n' \
+  printf '{"ok":true,"capabilities":{"release_version":"%s","continuation_contract_versions":["1.0","1.1","1.2","1.3"],"record_formats":[1],"wrapper_contract_version":"%s","event_schema_version":"1.1","tracker_adapters":{"github":{"operations":["publish","reconcile","record-dispatch-result","repair-index"]}},"operations":{"capabilities":true,"resolve-authority":true,"publish":true,"reconcile":true,"record-dispatch-result":true,"repair-index":true},"instruction_handlers":[],"instruction_modes":[],"evaluators":[],"effect_scopes":[],"optional_capabilities":{"immutable_producer_revisions":true,"terminal_rendering":true,"concurrent_dispatch":false,"prospective_projection":true,"fixed_frontier_authorization":true},"continuation_modes":{"default":"off","off":true,"report":true,"execute-frontier":true}}}\n' \
     "$release_version" \
     "$GIT_LOOPY_CONTINUATION_WRAPPER_CONTRACT_VERSION"
 }
@@ -207,12 +207,9 @@ git_loopy_continuation_capabilities() {
 # records the operator's selection without committing a host-specific executable
 # path or a family-member choice.
 
-# The named requirement sets this distribution is judged against. `execute-frontier`
-# is deliberately absent from both: it is #264 vocabulary, and a profile nobody
-# implements would let a pass be read as readiness for a mode no distribution
-# supports. `report` is the second profile (#263): a distribution that cannot
-# resolve an operator authority or does not advertise the mode fails closed here
-# rather than during a Run.
+# The named requirement sets this distribution is judged against. `report` is
+# the second profile (#263); `execute-frontier` adds the serial fixed-frontier
+# authorization requirement served by this distribution's native lifecycle.
 _GIT_LOOPY_CONTINUATION_FOUNDATION_PROFILE='{
   "requirements": [
     "contract-version",
@@ -257,6 +254,32 @@ _GIT_LOOPY_CONTINUATION_REPORT_PROFILE='{
   "required_modes": ["report"]
 }'
 
+_GIT_LOOPY_CONTINUATION_EXECUTE_FRONTIER_PROFILE='{
+  "requirements": [
+    "contract-version",
+    "record-format",
+    "tracker-adapter",
+    "native-operations",
+    "mode-default-off",
+    "mode-report",
+    "mode-execute-frontier",
+    "fixed-frontier"
+  ],
+  "continuation_contract_version": "1.3",
+  "record_format": 1,
+  "tracker_adapter": "github",
+  "tracker_operations": [
+    "publish", "reconcile", "record-dispatch-result", "repair-index"
+  ],
+  "native_operations": [
+    "capabilities", "publish", "reconcile", "record-dispatch-result",
+    "repair-index", "resolve-authority"
+  ],
+  "mode_default": "off",
+  "required_modes": ["report", "execute-frontier"],
+  "required_optional_capabilities": ["fixed_frontier_authorization"]
+}'
+
 git_loopy_continuation_profile() {
   local name="${1:-foundation}"
   case "$name" in
@@ -265,6 +288,9 @@ git_loopy_continuation_profile() {
       ;;
     report)
       jq -c . <<<"$_GIT_LOOPY_CONTINUATION_REPORT_PROFILE"
+      ;;
+    execute-frontier)
+      jq -c . <<<"$_GIT_LOOPY_CONTINUATION_EXECUTE_FRONTIER_PROFILE"
       ;;
     *)
       printf 'git-loopy: unknown Continuation capability profile %s\n' "$name" >&2
@@ -305,6 +331,10 @@ git_loopy_evaluate_continuation_capabilities() {
             or ($modes[$profile.mode_default] != true)
         elif $id == "mode-report" then
           ($manifest.continuation_modes // {}).report != true
+        elif $id == "mode-execute-frontier" then
+          ($manifest.continuation_modes // {})["execute-frontier"] != true
+        elif $id == "fixed-frontier" then
+          ($manifest.optional_capabilities // {}).fixed_frontier_authorization != true
         else true
         end;
       [$profile.requirements[] | select(unsatisfied(.))] as $unsatisfied

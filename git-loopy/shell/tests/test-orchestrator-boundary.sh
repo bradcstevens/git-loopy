@@ -2291,4 +2291,244 @@ jq -se '
 ' "$FAKE_TUI_STDIN" >/dev/null ||
   fail "the helper did not receive the stuck Run's final Event"
 
+# An execute-frontier Run is a separate, noninteractive lifecycle: it replaces
+# Pool collection with the native Continuation Reconciliation rather than
+# treating Dispatches as ordinary Iterations. This uses the public entrypoint
+# with only the GitHub boundary scripted, so a regression cannot hide behind an
+# in-process Continuation helper.
+write_frontier_tools() {
+  local bin_dir="$1"
+  write_fake_tools "$bin_dir"
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+printf 'copilot must not run during an execute-frontier lifecycle\n' >&2
+exit 91
+EOF
+  cat >"$bin_dir/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+case "${1-} ${2-}" in
+  "auth status")
+    exit 0
+    ;;
+  "repo view")
+    printf '{"owner":{"login":"octo"},"name":"example","defaultBranchRef":{"name":"main"}}\n'
+    ;;
+  "issue list")
+    [[ "$*" == *"--label git-loopy-continuation"* ]] || {
+      printf 'ordinary Pool collection is forbidden in execute-frontier mode\n' >&2
+      exit 92
+    }
+    printf '[]\n'
+    ;;
+  *)
+    printf 'unexpected gh invocation: %s\n' "$*" >&2
+    exit 92
+    ;;
+esac
+EOF
+  chmod +x "$bin_dir/copilot" "$bin_dir/gh"
+}
+
+repo="$temp_dir/execute-frontier"
+fake_bin="$temp_dir/execute-frontier-bin"
+make_repo "$repo"
+write_frontier_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/execute-frontier-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+export GIT_LOOPY_CONTINUATION_MODE="execute-frontier"
+export GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS="planner"
+export GIT_LOOPY_CONTINUATION_ACTOR="runner"
+export GIT_LOOPY_CONTINUATION_REPOSITORIES="octo/example"
+export GIT_LOOPY_CONTINUATION_EFFECT_SCOPES="tracker-write"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier.stdout" "$temp_dir/execute-frontier.stderr"; then
+  fail "execute-frontier lifecycle did not exit cleanly: $(<"$temp_dir/execute-frontier.stderr")"
+fi
+unset GIT_LOOPY_CONTINUATION_MODE GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS \
+  GIT_LOOPY_CONTINUATION_ACTOR GIT_LOOPY_CONTINUATION_REPOSITORIES \
+  GIT_LOOPY_CONTINUATION_EFFECT_SCOPES
+
+jq -se '
+  [.[].type] == [
+    "wrapper.run.start",
+    "wrapper.continuation.stopped",
+    "wrapper.run.end"
+  ]
+  and .[1].iter == null
+  and .[1].mode == "execute-frontier"
+  and .[1].repository == "octo/example"
+  and .[1].performer == "runner"
+  and .[1].reason == "frontier-drained"
+  and .[1].successor_executed == false
+  and .[2].outcome == "empty_pool"
+  and .[2].iterations_run == 0
+' "$temp_dir/execute-frontier.stdout" >/dev/null ||
+  fail "execute-frontier did not use the isolated Continuation lifecycle"
+[[ "$(<"$FAKE_GH_LOG")" == *"issue list --repo octo/example --state all --label git-loopy-continuation"* ]] ||
+  fail "execute-frontier did not reconcile its configured repository"
+
+# Global and project config remain distinct inputs to native authority
+# resolution. Their intersections select the one shared repository; the
+# project does not silently replace the global ceiling.
+repo="$temp_dir/execute-frontier-config"
+fake_bin="$temp_dir/execute-frontier-config-bin"
+make_repo "$repo"
+write_frontier_tools "$fake_bin"
+mkdir -p "$repo/xdg/git-loopy"
+cat >"$repo/xdg/git-loopy/config.toml" <<'EOF'
+continuation_mode = "execute-frontier"
+continuation_trusted_producers = ["planner", "other"]
+continuation_actor = "runner"
+continuation_maintainers = ["ada", "grace"]
+continuation_repositories = ["octo/example", "octo/other"]
+continuation_targets = []
+continuation_action_kinds = []
+continuation_instruction_modes = ["skill"]
+continuation_effect_scopes = ["tracker-write"]
+EOF
+cat >"$repo/git-loopy/config.toml" <<'EOF'
+continuation_mode = "execute-frontier"
+continuation_trusted_producers = ["planner"]
+continuation_maintainers = ["ada"]
+continuation_repositories = ["octo/example"]
+continuation_targets = []
+continuation_action_kinds = []
+continuation_instruction_modes = ["skill"]
+continuation_effect_scopes = ["tracker-write"]
+EOF
+export FAKE_GH_LOG="$temp_dir/execute-frontier-config-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-config-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier-config.stdout" \
+  "$temp_dir/execute-frontier-config.stderr"; then
+  fail "configured execute-frontier lifecycle failed: $(<"$temp_dir/execute-frontier-config.stderr")"
+fi
+jq -se '
+  [.[].type] == [
+    "wrapper.run.start",
+    "wrapper.continuation.stopped",
+    "wrapper.run.end"
+  ]
+  and .[1].repository == "octo/example"
+  and .[1].performer == "runner"
+' "$temp_dir/execute-frontier-config.stdout" >/dev/null ||
+  fail "global and project Continuation sources were not narrowed natively"
+
+# A ready frozen Action is bound to exactly one noninteractive Copilot process.
+# The shared Automation fixture drives the real shell Reconciliation three
+# times: freeze, authorize, then observe the already-dispatched member drain.
+write_frontier_dispatch_tools() {
+  local bin_dir="$1"
+  write_frontier_tools "$bin_dir"
+  cp "$script_dir/scripted-github.sh" "$bin_dir/scripted-github"
+  cat >"$bin_dir/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1-} ${2-}" in
+  "auth status")
+    printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+    exit 0
+    ;;
+  "repo view")
+    printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+    printf '{"owner":{"login":"octo"},"name":"example","defaultBranchRef":{"name":"main"}}\n'
+    exit 0
+    ;;
+  *)
+    exec "$(dirname "$0")/scripted-github" "$@"
+    ;;
+esac
+EOF
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+calls=0
+[[ -f "$FAKE_COPILOT_CALLS" ]] && calls="$(<"$FAKE_COPILOT_CALLS")"
+printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
+printf '%s\n' "$*" >"$FAKE_COPILOT_FRONTIER_ARGS"
+EOF
+  chmod +x "$bin_dir/gh" "$bin_dir/copilot" "$bin_dir/scripted-github"
+}
+
+repo="$temp_dir/execute-frontier-dispatch"
+fake_bin="$temp_dir/execute-frontier-dispatch-bin"
+make_repo "$repo"
+write_frontier_dispatch_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/execute-frontier-dispatch-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-dispatch-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+export FAKE_COPILOT_CALLS="$temp_dir/execute-frontier-dispatch-copilot.calls"
+export FAKE_COPILOT_FRONTIER_ARGS="$temp_dir/execute-frontier-dispatch-copilot.args"
+scripted_github_log="$temp_dir/execute-frontier-dispatch-scripted.log"
+scripted_github_script="$temp_dir/execute-frontier-dispatch-script.json"
+scripted_github_state="$temp_dir/execute-frontier-dispatch-script.state"
+export GIT_LOOPY_SCRIPTED_GITHUB_LOG="$scripted_github_log"
+export GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$scripted_github_script"
+export GIT_LOOPY_SCRIPTED_GITHUB_STATE="$scripted_github_state"
+jq '
+  [.scenarios[]
+   | select(.id == "automation-binds-one-dispatch")
+   | .github_script[]] as $steps
+  | $steps + $steps + $steps
+' "$port_dir/../conformance/continuation-scenarios.json" \
+  >"$GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"
+export GIT_LOOPY_CONTINUATION_MODE="execute-frontier"
+export GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS="planner"
+export GIT_LOOPY_CONTINUATION_ACTOR="runner"
+export GIT_LOOPY_CONTINUATION_REPOSITORIES="octo/example"
+export GIT_LOOPY_CONTINUATION_EFFECT_SCOPES="tracker-write"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier-dispatch.stdout" \
+  "$temp_dir/execute-frontier-dispatch.stderr"; then
+  fail "execute-frontier dispatch failed: $(<"$temp_dir/execute-frontier-dispatch.stderr")"
+fi
+unset GIT_LOOPY_CONTINUATION_MODE GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS \
+  GIT_LOOPY_CONTINUATION_ACTOR GIT_LOOPY_CONTINUATION_REPOSITORIES \
+  GIT_LOOPY_CONTINUATION_EFFECT_SCOPES GIT_LOOPY_SCRIPTED_GITHUB_LOG \
+  GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT GIT_LOOPY_SCRIPTED_GITHUB_STATE
+
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "one Dispatch creates one Copilot process"
+jq -se '
+  [.[].type] == [
+    "wrapper.run.start",
+    "wrapper.continuation_dispatch.started",
+    "wrapper.continuation_dispatch.ended",
+    "wrapper.continuation.stopped",
+    "wrapper.run.end"
+  ]
+  and .[1].iter == null
+  and .[1].mode == "execute-frontier"
+  and .[1].instruction_mode == "skill"
+  and .[1].noninteractive == true
+  and .[2].outcome == "complete"
+  and .[2].boundary == false
+  and .[2].evidence_recorded == false
+  and .[3].reason == "frontier-drained"
+  and .[3].dispatched == [.[1].action_identity]
+  and .[3].successor_executed == false
+  and ([.[1], .[2], .[3]] | tostring
+       | contains("/to-spec") | not)
+  and ([.[1], .[2], .[3]] | tostring
+       | contains("planner") | not)
+  and .[4].outcome == "empty_pool"
+  and .[4].iterations_run == 0
+' "$temp_dir/execute-frontier-dispatch.stdout" >/dev/null ||
+  fail "execute-frontier Dispatch Events drifted or leaked an Instruction"
+assert_equal "6" "$(<"$scripted_github_state")" \
+  "execute-frontier re-reconciles after its Dispatch"
+
 printf 'shell Orchestrator boundary: ok\n'
