@@ -252,7 +252,11 @@ while coming up, which the Run survives as an involuntary **Detach** (ADR-0024).
 both, because a replay needs to tell a fault from a voluntary Detach, not one fault from another.
 It carries `error_type` and the scrubbed `error` text,
 so a replay can tell a Run the operator walked away from apart from one whose live view crashed
-out from under them; a voluntary Detach records no fault, which is the distinction. Only an
+out from under them; a voluntary Detach records no fault, which is the distinction. It is
+Run-scoped in **Parallel mode** too, never contribution-scoped: the fault is a fact about the
+Dashboard, not about any **Lane**, and every in-flight Lane contribution — including one being
+integrated — runs on to its natural outcome and keeps emitting its own events, now to the line
+printer (#327). Only an
 Orchestrator that hosts a Dashboard can emit it — the shell and PowerShell Orchestrators host
 none and never do. Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.

@@ -17,6 +17,15 @@ waits for whichever finishes first.
   swap seam before the loop task exists, so the run happens in scrollback rather
   than not happening at all.
 
+None of this is mode-aware: **Parallel mode** plugs into the same ``drive``
+coroutine and the same :class:`~git_loopy.sinks.SinkFanout`, so a fault leaves
+every in-flight **Lane** — including a contribution mid-**Integration**, with its
+bounded auto-resolution still running — to its natural outcome, and refill and
+the **Lane cap** carry on across the swap. "Plugs into the same seam" is exactly
+the inference that let the original defect ship looking deliberate, so it is
+asserted directly against the Rolling-dispatch driver rather than inferred from
+the serial path (#327, ``tests/test_loop_parallel.py``).
+
 ADR-0001 enumerated the app's exits as ``q`` / ``Ctrl+C`` and Detach, and under
 that enumeration "not a Detach" really did mean "a Stop". An exception is a
 third way for the app task to finish and it carries no intent to read, so

@@ -114,9 +114,17 @@ from git_loopy import git as git_module
 from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
 from git_loopy.config import RunConfig
+from git_loopy.events import WRAPPER_DASHBOARD_FAULT
+from git_loopy.interactive.driver import (
+    EXIT_DASHBOARD_FAULT,
+    InteractiveDriver,
+)
+from git_loopy.interactive.state import LiveRunState
+from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
+from tests.test_interactive_terminal import FakeTerminal
 
 
 EXPECTED_RELEASE_VERSION = json.loads(
@@ -3440,3 +3448,787 @@ def test_parallel_with_adaptation_disabled_never_moves_the_lane_limit(
     # Disabled costs no telemetry read either: an unobserved controller cannot
     # move, so there is nothing to read *for*.
     assert telemetry.rate_limited_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Dashboard fault recovery under Rolling dispatch (#327)
+# ---------------------------------------------------------------------------
+#
+# #325 made a **Dashboard fault** an involuntary **Detach** and #326 extended
+# that to a Dashboard that never came up. Both were proved at the serial driver
+# seam. The failure that motivated the work was reported against
+# ``--interactive --parallel``, and Parallel mode is the mode with the most
+# **Agents** in flight to lose — so the recovery is proved *here*, through the
+# real :class:`~git_loopy.interactive.driver.InteractiveDriver` over the real
+# Rolling-dispatch driver, rather than inferred from the shared seam.
+
+
+class _RecordingSink:
+    """An ``EventSink`` that records every event, optionally delegating on.
+
+    Used twice per fault test: once wrapping the live
+    :class:`~git_loopy.interactive.state.LiveRunState` (what the **Dashboard**
+    saw before the fault) and once standing in for the parked line printer
+    (what landed in scrollback after it). Together they account for every event
+    of the **Run** exactly once — the drop/duplication check #327 asks for.
+    """
+
+    def __init__(self, inner: Any = None) -> None:
+        self.events: list[dict[str, Any]] = []
+        self._inner = inner
+
+    def render(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+        if self._inner is not None:
+            self._inner.render(event)
+
+    def stream_reasoning(self, delta: str, issue: int | str | None = None) -> None:
+        if self._inner is not None:
+            self._inner.stream_reasoning(delta, issue=issue)
+
+    def stream_message(self, delta: str, issue: int | str | None = None) -> None:
+        if self._inner is not None:
+            self._inner.stream_message(delta, issue=issue)
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything the driver asks of the live state beyond the sink contract
+        # (``mark_stopped`` on a **Stop**) reaches the real ``LiveRunState``, so
+        # the recorder is a faithful stand-in rather than a narrower object that
+        # would make a regression look like an ``AttributeError``.
+        inner = self.__dict__.get("_inner")
+        if inner is None:
+            raise AttributeError(name)
+        return getattr(inner, name)
+
+
+class _ScrollbackDriver(InteractiveDriver):
+    """The real interactive driver with both sink ends instrumented.
+
+    Only the *parked line printer* is substituted (for a recorder), so the swap
+    seam, the **Terminal owner**, the fault classification and the exit code are
+    all the production ones.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.live = LiveRunState()
+        self.dashboard_events = _RecordingSink(inner=self.live)
+        self.scrollback_events = _RecordingSink()
+        super().__init__(self.dashboard_events, **kwargs)
+
+    def attach_detach(
+        self, *, sinks: Any, line_printer: Any, console: Any, record: Any = None
+    ) -> None:
+        super().attach_detach(
+            sinks=sinks,
+            line_printer=self.scrollback_events,
+            console=console,
+            record=record,
+        )
+
+
+class _FaultingDashboard:
+    """A **Dashboard** that raises when ``fault_now`` is set (#325).
+
+    Until then it behaves like the real app: it runs until the driver calls
+    ``exit`` on the loop's natural completion.
+    """
+
+    def __init__(
+        self,
+        state: Any,
+        *,
+        summary: Any = None,
+        log_source: Any = None,
+        fault_now: asyncio.Event,
+        error: Exception,
+    ) -> None:
+        self.state = state
+        self.summary = summary
+        self.log_source = log_source
+        self.exited = False
+        self.detach_requested = False
+        self._fault_now = fault_now
+        self._error = error
+        self._closed = asyncio.Event()
+
+    async def run_async(self) -> None:
+        closed = asyncio.ensure_future(self._closed.wait())
+        faulted = asyncio.ensure_future(self._fault_now.wait())
+        done, pending = await asyncio.wait(
+            {closed, faulted}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if faulted in done:
+            raise self._error
+
+    def exit(self, *_args: Any, **_kwargs: Any) -> None:
+        self.exited = True
+        self._closed.set()
+
+
+def _fault_driver(
+    fault_now: asyncio.Event, *, error: Exception | None = None
+) -> _ScrollbackDriver:
+    """A driver whose Dashboard faults the moment ``fault_now`` is set."""
+    raised = error if error is not None else RuntimeError("render crashed")
+    return _ScrollbackDriver(
+        app_factory=lambda state, **kw: _FaultingDashboard(
+            state, fault_now=fault_now, error=raised, **kw
+        ),
+        terminal=TerminalOwner(FakeTerminal()),
+    )
+
+
+def _gated_client_cls(holds: dict[int, asyncio.Event]) -> type[_ParallelFakeClient]:
+    """A client whose Lane sessions block on a per-issue hold event.
+
+    Keeping each Lane suspended mid-session is what makes "every in-flight Lane
+    kept running" an assertion about genuine overlap rather than about a Run
+    that happened to finish before the Dashboard died.
+    """
+
+    class _GatedClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None and "/integrate/" not in str(
+                working_directory
+            ):
+                ref = int(Path(str(working_directory)).name.removeprefix("issue-"))
+                real_send_and_wait = session.send_and_wait
+
+                async def gated_send_and_wait(
+                    prompt: str,
+                    *,
+                    timeout: float = 60.0,
+                    _ref: int = ref,
+                    **extra: Any,
+                ) -> SessionEvent | None:
+                    await holds[_ref].wait()
+                    return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+                session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    return _GatedClient
+
+
+async def _settle(turns: int = 100) -> None:
+    """Yield to the event loop enough times for a pending swap to land."""
+    for _ in range(turns):
+        await asyncio.sleep(0)
+
+
+async def _until(
+    reached: Callable[[], bool],
+    run_task: "asyncio.Task[int]",
+    *,
+    what: str,
+    timeout: float = 10.0,
+) -> None:
+    """Yield until ``reached()``, failing rather than hanging if it never is.
+
+    A **Run** that ends early — or crashes — while the test is waiting for a
+    Lane to open would otherwise poll forever and hang the whole suite: the
+    regression it was written to catch would look like a stalled CI job rather
+    than a failing assertion. The Run's own outcome is surfaced first, because
+    that is the interesting half of such a failure.
+    """
+
+    async def poll() -> None:
+        while not reached():
+            if run_task.done():
+                run_task.result()
+                raise AssertionError(f"the Run ended before {what}")
+            await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(poll(), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise AssertionError(f"timed out waiting for {what}") from None
+
+
+class _ResolutionYieldingClient(_ParallelFakeClient):
+    """A client whose **auto-resolution** sessions suspend before responding.
+
+    A real agent session awaits the harness and so hands the event loop back;
+    the in-process fake resolves without ever suspending, which would let a
+    whole Integration cascade run to completion before the driver's peer task
+    was scheduled at all — making "the Dashboard died mid-Integration" untestable
+    rather than untrue. Yielding models what the real session does, so the fault
+    is genuinely classified while the cascade is still in flight.
+    """
+
+    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+        session = await super().create_session(**kwargs)
+        working_directory = kwargs.get("working_directory")
+        if working_directory is not None and "/integrate/" in str(
+            working_directory
+        ):
+            real_send_and_wait = session.send_and_wait
+
+            async def yielding_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                await _settle(20)
+                return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = yielding_send_and_wait  # type: ignore[method-assign]
+        return session
+
+
+def test_parallel_dashboard_fault_leaves_every_in_flight_lane_running(
+    tmp_path, monkeypatch
+) -> None:
+    """A **Dashboard fault** mid-**Run** costs the view, never the **Lanes**.
+
+    Two ``parallel-safe`` issues open Lanes and are held mid-session; the
+    Dashboard then raises. The fault is an involuntary **Detach** (#325), so
+    both Lanes run to their natural outcome, both contributions integrate and
+    close, and the remainder of the Run prints to scrollback — with the fault
+    written to the **Run**'s durable record and reported in the exit code
+    exactly as it is in serial mode.
+    """
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    holds = {42: asyncio.Event(), 43: asyncio.Event()}
+    opened: list[int] = []
+
+    class _CountingClient(_gated_client_cls(holds)):  # type: ignore[misc]
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None and "/integrate/" not in str(
+                working_directory
+            ):
+                opened.append(
+                    int(Path(str(working_directory)).name.removeprefix("issue-"))
+                )
+            return session
+
+    fake_client = _CountingClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    fault_now = asyncio.Event()
+    driver = _fault_driver(fault_now)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
+        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
+        # Both Lanes are suspended inside their agent session — the Dashboard
+        # dies with the maximum amount of work in flight.
+        fault_now.set()
+        await _settle()
+        for ref in (42, 43):
+            holds[ref].set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+
+    # The work came out clean, so the only remaining fact is the fault itself.
+    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
+
+    # Every in-flight Lane ran to its natural outcome: one commit each, both
+    # worktrees torn down, both contributions integrated onto base and closed.
+    events = _logged_events(tmp_path)
+    commits = [e for e in events if e["type"] == "wrapper.commit.recorded"]
+    assert len(commits) == 2, f"a Lane was lost with the Dashboard: {commits}"
+    assert len(_lane_worktree_removes(fake_git)) == 2
+    assert fake_git.active_worktrees == []
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    assert [e["issue"] for e in events if e["type"] == "wrapper.auto_close"] == [
+        42,
+        43,
+    ]
+
+    # The fault is in the durable record, so a replay tells it from a voluntary
+    # Detach — which records nothing.
+    faults = [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]
+    assert len(faults) == 1, f"expected one recorded fault, got {faults}"
+    assert faults[0]["error_type"] == "RuntimeError"
+    assert "render crashed" in faults[0]["error"]
+    # Run-scoped, never contribution-scoped: the fault is a fact about the
+    # Dashboard, not about any Lane, so a replay never attributes it to one.
+    assert faults[0].get("iter") is None
+    assert "lane_issue" not in faults[0]
+    assert "contribution_id" not in faults[0]
+
+    # The Run carried on in scrollback: both Lanes' closures printed there.
+    printed = [e["type"] for e in driver.scrollback_events.events]
+    assert "wrapper.auto_close" in printed
+    assert "wrapper.run.end" in printed
+
+
+def test_parallel_dashboard_fault_mid_integration_lets_auto_resolution_finish(
+    tmp_path, monkeypatch
+) -> None:
+    """A fault during **Integration** never leaves a partly merged state.
+
+    Issue 42's contribution gates red in its private **Integration stage** and
+    the Dashboard raises at that very gate run — the worst moment to lose the
+    view, with a merge staged and unpublished. Bounded auto-resolution keeps
+    running to its second, green attempt, the verified stage is published to
+    base and the issue closed; base never carries the red result, and no
+    worktree or branch is left behind.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ResolutionYieldingClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    fault_now = asyncio.Event()
+
+    class _FaultingAtGate(FakeGateRunner):
+        """Kills the Dashboard on 42's first (red) gate run, mid-Integration."""
+
+        def run(self, worktree: Path) -> Any:
+            if Path(worktree).name == "issue-42":
+                fault_now.set()
+            return super().run(worktree)
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: _FaultingAtGate(by_issue={42: [False, False, True]}, default=True),
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    driver = _fault_driver(fault_now, error=RuntimeError("dashboard died mid-merge"))
+    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
+
+    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
+
+    # Auto-resolution kept running past the fault: two bounded attempts in 42's
+    # own private stage, then a green publication.
+    resolution_dirs = [
+        c["working_directory"]
+        for c in fake_client.create_calls
+        if c["working_directory"] and "/integrate/" in c["working_directory"]
+    ]
+    assert len(resolution_dirs) == 2, (
+        f"auto-resolution stopped with the Dashboard: {resolution_dirs}"
+    )
+    assert all(wd.endswith("/issue-42") for wd in resolution_dirs)
+
+    # Nothing is left half-merged: base only ever received verified stages,
+    # both issues closed, every worktree torn down and every Lane branch reaped.
+    assert all("/integrate/" in b for b in fake_git.merge_calls)
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
+    assert fake_git.active_worktrees == []
+    assert fake_gh.issue_comment_calls == [], "no serial-fallback breadcrumb"
+
+    events = _logged_events(tmp_path)
+    assert [e["issue"] for e in events if e["type"] == "wrapper.auto_close"] == [
+        42,
+        43,
+    ]
+    assert len([e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]) == 1
+
+    # The swap took effect while the Integration cascade was still emitting, so
+    # the operator watched the rest of it happen in scrollback rather than being
+    # told about it only after the fact.
+    printed = [e["type"] for e in driver.scrollback_events.events]
+    assert "wrapper.auto_close" in printed
+
+
+def test_parallel_dashboard_fault_drops_or_duplicates_no_lane_event(
+    tmp_path, monkeypatch
+) -> None:
+    """Every event is rendered exactly once across the fault swap.
+
+    The always-on replay JSONL is the authority on what the **Run** emitted
+    (it is written independently of which sinks are registered), so the two
+    halves of the operator's view — what the **Dashboard** saw before the fault
+    and what the line printer saw after it — must partition it exactly: no
+    **Lane contribution**'s event rendered twice, none lost in the handoff, and
+    each Lane's per-issue attribution intact on both sides.
+    """
+    fake_git, _gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    holds = {42: asyncio.Event(), 43: asyncio.Event()}
+    fake_client = _gated_client_cls(holds)(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    fault_now = asyncio.Event()
+    driver = _fault_driver(fault_now)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
+        # Let one Lane's session start and stream before the fault, so the
+        # split genuinely falls mid-Run rather than before it.
+        await _until(
+            lambda: len(fake_client.created) >= 2, run_task, what="two open Lanes"
+        )
+        holds[42].set()
+        await _settle()
+        fault_now.set()
+        await _settle()
+        holds[43].set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
+
+    def _identity(event: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            event["type"],
+            event.get("iter"),
+            event.get("lane_issue"),
+            event.get("issue"),
+            event.get("ts"),
+        )
+
+    logged = [_identity(e) for e in _logged_events(tmp_path)]
+    seen = [_identity(e) for e in driver.dashboard_events.events] + [
+        _identity(e) for e in driver.scrollback_events.events
+    ]
+
+    assert seen == logged, "the swap dropped, duplicated or reordered an event"
+
+    # The split is real on both sides — the assertion above would also hold if
+    # the Dashboard had seen everything or nothing.
+    assert driver.dashboard_events.events, "nothing reached the live Dashboard"
+    assert driver.scrollback_events.events, "nothing reached the line printer"
+
+    # Per-Lane accounting after the fault is the accounting that happened: one
+    # commit per Lane, each stamped with its own issue, across the two halves.
+    lane_commits = [
+        e["lane_issue"]
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.commit.recorded"
+    ]
+    assert sorted(lane_commits) == [42, 43]
+
+
+def test_parallel_dashboard_fault_keeps_refill_within_the_lane_cap(
+    tmp_path, monkeypatch
+) -> None:
+    """Refill and the **Lane cap** behave normally after the swap (#327).
+
+    Four eligible ``parallel-safe`` issues against ``parallel=2``: the Dashboard
+    dies with both slots occupied, and the scheduler carries on exactly as it
+    would have — no third Lane while the cap is full, prompt refill the moment a
+    slot frees, and the whole **Pool** drained to a truthful ``empty_pool``.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
+            for n in (42, 43, 44, 45)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    holds = {n: asyncio.Event() for n in (42, 43, 44, 45)}
+    opened: list[int] = []
+
+    class _CountingGatedClient(_gated_client_cls(holds)):  # type: ignore[misc]
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None and "/integrate/" not in str(
+                working_directory
+            ):
+                opened.append(
+                    int(Path(str(working_directory)).name.removeprefix("issue-"))
+                )
+            return session
+
+    fake_client = _CountingGatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    real_add_worktree = fake_git.add_worktree
+    real_remove_worktree = fake_git.remove_worktree
+    live_lane_worktrees: set[Path] = set()
+    high_water_mark = 0
+
+    def tracked_add_worktree(path: Path, *, branch: str, base: str) -> FakeGitClient:
+        child = real_add_worktree(path, branch=branch, base=base)
+        if "/integrate/" not in str(path):
+            live_lane_worktrees.add(Path(path))
+            nonlocal high_water_mark
+            high_water_mark = max(high_water_mark, len(live_lane_worktrees))
+        return child
+
+    def tracked_remove_worktree(path: Path, *, force: bool = False) -> None:
+        real_remove_worktree(path, force=force)
+        live_lane_worktrees.discard(Path(path))
+
+    monkeypatch.setattr(fake_git, "add_worktree", tracked_add_worktree)
+    monkeypatch.setattr(fake_git, "remove_worktree", tracked_remove_worktree)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unlimited: drive until the pool drains
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    fault_now = asyncio.Event()
+    driver = _fault_driver(fault_now)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
+        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
+        fault_now.set()
+        await _settle()
+
+        # The swap changed nothing about dispatch: the cap still withholds a
+        # third Lane while both slots are occupied.
+        assert len(opened) == 2, f"a 3rd Lane opened past the cap: {opened}"
+
+        # Freeing one slot still refills promptly, without waiting for the
+        # other held Lane.
+        holds[opened[0]].set()
+        await _until(
+            lambda: len(opened) >= 3, run_task, what="the freed slot to refill"
+        )
+
+        for ref in (42, 43, 44, 45):
+            holds[ref].set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
+    assert high_water_mark == 2, (
+        f"expected the Lane cap (2) to bind, saw high water mark {high_water_mark}"
+    )
+    lane_issues = sorted(
+        int(b.split("/issue-")[1]) for (_p, b, _base) in _lane_worktree_adds(fake_git)
+    )
+    assert lane_issues == [42, 43, 44, 45], "the fault stranded a candidate"
+
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+
+
+def test_parallel_dashboard_fault_at_startup_runs_every_lane_in_scrollback(
+    tmp_path, monkeypatch
+) -> None:
+    """A Dashboard that never comes up still runs the whole **Wave** (#326).
+
+    The factory raises before there is anything to peer with, so the swap
+    happens before the loop task exists: every Lane's event goes to the line
+    printer from the **Run**'s first line, nothing is handed to a Dashboard that
+    was never there, and the exit code is left to the work — this is the
+    ``[tui]``-extra-absent path's behaviour, and Parallel mode learns no second
+    one.
+    """
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+
+    def exploding_factory(_state: Any, **_kw: Any) -> Any:
+        raise RuntimeError("dashboard could not start")
+
+    driver = _ScrollbackDriver(
+        app_factory=exploding_factory, terminal=TerminalOwner(FakeTerminal())
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
+
+    # The exit code is the work's own: nothing was taken from the operator
+    # mid-Run, so there is no fault to report in it.
+    assert exit_code == 0, f"got {exit_code}"
+
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == 2
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    assert fake_git.active_worktrees == []
+
+    faults = [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]
+    assert len(faults) == 1
+    assert faults[0]["error_type"] == "RuntimeError"
+
+    # Nothing was rendered into a live view that never existed; every event of
+    # the Run is in scrollback, behind the notice that explains why it is there.
+    assert driver.dashboard_events.events == []
+    printed = [e["type"] for e in driver.scrollback_events.events]
+    assert printed[0] == WRAPPER_DASHBOARD_FAULT
+    assert printed == [e["type"] for e in events]
+
+
+class _DetachingDashboard(_FaultingDashboard):
+    """The operator's voluntary **Detach** (``d``), for the contrast case."""
+
+    async def run_async(self) -> None:
+        await self._fault_now.wait()
+        self.detach_requested = True
+        self.exit()
+
+
+def test_parallel_voluntary_detach_records_no_dashboard_fault(
+    tmp_path, monkeypatch
+) -> None:
+    """A voluntary **Detach** under Rolling dispatch stays indistinguishable.
+
+    The two Detaches share one continuation, so what tells them apart in a
+    replay is the record: an operator who chose to detach leaves no
+    ``wrapper.dashboard.fault`` behind and keeps the work's own exit code. The
+    contrast is what makes the fault tests above assert something.
+    """
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    holds = {42: asyncio.Event(), 43: asyncio.Event()}
+    fake_client = _gated_client_cls(holds)(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    detach_now = asyncio.Event()
+    driver = _ScrollbackDriver(
+        app_factory=lambda state, **kw: _DetachingDashboard(
+            state, fault_now=detach_now, error=RuntimeError("unused"), **kw
+        ),
+        terminal=TerminalOwner(FakeTerminal()),
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
+        await _until(
+            lambda: len(fake_client.created) >= 2, run_task, what="two open Lanes"
+        )
+        detach_now.set()
+        await _settle()
+        for ref in (42, 43):
+            holds[ref].set()
+        return await asyncio.wait_for(run_task, timeout=10)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 0, "a Detach returns the work's own exit code"
+    events = _logged_events(tmp_path)
+    assert [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT] == []
+    # ...and the Lanes ran on into scrollback exactly as they do after a fault.
+    assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == 2
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
+    assert fake_git.active_worktrees == []
+    assert driver.scrollback_events.events, "the Detach never reached the printer"
+
+
+def test_parallel_dashboard_fault_never_masks_a_stuck_run(
+    tmp_path, monkeypatch
+) -> None:
+    """A renderer crash never rewrites the outcome of the work (#325 in parallel).
+
+    :data:`~git_loopy.interactive.driver.EXIT_DASHBOARD_FAULT` is the *only
+    remaining fact* about a Run that came out clean; a Run that ended ``stuck``
+    already carries the fact worth reporting, and reporting the Dashboard
+    instead would tell a supervising script the wrong thing. The rule is the
+    serial one and Parallel mode keeps it.
+
+    Both issues are ``parallel-safe`` and their **Lanes** are held mid-session
+    when the Dashboard raises, so this is a genuine mid-**Run** swap over live
+    Lanes — and their agent commits nothing, so the shared **Strike** machine
+    reaches its limit and the Run ends ``stuck`` with its Lanes drained.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
+            for n in (42, 43)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    holds = {42: asyncio.Event(), 43: asyncio.Event()}
+    opened: list[int] = []
+
+    class _StuckGatedClient(_gated_client_cls(holds)):  # type: ignore[misc]
+        """Held Lanes whose agent commits nothing — the Strike machine's input."""
+
+        _session_cls = _NoProgressFakeSession
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is not None and "/integrate/" not in str(
+                working_directory
+            ):
+                opened.append(
+                    int(Path(str(working_directory)).name.removeprefix("issue-"))
+                )
+            return session
+
+    fake_client = _StuckGatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unbounded: only the Strike limit can stop this Run
+        max_nmt_strikes=2,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    fault_now = asyncio.Event()
+    driver = _fault_driver(fault_now)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
+        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
+        fault_now.set()
+        await _settle()
+        for ref in (42, 43):
+            holds[ref].set()
+        return await asyncio.wait_for(run_task, timeout=60)
+
+    exit_code = asyncio.run(scenario())
+
+    # The fault was classified mid-Run, over live Lanes...
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]) == 1
+    assert driver.scrollback_events.events, "the swap never reached the printer"
+    assert len(_lane_worktree_adds(fake_git)) >= 2, "no Lane was ever in flight"
+
+    # ...and the work's own outcome is what the exit code reports.
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "stuck"
+    assert exit_code == loop_module.exit_code_for("stuck")
+    assert exit_code != EXIT_DASHBOARD_FAULT
