@@ -118,8 +118,9 @@ _RE_AC: re.Pattern[str] = re.compile(r"^## Acceptance criteria", re.MULTILINE)
 
 # PR AFK-ready discriminator. Unlike issues (whose AFK shape lives in the
 # body), a PR's agent brief is posted by ``/triage`` as a *comment* headed
-# ``## Agent Brief`` (see .copilot/skills/triage/AGENT-BRIEF.md). We scan the
-# body and every comment for that header.
+# ``## Agent Brief`` (see ``skills/triage/AGENT-BRIEF.md`` in the pinned
+# catalog, ``bradcstevens/git-loopy-skills``). We scan the body and every
+# comment for that header.
 _RE_AGENT_BRIEF: re.Pattern[str] = re.compile(r"^## Agent Brief", re.MULTILINE)
 
 # PRDs file-name discriminator: ``<NNN>-<anything>.md`` where ``<NNN>``

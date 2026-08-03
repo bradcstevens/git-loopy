@@ -1,5 +1,0 @@
-interface:
-  display_name: "Setup Agent Skills"
-  short_description: "Bootstrap and configure a GitHub-ready project"
-policy:
-  allow_implicit_invocation: false

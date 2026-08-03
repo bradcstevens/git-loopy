@@ -49,8 +49,11 @@ git-loopy/.tmp/
 prds/
 issues/
 
-# Copilot CLI session state (per-session artifacts; never commit)
-.copilot/session-state/
+# Copilot CLI's own working tree. git-loopy reads Skills from the catalog it
+# installs from the pin and from nowhere else (ADR-0025), so this repository
+# tracks no `.copilot/` catalog (#340) -- only whatever a local Copilot CLI
+# session happens to leave here, which is never committed.
+.copilot/
 .mypy_cache/
 .pytest_cache/
 .test-tmp/
@@ -60,8 +63,6 @@ issues/
 docs/feature-requests/
 
 .reference/
-
-.copilot/skills/azure-mcaps-resource-deployment/
 
 # Nested git worktrees. These are gitlinks (mode 160000) with no .gitmodules
 # entry, so committing one makes `actions/checkout` fail its submodule cleanup

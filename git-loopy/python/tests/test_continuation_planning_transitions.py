@@ -43,7 +43,7 @@ from git_loopy.gh import (
     GhError,
 )
 from tests.skill_templates import (
-    PROJECT_SKILLS_DIR as SKILLS_DIR,
+    CONTRACT_SKILLS_DIR as SKILLS_DIR,
     fill as _fill,
     template as _template,
     templates as _templates,

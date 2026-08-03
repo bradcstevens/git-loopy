@@ -1,18 +1,18 @@
-"""The mandatory Transition-owner and packaged-Skill coverage gate (#262).
+"""The mandatory Transition-owner and contract-fixture coverage gate (#262).
 
 Each of #258-#261 pinned the owners it introduced, and each one is right about
-its own corner. None of them can see the catalog whole, and that is the gap this
+its own corner. None of them can see the contract whole, and that is the gap this
 module exists to close: nothing asserted that the *union* of those suites covers
-every locked Action kind and disposition, that a Skill added tomorrow cannot
-quietly hand-write a Producer revision, that the packaged distribution ships the
-same requests the project sources document, or that report mode stays unadvertised
+every locked Action kind and disposition, that a prompt added tomorrow cannot
+quietly hand-write a Producer revision, or that report mode stays unadvertised
 until all of that is true.
 
 This is a **gate**, not a description. Its data is the coverage claim itself, so a
-kind that loses its owner, an operation nobody advertises, or a mirror that drifts
-fails here by name rather than being noticed later by an operator whose Run went
-quiet. The last test is the interlock #263 depends on: report-mode capability
-advertisement may not be switched on while any of it is incomplete.
+kind that loses its owner, an operation nobody advertises, or a fixture that grows
+back into a catalog fails here by name rather than being noticed later by an
+operator whose Run went quiet. The last test is the interlock #263 depends on:
+report-mode capability advertisement may not be switched on while any of it is
+incomplete.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import pytest
 
 from git_loopy import continuation
 from tests.skill_templates import (
-    PROJECT_SKILLS_DIR,
+    CONTRACT_SKILLS_DIR,
     skill_text,
     template,
     templates,
@@ -51,10 +51,13 @@ OWNER_SKILLS: frozenset[str] = frozenset(
     skill for owners in TRANSITION_OWNERS.values() for skill in owners
 )
 
-#: `/next` is a Consumer and `/handoff` carries context; neither owns a transition,
-#: so neither may publish. They are named rather than lumped in with the pointer-only
-#: helpers because their boundary is the one most tempting to cross.
-READ_ONLY_CONSUMERS: tuple[str, ...] = ("next", "handoff")
+#: `/next` is a Consumer: it binds three `reconcile` requests and writes nothing,
+#: so it does carry a git-loopy contract and is held to naming only reads. It is
+#: named rather than lumped in with the pointer-only helpers because its boundary
+#: is the one most tempting to cross. `/handoff` carries context and owns no
+#: transition, so it carries no contract at all; that claim is
+#: `test_nested_participants_stay_pointer_only`'s.
+READ_ONLY_CONSUMERS: tuple[str, ...] = ("next",)
 
 #: The locked areas that are *behaviours* rather than owners. Each names the suite
 #: and the test that pins it, so deleting the test fails this gate instead of
@@ -93,7 +96,38 @@ READ_ONLY_OPERATIONS: frozenset[str] = frozenset({"capabilities", "reconcile"})
 
 def _catalog_skills() -> list[str]:
     return sorted(
-        child.name for child in PROJECT_SKILLS_DIR.iterdir() if child.is_dir()
+        child.name for child in CONTRACT_SKILLS_DIR.iterdir() if child.is_dir()
+    )
+
+
+def test_the_contract_fixture_holds_only_contract_carrying_prompts() -> None:
+    """The fixture is git-loopy's contract surface, not a catalog growing back.
+
+    #340 removed the root `.copilot/` tree because a catalog no Run reads
+    (ADR-0025) drifts unfalsifiably -- it had lost `tdd` and `domain-modeling`
+    without a single suite noticing. What is kept here is narrower on purpose:
+    the prompts that document a request against git-loopy's *own* native
+    command. A prompt that names no such request is a Skill, and a directory of
+    Skills is the thing that was just deleted, so it fails here rather than
+    quietly re-establishing the tree under a new path.
+    """
+    present = _catalog_skills()
+    assert present, "the Continuation contract fixture is empty"
+
+    contractless = [
+        skill
+        for skill in present
+        if "git-loopy continuation" not in skill_text(skill) and not templates(skill)
+    ]
+    assert not contractless, (
+        "these prompts carry no git-loopy Continuation contract, so they are "
+        "Skills rather than contract fixtures -- the catalog ADR-0025 retired is "
+        f"growing back: {contractless}"
+    )
+    assert set(present) == OWNER_SKILLS | set(READ_ONLY_CONSUMERS), (
+        "the fixture and the coverage claim disagree about who carries the "
+        f"contract: fixture {present}, claim "
+        f"{sorted(OWNER_SKILLS | set(READ_ONLY_CONSUMERS))}"
     )
 
 
@@ -153,7 +187,7 @@ def test_every_locked_coverage_area_has_a_publishing_owner(area: str) -> None:
     owners = TRANSITION_OWNERS[area]
     assert owners, f"{area} names no Transition owner"
     for skill in owners:
-        assert (PROJECT_SKILLS_DIR / skill / "SKILL.md").is_file(), (
+        assert (CONTRACT_SKILLS_DIR / skill / "SKILL.md").is_file(), (
             f"{area} names {skill}, which is not in the Skill catalog"
         )
         assert _completion_templates(skill), (
@@ -325,9 +359,9 @@ def test_no_owner_reconstructs_what_reconciliation_derives(skill: str) -> None:
 
 @pytest.mark.parametrize("skill", READ_ONLY_CONSUMERS)
 def test_a_read_only_consumer_publishes_nothing(skill: str) -> None:
-    """`/next` presents the projection and `/handoff` carries context.
+    """`/next` presents the projection; presenting it is not publishing it.
 
-    Either one publishing would be a second answer to a question the contract
+    A Consumer publishing would be a second answer to a question the contract
     already answers, and the two answers are free to disagree.
     """
     assert skill not in OWNER_SKILLS
@@ -335,22 +369,29 @@ def test_a_read_only_consumer_publishes_nothing(skill: str) -> None:
     assert named <= READ_ONLY_OPERATIONS, (
         f"{skill} names writing operations: {sorted(named - READ_ONLY_OPERATIONS)}"
     )
+    assert not _completion_templates(skill), (
+        f"{skill} is a Consumer but documents completion requests "
+        f"{sorted(_completion_templates(skill))}"
+    )
 
 
 # ---------------------------------------------------------------------------
 # What this suite does and does not prove about an adopter
 #
-# Every guard above reads this checkout's own `.copilot/skills/`. Under
-# ADR-0025 git-loopy ships no Skills and copies none into a consuming project:
-# an adopter runs the catalog installed from the pinned external repository. So
-# these guards prove the contract is coherent *here*; they say nothing about
-# what an adopter's session is told to publish. The comparison that used to
-# bridge the two — a byte-for-byte check against the vendored mirror in the
-# wheel — has no subject any more, because there is no mirror.
+# Every guard above reads the Continuation contract fixture, which is git-loopy's
+# own contract surface rather than a catalog: #340 removed the root
+# `.copilot/skills/` tree these guards used to read, because under ADR-0025 an
+# adopter runs the catalog installed from the pinned external repository and no
+# Run consults a tracked tree here. So these guards prove the contract is
+# coherent *as git-loopy states it*; they say nothing about what an adopter's
+# session is told to publish, because the pinned revision does not carry these
+# requests yet.
 #
-# Carrying the Continuation contract into the pinned catalog is separate work
-# with its own issue; when it lands, the bridge to rebuild is a guard over the
-# acquired revision (see `test_prompt_metadata` for the offline-safe shape).
+# #341 is the work that closes that: publish the contract-carrying Skills
+# upstream, and replace this fixture with a guard over the acquired revision
+# (see `test_prompt_metadata` for the offline-safe shape). Until it lands, this
+# fixture is also the only surviving copy of those requests, which is why #340
+# moved them rather than deleting them with the rest of the tree.
 # ---------------------------------------------------------------------------
 
 

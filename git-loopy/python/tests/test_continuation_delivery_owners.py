@@ -33,7 +33,7 @@ import pytest
 from git_loopy import cli, continuation
 from tests.continuation_transport import RecordingGitHub
 from tests.skill_templates import (
-    PROJECT_SKILLS_DIR as SKILLS_DIR,
+    CONTRACT_SKILLS_DIR as SKILLS_DIR,
     fill as _fill,
     template as _template,
     templates as _templates,
@@ -799,9 +799,21 @@ def test_every_delivery_owner_publishes_natively_and_writes_no_carrier_comment(
 
 
 def test_nested_participants_stay_pointer_only() -> None:
-    """A nested surface returns evidence to its owner; it publishes nothing."""
+    """A nested surface returns evidence to its owner; it publishes nothing.
+
+    This used to read each prompt out of the checkout's own `.copilot/skills/`
+    and assert the absence of a publish instruction. #340 removed that tree,
+    because under ADR-0025 those prompts belong to the pinned catalog and a Run
+    reads Skills from the installed catalog alone -- so "what `/tdd`'s prompt
+    says" stopped being a claim this repository is entitled to make. What it is
+    still entitled to say, and what actually protects the boundary, is that a
+    participant owning no durable transition is handed no Continuation contract
+    at all: none of them has an entry in the contract fixture, so there is
+    nothing for one to publish *with*.
+    """
     for skill in POINTER_ONLY:
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert "continuation publish" not in text
-        assert _templates(skill) == {}
-        assert continuation._RECORD_MARKER not in text
+        assert not (SKILLS_DIR / skill).exists(), (
+            f"{skill} owns no Workflow transition, so git-loopy hands it no "
+            "Continuation contract; an entry here would give a nested "
+            "participant something to publish with"
+        )

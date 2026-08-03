@@ -47,7 +47,7 @@ from git_loopy.gh import (
     GhError,
 )
 from tests.skill_templates import (
-    PROJECT_SKILLS_DIR,
+    CONTRACT_SKILLS_DIR,
     fill,
     skill_text,
     template,
@@ -61,7 +61,7 @@ INDEX_LABEL = "git-loopy-continuation"
 # `/next` is the only Consumer here, so its helpers default to it; the extraction
 # itself is shared, because four copies of the marker regexp is four chances for
 # the thing that reads the contract to disagree with the thing that reads it.
-SKILLS_DIR = PROJECT_SKILLS_DIR
+SKILLS_DIR = CONTRACT_SKILLS_DIR
 _fill = fill
 
 
