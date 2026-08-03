@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.7 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.8 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -525,10 +525,13 @@ expected toolkit-neutral Dashboard and per-issue drill-in model.
 
 The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
 `detail header -> Iteration breakdown -> Log`. Queue columns are ordered `Issue | Status | Started
-| Active | Closed | Iters | Tokens in | Tokens out | Cost`. Iteration-breakdown columns are ordered
-`Contribution | Outcome | Duration | Status | Active | Tokens in | Tokens out | Cost | Peak Context
-fill`, where `Outcome` and `Duration` are the owning Iteration's own disposition and monotonic
-duration while `Status` and `Active` remain scoped to the issue within that contribution. Context
+| Active | Closed | Iters | Tokens in | Tokens out | Credits | Premium`. Iteration-breakdown
+columns are ordered `Contribution | Outcome | Duration | Status | Active | Tokens in | Tokens out
+| Cache read | Cache write | Credits | Premium | Peak Context fill`, where `Outcome` and `Duration`
+are the owning Iteration's own disposition and monotonic duration while `Status` and `Active`
+remain scoped to the issue within that contribution. `Cache read` and `Cache write` are components
+of `Tokens in` rather than figures beside it, so no total sums them in; they are drill-in detail
+and reach no Queue or Summary column. Context
 fill is current-Iteration scoped; Queue accounting and the Log aggregate one issue across
 contributions; each Summary row is one Iteration or Lane contribution; and the Iteration breakdown
 is the same ordered contribution set counted by `Iters`.

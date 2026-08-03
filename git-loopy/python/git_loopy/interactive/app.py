@@ -258,6 +258,8 @@ class _IterationBreakdown(DataTable):
         self.add_column("Active", key="active")
         self.add_column("Tokens in", key="tokens_in")
         self.add_column("Tokens out", key="tokens_out")
+        self.add_column("Cache read", key="cache_read")
+        self.add_column("Cache write", key="cache_write")
         self.add_column("Credits", key="credits")
         self.add_column("Premium", key="premium_requests")
         self.add_column("Peak Context fill", key="peak_context")
@@ -670,6 +672,8 @@ class GitLoopyApp(App[None]):
                 format_duration(contribution["active_seconds"]),
                 _format_optional_tokens(contribution["consumption"]["tokens_in"]),
                 _format_optional_tokens(contribution["consumption"]["tokens_out"]),
+                _format_optional_tokens(contribution["consumption"]["cache_read"]),
+                _format_optional_tokens(contribution["consumption"]["cache_write"]),
                 (
                     f"{contribution['credits']:.4f}"
                     if contribution["credits"] is not None

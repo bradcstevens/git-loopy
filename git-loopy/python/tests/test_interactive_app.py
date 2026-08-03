@@ -674,6 +674,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "Active",
         "Tokens in",
         "Tokens out",
+        "Cache read",
+        "Cache write",
         "Credits",
         "Premium",
         "Peak Context fill",
@@ -686,6 +688,8 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "0:00:04",
         "100",
         "50",
+        "—",
+        "—",
         "—",
         "—",
         "12,000/32,000 38%",
@@ -846,6 +850,234 @@ async def test_esc_on_dashboard_is_a_noop() -> None:
         assert app.query_one("#log", _LogView).display is False
 
 
+async def test_drill_in_breakdown_shows_the_cache_split_per_contribution() -> None:
+    """The **Iteration breakdown** separates cache reads from cache writes (#333).
+
+    A genuinely oversized **Iteration** and a long agent loop re-sending the
+    same context produce similar token totals; only the split tells them apart.
+    The figures ride the harness's own reported counts — the same ones
+    ``test_events`` pins at the mapper — and are components of ``tokens_in``
+    rather than figures beside it, so nothing here sums them into a total.
+    """
+    state = LiveRunState(
+        run_id="01C",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 30.0,
+        wall_clock=lambda: datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc),
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [42]})
+    state.stream_message("<working issue=42>\n")
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "m",
+            "input": 13_512,
+            "output": 240,
+            "cache_read": 8_267,
+            "cache_write": 5_235,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 6.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 13_512,
+                        "tokens_out": 240,
+                        "cache_read": 8_267,
+                        "cache_write": 5_235,
+                    },
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        breakdown = app.query_one("#iteration-breakdown", DataTable)
+        columns = [str(column.label) for column in breakdown.columns.values()]
+        row = breakdown.get_row_at(0)
+        queue_columns = [
+            str(column.label)
+            for column in app.query_one("#queue", DataTable).columns.values()
+        ]
+
+    assert columns[columns.index("Tokens out") + 1 :][:2] == [
+        "Cache read",
+        "Cache write",
+    ], "the split sits with the token story it decomposes"
+    assert row[columns.index("Cache read")] == "8,267"
+    assert row[columns.index("Cache write")] == "5,235"
+    # The Summary and the Queue stay readable: the detail is one keystroke away
+    # in the drill-in rather than two more columns on the glance surfaces.
+    assert not [label for label in queue_columns if "Cache" in label]
+
+
+async def test_drill_in_breakdown_shows_the_cache_split_for_a_lane_contribution() -> (
+    None
+):
+    """In **Parallel mode** the row is the issue's **Lane** contribution (#333).
+
+    The split is a fact about the agent loop that did the work, not about the
+    serial Iteration counter, so it has to survive the one place the breakdown
+    row changes identity: a Lane contribution carries no Iteration number and
+    is labelled by its Lane instead.
+    """
+    state = LiveRunState(
+        run_id="01P",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 30.0,
+        wall_clock=lambda: datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc),
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [66]})
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 66,
+            "lane_issue": 66,
+            "activated_at": "2026-05-16T00:00:01.000Z",
+            "binding_source": "lane_pickup",
+        }
+    )
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "m",
+            "input": 13_512,
+            "output": 240,
+            "cache_read": 8_267,
+            "cache_write": 5_235,
+            "lane_issue": 66,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 6.0,
+            "issues": [
+                {
+                    "issue": 66,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 13_512,
+                        "tokens_out": 240,
+                        "cache_read": 8_267,
+                        "cache_write": 5_235,
+                    },
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        breakdown = app.query_one("#iteration-breakdown", DataTable)
+        columns = [str(column.label) for column in breakdown.columns.values()]
+        row = breakdown.get_row_at(0)
+
+    assert row[columns.index("Contribution")] == "Lane 66"
+    assert row[columns.index("Cache read")] == "8,267"
+    assert row[columns.index("Cache write")] == "5,235"
+
+
+async def test_drill_in_breakdown_renders_a_missing_cache_split_as_unknown() -> None:
+    """Tokens observed, no split reported: unknown, never a fabricated 0 (#333).
+
+    An Iteration whose harness telemetry carries token counts but no cache
+    figures has not told the operator that nothing was cached — it has told
+    them nothing at all. Rendering the split as ``0`` would answer the very
+    question the split exists to answer, with a number the harness never sent.
+    """
+    state = LiveRunState(
+        run_id="01D",
+        model="m",
+        reasoning_effort="x",
+        monotonic=lambda: 30.0,
+        wall_clock=lambda: datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc),
+    )
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render({"type": events_module.WRAPPER_AFK_READY_COLLECTED, "issues": [42]})
+    state.stream_message("<working issue=42>\n")
+    state.render(
+        {
+            "type": events_module.USAGE_TOKENS,
+            "model": "m",
+            "input": 1_200,
+            "output": 240,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "closed",
+            "duration_seconds": 6.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "closed",
+                    "first_started_at": "2026-05-16T00:00:01.000Z",
+                    "closed_at": "2026-05-16T00:00:05.000Z",
+                    "issue_elapsed_seconds": 4.0,
+                    "active_seconds": 4.0,
+                    "cumulative_active_seconds": 4.0,
+                    "consumption": {
+                        "model": "m",
+                        "tokens_in": 1_200,
+                        "tokens_out": 240,
+                    },
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+
+    app = GitLoopyApp(state, refresh_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        breakdown = app.query_one("#iteration-breakdown", DataTable)
+        columns = [str(column.label) for column in breakdown.columns.values()]
+        row = breakdown.get_row_at(0)
+
+    assert row[columns.index("Tokens in")] == "1,200"
+    assert row[columns.index("Cache read")] == "—"
+    assert row[columns.index("Cache write")] == "—"
+
+
 async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -> None:
     """A native-Orchestrator contribution shows unknown, never a fabricated 0."""
     state = LiveRunState(
@@ -911,6 +1143,8 @@ async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -
         "0:00:29",
         "advanced",
         "0:00:29",
+        "—",
+        "—",
         "—",
         "—",
         "—",

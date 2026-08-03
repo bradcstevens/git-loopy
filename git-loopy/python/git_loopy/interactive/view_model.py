@@ -239,8 +239,9 @@ def _contribution_row(
             "tokens_out": (
                 contribution.usage.tokens_out if contribution.usage_observed else None
             ),
-            # Recorded here rather than given a column: #333 surfaces the split
-            # in the Iteration breakdown, on the figures this ticket records.
+            # Components of `tokens_in`, not figures beside it: a genuinely
+            # oversized Iteration and a long agent loop re-sending the same
+            # context are indistinguishable without the split (#333).
             "cache_read": contribution.usage.cache_read,
             "cache_write": contribution.usage.cache_write,
         },

@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.2",
-  "wrapper_contract_version": "1.7",
+  "wrapper_contract_version": "1.8",
   "event_schema_version": "1.1",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -153,6 +153,22 @@
         "scope": "issue_in_contribution",
         "fields": [
           "consumption.tokens_out"
+        ]
+      },
+      {
+        "key": "cache_read",
+        "label": "Cache read",
+        "scope": "issue_in_contribution",
+        "fields": [
+          "consumption.cache_read"
+        ]
+      },
+      {
+        "key": "cache_write",
+        "label": "Cache write",
+        "scope": "issue_in_contribution",
+        "fields": [
+          "consumption.cache_write"
         ]
       },
       {
@@ -1255,7 +1271,7 @@
           "iter": 1,
           "type": "usage.tokens",
           "model": "gpt-5.4-mini",
-          "input": 900,
+          "input": 13512,
           "output": 150,
           "credits": 0.849545,
           "premium_requests": 0.33,
@@ -1315,9 +1331,9 @@
           "duration_seconds": 19,
           "summary": {
             "model": "gpt-5.4-mini",
-            "tokens_in": 900,
+            "tokens_in": 13512,
             "tokens_out": 150,
-            "observed_tokens": 1050,
+            "observed_tokens": 13662,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -1347,7 +1363,7 @@
               "cumulative_active_seconds": 15,
               "consumption": {
                 "model": "gpt-5.4-mini",
-                "tokens_in": 900,
+                "tokens_in": 13512,
                 "tokens_out": 150,
                 "credits": 0.849545,
                 "premium_requests": 0.33,
@@ -1413,7 +1429,7 @@
                     "active_seconds": 5.0,
                     "closed_at": null,
                     "iteration_count": 0,
-                    "tokens_in": 900,
+                    "tokens_in": 13512,
                     "tokens_out": 150,
                     "credits": 0.849545,
                     "premium_requests": 0.33
@@ -1552,7 +1568,7 @@
                     "active_seconds": 15.0,
                     "closed_at": "2026-05-17T09:00:20+00:00",
                     "iteration_count": 1,
-                    "tokens_in": 900,
+                    "tokens_in": 13512,
                     "tokens_out": 150,
                     "credits": 0.849545,
                     "premium_requests": 0.33
@@ -1572,9 +1588,9 @@
                     "outcome": "closed",
                     "duration_seconds": 19.0,
                     "model": "gpt-5.4-mini",
-                    "tokens_in": 900,
+                    "tokens_in": 13512,
                     "tokens_out": 150,
-                    "observed_tokens": 1050,
+                    "observed_tokens": 13662,
                     "credits": 0.849545,
                     "premium_requests": 0.33,
                     "tool_count": 0,
@@ -1616,7 +1632,7 @@
                     "active_seconds": 15.0,
                     "consumption": {
                       "model": "gpt-5.4-mini",
-                      "tokens_in": 900,
+                      "tokens_in": 13512,
                       "tokens_out": 150,
                       "cache_read": 8267,
                       "cache_write": 5235
@@ -1742,8 +1758,10 @@
           "iter": 1,
           "type": "usage.tokens",
           "model": "claude-sonnet-4.6",
-          "input": 1200,
+          "input": 13512,
           "output": 240,
+          "cache_read": 8267,
+          "cache_write": 5235,
           "lane_issue": 310
         },
         {
@@ -1781,9 +1799,9 @@
           "duration_seconds": 29,
           "summary": {
             "model": "claude-sonnet-4.6",
-            "tokens_in": 1200,
+            "tokens_in": 13512,
             "tokens_out": 240,
-            "observed_tokens": 1440,
+            "observed_tokens": 13752,
             "tool_count": 0,
             "skill_call_count": 0,
             "skills_consulted": [],
@@ -1791,7 +1809,9 @@
             "auto_closures": 0,
             "pr_advances": 0,
             "strikes": 1,
-            "peak_context_window": null
+            "peak_context_window": null,
+            "cache_read": 8267,
+            "cache_write": 5235
           },
           "issues": [
             {
@@ -1804,8 +1824,10 @@
               "cumulative_active_seconds": 28,
               "consumption": {
                 "model": "claude-sonnet-4.6",
-                "tokens_in": 1200,
-                "tokens_out": 240
+                "tokens_in": 13512,
+                "tokens_out": 240,
+                "cache_read": 8267,
+                "cache_write": 5235
               },
               "peak_context_window": null
             },
@@ -2105,7 +2127,7 @@
                     "active_seconds": 6.0,
                     "closed_at": null,
                     "iteration_count": 0,
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
                     "premium_requests": null
@@ -2211,7 +2233,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
                     "premium_requests": null
@@ -2243,9 +2265,9 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "model": "claude-sonnet-4.6",
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
-                    "observed_tokens": 1440,
+                    "observed_tokens": 13752,
                     "credits": null,
                     "premium_requests": null,
                     "tool_count": 0,
@@ -2282,10 +2304,10 @@
                     "active_seconds": 28.0,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
-                      "tokens_in": 1200,
+                      "tokens_in": 13512,
                       "tokens_out": 240,
-                      "cache_read": null,
-                      "cache_write": null
+                      "cache_read": 8267,
+                      "cache_write": 5235
                     },
                     "credits": null,
                     "premium_requests": null,
@@ -2359,7 +2381,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
                     "premium_requests": null
@@ -2403,9 +2425,9 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "model": "claude-sonnet-4.6",
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
-                    "observed_tokens": 1440,
+                    "observed_tokens": 13752,
                     "credits": null,
                     "premium_requests": null,
                     "tool_count": 0,
@@ -2463,10 +2485,10 @@
                     "active_seconds": 28.0,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
-                      "tokens_in": 1200,
+                      "tokens_in": 13512,
                       "tokens_out": 240,
-                      "cache_read": null,
-                      "cache_write": null
+                      "cache_read": 8267,
+                      "cache_write": 5235
                     },
                     "credits": null,
                     "premium_requests": null,
@@ -2540,7 +2562,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
                     "premium_requests": null
@@ -2608,9 +2630,9 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "model": "claude-sonnet-4.6",
-                    "tokens_in": 1200,
+                    "tokens_in": 13512,
                     "tokens_out": 240,
-                    "observed_tokens": 1440,
+                    "observed_tokens": 13752,
                     "credits": null,
                     "premium_requests": null,
                     "tool_count": 0,
@@ -2710,10 +2732,10 @@
                     "active_seconds": 28.0,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
-                      "tokens_in": 1200,
+                      "tokens_in": 13512,
                       "tokens_out": 240,
-                      "cache_read": null,
-                      "cache_write": null
+                      "cache_read": 8267,
+                      "cache_write": 5235
                     },
                     "credits": null,
                     "premium_requests": null,

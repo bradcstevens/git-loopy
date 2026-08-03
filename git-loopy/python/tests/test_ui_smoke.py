@@ -2065,6 +2065,29 @@ def test_run_table_leads_with_billed_credits_and_premium_requests() -> None:
     assert premium_column.footer == "2"
 
 
+def test_run_table_keeps_the_cache_split_out_of_the_summary() -> None:
+    """The split is drill-in detail, not a **Summary** column (#333).
+
+    The counts are recorded in **Consumption** and surfaced in the per-issue
+    **Iteration breakdown**, one keystroke away. The Summary stays readable now
+    that Cost is trustworthy on its own, so two more counters do not earn a
+    place on the glance surface.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 333})
+    renderer.render(
+        _billed_usage_event(
+            credits=0.849545, premium=0.33, cache_read=8267, cache_write=5040
+        )
+    )
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1, "outcome": "closed"})
+
+    headers = [str(column.header) for column in summary.build_run_table().columns]
+
+    assert [header for header in headers if "Cache" in header] == []
+    assert "Tokens in" in headers
+
+
 def test_run_table_renders_unreported_credits_as_unknown_not_zero() -> None:
     """No billing telemetry is the em dash — a zero would read as free work."""
     renderer, summary, _buf = _make_renderer()

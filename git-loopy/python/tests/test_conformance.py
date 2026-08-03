@@ -254,7 +254,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.7"
+    assert _EVENT_SCHEMA["contract_version"] == "1.8"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -902,6 +902,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Active",
         "Tokens in",
         "Tokens out",
+        "Cache read",
+        "Cache write",
         "Credits",
         "Premium",
         "Peak Context fill",
@@ -988,6 +990,36 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert breakdown[0]["duration_seconds"] == 4.0
 
 
+def test_every_pinned_cache_split_stays_inside_its_token_total() -> None:
+    """The split decomposes ``tokens_in``; it is never a figure beside it (#333).
+
+    The Event schema says so in prose, and the **Iteration breakdown** now
+    renders the two counts next to the total they come out of. A fixture case
+    whose split exceeds its own ``tokens_in`` would hand every renderer a
+    target that cannot describe a real **Run**, and would let a consumer that
+    summed them into a token total look correct here.
+    """
+    checked = 0
+    for case in _DASHBOARD_INSIGHTS["cases"]:
+        for snapshot in case["snapshots"]:
+            for row in snapshot["expected"]["drill_in"]["iteration_breakdown"]["rows"]:
+                consumption = row["consumption"]
+                split = [
+                    consumption["cache_read"],
+                    consumption["cache_write"],
+                ]
+                if all(value is None for value in split):
+                    continue
+                where = f"{case['id']} contribution {row['kind']}"
+                assert consumption["tokens_in"] is not None, where
+                assert sum(value or 0 for value in split) <= consumption["tokens_in"], (
+                    where
+                )
+                checked += 1
+    # An inventory sweep that reached no reported split would pass vacuously.
+    assert checked > 0
+
+
 def _resolve_field(row: dict[str, Any], path: str) -> Any:
     value: Any = row
     for part in path.split("."):
@@ -1067,9 +1099,8 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             _resolve_field(sample_breakdown, path)
     # Every declared queue field is rendered by exactly one column; the
     # breakdown additionally carries `consumption.model`, which names the model
-    # behind the token counts rather than occupying a column of its own, and the
-    # cache-read/cache-write split, which is projected for a consumer to read
-    # (#335) but does not reach a column until #333 surfaces it.
+    # behind the token counts rather than occupying a column of its own. The
+    # cache-read/cache-write split reaches columns of its own (#333).
     assert sorted(
         path for column in contract["queue_columns"] for path in column["fields"]
     ) == sorted(fields["queue_row"])
@@ -1081,8 +1112,6 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     assert breakdown_paths | {
         "consumption",
         "consumption.model",
-        "consumption.cache_read",
-        "consumption.cache_write",
     } == set(fields["iteration_breakdown_row"]) | {
         f"consumption.{name}" for name in fields["consumption"]
     }

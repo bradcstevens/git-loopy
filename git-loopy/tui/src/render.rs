@@ -528,7 +528,12 @@ fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Gl
 }
 
 /// The locked Iteration-breakdown columns, in the locked order.
-const BREAKDOWN_COLUMNS: [Column; 10] = [
+///
+/// The cache split sits immediately after the token counts it decomposes —
+/// `cache_read` and `cache_write` are components of `tokens_in`, not figures
+/// beside it — and is given up first on a narrow terminal: it is the detail an
+/// operator drills in for once the totals have already raised the question.
+const BREAKDOWN_COLUMNS: [Column; 12] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
@@ -536,6 +541,8 @@ const BREAKDOWN_COLUMNS: [Column; 10] = [
     fixed("Active", 9, 3),
     fixed("Tokens in", 11, 6),
     fixed("Tokens out", 11, 7),
+    fixed("Cache read", 10, 11),
+    fixed("Cache write", 11, 12),
     fixed("Credits", 11, 9),
     fixed("Premium", 9, 10),
     filling("Peak Context fill", 19, 8),
@@ -665,6 +672,8 @@ fn draw_breakdown(frame: &mut Frame, area: Rect, rows: &[ContributionRow], glyph
                 duration(row.active_seconds),
                 tokens(row.consumption.tokens_in, glyphs),
                 tokens(row.consumption.tokens_out, glyphs),
+                tokens(row.consumption.cache_read, glyphs),
+                tokens(row.consumption.cache_write, glyphs),
                 credits(row.credits, glyphs),
                 premium(row.premium_requests, glyphs),
                 peak_context(row.peak_context_window.as_ref(), glyphs),

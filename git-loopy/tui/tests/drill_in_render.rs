@@ -223,10 +223,46 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "50",
             "—",
             "—",
+            "—",
+            "—",
             "12,000/32,000",
         ],
         "one row per contribution, scoped to this issue inside it"
     );
+}
+
+/// The cache split an operator drills in for, on a Parallel **Lane** row.
+///
+/// A genuinely oversized Iteration and a long agent loop re-sending the same
+/// context reach similar token totals; the split is the only thing that tells
+/// them apart. The fixture case is a Parallel **Wave**, so this also pins that
+/// the split survives the one place the row changes identity — a Lane
+/// contribution carries no Iteration number.
+#[test]
+fn the_breakdown_separates_cache_reads_from_cache_writes() {
+    let frame = drill_in_frame("parallel-lanes-and-non-closure-outcomes", "310");
+    let lines = render_lines(&frame, 160, 40);
+    let breakdown = band(&lines, "Iteration breakdown");
+
+    let row = &expected_drill_in("parallel-lanes-and-non-closure-outcomes")["iteration_breakdown"]
+        ["rows"][0];
+    assert_eq!(row["kind"], "lane", "the fixture pins a Lane contribution");
+    assert_eq!(row["consumption"]["cache_read"], 8267);
+    assert_eq!(row["consumption"]["cache_write"], 5235);
+
+    let labels: Vec<String> = cells(&breakdown[0]);
+    let drawn = cells(&breakdown[1]);
+    let at = |label: &str| {
+        labels
+            .iter()
+            .position(|heading| heading == label)
+            .expect("the contract names the column")
+    };
+    assert_eq!(drawn[at("Contribution")], "lane #310");
+    assert_eq!(drawn[at("Cache read")], "8,267");
+    assert_eq!(drawn[at("Cache write")], "5,235");
+    // Components of `tokens_in`, not figures beside it: nothing sums them in.
+    assert_eq!(drawn[at("Tokens in")], "13,512");
 }
 
 #[test]
@@ -251,7 +287,7 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
         let drawn = cells(row);
         assert_eq!(
             &drawn[5..],
-            ["—", "—", "—", "—", "—"],
+            ["—", "—", "—", "—", "—", "—", "—"],
             "an unavailable measurement never renders as an observed zero"
         );
     }
