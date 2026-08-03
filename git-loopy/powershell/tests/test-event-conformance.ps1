@@ -80,6 +80,50 @@ foreach ($Name in $ExpectedCapabilities.Keys) {
     )
 }
 
+# #334: the run-scoped Rate-card capability (ADR-0026, Wrapper contract 12).
+# This port reads no model listing, so it resolves no **Rate card** on any Run
+# and declares the capability false with an explicit `null` card beside it.
+# Pinned as a *relationship* between the fixture and this port's production
+# values rather than as a second copy of the literal, so the two cannot end up
+# agreeing only with themselves.
+$RunScoped = $Fixture["insight_capabilities"]["run_scoped"]
+$ActualRunScoped = Get-GitLoopyRunScopedInsightCapabilities
+Assert-Equal (
+    (@($RunScoped["names"]) | Sort-Object) -join ","
+) ((@($ActualRunScoped.Keys) | Sort-Object) -join ",") (
+    "run-scoped Insight capability names"
+)
+foreach ($Name in $ActualRunScoped.Keys) {
+    # A JSON Boolean, not merely something that compares equal to one:
+    # PowerShell's loose equality makes `0 -eq $false` true, so without the type
+    # check a fabricated numeric zero would read as a truthful "unavailable".
+    Assert-True ($ActualRunScoped[$Name] -is [bool]) (
+        "run-scoped Insight capability $Name is a boolean"
+    )
+    Assert-Equal $false $ActualRunScoped[$Name] (
+        "run-scoped Insight capability $Name"
+    )
+}
+Assert-True (
+    @($RunScoped["declared_by"]) -contains "powershell"
+) "PowerShell declares the run-scoped Insight capabilities"
+Assert-True (
+    @($RunScoped["never_resolved_by"]) -contains "powershell"
+) "PowerShell resolves no Rate card on any Run"
+# A false declaration publishes an explicit `null`, never an empty card: an
+# empty card is a record nothing can be audited against.
+Assert-True ($null -eq (Get-GitLoopyRateCard)) "PowerShell publishes no Rate card"
+# The wire manifest is exactly the frozen per-distribution keys plus the
+# run-scoped ones -- a port may not smuggle a run-scoped answer into the frozen
+# manifest, nor drop one on its way to `wrapper.run.start`.
+$ExpectedWireKeys = @($Fixture["insight_capabilities"]["names"]) +
+    @($RunScoped["names"])
+Assert-Equal (
+    ($ExpectedWireKeys | Sort-Object) -join ","
+) ((@((Get-GitLoopyRunInsightCapabilities).Keys) | Sort-Object) -join ",") (
+    "Run-start Insight manifest keys"
+)
+
 # #311 AC3: Parallel mode is declared, never inferred from silence. This port
 # has no rolling scheduler, so `parallel_mode` is false -- and a port that
 # cannot fill a second Lane cannot honour refill, backlog, adaptation, or the
@@ -447,6 +491,45 @@ function Assert-CapabilityDerivedTelemetry {
     }
 }
 
+function Assert-NoBillingFigure {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Rollup,
+        [Parameter(Mandatory)]
+        [string]$CaseId
+    )
+
+    # #334 AC3: billing telemetry arrives on the SDK event stream, which this
+    # port does not subscribe to, so it emits no Credits, premium-request or
+    # cache-split figure at all. Those keys are *omitted* rather than nulled —
+    # that omission is what makes them additive for the reference Orchestrator —
+    # so their absence at any depth is the assertion. A fabricated 0 here would
+    # say the Iteration was free rather than that this port cannot see what it
+    # cost, and the fixture comparison alone cannot catch a coordinated edit
+    # that adds the key to both production and `expected`.
+    $Forbidden = @("credits", "premium_requests", "cache_read", "cache_write")
+    $Pending = [Collections.Generic.Queue[object]]::new()
+    $Pending.Enqueue($Rollup)
+    while ($Pending.Count -gt 0) {
+        $Node = $Pending.Dequeue()
+        if ($Node -is [Collections.IDictionary]) {
+            foreach ($Key in @($Node.Keys)) {
+                Assert-True (
+                    -not ($Forbidden -ccontains [string]$Key)
+                ) (
+                    "this port must emit no billing figure it cannot " +
+                    "observe ('$Key'): $CaseId"
+                )
+                $Pending.Enqueue($Node[$Key])
+            }
+            continue
+        }
+        if ($Node -is [Collections.IEnumerable] -and $Node -isnot [string]) {
+            foreach ($Item in $Node) { $Pending.Enqueue($Item) }
+        }
+    }
+}
+
 function Assert-ObservedFact {
     param(
         [Parameter(Mandatory)]
@@ -557,6 +640,7 @@ foreach (
                 -Rollup $Rollup `
                 -CaseId $Case["id"]
             Assert-ObservedFact -Rollup $Rollup -CaseId $Case["id"]
+            Assert-NoBillingFigure -Rollup $Rollup -CaseId $Case["id"]
         }
         continue
     }
@@ -570,6 +654,7 @@ foreach (
     ) "normalized rollup fixture: $($Case["id"])"
     Assert-CapabilityDerivedTelemetry -Rollup $Actual -CaseId $Case["id"]
     Assert-ObservedFact -Rollup $Actual -CaseId $Case["id"]
+    Assert-NoBillingFigure -Rollup $Actual -CaseId $Case["id"]
 }
 
 # The renderer-neutral Dashboard seam is only anti-drift if the native trace it
@@ -579,8 +664,39 @@ foreach (
 $DashboardFixture = Get-Content -LiteralPath $DashboardFixturePath -Raw |
     ConvertFrom-Json -AsHashtable
 $DashboardRollups = 0
+$NativeRunStarts = 0
 foreach ($Case in $DashboardFixture["cases"]) {
     if (-not $Case.Contains("producer_rollups")) { continue }
+    $DeclaresThisPort = @(
+        $Case["producer_rollups"] |
+            Where-Object { @($_["distributions"]) -ccontains "powershell" }
+    ).Count -gt 0
+    if ($DeclaresThisPort) {
+        # The same demand one Event earlier: a native case's
+        # `wrapper.run.start` must declare what this port really declares.
+        # Without this the Dashboard fixture could pin a native trace whose
+        # capability manifest no port emits, and every consumer would agree
+        # with a producer that does not exist.
+        $RunStart = $Case["events"][0]
+        Assert-Equal "wrapper.run.start" $RunStart["type"] (
+            "native Dashboard case opens on a Run start: $($Case["id"])"
+        )
+        Assert-Equal (
+            ConvertTo-CanonicalJson -Value (Get-GitLoopyRunInsightCapabilities)
+        ) (
+            ConvertTo-CanonicalJson -Value $RunStart["insight_capabilities"]
+        ) (
+            "native Dashboard Run start declares a manifest this port " +
+            "cannot emit: $($Case["id"])"
+        )
+        Assert-True (
+            $RunStart.Contains("rate_card")
+        ) "native Dashboard Run start publishes a Rate-card key: $($Case["id"])"
+        Assert-True (
+            (Get-GitLoopyRateCard) -eq $RunStart["rate_card"]
+        ) "native Dashboard Run start publishes this port's Rate card: $($Case["id"])"
+        $NativeRunStarts++
+    }
     foreach ($Rollup in $Case["producer_rollups"]) {
         if (-not (@($Rollup["distributions"]) -ccontains "powershell")) {
             continue
@@ -605,6 +721,9 @@ foreach ($Case in $DashboardFixture["cases"]) {
 Assert-True (
     $DashboardRollups -gt 0
 ) "no native Dashboard case declares a PowerShell producer rollup"
+Assert-True (
+    $NativeRunStarts -gt 0
+) "no native Dashboard case pins a PowerShell Run start"
 
 $GeneratedRunId = New-GitLoopyRunId
 Assert-True (

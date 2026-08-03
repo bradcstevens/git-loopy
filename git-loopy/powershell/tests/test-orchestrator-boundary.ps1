@@ -972,17 +972,36 @@ exit 97
         context_window = $false
         skill_consultation = $false
         cost = $false
+        rate_card = $false
     }
     foreach ($Name in $ExpectedInsightCapabilities.Keys) {
         Assert-True (
             $Events[0]["insight_capabilities"].Contains($Name)
         ) "Run Insight capability $Name is declared"
+        # A JSON Boolean, not merely something that compares equal to one:
+        # PowerShell's loose equality makes `0 -eq $false` true, so a
+        # fabricated numeric zero would otherwise read as a truthful
+        # "unavailable" on the wire.
+        Assert-True (
+            $Events[0]["insight_capabilities"][$Name] -is [bool]
+        ) "Run Insight capability $Name is a boolean"
         Assert-Equal (
             $ExpectedInsightCapabilities[$Name]
         ) $Events[0]["insight_capabilities"][$Name] (
             "Run Insight capability $Name"
         )
     }
+    # #334: this port reads no model listing, so the run-scoped Rate-card
+    # capability is false and the card it publishes is an explicit `null`. The
+    # `Contains` is what makes the claim -- a null value is also what a
+    # producer that never heard of the key looks like, and telling those two
+    # apart is the whole point of declaring it.
+    Assert-True (
+        $Events[0].Contains("rate_card")
+    ) "Run publishes a Rate-card key"
+    Assert-True (
+        $null -eq $Events[0]["rate_card"]
+    ) "Run publishes no Rate card"
     Assert-Equal 0 $Events[2]["issues"].Count "empty collected Pool"
     Assert-Equal "no_progress" $Events[3]["outcome"] "empty Iteration outcome"
     Assert-True (

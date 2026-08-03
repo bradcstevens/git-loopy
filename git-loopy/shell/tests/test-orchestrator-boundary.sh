@@ -491,8 +491,16 @@ jq -se --arg release_version "$expected_release_version" '
     token_usage: false,
     context_window: false,
     skill_consultation: false,
-    cost: false
+    cost: false,
+    rate_card: false
   }
+  # #334: this port reads no model listing, so the run-scoped Rate-card
+  # capability is false and the card it publishes is an explicit `null`. The
+  # `has` is what makes the claim: `.rate_card == null` is also true of a
+  # producer that never heard of the key, and telling those two apart is the
+  # whole point of declaring it.
+  and (.[0] | has("rate_card"))
+  and .[0].rate_card == null
   and .[2].issues == []
   and .[3].outcome == "no_progress"
   and (.[3].duration_seconds | type == "number" and . >= 0)

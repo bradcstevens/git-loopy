@@ -61,6 +61,24 @@ $script:InsightCapabilities = [ordered]@{
     skill_consultation = $false
     cost = $false
 }
+# What *this Run* obtained, as opposed to what this distribution can observe.
+# The six above are fixed per binary; a run-scoped capability can differ between
+# two Runs of one binary, so it is composed onto the wire manifest rather than
+# frozen beside them (#334, ADR-0026, Wrapper contract 12).
+#
+# `rate_card` is the only one today. This port subscribes to no SDK event stream
+# and reads no model listing, so it resolves no **Rate card** on any Run — the
+# answer happens to be the same every time, but it is declared here because a
+# **Dashboard** reading this stream must be able to tell "this Orchestrator
+# cannot report a rate" from "this Run's prices failed to load", and an omitted
+# key collapses those two facts into one unknown.
+$script:RunScopedInsightCapabilities = [ordered]@{
+    rate_card = $false
+}
+# The card that travels beside the declaration. A port declaring the capability
+# `false` publishes an explicit `null`, never an omitted key and never an empty
+# object: an empty card would be a record nothing can be audited against.
+$script:RateCard = $null
 # What this port can *schedule*, as opposed to what it can observe. The
 # PowerShell Orchestrator has no rolling scheduler, no **Integration** stage,
 # and no **Lane**, so every parallel capability is false. Declaring it is what
@@ -114,6 +132,39 @@ function Get-GitLoopyInsightCapabilities {
         $Copy[$Name] = $script:InsightCapabilities[$Name]
     }
     return $Copy
+}
+
+function Get-GitLoopyRunScopedInsightCapabilities {
+    [CmdletBinding()]
+    param()
+
+    $Copy = [ordered]@{}
+    foreach ($Name in $script:RunScopedInsightCapabilities.Keys) {
+        $Copy[$Name] = $script:RunScopedInsightCapabilities[$Name]
+    }
+    return $Copy
+}
+
+function Get-GitLoopyRunInsightCapabilities {
+    [CmdletBinding()]
+    param()
+
+    # The Run-start Insight manifest as it goes on the wire: the frozen
+    # per-distribution capabilities, then this Run's own run-scoped answers. The
+    # run-scoped keys come last so the six a **Dashboard** must find keep the
+    # order the family contract lists them in.
+    $Manifest = Get-GitLoopyInsightCapabilities
+    foreach ($Name in $script:RunScopedInsightCapabilities.Keys) {
+        $Manifest[$Name] = $script:RunScopedInsightCapabilities[$Name]
+    }
+    return $Manifest
+}
+
+function Get-GitLoopyRateCard {
+    [CmdletBinding()]
+    param()
+
+    return $script:RateCard
 }
 
 function Get-GitLoopyParallelCapabilities {
@@ -414,6 +465,9 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyEventTypes",
     "Get-GitLoopyEventSchemaVersion",
     "Get-GitLoopyInsightCapabilities",
+    "Get-GitLoopyRunScopedInsightCapabilities",
+    "Get-GitLoopyRunInsightCapabilities",
+    "Get-GitLoopyRateCard",
     "Get-GitLoopyParallelCapabilities",
     "Get-GitLoopyIsoTimestamp",
     "New-GitLoopyRunId",

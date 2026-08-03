@@ -72,6 +72,24 @@ declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
   "skill_consultation": false,
   "cost": false
 }'
+# What *this Run* obtained, as opposed to what this distribution can observe.
+# The six above are fixed per binary; a run-scoped capability can differ between
+# two Runs of one binary, so it is composed onto the wire manifest rather than
+# frozen beside them (#334, ADR-0026, Wrapper contract 12).
+#
+# `rate_card` is the only one today. This port subscribes to no SDK event stream
+# and reads no model listing, so it resolves no **Rate card** on any Run — the
+# answer happens to be the same every time, but it is declared here because a
+# **Dashboard** reading this stream must be able to tell "this Orchestrator
+# cannot report a rate" from "this Run's prices failed to load", and an omitted
+# key collapses those two facts into one unknown.
+declare -r GIT_LOOPY_RUN_SCOPED_INSIGHT_CAPABILITIES_JSON='{
+  "rate_card": false
+}'
+# The card that travels beside the declaration. A port declaring the capability
+# `false` publishes an explicit `null`, never an omitted key and never an empty
+# object: an empty card would be a record nothing can be audited against.
+declare -r GIT_LOOPY_RATE_CARD_JSON='null'
 # What this port can *schedule*, as opposed to what it can observe. The shell
 # Orchestrator has no rolling scheduler, no **Integration** stage, and no
 # **Lane**, so every parallel capability is false. Declaring it is what turns
@@ -84,6 +102,17 @@ declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
   "adaptive_lane_limit": false,
   "contribution_events": false
 }'
+
+# The Run-start Insight manifest as it goes on the wire: the frozen
+# per-distribution capabilities, then this Run's own run-scoped answers. The
+# run-scoped keys come last so the six a **Dashboard** must find keep the order
+# the family contract lists them in.
+git_loopy_run_insight_capabilities_json() {
+  jq -cn \
+    --argjson distribution "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
+    --argjson run_scoped "$GIT_LOOPY_RUN_SCOPED_INSIGHT_CAPABILITIES_JSON" \
+    '$distribution + $run_scoped'
+}
 
 GIT_LOOPY_RUN_ID=""
 GIT_LOOPY_STARTED_AT=""

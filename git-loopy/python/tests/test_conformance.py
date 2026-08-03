@@ -254,7 +254,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.6"
+    assert _EVENT_SCHEMA["contract_version"] == "1.7"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -1191,6 +1191,23 @@ def _dashboard_wall_clock_steps_backwards(case: dict[str, Any]) -> bool:
     return any(later < earlier for earlier, later in zip(stamps, stamps[1:]))
 
 
+def _native_run_start_manifest() -> dict[str, bool]:
+    """The Run-start Insight manifest both native ports put on the wire.
+
+    The frozen per-distribution six, then the run-scoped answers they give on
+    every Run (#334): neither port reads a model listing, so its **Rate card**
+    declaration is a constant ``false``. Composed from the fixture rather than
+    written out, so a native trace stays identified by what the ports emit
+    rather than by a literal that can drift away from them.
+    """
+    insight = _EVENT_SCHEMA["insight_capabilities"]
+    manifest = dict(insight["orchestrators"]["shell"])
+    assert manifest == insight["orchestrators"]["powershell"]
+    run_scoped = insight["run_scoped"]
+    assert set(run_scoped["never_resolved_by"]) == {"shell", "powershell"}
+    return {**manifest, **{name: False for name in run_scoped["names"]}}
+
+
 def test_native_dashboard_cases_are_producer_verified() -> None:
     """A native trace in this fixture is producible by both native ports.
 
@@ -1202,7 +1219,7 @@ def test_native_dashboard_cases_are_producer_verified() -> None:
     PowerShell Event-schema suites rebuild those payloads through their real
     rollup seams.
     """
-    native_manifest = _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["shell"]
+    native_manifest = _native_run_start_manifest()
     native_cases = [
         case
         for case in _DASHBOARD_INSIGHTS["cases"]
@@ -1977,16 +1994,18 @@ def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:
 
     capabilities = native["events"][0]["insight_capabilities"]
     # Exactly the family contract's native-Orchestrator manifest.
-    assert (
-        capabilities
-        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["shell"]
-        == _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]["powershell"]
-    )
-    assert set(capabilities) == set(_EVENT_SCHEMA["insight_capabilities"]["names"])
+    assert capabilities == _native_run_start_manifest()
+    assert set(capabilities) == set(
+        _EVENT_SCHEMA["insight_capabilities"]["names"]
+    ) | set(_EVENT_SCHEMA["insight_capabilities"]["run_scoped"]["names"])
     assert capabilities["token_usage"] is False
     assert capabilities["context_window"] is False
     assert capabilities["skill_consultation"] is False
     assert capabilities["cost"] is False
+    # Two facts, not one: a port that cannot report Cost also resolves no
+    # **Rate card**, and it says so rather than going silent (#334).
+    assert capabilities["rate_card"] is False
+    assert native["events"][0]["rate_card"] is None
 
     # A half-hour display zone proves localization is a real conversion rather
     # than an hour-granular offset.

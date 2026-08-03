@@ -46,6 +46,32 @@ jq -e \
   ' "$fixture" >/dev/null ||
   fail "shell Insight capability manifest drifted from event-schema.json"
 
+# #334: the run-scoped Rate-card capability (ADR-0026, Wrapper contract 12).
+# This port reads no model listing, so it resolves no **Rate card** on any Run
+# and declares the capability false with an explicit `null` card beside it.
+# Pinned as a *relationship* between the fixture and this port's production
+# constants rather than as a second copy of the literal, so the two cannot end
+# up agreeing only with themselves.
+jq -e \
+  --argjson run_scoped "$GIT_LOOPY_RUN_SCOPED_INSIGHT_CAPABILITIES_JSON" \
+  --argjson wire "$(git_loopy_run_insight_capabilities_json)" \
+  --argjson card "$GIT_LOOPY_RATE_CARD_JSON" \
+  '
+    .insight_capabilities.run_scoped as $fixture
+    | ($run_scoped | keys) == ($fixture.names | sort)
+    and all($run_scoped[]; . == false)
+    and ($fixture.declared_by | index("shell")) != null
+    and ($fixture.never_resolved_by | index("shell")) != null
+    # A false declaration publishes an explicit `null`, never an empty card:
+    # an empty card is a record nothing can be audited against.
+    and $card == null
+    # The wire manifest is exactly the frozen per-distribution keys plus the
+    # run-scoped ones -- a port may not smuggle a run-scoped answer into the
+    # frozen manifest, nor drop one on its way to `wrapper.run.start`.
+    and ($wire | keys) == ((.insight_capabilities.names + $fixture.names) | sort)
+  ' "$fixture" >/dev/null ||
+  fail "shell run-scoped Insight capability drifted from event-schema.json"
+
 # #311 AC3: Parallel mode is declared, never inferred from silence. This port
 # has no scheduler, so `parallel_mode` is false -- and a port that cannot fill a
 # second Lane cannot honour refill, backlog, adaptation, or the contribution
@@ -292,6 +318,20 @@ while IFS= read -r case_json; do
       )
     ' >/dev/null <<<'null' ||
     fail "observable lifecycle and accounting facts must stay observed: $case_id"
+
+  # #334 AC3: billing telemetry arrives on the SDK event stream, which this port
+  # does not subscribe to, so it emits no Credits, premium-request or cache-split
+  # figure at all. Those keys are *omitted* rather than nulled -- that omission is
+  # what makes them additive for the reference Orchestrator -- so their absence at
+  # any depth is the assertion. A fabricated 0 here would say the Iteration was
+  # free rather than that this port cannot see what it cost.
+  jq -e --argjson rollup "$GIT_LOOPY_ITERATION_ROLLUP_JSON" \
+    '
+      [$rollup | paths | .[-1] | select(type == "string")]
+      | any(IN("credits", "premium_requests", "cache_read", "cache_write"))
+      | not
+    ' >/dev/null <<<'null' ||
+    fail "this port must emit no billing figure it cannot observe: $case_id"
 done < <(
   jq -c '.normalized_rollup_cases[] | select(.orchestrator == "shell")' "$fixture"
 )
@@ -328,6 +368,33 @@ done < <(
 )
 ((dashboard_rollups > 0)) ||
   fail "no native Dashboard case declares a shell producer rollup"
+
+# The same demand one Event earlier: a native case's `wrapper.run.start` must
+# declare what this port really declares. Without this the Dashboard fixture
+# could pin a native trace whose capability manifest no port emits, and every
+# consumer would agree with a producer that does not exist.
+native_run_starts=0
+while IFS= read -r declared; do
+  jq -e \
+    --argjson wire "$(git_loopy_run_insight_capabilities_json)" \
+    --argjson card "$GIT_LOOPY_RATE_CARD_JSON" \
+    '
+      .insight_capabilities == $wire
+      and (. | has("rate_card"))
+      and .rate_card == $card
+    ' <<<"$declared" >/dev/null ||
+    fail "native Dashboard Run start declares a manifest this port cannot emit"
+  native_run_starts=$((native_run_starts + 1))
+done < <(
+  jq -c '
+    .cases[]
+    | select((.producer_rollups // []) | any(.distributions | index("shell")))
+    | .events[0]
+    | select(.type == "wrapper.run.start")
+  ' "$dashboard_fixture"
+)
+((native_run_starts > 0)) ||
+  fail "no native Dashboard case pins a shell Run start"
 
 set +e
 invalid_output="$(git_loopy_to_jsonl_line '{}' 2>/dev/null)"

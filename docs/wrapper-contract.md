@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.6 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.7 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -341,8 +341,12 @@ terms the roster fetch failure already uses, declares the capability `false`, an
 }
 ```
 
-The shell and PowerShell Orchestrators declare no run-scoped capability today; they subscribe to no
-SDK event stream and read no model listing.
+All three Orchestrators declare `rate_card` (#334). The shell and PowerShell Orchestrators subscribe
+to no SDK event stream and read no model listing, so they resolve no card on any Run: each declares
+the capability `false` and publishes `rate_card: null` beside it. They declare it rather than omit
+it because an omitted key leaves a **Dashboard** unable to tell *this Orchestrator cannot report a
+rate* from *this Run's prices failed to load*, which is the collapse a separate declaration exists
+to end. A port that declares it `false` MUST hold no price data and MUST fetch nothing.
 
 Every `wrapper.run.start` MUST also carry a `parallel_capabilities` object with exactly these
 boolean keys:

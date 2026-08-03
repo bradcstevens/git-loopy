@@ -2676,10 +2676,11 @@ git_loopy_run_discovery() {
       --arg send_timeout "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" \
       --argjson deny_skills "$deny_skills_json" \
       --argjson deny_tools "$deny_tools_json" \
-      --argjson insight_capabilities "$GIT_LOOPY_INSIGHT_CAPABILITIES_JSON" \
+      --argjson insight_capabilities "$(git_loopy_run_insight_capabilities_json)" \
       --argjson max_iterations "$GIT_LOOPY_MAX_ITERATIONS" \
       --argjson max_nmt_strikes "$GIT_LOOPY_MAX_NMT_STRIKES" \
       --argjson parallel_capabilities "$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON" \
+      --argjson rate_card "$GIT_LOOPY_RATE_CARD_JSON" \
       --argjson schema_version "$GIT_LOOPY_EVENT_SCHEMA_VERSION" \
       '{
         deny_skills: $deny_skills,
@@ -2691,6 +2692,7 @@ git_loopy_run_discovery() {
         model: $model,
         parallel_capabilities: $parallel_capabilities,
         prompt_path: $prompt_path,
+        rate_card: $rate_card,
         release_version: $release_version,
         reasoning_effort: (
           if $reasoning_effort == ""

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.6",
+  "contract_version": "1.7",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -13,7 +13,8 @@
     ],
     "run_scoped": {
       "names": ["rate_card"],
-      "declared_by": ["python"],
+      "declared_by": ["python", "shell", "powershell"],
+      "never_resolved_by": ["shell", "powershell"],
       "payload_key": "rate_card",
       "card_fields": ["multiplier", "discount_percent", "prices"],
       "price_fields": [
@@ -32,7 +33,7 @@
         "cache_write_price",
         "max_prompt_tokens"
       ],
-      "note": "Rate-card availability (#331, ADR-0026) is a fact about one Run rather than about a distribution: it says whether THIS Run reached the harness's live model listing, and two Runs of one binary can differ. It is therefore declared alongside `names` in the Run-start Insight manifest but is not one of them -- accepted from any producer, required of none. An Orchestrator that declares it publishes the resolved card under `payload_key` on `wrapper.run.start`, keyed by the harness's own model id, or `null` when it resolved none. The card is provenance, not arithmetic: nothing derives a figure from it, so an absent card never costs a figure and Cost stays a separate declaration. Prices are denominated in AI Credits per batch of `batch_size` tokens and are recorded as published -- never flattened to a single rate, because the cache prices dominate an agent loop and a card recorded lossily is not a record of what a Run was billed under. The shell and PowerShell Orchestrators declare it in #334."
+      "note": "Rate-card availability (#331, ADR-0026) is a fact about one Run rather than about a distribution: it says whether THIS Run reached the harness's live model listing, and two Runs of one binary can differ. It is therefore declared alongside `names` in the Run-start Insight manifest but is not one of them -- accepted from any producer, required of none. An Orchestrator that declares it publishes the resolved card under `payload_key` on `wrapper.run.start`, keyed by the harness's own model id, or `null` when it resolved none. The card is provenance, not arithmetic: nothing derives a figure from it, so an absent card never costs a figure and Cost stays a separate declaration. Prices are denominated in AI Credits per batch of `batch_size` tokens and are recorded as published -- never flattened to a single rate, because the cache prices dominate an agent loop and a card recorded lossily is not a record of what a Run was billed under. All three Orchestrators declare it (#334); `never_resolved_by` names the ports whose answer is `false` on every Run, because they subscribe to no SDK event stream and read no model listing. Those ports still declare it rather than omit it: an omitted key would leave a Dashboard unable to tell `this Orchestrator cannot report a rate` from `this Run's prices failed to load`, which is the collapse the separate declaration exists to end. A port in `never_resolved_by` fetches nothing and holds no price data -- it publishes `null` under `payload_key`."
     },
     "orchestrators": {
       "python": {

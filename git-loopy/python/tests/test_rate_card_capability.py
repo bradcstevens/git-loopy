@@ -83,11 +83,35 @@ def test_the_fixture_pins_the_run_scoped_capability_against_the_constant() -> No
         events_module.RUN_SCOPED_INSIGHT_CAPABILITY_NAMES
     )
     # Accepted from any producer, required of none: keeping it out of `names`
-    # is what lets the shell and PowerShell ports stay conformant until #334
-    # declares it for them.
+    # is what let the shell and PowerShell ports stay conformant until #334
+    # declared it for them.
     fixture_names = _EVENT_SCHEMA["insight_capabilities"]["names"]
     assert not set(run_scoped["names"]) & set(fixture_names)
-    assert run_scoped["declared_by"] == ["python"]
+    assert run_scoped["declared_by"] == ["python", "shell", "powershell"]
+
+
+def test_the_ports_declare_the_capability_false_on_every_run() -> None:
+    """A port that reads no listing declares `false`; it does not go silent.
+
+    The shell and PowerShell Orchestrators subscribe to no SDK event stream and
+    read no model listing, so their answer is the same on every Run — which is
+    precisely why the fixture records them separately from the reference
+    Orchestrator, whose answer is genuinely per Run. They still *declare* it:
+    an omitted key would leave a **Dashboard** unable to tell "this
+    Orchestrator cannot report a rate" from "this Run's prices failed to load",
+    and telling those apart is the whole reason the capability is its own.
+    """
+    run_scoped = _run_scoped()
+
+    assert run_scoped["never_resolved_by"] == ["shell", "powershell"]
+    # Every port that never resolves one still declares one.
+    assert set(run_scoped["never_resolved_by"]) <= set(run_scoped["declared_by"])
+    # The reference Orchestrator is not among them: it resolves a card when it
+    # can reach the listing, so a constant `false` would be a lie about it.
+    assert "python" not in run_scoped["never_resolved_by"]
+    assert set(run_scoped["declared_by"]) == set(
+        _EVENT_SCHEMA["insight_capabilities"]["orchestrators"]
+    )
 
 
 def test_the_fixture_pins_the_published_card_shape_the_python_runner_emits() -> None:

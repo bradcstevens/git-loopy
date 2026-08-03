@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.2",
-  "wrapper_contract_version": "1.6",
+  "wrapper_contract_version": "1.7",
   "event_schema_version": "1.1",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -697,7 +697,8 @@
             "token_usage": false,
             "context_window": false,
             "skill_consultation": false,
-            "cost": false
+            "cost": false,
+            "rate_card": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -706,6 +707,7 @@
             "adaptive_lane_limit": false,
             "contribution_events": false
           },
+          "rate_card": null,
           "max_nmt_strikes": 3,
           "observed_monotonic": 0
         },
@@ -2763,7 +2765,8 @@
             "token_usage": false,
             "context_window": false,
             "skill_consultation": false,
-            "cost": false
+            "cost": false,
+            "rate_card": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -2772,6 +2775,7 @@
             "adaptive_lane_limit": false,
             "contribution_events": false
           },
+          "rate_card": null,
           "max_nmt_strikes": 3
         },
         {
