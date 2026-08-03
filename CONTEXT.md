@@ -646,8 +646,9 @@ _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Release version**:
 The Semantic Versioning identity assigned to one published git-loopy distribution.
-Every included **Orchestrator**, packaged **Skill** set, and **TUI helper** shares it;
-contract and schema versions remain separate compatibility identities.
+Every included **Orchestrator** and **TUI helper** shares it; the **installed catalog**
+does not, because a distribution carries no Skills — only the pin naming the revision
+to install. Contract and schema versions remain separate compatibility identities.
 _Avoid_: component version, protocol version, schema version.
 
 **Release target**:
@@ -670,9 +671,9 @@ across every tier). Replaces the per-run environment the retired bash launcher u
 _Avoid_: settings file, profile.
 
 **init**:
-First-run setup that writes **Config** — and optionally an editable prompt and skills — into a
-chosen **scope**. Runs automatically the first time on an interactive terminal; also invocable as
-`git-loopy init`.
+First-run setup that installs the **installed catalog**, then writes **Config** — and
+optionally an editable prompt — into a chosen **scope**. Runs automatically the first
+time on an interactive terminal; also invocable as `git-loopy init`.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 

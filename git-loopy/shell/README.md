@@ -57,13 +57,19 @@ Copilot skills, is in [`docs/skills-setup.md`](../../docs/skills-setup.md).
 git-loopy runs on top of a configured issue tracker. Before your first Run, do
 the one-time setup from [`docs/skills-setup.md`](../../docs/skills-setup.md):
 
-1. **Install the Skill catalog** with `git-loopy init`, which clones
-   [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
-   at the pinned revision into `<config-home>/git-loopy/skills/`. That install
-   is machine-wide, so it serves this Orchestrator too. To type the same
-   commands yourself in `copilot`, install them into Copilot CLI as well with
-   `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`.
-2. **Configure this repo** by running `/setup-agent-skills` inside `copilot`,
+1. **Install the Skill catalog into Copilot CLI** with
+   `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`, which
+   installs
+   [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills).
+   This Orchestrator starts `copilot`, which resolves Skills from its own
+   sources — so this is the install its Runs read. Update it later with
+   `npx skills update`.
+2. **Run `git-loopy init`** to write the Config this Orchestrator reads. It also
+   installs the same pinned catalog into `<config-home>/git-loopy/skills/`, but
+   that copy is the **Python Runner's** Skill source: this port reports
+   `enabled_skills` as an unsupported Config surface and passes no Skill
+   directory to `copilot`.
+3. **Configure this repo** by running `/setup-agent-skills` inside `copilot`,
    which writes `docs/agents/issue-tracker.md`.
 
 That file is the Orchestrator's **preflight signal** — without it the Run exits

@@ -211,6 +211,6 @@ an ever-growing conversation to remember the project.
 - [`docs/runners.md`](runners.md) - invocation and per-Iteration behavior.
 - [`docs/customization.md`](customization.md) - Config, prompt, skills, and
   repository feedback loops.
-- [`docs/skills-setup.md`](skills-setup.md) - installing and configuring the
-  vendored skills.
+- [`docs/skills-setup.md`](skills-setup.md) - installing the pinned Skill
+  catalog and configuring it for a repository.
 - Back to [`README.md`](../README.md).

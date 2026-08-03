@@ -16,10 +16,13 @@ The single most common point of confusion is treating "install the skills" and "
 
 | Step | Command | Scope | What it changes | Run how often |
 | --- | --- | --- | --- | --- |
-| **1. Install** the workflow skill catalog | `git-loopy init --project` or `git-loopy init --global` | Your machine, in git-loopy's config home | Installs the pinned workflow skill catalog so `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest are discoverable. | Once per machine; every Run refreshes it against the pin |
+| **1. Install** the workflow skill catalog | `git-loopy init --project` or `git-loopy init --global` | Your machine, in git-loopy's config home | Installs the pinned workflow skill catalog so `/grill-with-docs`, `/wayfinder`, `/research`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, `/tdd`, `/code-review`, and the rest are resolvable **by a Run**. | Once per machine; every Run refreshes it against the pin |
+| **1b. Install** the same catalog into Copilot CLI | `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot` ([§1.3](#13-also-give-copilot-cli-the-slash-commands)) | Your machine, in Copilot CLI's own source | Makes those commands answer when **you** type them in `copilot`. Step 1's install is git-loopy's own Skill source and Copilot CLI does not read it, so step 2 below needs this one. | Once per machine; `npx skills update` to refresh |
 | **2. Configure** the skills for this repo | `/setup-agent-skills` (inside `copilot`) | This repo | Edits **this repo's** `AGENTS.md` `## Agent skills` block and writes **this repo's** `docs/agents/*.md`, telling the other skills which issue tracker, label vocabulary, and context layout this project uses. | Once per repo (re-run to change trackers/labels) |
 
-Step 1 makes the commands _exist_. Step 2 makes them _correct for this project_. You must do both, in order, before any of the planning or implementation skills will behave.
+Step 1 makes the commands _exist for a Run_; step 1b makes them exist _for you_.
+Step 2 makes them _correct for this project_. You must do all three, in order,
+before any of the planning or implementation skills will behave.
 
 ---
 

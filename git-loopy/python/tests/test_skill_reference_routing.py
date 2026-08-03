@@ -50,7 +50,6 @@ _REPOSITORY_SKILL_TREE = re.compile(r"(?:^|/)\.copilot/skills(?:/|$)")
 _EXEMPT_PREFIXES: tuple[str, ...] = (
     ".copilot/",  # the tree's own contents; #340 removes it
     "docs/adr/",  # architecture decision records are immutable history
-    "docs/feature-requests/",  # raw, human-owned intake (append-only)
     ".reference/",  # third-party notes captured verbatim
 )
 
@@ -264,28 +263,109 @@ def test_the_supported_install_flow_is_the_external_catalogs_own(
     )
 
 
-def test_no_first_party_doc_offers_a_shipped_skill_catalog(repo_root: Path) -> None:
-    """A distribution carries no Skills, so no document may offer one (ADR-0025)."""
-    claims = re.compile(
-        r"packaged (?:\W*workflow\W*)?\W*skill catalog"
-        r"|vendored \W*(?:skill \W*)?catalog"
-        r"|bundled \W*skill catalog"
-        r"|packaged \W*fallback",
+#: The glossary entry whose *Avoid* list names the retired catalog vocabulary.
+_INSTALLED_CATALOG_ENTRY = "**Installed catalog**:"
+
+#: Claims the guard below must catch, whatever the glossary spells its list as.
+#: Each asserts the thing ADR-0025 deleted; the last three are the
+#: Markdown-decorated spellings a plain-prose scan walks straight past.
+_RETIRED_CLAIMS: tuple[str, ...] = (
+    "the packaged skill catalog is refreshed at preflight",
+    "install the packaged workflow skill catalog",
+    "git-loopy falls back to its vendored skills",
+    "a vendored catalog ships inside the wheel",
+    "the bundled skill catalog wins",
+    "the release carries a packaged fallback",
+    "install the packaged **workflow skill** catalog",
+    "the **bundled** skill catalog",
+    "configuring the vendored skills",
+)
+
+
+def _forbidden_catalog_vocabulary(repo_root: Path) -> tuple[str, ...]:
+    """The words CONTEXT.md's **Installed catalog** entry tells writers to avoid.
+
+    Read out of the glossary rather than restated here, so the guard cannot
+    drift from the entry it enforces: a term added to that *Avoid* list becomes
+    a tripwire in the same commit that adds it. Restating the list is exactly
+    what let "vendored skills" survive in `docs/workflow.md` while a hand-rolled
+    regex naming "vendored catalog" reported the whole surface clean.
+    """
+    text = (repo_root / "CONTEXT.md").read_text(encoding="utf-8")
+    entry = text[text.index(_INSTALLED_CATALOG_ENTRY) :]
+    avoid = re.search(r"(?m)^_Avoid_:\s*(.+?)\.\s*$", entry)
+    assert avoid, "the **Installed catalog** glossary entry carries no _Avoid_ list"
+    return tuple(term.strip() for term in avoid.group(1).split(",") if term.strip())
+
+
+def _retired_claim_pattern(vocabulary: tuple[str, ...]) -> re.Pattern[str]:
+    """The *Avoid* list, read as a cross-product rather than three spellings.
+
+    Each avoided term is an adjective about provenance ("packaged", "vendored",
+    "bundled") applied to a noun for the thing ("fallback", "skills",
+    "catalog"), and *any* pairing of the two makes the same retired claim -- so
+    the guard refuses all nine rather than only the three the glossary happens
+    to write out.
+
+    Nouns are taken verbatim, pluralised only where the glossary states them in
+    the singular. Singularising "skills" instead would condemn "the packaged
+    Required Skill list", which is a true statement about the packaged
+    `PROMPT.md` (ADR-0006) and no claim about Skills at all.
+    """
+    provenance: set[str] = set()
+    subjects: set[str] = set()
+    for term in vocabulary:
+        adjective, _, noun = term.partition(" ")
+        assert noun, f"expected an '<adjective> <noun>' term, got {term!r}"
+        provenance.add(re.escape(adjective.lower()))
+        subjects.add(re.escape(noun.lower()) + ("" if noun.endswith("s") else "s?"))
+
+    # Any intervening words may only be qualifiers that leave it the *same*
+    # claim ("packaged **workflow skill** catalog"), each free to carry
+    # Markdown emphasis so that bolding one does not launder it. Admitting
+    # arbitrary words instead would condemn "the packaged instructions'
+    # Required Skills", which is true of the packaged `PROMPT.md` (ADR-0006).
+    return re.compile(
+        r"\b(?:" + "|".join(sorted(provenance)) + r")\b"
+        r"(?:\W+(?:workflow|agent|skill)){0,2}\W+"
+        r"(?:" + "|".join(sorted(subjects)) + r")\b",
         re.IGNORECASE,
     )
+
+
+def test_no_first_party_doc_uses_the_retired_catalog_vocabulary(
+    repo_root: Path,
+) -> None:
+    """A distribution carries no Skills, so no document may say it does."""
+    vocabulary = _forbidden_catalog_vocabulary(repo_root)
+    assert len(vocabulary) >= 3, (
+        f"the _Avoid_ list parsed as {vocabulary} -- the scan looks broken"
+    )
+    claims = _retired_claim_pattern(vocabulary)
+
+    missed = [claim for claim in _RETIRED_CLAIMS if not claims.search(claim)]
+    assert not missed, (
+        "the vocabulary derived from CONTEXT.md's **Installed catalog** entry "
+        "no longer catches these retired claims, so the scan below would pass "
+        f"straight over them: {missed}"
+    )
+
     failures = [
         f"{rel}:{lineno}: {line.strip()[:110]}"
         for rel in _first_party_markdown(repo_root)
-        if rel != "CONTEXT.md"  # the glossary's *Avoid* list names what to avoid
         for lineno, line in enumerate(
             (repo_root / rel).read_text(encoding="utf-8").splitlines(), start=1
         )
-        if claims.search(line)
+        # A glossary *Avoid* line's whole job is to write the retired
+        # vocabulary down, so it is the one line exempt from it -- rather than
+        # the whole of CONTEXT.md, which is guidance like any other.
+        if not line.lstrip().startswith("_Avoid_:") and claims.search(line)
     ]
     assert not failures, (
         "a git-loopy distribution carries no Skills -- it carries the pin, and "
         "the catalog is installed from the external source of record "
-        "(ADR-0025). Offending claims:\n  " + "\n  ".join(failures)
+        f"(ADR-0025). CONTEXT.md tells writers to avoid {list(vocabulary)}. "
+        "Offending claims:\n  " + "\n  ".join(failures)
     )
 
 
@@ -351,15 +431,71 @@ def test_no_first_party_doc_installs_skills_by_copying_a_repository_tree(
     )
 
 
+def test_no_first_party_doc_offers_editable_skill_copies(repo_root: Path) -> None:
+    """Setup writes Config and a prompt override -- never a Skill (ADR-0025).
+
+    The installed catalog is git-loopy's to own: a hand-edited Skill is
+    *repaired* on the next Run, so a document that offers editable copies is
+    offering an edit the next Run silently reverts.
+    """
+    offers = re.compile(r"editable\b(?:\W+\w[\w-]*){0,6}\W+skills\b", re.IGNORECASE)
+    failures = [
+        f"{rel}:{lineno}: {line.strip()[:110]}"
+        for rel in _first_party_markdown(repo_root)
+        for lineno, line in enumerate(
+            (repo_root / rel).read_text(encoding="utf-8").splitlines(), start=1
+        )
+        if offers.search(line)
+    ]
+    assert not failures, (
+        "`git-loopy init` scaffolds an editable `PROMPT.md` and writes Config; "
+        "it installs the Skill catalog rather than handing out copies to edit "
+        "(ADR-0025). Offending offers:\n  " + "\n  ".join(failures)
+    )
+
+
+def test_every_exempt_prefix_names_something_that_exists(repo_root: Path) -> None:
+    """A prefix naming nothing exempts nothing -- and hides that it exempts nothing.
+
+    `docs/feature-requests/` sat in this list while the intake actually lives in
+    `docs/features/`, so the list read as narrower than the scan really was.
+    Either way round the mismatch is a lie about coverage, so the list is held
+    to naming real paths.
+    """
+    missing = [
+        prefix for prefix in _EXEMPT_PREFIXES if not (repo_root / prefix).is_dir()
+    ]
+    assert not missing, (
+        f"these exemptions name no directory, so they exempt nothing: {missing}"
+    )
+
+
 def test_every_orchestrator_onboarding_names_the_supported_install(
     repo_root: Path,
 ) -> None:
-    """Each port's front door routes to the same one install, not to a copy."""
+    """Each port routes to the install that actually serves *it*.
+
+    A shell or PowerShell Run invokes `copilot`, which resolves Skills from
+    Copilot CLI's own sources. git-loopy's **installed catalog** is passed to
+    the client by the Python Runner alone (`loop.py`'s `installed_skills_dir`),
+    and these ports report `enabled_skills` as an unsupported Config surface --
+    so telling their operators that a machine-wide install "serves this
+    Orchestrator too" routes them to an install their Runs never read.
+    """
     for rel in ("git-loopy/shell/README.md", "git-loopy/powershell/README.md"):
         text = (repo_root / rel).read_text(encoding="utf-8")
+        assert f"npx skills add {SKILL_CATALOG_REPOSITORY}" in text, (
+            f"{rel} must route its Skills onboarding through the external "
+            "catalog's own install, which is what a `copilot` session this "
+            "Orchestrator starts can actually resolve"
+        )
         assert "git-loopy init" in text, (
-            f"{rel} must route its Skills onboarding through `git-loopy init`, "
-            "which installs the pinned catalog a Run reads"
+            f"{rel} must relate that install to `git-loopy init`, which writes "
+            "the Config this Orchestrator reads"
+        )
+        assert "serves this Orchestrator too" not in text, (
+            f"{rel} claims git-loopy's installed catalog serves this port; only "
+            "the Python Runner passes it to the Copilot client (ADR-0025)"
         )
 
 

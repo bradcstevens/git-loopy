@@ -90,14 +90,14 @@ you by [`git-loopy init`](#first-run-setup-git-loopy-init) — when you want the
 
 ## First-run setup (`git-loopy init`)
 
-`git-loopy init` is an interactive wizard that writes a
-[`config.toml`](#persistent-config-configtoml) (and, by default, scaffolds
-editable asset overrides) into a chosen **scope**, then **exits** — it never
-starts the loop. You rarely run it by hand: the **first** bare `git-loopy` in a
-repo with no Config anywhere auto-runs it for you on a TTY (see [First run
-(auto-setup)](#first-run-auto-setup)), then continues into the loop. Invoke it
-explicitly to (re)configure a scope, pin a model / reasoning effort, or get
-editable copies of the prompt and skills.
+`git-loopy init` is an interactive wizard that installs the pinned Skill catalog
+and writes a [`config.toml`](#persistent-config-configtoml) (and, by default,
+scaffolds an editable `PROMPT.md` override) into a chosen **scope**, then
+**exits** — it never starts the loop. You rarely run it by hand: the **first**
+bare `git-loopy` in a repo with no Config anywhere auto-runs it for you on a TTY
+(see [First run (auto-setup)](#first-run-auto-setup)), then continues into the
+loop. Invoke it explicitly to (re)configure a scope, pin a model / reasoning
+effort, establish a Skill policy, or get an editable copy of the prompt.
 
 ```bash
 # Interactive: pick a scope, then a model + reasoning effort from the live list.
@@ -134,8 +134,11 @@ The wizard:
   `~/.config/git-loopy/PROMPT.md`. Nothing is written into `.copilot/skills/`,
   in this repository or any other: a project Skill tree is not a Skill source a
   Run reads. See [`docs/skills-setup.md`](../../docs/skills-setup.md).
-- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
-  runs nothing, and exits non-zero.
+- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **no Config
+  and no prompt**, runs nothing, and exits non-zero. The Skill install above has
+  already happened by then — it is the wizard's first act, before anything is
+  collected — and is machine-wide rather than scoped, so cancelling leaves the
+  scope untouched but the catalog installed.
 
 ### Tracker labels the wizard ensures
 
