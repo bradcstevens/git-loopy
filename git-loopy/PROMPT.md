@@ -47,7 +47,7 @@ The marker changes nothing else: you still **pick exactly one task** by the prio
 
 # SKILLS NOT TO INVOKE
 
-Many skills in `.copilot/skills` exist for **human-driven sessions or upstream work** and are out of scope for this autonomous loop. Leave the ones below alone — they're grouped by *why* they don't belong in an unattended iteration.
+Many skills in the installed catalog exist for **human-driven sessions or upstream work** and are out of scope for this autonomous loop. Leave the ones below alone — they're grouped by *why* they don't belong in an unattended iteration.
 
 **Upstream issue-creation & requirements capture** — these run *before* the loop; the loop only works tickets that a human (or `/triage`) has already marked `ready-for-agent`:
 

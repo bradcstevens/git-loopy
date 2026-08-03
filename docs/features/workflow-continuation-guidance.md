@@ -191,7 +191,7 @@ not duplicate its contents.
 - [The Matt Pocock Skills Workflow: A Complete Guide](../../.reference/mattpocock-skills-workflow-guide.md)
   describes the main skill sequence and the deliberate context-clearing points
   between tickets.
-- [`/handoff`](../../.copilot/skills/handoff/SKILL.md) currently creates a
+- [`/handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/handoff) currently creates a
   temporary, session-specific continuation document and already includes a
   "suggested skills" section.
 - Existing GitHub issue labels, native sub-issues, and `blocked_by` dependencies

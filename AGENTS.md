@@ -57,7 +57,14 @@ operator has. Never hard-code a host-specific executable path here.
 
 ## Agent skills
 
-Agent skills are located in `.copilot/skills/*/SKILL.md`
+Agent skills come from
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
+the source of record. `git-loopy init` installs it at the revision this
+repository pins (`git-loopy/python/git_loopy/skill_source.json`) into
+`<config-home>/git-loopy/skills/`, and every Run refreshes that install — which
+is the only Skill source a Run reads (ADR-0025). To type the same commands
+yourself in `copilot`, install them into Copilot CLI as well:
+`npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`.
 
 ### Issue tracker
 

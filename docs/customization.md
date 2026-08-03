@@ -20,22 +20,6 @@
 │   ├── runners.md
 │   ├── skills-setup.md
 │   └── customization.md
-├── .copilot/skills/                # This repo's own copy of the composable workflow skills.
-│   ├── setup-agent-skills/         # Configure tracker, labels, and domain docs first.
-│   ├── intake/                     # Capture a messy request without designing it.
-│   ├── grill-me/                   # Resolve a general plan or decision.
-│   ├── grill-with-docs/            # Plan against CONTEXT.md and ADRs.
-│   ├── wayfinder/                  # Map planning work too large for one context.
-│   ├── research/                   # Gather cited primary-source evidence.
-│   ├── prototype/                  # Answer logic or UI questions with runnable evidence.
-│   ├── to-spec/                    # Publish the agreed destination.
-│   ├── to-tickets/                 # Slice the route into dependency-aware tracer bullets.
-│   ├── triage/                     # Open the ready-for-agent execution gate.
-│   ├── implement/                  # Human-driven execution of one selected slice.
-│   ├── tdd/                        # Red-to-green vertical-slice discipline.
-│   ├── diagnosing-bugs/            # Reproduce and diagnose difficult bugs.
-│   ├── codebase-design/            # Design deep modules at clean seams.
-│   └── code-review/                # Review against standards and the originating spec.
 └── git-loopy/
     ├── PROMPT.md                   # Agent prompt loaded each iteration.
     ├── conformance/                # Language-neutral Wrapper-contract fixtures.
@@ -126,20 +110,27 @@ preflight works without it; this directive adds the interactive auto-trigger.
 
 ## Skills reference
 
-git-loopy's workflow catalog is maintained in
-[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
-and installed from a pinned revision by `git-loopy init`; this repository keeps
-its own copy under [`.copilot/skills/`](../.copilot/skills) for the agents that
-work on it. The GitHub Copilot CLI marketplace contains additional skills for
-work outside this catalog.
+Three different things supply Skills, and they are not interchangeable:
 
-To discover more skills beyond the catalog:
+| Layer | Where it lives | Who reads it |
+| --- | --- | --- |
+| **The external catalog** — the source of record | [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills) at the revision git-loopy pins | nobody directly; it is what an install resolves against |
+| **The installed catalog** | `<config-home>/git-loopy/skills/`, written by `git-loopy init` and refreshed at the start of every Run | **git-loopy Runs** — this is the only Skill source git-loopy provides for itself |
+| **Copilot CLI's own sources** | your personal, plugin, built-in, and custom Skills, including `~/.copilot/skills/` | **Copilot CLI**, when you type a slash command yourself |
+
+A git-loopy distribution ships **no** Skills, and a Run reads **no** Skill from
+the repository it is pointed at — committing a `SKILL.md` into a project does
+not hand a Run a Skill
+([ADR-0025](adr/0025-installed-skill-catalog.md)). Which of Copilot's own
+sources a Run may expose is decided by the closed-world
+[Skill policy](skill-policy.md), and a name the installed catalog also provides
+resolves to the installed copy. Installing the catalog into Copilot for your
+own use is [`docs/skills-setup.md` §1.3](skills-setup.md#13-also-give-copilot-cli-the-slash-commands).
+
+The GitHub Copilot CLI marketplace contains additional skills for work outside
+this catalog. To discover them:
 
 ```bash
-# From inside copilot:
-> /find-skills <query>
-
-# From the shell:
 npx skills find <query>
 ```
 

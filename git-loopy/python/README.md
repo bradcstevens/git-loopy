@@ -119,16 +119,21 @@ The wizard:
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses, rendered as a plain numbered list (no `[tui]` extra required).
-- **Then offers (default yes)** to scaffold an editable `PROMPT.md` override and
-  git-loopy's packaged **workflow skill catalog** into the scope — project
-  `./git-loopy/PROMPT.md` + `./.copilot/skills/`, global
-  `~/.config/git-loopy/PROMPT.md` + `~/.copilot/skills/`. The completion summary
-  computes the catalog count from the packaged contents (currently **27 skills**).
-  See the [recommended workflow skill catalog install
-  path](../../docs/skills-setup.md).
-- The three optional tool/vendor integrations (`microsoft-docs`,
-  `microsoft-foundry`, and `playwright-cli`) are excluded because they are
-  cleanly separable from the core loop-engineering workflow.
+- **Installs the workflow Skill catalog first**, before collecting anything —
+  because the **Skill policy** you are about to choose is a choice among the
+  installed catalog. It clones
+  [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+  at the revision this distribution pins (`git_loopy/skill_source.json`) into
+  `<config-home>/git-loopy/skills/`. That location is **machine-wide and
+  scope-independent**: `--global` and `--project` install to the same place and
+  only decide which Config the rest of setup writes. git-loopy ships no Skills
+  of its own, and every later Run refreshes this install against the pin
+  ([ADR-0025](../../docs/adr/0025-installed-skill-catalog.md)).
+- **Then offers (default yes)** to scaffold an editable `PROMPT.md` override
+  into the scope — project `./git-loopy/PROMPT.md`, global
+  `~/.config/git-loopy/PROMPT.md`. Nothing is written into `.copilot/skills/`,
+  in this repository or any other: a project Skill tree is not a Skill source a
+  Run reads. See [`docs/skills-setup.md`](../../docs/skills-setup.md).
 - **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **nothing**,
   runs nothing, and exits non-zero.
 

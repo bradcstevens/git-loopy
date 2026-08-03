@@ -57,8 +57,12 @@ Copilot skills, is in [`docs/skills-setup.md`](../../docs/skills-setup.md).
 git-loopy runs on top of a configured issue tracker. Before your first Run, do
 the one-time setup from [`docs/skills-setup.md`](../../docs/skills-setup.md):
 
-1. **Install the skills** at the user level:
-   `cp -R .copilot/skills/* ~/.copilot/skills/`.
+1. **Install the Skill catalog** with `git-loopy init`, which clones
+   [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+   at the pinned revision into `<config-home>/git-loopy/skills/`. That install
+   is machine-wide, so it serves this Orchestrator too. To type the same
+   commands yourself in `copilot`, install them into Copilot CLI as well with
+   `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`.
 2. **Configure this repo** by running `/setup-agent-skills` inside `copilot`,
    which writes `docs/agents/issue-tracker.md`.
 

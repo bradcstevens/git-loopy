@@ -37,64 +37,77 @@ flowchart LR
 
 ## The skills and their purpose
 
-These [skills](.copilot/skills/) are small, composable disciplines rather than
-one monolithic process. Use only the skills the work needs; run
-`/setup-agent-skills` once before the rest. They are maintained in
-[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills);
-`git-loopy init` installs them from a pinned revision of that catalog and every
-Run refreshes the install, so a git-loopy installation never depends on this
-tree ([ADR-0025](docs/adr/0025-installed-skill-catalog.md)).
+These skills are small, composable disciplines rather than one monolithic
+process. Use only the skills the work needs; run `/setup-agent-skills` once
+before the rest.
+
+The catalog's source of record is
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+— every skill below links there. `git-loopy init` installs that catalog from a
+pinned revision into git-loopy's own config home and every Run refreshes the
+install, so a git-loopy installation carries no skills of its own and reads
+none from your repository
+([ADR-0025](docs/adr/0025-installed-skill-catalog.md)). To type these as slash
+commands yourself, install them into your agent with the catalog's own `skills`
+CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-cli-the-slash-commands).
 
 ### Shape intent and gather evidence
 
 | Skill | Purpose |
 | --- | --- |
-| [`/intake`](.copilot/skills/intake/SKILL.md) | Capture messy requests and supporting material as a grill-ready brief. |
-| [`/grill-me`](.copilot/skills/grill-me/SKILL.md) | Interview a human until a general plan or design has no hidden decision branches. |
-| [`/batch-grill-me`](.copilot/skills/batch-grill-me/SKILL.md) | Ask all unresolved interview questions in rounds when a serial grill would be too slow. |
-| [`/grill-with-docs`](.copilot/skills/grill-with-docs/SKILL.md) | Grill a repository change while sharpening `CONTEXT.md` and recording non-obvious decisions in ADRs. |
-| [`/grilling`](.copilot/skills/grilling/SKILL.md) | Supply the reusable interview discipline behind the grilling workflows. |
-| [`/wayfinder`](.copilot/skills/wayfinder/SKILL.md) | Map work too large or unclear for one planning session into linked investigation tickets. |
-| [`/research`](.copilot/skills/research/SKILL.md) | Resolve factual uncertainty from high-trust primary sources and save cited findings in the repository. |
-| [`/prototype`](.copilot/skills/prototype/SKILL.md) | Build a throwaway logic or UI artifact when a runnable answer is cheaper than more discussion. |
-| [`/domain-modeling`](.copilot/skills/domain-modeling/SKILL.md) | Sharpen the project's shared language and capture architectural decisions. |
-| [`/handoff`](.copilot/skills/handoff/SKILL.md) | Compact a human-driven session so another agent can resume it without reconstructing the thread. |
-| [`/to-questionnaire`](.copilot/skills/to-questionnaire/SKILL.md) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
+| [`/grill-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grill-me) | Interview a human until a general plan or design has no hidden decision branches. |
+| [`/batch-grill-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/batch-grill-me) | Ask all unresolved interview questions in rounds when a serial grill would be too slow. |
+| [`/grill-with-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grill-with-docs) | Grill a repository change while sharpening `CONTEXT.md` and recording non-obvious decisions in ADRs. |
+| [`/grilling`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grilling) | Supply the reusable interview discipline behind the grilling workflows. |
+| [`/wayfinder`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wayfinder) | Map work too large or unclear for one planning session into linked investigation tickets. |
+| [`/research`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/research) | Resolve factual uncertainty from high-trust primary sources and save cited findings in the repository. |
+| [`/prototype`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/prototype) | Build a throwaway logic or UI artifact when a runnable answer is cheaper than more discussion. |
+| [`/domain-modeling`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/domain-modeling) | Sharpen the project's shared language and capture architectural decisions. |
+| [`/handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/handoff) | Compact a human-driven session so another agent can resume it without reconstructing the thread. |
+| [`/to-questionnaire`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-questionnaire) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
 
 ### Turn intent into delivered work
 
 | Skill | Purpose |
 | --- | --- |
-| [`/to-spec`](.copilot/skills/to-spec/SKILL.md) | Synthesize the agreed destination into a durable spec on the configured issue tracker. |
-| [`/to-tickets`](.copilot/skills/to-tickets/SKILL.md) | Slice a plan or spec into dependency-aware tracer-bullet tickets sized for focused execution. |
-| [`/triage`](.copilot/skills/triage/SKILL.md) | Verify issue readiness and move executable work into the `ready-for-agent` Pool. |
-| [`/implement`](.copilot/skills/implement/SKILL.md) | Drive one human-selected spec or ticket through implementation, TDD, review, and commit. |
-| [`/tdd`](.copilot/skills/tdd/SKILL.md) | Build one behavior at a time with a red-to-green vertical slice at a public seam. |
-| [`/diagnosing-bugs`](.copilot/skills/diagnosing-bugs/SKILL.md) | Reproduce, minimize, hypothesize, instrument, fix, and regression-test a difficult bug. |
-| [`/codebase-design`](.copilot/skills/codebase-design/SKILL.md) | Design deep modules with small interfaces at clean, testable seams. |
-| [`/improve-codebase-architecture`](.copilot/skills/improve-codebase-architecture/SKILL.md) | Find module-deepening opportunities and grill through a selected architectural change. |
-| [`/code-review`](.copilot/skills/code-review/SKILL.md) | Review a diff in fresh contexts against both repository standards and the originating spec. |
-| [`/resolving-merge-conflicts`](.copilot/skills/resolving-merge-conflicts/SKILL.md) | Resolve merge or rebase conflicts hunk by hunk from each side's documented intent. |
+| [`/to-spec`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-spec) | Synthesize the agreed destination into a durable spec on the configured issue tracker. |
+| [`/to-tickets`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-tickets) | Slice a plan or spec into dependency-aware tracer-bullet tickets sized for focused execution. |
+| [`/triage`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/triage) | Verify issue readiness and move executable work into the `ready-for-agent` Pool. |
+| [`/implement`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/implement) | Drive one human-selected spec or ticket through implementation, TDD, review, and commit. |
+| [`/tdd`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/tdd) | Build one behavior at a time with a red-to-green vertical slice at a public seam. |
+| [`/diagnosing-bugs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/diagnosing-bugs) | Reproduce, minimize, hypothesize, instrument, fix, and regression-test a difficult bug. |
+| [`/codebase-design`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-design) | Design deep modules with small interfaces at clean, testable seams. |
+| [`/improve-codebase-architecture`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/improve-codebase-architecture) | Find module-deepening opportunities and grill through a selected architectural change. |
+| [`/code-review`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/code-review) | Review a diff in fresh contexts against both repository standards and the originating spec. |
+| [`/codebase-audit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-audit) | Audit a codebase line by line for junk files, dead code, and security holes before a push. |
+| [`/resolving-merge-conflicts`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/resolving-merge-conflicts) | Resolve merge or rebase conflicts hunk by hunk from each side's documented intent. |
 
 ### Set up and extend the workflow
 
 | Skill | Purpose |
 | --- | --- |
-| [`/setup-agent-skills`](.copilot/skills/setup-agent-skills/SKILL.md) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
-| [`/find-skills`](.copilot/skills/find-skills/SKILL.md) | Discover an installable skill when the current catalog does not cover a task. |
-| [`/teach`](.copilot/skills/teach/SKILL.md) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
-| [`/writing-great-skills`](.copilot/skills/writing-great-skills/SKILL.md) | Apply the vocabulary and design principles that make skills predictable. |
-| [`/skill-creator`](.copilot/skills/skill-creator/SKILL.md) | Create, edit, evaluate, and improve agent skills. |
-| [`/playwright-cli`](.copilot/skills/playwright-cli/SKILL.md) | Exercise browser behavior, capture screenshots, and automate web interactions. |
-| [`/microsoft-docs`](.copilot/skills/microsoft-docs/SKILL.md) | Ground Microsoft technology questions in official documentation. |
-| [`/microsoft-foundry`](.copilot/skills/microsoft-foundry/SKILL.md) | Deploy, evaluate, optimize, and operate Microsoft Foundry agents. |
+| [`/setup-agent-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-agent-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
+| [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Route to the one action to take now, from the live state of the work. |
+| [`/teach`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/teach) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
+| [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
+| [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |
+| [`/writing-great-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-great-skills) | Apply the vocabulary and design principles that make skills predictable. |
+| [`/playwright-cli`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/playwright-cli) | Exercise browser behavior, capture screenshots, and automate web interactions. |
+| [`/microsoft-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-docs) | Ground Microsoft technology questions in official documentation. |
+| [`/microsoft-code-reference`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-code-reference) | Look up Microsoft API references and verify SDK code against working samples. |
+| [`/microsoft-foundry`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-foundry) | Deploy, evaluate, optimize, and operate Microsoft Foundry agents. |
+| [`/azure-mcaps-resource-deployment`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/azure-mcaps-resource-deployment) | Set tagging and API authentication for an MCAPS subscription that hosts Foundry resources. |
+
+The GitHub Copilot CLI marketplace carries additional skills for work outside
+this catalog; `npx skills find <query>` searches it.
 
 ## The complete loop workflow, start to finish
 
-1. **Start with the vague idea.** Use `/intake` when the request is still a pile
-   of notes. Use `/grill-with-docs` for repository or domain work and `/grill-me`
-   for a general plan. If planning itself is too large for one useful context,
-   use `/wayfinder` to turn the fog into a shared map of investigation tickets.
+1. **Start with the vague idea.** Use `/grill-with-docs` for repository or domain
+   work and `/grill-me` for a general plan. When the answers live in someone
+   else's head, `/to-questionnaire` pulls them out in one pass. If planning
+   itself is too large for one useful context, use `/wayfinder` to turn the fog
+   into a shared map of investigation tickets.
 2. **Buy evidence where discussion is not enough.** Use `/research` for factual
    questions and `/prototype` for behavior or visual questions. Feed the evidence
    back into the grill instead of guessing.

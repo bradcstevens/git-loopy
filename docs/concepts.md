@@ -40,11 +40,12 @@ context cannot verify.
 
 ## What git-loopy provides
 
-- **A loop-engineering workflow.** A pinned catalog of skills — installed by
-  `git-loopy init` and refreshed on every Run, and mirrored under
-  [`.copilot/skills/`](../.copilot/skills) for this repository's own agents —
-  shapes intent, gathers evidence, records a spec, slices tickets, triages them,
-  and supports disciplined execution.
+- **A loop-engineering workflow.** A pinned catalog of skills — whose source of
+  record is
+  [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
+  installed by `git-loopy init` into git-loopy's own config home and refreshed
+  on every Run — shapes intent, gathers evidence, records a spec, slices
+  tickets, triages them, and supports disciplined execution.
 - **A Runner family.** The Python reference Orchestrator is available now;
   shell, PowerShell, and Rust members are planned around one
   [Wrapper contract](wrapper-contract.md).

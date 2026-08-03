@@ -31,19 +31,20 @@ can execute without inventing product decisions.
 
 ### 1. Capture and shape intent
 
-Use [`/intake`](../.copilot/skills/intake/SKILL.md) when the starting point is a
-pile of notes, screenshots, or bundled requests. It preserves the source
-material and produces a grill-ready brief; skip it when the idea is already
-coherent.
+Use [`/to-questionnaire`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-questionnaire)
+when the decision is blocked on knowledge that lives in someone else's head: it
+turns the unresolved decisions into a document that pulls the answers out in
+one pass. When the knowledge is already yours or the repository's, go straight
+to a grill.
 
 Then choose the smallest planning path that can reach shared understanding:
 
-- [`/grill-me`](../.copilot/skills/grill-me/SKILL.md) for a general plan or
+- [`/grill-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grill-me) for a general plan or
   decision that does not need repository-backed vocabulary.
-- [`/grill-with-docs`](../.copilot/skills/grill-with-docs/SKILL.md) for
+- [`/grill-with-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grill-with-docs) for
   repository or domain work where terms and architectural decisions must
   persist in `CONTEXT.md` and `docs/adr/`.
-- [`/wayfinder`](../.copilot/skills/wayfinder/SKILL.md) when planning itself is
+- [`/wayfinder`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wayfinder) when planning itself is
   too large or foggy for one useful context. It creates a shared map of
   decision tickets and works the frontier until the route is clear.
 
@@ -62,11 +63,11 @@ glossary before the domain has a shape only freezes guesses.
 
 Do not settle factual or behavioral questions by confidence alone:
 
-- [`/research`](../.copilot/skills/research/SKILL.md) investigates factual
+- [`/research`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/research) investigates factual
   uncertainty against high-trust primary sources and records cited findings.
-- [`/prototype`](../.copilot/skills/prototype/SKILL.md) builds a throwaway logic
+- [`/prototype`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/prototype) builds a throwaway logic
   or UI artifact when a runnable answer is cheaper than another round of prose.
-- [`/handoff`](../.copilot/skills/handoff/SKILL.md) preserves a human-driven
+- [`/handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/handoff) preserves a human-driven
   planning thread when it must cross sessions.
 
 Feed the result back into the grill or Wayfinder map. Evidence narrows the
@@ -75,7 +76,7 @@ decision tree; it does not bypass human judgment.
 ### 3. Record the destination with `/to-spec`
 
 Once the loop engineer and agent agree on the outcome, run
-[`/to-spec`](../.copilot/skills/to-spec/SKILL.md) in the same planning context.
+[`/to-spec`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-spec) in the same planning context.
 It synthesizes the discussion into a durable spec on the configured issue
 tracker, including the problem, user stories, implementation decisions, testing
 seams, and explicit exclusions.
@@ -85,7 +86,7 @@ record consequential decisions; the spec says what this effort must make true.
 
 ### 4. Create the route with `/to-tickets`
 
-Run [`/to-tickets`](../.copilot/skills/to-tickets/SKILL.md) to turn the spec into
+Run [`/to-tickets`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-tickets) to turn the spec into
 dependency-aware tracer bullets. Each ticket should:
 
 - deliver a narrow but complete path through every affected layer;
@@ -98,7 +99,7 @@ into schema, service, and UI batches that only become useful when recombined.
 
 ### 5. Open the execution gate with `/triage`
 
-[`/triage`](../.copilot/skills/triage/SKILL.md) verifies that an issue is
+[`/triage`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/triage) verifies that an issue is
 actionable and applies the repository's `ready-for-agent` label. That label is
 an explicit delegation decision. It means the issue has enough context,
 acceptance criteria, and cleared dependencies for an autonomous Iteration.
@@ -182,7 +183,7 @@ gate again. Autonomous execution does not outsource accountability.
 ## Where `/implement` fits
 
 The reference skills workflow ends an interactive path with
-[`/implement`](../.copilot/skills/implement/SKILL.md), which drives one
+[`/implement`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/implement), which drives one
 human-selected spec or ticket through `/tdd`, `/code-review`, and commit. Use it
 when a person is staying in the session and choosing the work directly.
 

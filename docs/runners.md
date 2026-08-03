@@ -159,11 +159,14 @@ GIT_LOOPY_ISSUE_SOURCE=prds uv run --project git-loopy/python git-loopy
 GIT_LOOPY_INCLUDE_PRS=1 uv run --project git-loopy/python git-loopy
 ```
 
-First-run setup: `git-loopy init` is an interactive wizard that writes a
-`config.toml` (and, by default, scaffolds an editable `PROMPT.md` override and
-git-loopy's packaged **workflow skill catalog**) into a **global** or
-**project** scope, then exits without running the loop. Its completion summary
-computes the catalog count from the packaged contents (currently **27 skills**).
+First-run setup: `git-loopy init` is an interactive wizard that installs the
+pinned **workflow Skill catalog** from
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+into `<config-home>/git-loopy/skills/`, then writes a `config.toml` (and, by
+default, scaffolds an editable `PROMPT.md` override) into a **global** or
+**project** scope, then exits without running the loop. The catalog install is
+machine-wide and scope-independent; the Skills themselves are never shipped in
+a distribution ([ADR-0025](adr/0025-installed-skill-catalog.md)).
 Run inside a repository it also ensures the tracker carries the **label
 vocabulary** the loop reads — the five triage roles plus `parallel-safe` —
 creating only what is absent and leaving existing labels untouched; an
