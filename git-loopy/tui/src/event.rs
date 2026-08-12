@@ -154,6 +154,15 @@ pub struct InsightCapabilities {
     /// Cost estimation.
     #[serde(default)]
     pub cost: Option<bool>,
+    /// Whether *this Run* resolved the harness's live **Rate card**.
+    ///
+    /// Run-scoped rather than per-distribution (ADR-0026): two Runs of one
+    /// binary can differ, so it is accepted from any producer and required of
+    /// none. Nothing is derived from the card, so an absent one never costs a
+    /// figure — the declaration records what the Run knows about its own
+    /// prices, not what it can display.
+    #[serde(default)]
+    pub rate_card: Option<bool>,
 }
 
 /// The AFK-ready Pool collected for one Iteration.

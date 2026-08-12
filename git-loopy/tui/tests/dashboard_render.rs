@@ -208,8 +208,9 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     // queued, so it precedes the closed #7 even though #7 was seen first.
     assert_eq!(
         cells(&queue[1]),
-        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "—", "—"],
-        "an Orchestrator that cannot measure Consumption never renders a zero"
+        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "n/a", "n/a"],
+        "an Orchestrator that cannot measure Consumption never renders a zero, \
+         and the Cost cells say which kind of unknown they are"
     );
     assert_eq!(
         cells(&queue[2]),
@@ -222,8 +223,8 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
             "2",
             "—",
             "—",
-            "—",
-            "—",
+            "n/a",
+            "n/a",
         ],
     );
 }
@@ -379,9 +380,11 @@ fn an_unmeasurable_context_window_still_shows_its_slot() {
 
     assert_eq!(
         band(&lines, "git-loopy")[1],
-        "active #7 0:00:01  •  context —  •  running  •  strikes 0/3",
+        "active #7 0:00:01  •  context —  •  running  •  strikes 0/3  \
+         •  rate card unavailable",
         "an Orchestrator that cannot measure Context fill keeps the slot \
-         visible with the unknown placeholder"
+         visible with the unknown placeholder, and one that resolved no \
+         Rate card says that beside it"
     );
 }
 
@@ -558,5 +561,85 @@ fn a_wide_terminal_lays_out_the_same_bands_when_nothing_can_be_measured() {
             "native-orchestrator-unavailable-capabilities",
             TerminalCapabilities::default(),
         ),
+    );
+}
+
+#[test]
+fn an_unknown_cost_says_which_kind_of_unknown_it_is() {
+    // Two Runs, two reasons, one em dash between them until now. An
+    // Orchestrator that declared Cost unavailable will never report a figure,
+    // and an operator can stop waiting for one; a Run whose harness has simply
+    // not billed yet may report one at any moment (ADR-0026).
+    let unable = fixture_view("native-orchestrator-unavailable-capabilities");
+    assert_eq!(
+        unable.dashboard.header.cost.availability, "unavailable",
+        "the case exists precisely because the Orchestrator cannot report Cost"
+    );
+    let lines = render_lines(&unable, 160, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    let row = cells(&queue[1]);
+    assert_eq!(
+        &row[8..],
+        ["n/a", "n/a"],
+        "an Orchestrator that cannot report Cost says so in the cell"
+    );
+
+    let unbilled = fixture_view("baseline-closed-iteration");
+    assert_eq!(
+        unbilled.dashboard.header.cost.availability, "available",
+        "and this one can report Cost, but its harness billed nothing yet"
+    );
+    let lines = render_lines(&unbilled, 160, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    let row = cells(&queue[1]);
+    assert_eq!(
+        &row[8..],
+        ["—", "—"],
+        "an unreported bill keeps the unknown placeholder, never a zero"
+    );
+}
+
+#[test]
+fn the_header_states_what_the_run_knows_about_its_own_prices() {
+    // The **Rate card** is provenance, not arithmetic: it gates no figure, so
+    // what it gates is this one statement about the Run's own prices — and
+    // *no rate card* stays legible as a fact of its own rather than becoming a
+    // third kind of unknown Cost (ADR-0026).
+    let resolved = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    assert_eq!(
+        resolved.dashboard.header.rate_card.availability,
+        "available"
+    );
+    let lines = render_lines(&resolved, 160, 40, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("rate card recorded"),
+        "a Run that resolved the card records it, in:\n{}",
+        lines.join("\n")
+    );
+
+    let without = fixture_view("native-orchestrator-unavailable-capabilities");
+    assert_eq!(
+        without.dashboard.header.rate_card.availability,
+        "unavailable"
+    );
+    let lines = render_lines(&without, 160, 40, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("rate card unavailable"),
+        "and one that resolved none says so, in:\n{}",
+        lines.join("\n")
+    );
+
+    // Silence is not a refusal: a producer that never declared the run-scoped
+    // capability has said nothing to report.
+    let undeclared = fixture_view("baseline-closed-iteration");
+    assert_eq!(
+        undeclared.dashboard.header.rate_card.availability,
+        "not_declared"
+    );
+    let lines = render_lines(&undeclared, 160, 40, TerminalCapabilities::default());
+    assert!(
+        !band(&lines, "git-loopy")[1].contains("rate card"),
+        "an undeclared card states nothing, in:\n{}",
+        lines.join("\n")
     );
 }

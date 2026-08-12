@@ -386,6 +386,12 @@ class LiveRunState:
         self.strikes = 0
         self.ended = False
         self.context_window_available: bool | None = None
+        #: What this Orchestrator declared about Cost and about *this* Run's
+        #: **Rate card** (ADR-0026). ``None`` is silence, which is neither a
+        #: refusal nor a promise: a run-scoped capability is required of no
+        #: producer, and a Run that has seen no manifest has been told nothing.
+        self.cost_available: bool | None = None
+        self.rate_card_available: bool | None = None
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
 
@@ -512,6 +518,12 @@ class LiveRunState:
                 available = capabilities.get("context_window")
                 if isinstance(available, bool):
                     self.context_window_available = available
+                declared_cost = capabilities.get("cost")
+                if isinstance(declared_cost, bool):
+                    self.cost_available = declared_cost
+                declared_card = capabilities.get("rate_card")
+                if isinstance(declared_card, bool):
+                    self.rate_card_available = declared_card
             max_strikes = event.get("max_nmt_strikes")
             if max_strikes is not None:
                 self.max_strikes = _coerce_int(max_strikes, self.max_strikes)

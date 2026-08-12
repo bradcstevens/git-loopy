@@ -287,8 +287,10 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
         let drawn = cells(row);
         assert_eq!(
             &drawn[5..],
-            ["—", "—", "—", "—", "—", "—", "—"],
-            "an unavailable measurement never renders as an observed zero"
+            ["—", "—", "—", "—", "n/a", "n/a", "—"],
+            "an unavailable measurement never renders as an observed zero, and \
+             an Orchestrator that cannot report Cost at all says so in the two \
+             Cost cells rather than sharing the unknown placeholder"
         );
     }
 }

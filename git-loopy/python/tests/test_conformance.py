@@ -848,7 +848,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.2"
+    # 1.3 adds the header's two capability declarations: a consumer pinned to
+    # 1.2 projects a header this fixture no longer matches.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.3"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -1057,6 +1059,12 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             header = expected["dashboard"]["header"]
             assert list(header) == fields["header"], where
             assert list(header["context_fill"]) == fields["context_fill"], where
+            # One capability answers exactly one question, so both declarations
+            # project the same single field (ADR-0026): a Dashboard that could
+            # read *cost* but not *rate_card* would have collapsed the two facts
+            # a separate declaration exists to keep apart.
+            assert list(header["cost"]) == fields["declaration"], where
+            assert list(header["rate_card"]) == fields["declaration"], where
             assert list(expected["dashboard"]["activity"]) == fields["activity"], where
             assert list(expected["drill_in"]["detail_header"]) == (
                 fields["detail_header"]

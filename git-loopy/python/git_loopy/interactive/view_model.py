@@ -111,6 +111,31 @@ def _header(state: LiveRunState) -> dict[str, Any]:
             state.context_window,
             available=state.context_window_available,
         ),
+        # Cost is unknown for more than one reason, and only the Run-start
+        # declaration carries which (ADR-0026): a nulled figure cannot, because
+        # the Wrapper contract lets a producer signal an unobservable
+        # measurement by omitting a key *or* by nulling it. The **Rate card**
+        # is declared beside it rather than inside it — it gates no figure, so
+        # *no rate card* is provenance, never a third kind of unknown Cost.
+        "cost": _declaration(state.cost_available),
+        "rate_card": _declaration(state.rate_card_available),
+    }
+
+
+def _declaration(declared: bool | None) -> dict[str, Any]:
+    """What an **Orchestrator**'s manifest says about one **Insight capability**.
+
+    Silence is its own answer: a run-scoped capability is accepted from any
+    producer and required of none, so an undeclared one has not been refused.
+    """
+    return {
+        "availability": (
+            "not_declared"
+            if declared is None
+            else "available"
+            if declared
+            else "unavailable"
+        )
     }
 
 

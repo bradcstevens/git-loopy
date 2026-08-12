@@ -195,3 +195,99 @@ fn one_unbilled_sample_latches_the_issue_total_to_unknown_never_zero() {
         "and never to an observed zero"
     );
 }
+
+#[test]
+fn an_orchestrator_that_cannot_report_cost_declares_it_rather_than_leaving_one_unknown() {
+    // Two facts arrive as the same `null` Credits cell: *no billing telemetry*
+    // and *this Orchestrator cannot report Cost at all*. Only the second is a
+    // property of the Run, so the projection states it once (ADR-0026).
+    let events = vec![
+        serde_json::json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"agent_output": true, "cost": false}
+        }),
+        serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+        serde_json::json!({"type": "wrapper.issue.activated", "iter": 1, "issue": 42}),
+    ];
+    let projected = reduce(&events, IssueRef::number(42));
+
+    assert_eq!(
+        projected["dashboard"]["header"]["cost"]["availability"],
+        serde_json::json!("unavailable")
+    );
+    // The Cost figure itself is unknown either way — never an observed zero.
+    assert!(queue_row(&projected, 42)["credits"].is_null());
+}
+
+#[test]
+fn an_absent_rate_card_is_declared_on_its_own_and_never_costs_a_figure() {
+    // The **Rate card** is provenance, not arithmetic: its prices are
+    // denominated in the same **AI Credits** the harness already billed, so
+    // nothing is derived from it and a Run without one still reports Cost in
+    // full (ADR-0026). It is a separate declaration precisely so *no rate card*
+    // cannot be mistaken for *no Cost*.
+    let events = vec![
+        serde_json::json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"cost": true, "rate_card": false},
+            "rate_card": null
+        }),
+        serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+        serde_json::json!({"type": "wrapper.issue.activated", "iter": 1, "issue": 42}),
+        serde_json::json!({
+            "type": "usage.tokens", "iter": 1,
+            "credits": 1.5, "premium_requests": 2.0
+        }),
+    ];
+    let projected = reduce(&events, IssueRef::number(42));
+
+    let header = &projected["dashboard"]["header"];
+    assert_eq!(
+        header["rate_card"]["availability"],
+        serde_json::json!("unavailable")
+    );
+    assert_eq!(
+        header["cost"]["availability"],
+        serde_json::json!("available")
+    );
+    let row = queue_row(&projected, 42);
+    assert_eq!(row["credits"], serde_json::json!(1.5));
+    assert_eq!(row["premium_requests"], serde_json::json!(2.0));
+}
+
+#[test]
+fn a_resolved_rate_card_and_an_undeclared_one_are_different_facts() {
+    let with_card = reduce(
+        &[serde_json::json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"cost": true, "rate_card": true},
+            "rate_card": {"models": {}}
+        })],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        with_card["dashboard"]["header"]["rate_card"]["availability"],
+        serde_json::json!("available")
+    );
+
+    // A run-scoped capability is required of no producer, so silence is its own
+    // answer: an Orchestrator that never declared the card has not refused it.
+    let silent = reduce(
+        &[serde_json::json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"cost": true}
+        })],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        silent["dashboard"]["header"]["rate_card"]["availability"],
+        serde_json::json!("not_declared")
+    );
+    // And a Run that has not yet seen a manifest at all has been told nothing
+    // about Cost either — which is not the same as being told it is absent.
+    let before_any_event = reduce(&[], IssueRef::number(42));
+    assert_eq!(
+        before_any_event["dashboard"]["header"]["cost"]["availability"],
+        serde_json::json!("not_declared")
+    );
+}

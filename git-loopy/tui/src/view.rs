@@ -117,6 +117,38 @@ pub struct Header {
     pub active_issue: Option<IssueRef>,
     pub active_seconds: Option<f64>,
     pub context_fill: ContextFill,
+    pub cost: Declaration,
+    pub rate_card: Declaration,
+}
+
+/// One Run-scoped **Insight capability**, projected as its own declaration.
+///
+/// A Cost figure is unknown for more than one reason, and the reasons are not
+/// interchangeable: *this Orchestrator cannot report Cost at all* is a property
+/// of the Run that the operator cannot act on, while *no billing telemetry has
+/// arrived yet* is a property of the work so far. Collapsing them into one
+/// unknown cell is the loss ADR-0026 refuses, so the declaration is projected
+/// once per Run and a renderer reads it beside the cell.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Declaration {
+    pub availability: &'static str,
+}
+
+impl Declaration {
+    /// What an Orchestrator's manifest says about one capability.
+    ///
+    /// An undeclared capability is neither available nor refused: run-scoped
+    /// keys are accepted from any producer and required of none, so silence is
+    /// its own answer rather than a `false` in disguise.
+    fn from_capability(declared: Option<bool>) -> Self {
+        Self {
+            availability: match declared {
+                Some(true) => "available",
+                Some(false) => "unavailable",
+                None => "not_declared",
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -300,6 +332,8 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         }),
         active_issue: active,
         context_fill: context_fill(state),
+        cost: Declaration::from_capability(state.capabilities.cost),
+        rate_card: Declaration::from_capability(state.capabilities.rate_card),
     }
 }
 

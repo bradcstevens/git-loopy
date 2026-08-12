@@ -32,6 +32,15 @@ use crate::view::{
 const UNKNOWN: &str = "—";
 /// The ASCII placeholder, for a terminal that cannot render the em dash.
 const UNKNOWN_ASCII: &str = "-";
+/// The placeholder for a figure this Orchestrator can never report.
+///
+/// A different mark from [`UNKNOWN`] on purpose (ADR-0026): *no billing
+/// telemetry yet* may still resolve into a figure, while *this Orchestrator
+/// cannot report Cost* never will, and an operator who cannot tell them apart
+/// waits for a number that is not coming. It is ASCII either way — the
+/// distinction is a fact, not a flourish, so it must survive a terminal that
+/// renders no box drawing.
+const UNAVAILABLE: &str = "n/a";
 
 /// One drawn table column.
 ///
@@ -175,7 +184,13 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
         &dashboard.diagnostics,
         &glyphs,
     );
-    draw_queue(frame, queue, &view.dashboard.queue.rows, &glyphs);
+    draw_queue(
+        frame,
+        queue,
+        &view.dashboard.queue.rows,
+        cost_placeholder(&view.dashboard.header, &glyphs),
+        &glyphs,
+    );
     draw_activity(frame, activity, &view.dashboard.activity, &glyphs);
     draw_summary(frame, summary, &view.dashboard.summary.rows, &glyphs);
 }
@@ -373,6 +388,7 @@ fn draw_header(
             ),
         ),
     ];
+    segments.extend(rate_card_segment(header).map(|note| (5, note)));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
@@ -386,7 +402,7 @@ fn draw_header(
     );
 }
 
-fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], glyphs: &Glyphs) {
+fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], cost: &str, glyphs: &Glyphs) {
     draw_table(
         frame,
         area,
@@ -401,8 +417,8 @@ fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], glyphs: &Glyphs)
                 row.iteration_count.to_string(),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
-                credits(row.credits, glyphs),
-                premium(row.premium_requests, glyphs),
+                credits(row.credits, cost),
+                premium(row.premium_requests, cost),
             ]
         }),
         " Queue ",
@@ -418,15 +434,46 @@ fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), grouped)
 }
 
-/// Billed **AI Credits** to four places, or the unknown placeholder.
+/// Billed **AI Credits** to four places, or `unknown` — the placeholder this
+/// Run's own Cost declaration chose.
 ///
 /// A missing bill is unknown, never zero: rendering it as `0` would say the
 /// work was free rather than that nobody reported what it cost.
-fn credits(value: Option<f64>, glyphs: &Glyphs) -> String {
-    value.map_or_else(
-        || glyphs.unknown.to_string(),
-        |amount| format!("{amount:.4}"),
-    )
+fn credits(value: Option<f64>, unknown: &str) -> String {
+    value.map_or_else(|| unknown.to_string(), |amount| format!("{amount:.4}"))
+}
+
+/// What an unknown Cost cell says on this Run.
+///
+/// The figure is unknown either way; the reason is not, and only the Run-start
+/// declaration carries it. A nulled figure cannot: the Wrapper contract lets a
+/// producer signal an unobservable measurement by omitting a key *or* by
+/// nulling it, so the cell alone can never tell *unmeasured* from
+/// *unmeasurable* (ADR-0026).
+fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
+    if header.cost.availability == "unavailable" {
+        UNAVAILABLE
+    } else {
+        glyphs.unknown
+    }
+}
+
+/// What this Run knows about its own prices, when it declared anything.
+///
+/// The **Rate card** gates no figure — its prices are denominated in the same
+/// **AI Credits** the harness already billed, so nothing derives from it and an
+/// absent card costs nothing (ADR-0026). What it gates is this statement, which
+/// is the card's whole job: a replay can see which prices the work was billed
+/// under, and *no rate card* stays a fact of its own instead of becoming a
+/// third kind of unknown Cost. A run-scoped capability is required of no
+/// producer, so an undeclared card states nothing rather than claiming a
+/// refusal nobody made.
+fn rate_card_segment(header: &Header) -> Option<String> {
+    match header.rate_card.availability {
+        "available" => Some("rate card recorded".to_string()),
+        "unavailable" => Some("rate card unavailable".to_string()),
+        _ => None,
+    }
 }
 
 /// A premium-request count, or the unknown placeholder.
@@ -434,9 +481,9 @@ fn credits(value: Option<f64>, glyphs: &Glyphs) -> String {
 /// Whole counts read without a decimal point — the ordinary case, one request
 /// per call — and a fractional multiplier to two places so it is not rounded
 /// away into a wrong whole number.
-fn premium(value: Option<f64>, glyphs: &Glyphs) -> String {
+fn premium(value: Option<f64>, unknown: &str) -> String {
     value.map_or_else(
-        || glyphs.unknown.to_string(),
+        || unknown.to_string(),
         |count| {
             if count.fract() == 0.0 {
                 format!("{count:.0}")
@@ -578,6 +625,7 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
         frame,
         breakdown,
         &view.drill_in.iteration_breakdown.rows,
+        cost_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
     draw_issue_log(frame, log, &view.drill_in, &glyphs);
@@ -657,7 +705,13 @@ fn draw_detail_header(
     );
 }
 
-fn draw_breakdown(frame: &mut Frame, area: Rect, rows: &[ContributionRow], glyphs: &Glyphs) {
+fn draw_breakdown(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[ContributionRow],
+    cost: &str,
+    glyphs: &Glyphs,
+) {
     draw_table(
         frame,
         area,
@@ -674,8 +728,8 @@ fn draw_breakdown(frame: &mut Frame, area: Rect, rows: &[ContributionRow], glyph
                 tokens(row.consumption.tokens_out, glyphs),
                 tokens(row.consumption.cache_read, glyphs),
                 tokens(row.consumption.cache_write, glyphs),
-                credits(row.credits, glyphs),
-                premium(row.premium_requests, glyphs),
+                credits(row.credits, cost),
+                premium(row.premium_requests, cost),
                 peak_context(row.peak_context_window.as_ref(), glyphs),
             ]
         }),

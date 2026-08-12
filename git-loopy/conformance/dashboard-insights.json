@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.2",
+  "fixture_schema_version": "1.3",
   "wrapper_contract_version": "1.8",
   "event_schema_version": "1.1",
   "semantic_contract": {
@@ -207,7 +207,9 @@
         "strikes",
         "active_issue",
         "active_seconds",
-        "context_fill"
+        "context_fill",
+        "cost",
+        "rate_card"
       ],
       "context_fill": [
         "availability",
@@ -216,6 +218,9 @@
         "percentage",
         "effective_target_tokens",
         "effective_ceiling_tokens"
+      ],
+      "declaration": [
+        "availability"
       ],
       "queue_row": [
         "issue",
@@ -477,6 +482,12 @@
                   "percentage": 37.5,
                   "effective_target_tokens": 20000,
                   "effective_ceiling_tokens": 28000
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
                 }
               },
               "queue": {
@@ -572,6 +583,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
                 }
               },
               "queue": {
@@ -892,6 +909,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "unavailable"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -1000,6 +1023,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "unavailable"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -1406,6 +1435,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
                 }
               },
               "queue": {
@@ -1533,6 +1568,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
                 }
               },
               "queue": {
@@ -1696,7 +1737,8 @@
             "token_usage": true,
             "context_window": true,
             "skill_consultation": true,
-            "cost": true
+            "cost": true,
+            "rate_card": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -1704,6 +1746,23 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": false
+          },
+          "rate_card": {
+            "models": {
+              "gpt-5.6-sol": {
+                "multiplier": 1.0,
+                "discount_percent": null,
+                "prices": {
+                  "batch_size": 1000000,
+                  "input_price": 1.25,
+                  "output_price": 10.0,
+                  "cache_read_price": 0.125,
+                  "cache_write_price": 1.5625,
+                  "max_prompt_tokens": 400000,
+                  "long_context": null
+                }
+              }
+            }
           },
           "max_nmt_strikes": 3
         },
@@ -2104,6 +2163,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2210,6 +2275,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2358,6 +2429,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2539,6 +2616,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2948,6 +3031,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "unavailable"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -3054,6 +3143,12 @@
                   "percentage": null,
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "unavailable"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
