@@ -554,8 +554,30 @@ _Avoid_: quit, kill, abort.
 
 **Detach**:
 Leaving the live interface while the run keeps going unattended, falling back to the
-line-by-line scrollback output.
+line-by-line scrollback output. It has two forms: the **voluntary** one the operator
+asks for, and the **involuntary** one a **Dashboard fault** produces. Both produce the
+same continuation — the loop runs on, the sinks swap to the parked line printer — and
+are labelled differently, because one of them is a bug the operator wants to see
+(ADR-0024).
 _Avoid_: background, minimize, exit.
+
+**Dashboard fault**:
+A **Dashboard** that raises — at startup or mid-**Run** — which the Run survives. It
+is an involuntary **Detach**: the operator loses the live view, not the work, and the
+Run continues on the parked line printer (ADR-0024). It is recorded distinguishably
+from a voluntary Detach, reported at the point of the swap, and carries its own exit
+code, so a supervising script is never told everything was fine.
+_Avoid_: TUI crash, renderer error, dashboard failure (as the name).
+
+**Terminal owner**:
+The single component responsible for the terminal's mode state for the whole process
+(ADR-0024). It captures the terminal's entry state before the **Dashboard** starts and
+restores that captured state — not an assumed one — on every ordinary exit path,
+including a **Stop**, a **Detach**, a **Dashboard fault**, an unhandled exception and a
+signal. Release is idempotent, and the non-interactive path acquires no ownership at
+all.
+_Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
+Dashboard's teardown).
 
 ### The live interface
 
@@ -604,13 +626,49 @@ both **Observed tokens** and **Consumption**, which accumulate billed tokens and
 _Avoid_: context usage, cumulative tokens, token consumption.
 
 **Consumption**:
-The tokens-in / tokens-out and the model they were billed against, attributed to a
-scope: a serial **Iteration** or parallel **Lane contribution** (the basis for a
-**Summary** row's Cost), or an **Active issue** — summed across every accounting unit
-that worked it — the basis for the **Queue**'s per-issue Cost. Every Cost figure
-derives from Consumption by one shared rule (first non-None model wins; tokens sum),
-represented in code by the `UsageTally` value object (`git_loopy.usage`).
+The tokens-in / tokens-out, the model they were billed against, and the billing the
+harness reported for them — **AI Credits**, premium requests, and the cache-read /
+cache-write split — attributed to a scope: a serial **Iteration** or parallel **Lane
+contribution** (the basis for a **Summary** row's Cost), or an **Active issue** — summed
+across every accounting unit that worked it — the basis for the **Queue**'s per-issue
+Cost. Consumption *carries* what was billed; it does not denominate it. Turning a
+Consumption tally into a Cost figure is the **Cost denomination**'s job. A figure no
+sample reported stays unknown, and a total missing one of its terms is unknown too
+rather than an understatement.
 _Avoid_: usage, spend (for the token measure); billing.
+
+**Cost denomination**:
+The single injected seam that turns a **Consumption** tally into a Cost figure, resolved
+once per **Run** and threaded to every Cost-bearing surface — the **Summary**, the
+**Queue**, the **Iteration breakdown** and **Rolling dispatch**'s cost pressure — so
+those surfaces cannot disagree about what an issue cost. The one production
+denomination reads the **AI Credits** the harness billed; unknown is unknown, never zero
+(ADR-0026).
+_Avoid_: pricing, cost calculator, estimator.
+
+**AI Credits**:
+The unit Cost is denominated in: the billing the harness itself reports, which is what
+the quota is drawn against. It is the primary, un-derived Cost figure — read and
+totalled, **never recomputed** from tokens and prices in any code path, including as a
+fallback — with the **premium-request count** reported alongside it, because that is the
+budget an operator actually exhausts mid-**Run**. A figure the harness did not report is
+unknown, and unknown renders as unavailable — never as zero, and never as an estimate
+wearing a billed figure's clothes (ADR-0026). git-loopy publishes **no USD figure**: no
+field on any surface the kit reads is denominated in dollars by its schema, and a
+currency is never inferred from an unlabelled float. The bar for revisiting that is a
+**dollar-denominated figure published by the harness itself**.
+_Avoid_: credits (unqualified), spend, estimated cost; dollars or USD as a name for
+this unit.
+
+**Rate card**:
+The harness's own live per-model price listing — separate input, output, cache-read and
+cache-write prices, the billing batch size and the nested long-context block — read from
+the same `models.list` call that supplies the model roster, resolved once per **Run**,
+held fixed, and published in that Run's **Insight capability** block. Its prices are
+denominated in **AI Credits**, the unit the harness has already billed in, so the card is
+**provenance, not arithmetic**: nothing derives a figure from it, and an absent card
+never costs a figure. Never packaged, cached, or otherwise hand-maintained (ADR-0026).
+_Avoid_: pricing table, price list, `pricing.toml` (the deleted hand-authored table).
 
 **Observed tokens**:
 The cumulative tokens-in plus tokens-out reported during an **Iteration**. An
@@ -1019,8 +1077,12 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   freshness.
 - **Consumption** is attributed to a scope: a serial **Iteration** or parallel
   **Lane contribution** (a **Summary** row's Cost), or an **Active issue** (the
-  **Queue**'s per-issue Cost). Both derive Cost from the same `UsageTally` rule, so
-  per-issue and accounting-row figures stay reconcilable.
+  **Queue**'s per-issue Cost). Both resolve Cost through the same **Cost denomination**,
+  so per-issue and accounting-row figures stay reconcilable.
+- Cost is the **AI Credits** the harness reported billing, never a figure git-loopy
+  recomputed from tokens and prices. The **Rate card** records the prices a **Run** was
+  billed under and denominates nothing, so a Run without one reports Cost exactly as a
+  Run with one does.
 - A context cutover starts another **Iteration** pinned to the same **Active issue**;
   it does not create a sub-Iteration accounting entity.
 - An issue's **Iteration breakdown** has one row per Iteration contribution; the
@@ -1111,3 +1173,12 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
 - `task type` was read as implying work order — resolved: a **Task type** selects a
   **Routed pair** only. Scheduling priority is a separate, currently unmodelled axis and
   must not be folded into the `task-type:` label vocabulary.
+- `cost` was rendered in dollars, from a hand-authored list-price table git-loopy
+  maintained itself, and was described as derived from **Consumption** by multiplying
+  tokens by a per-model price — resolved: Cost is the harness's own reported billing,
+  denominated in **AI Credits**, and no USD figure is published, because no surface the
+  kit reads is denominated in dollars by its schema (ADR-0026, superseding one clause of
+  ADR-0018). The table, the operator-supplied conversion rate and the estimate are
+  deleted; the live **Rate card** replaces none of them, being provenance rather than
+  arithmetic. An operator-supplied rate, an offline price fallback and any recompute of a
+  figure the harness already billed all stay rejected.
