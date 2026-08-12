@@ -1479,8 +1479,206 @@ async def test_a_failed_session_ends_the_run_without_a_typed_stop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Three refusals the Runner owns, and one freeze that covers the whole Run
+# The Run envelope: what the real Runner emits and exits with
 # ---------------------------------------------------------------------------
+#
+# Everything above stops at `_drive_frontier`, which is the driver's own seam.
+# What the *Runner* owns is the envelope around it --- the Events a Run opens
+# and closes with, and the fact that reaching the frontier means never reaching
+# the Pool. The shell Orchestrator pins exactly this through its public
+# entrypoint (`tests/test-orchestrator-boundary.sh`); the reference Runner had
+# no equivalent, so a regression in the envelope could hide behind the injected
+# seams the rest of this suite uses.
+
+
+class _ForbiddenPool:
+    """An Issue source that answers preflight and refuses to be collected.
+
+    An execute-frontier Run replaces Pool selection outright. Asserting on a
+    *call count* would pass just as well if the Pool were collected and thrown
+    away --- which still costs the tracker round trip and still lets an issue
+    the operator never authorized reach a Performer. So collection raises.
+    """
+
+    def __init__(self, preflight_rc: int | None = None) -> None:
+        self.preflight_rc = preflight_rc
+        self.preflighted = 0
+
+    def preflight(self) -> int | None:
+        self.preflighted += 1
+        return self.preflight_rc
+
+    def collect_pool(self) -> Any:
+        raise AssertionError(
+            "an execute-frontier Run collected the Pool it exists to replace"
+        )
+
+
+def _runner_loop(
+    plan: continuation_frontier.FrontierPlan,
+    *,
+    source: Any,
+    drive_frontier: Any = None,
+) -> Any:
+    """A `_Loop` carrying only what `drive()` reads before it branches.
+
+    Same construction as :func:`_bare_loop` and for the same reason: the Pool
+    path's collaborators --- git, the writers, a Copilot client, the Strike
+    machine --- are precisely what this Run must never touch, so a harness that
+    supplied them would weaken the very claim being made.
+
+    `drive_frontier` left unset means the production method runs, which is the
+    default because it is the interesting case; a test that only cares about
+    *which* Run `drive()` chose passes a stub instead of standing up a tracker.
+    """
+    bare = object.__new__(loop._Loop)
+    bare._diag = logging.getLogger("test.continuation.frontier")
+    bare._emitted = []
+    bare._emit = lambda event_type, **payload: bare._emitted.append(
+        {"type": event_type, **payload}
+    )
+    bare._source = source
+    bare._frontier_plan = plan
+    bare._config = SimpleNamespace(
+        issue_source="github", max_iterations=12, max_nmt_strikes=3, parallel=1
+    )
+    bare._release_version = "0.0.0-test"
+    bare._rate_card = None
+    bare._include_prs = True
+    bare._skill_preflight = SimpleNamespace(
+        migration_warning=False, event_payload={"policy": "closed-world"}
+    )
+    if drive_frontier is not None:
+        bare._drive_frontier = drive_frontier
+    return bare
+
+
+def _plan() -> continuation_frontier.FrontierPlan:
+    return continuation_frontier.plan_frontier(
+        _authority(actor="planner", effect_scopes=("tracker-write",)),
+        satisfied_requirements=(("skill", "to-spec"), ("access", "tracker-write")),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_execute_frontier_run_never_collects_the_pool() -> None:
+    """The frontier *replaces* selection; it does not run beside it.
+
+    Collecting the Pool anyway would put issues nobody authorized in front of a
+    Run whose whole selection is supposed to be the frozen frontier --- and it
+    would do so before `_drive_frontier` is ever reached, where every other test
+    in this suite starts looking.
+    """
+    source = _ForbiddenPool()
+
+    async def drive_frontier(plan: continuation_frontier.FrontierPlan) -> int:
+        return 0
+
+    bare = _runner_loop(_plan(), source=source, drive_frontier=drive_frontier)
+
+    assert await bare.drive() == 0
+    assert source.preflighted == 1
+
+
+@pytest.mark.asyncio
+async def test_the_run_envelope_reports_dispatches_without_claiming_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole lifecycle through `drive()`, with only the tracker scripted.
+
+    This is the Python counterpart of the shell Orchestrator's entrypoint case:
+    every seam between `drive()` and §9 is the production one, so nothing here
+    can pass because a helper agreed with itself.
+
+    `iterations_run` is 0 and not the Dispatch count. An Iteration is a Pool
+    concept carrying its own rollup, Strike accounting and cap; a Dispatch is
+    none of those, and counting one as the other would put Continuation work
+    into the Strike progress that ADR-0004 keeps it out of. The Dispatches are
+    reported by their own three Events instead.
+    """
+    github = _live_transport()
+    for index, (key, target) in enumerate((("first", 239), ("second", 240))):
+        _publish(_publish_request(key=key, target=target, evidence=7001 + index), github)
+    monkeypatch.setattr(continuation, "make_github_client", lambda: github)
+    bare = _runner_loop(_plan(), source=_ForbiddenPool())
+    dispatched: list[int] = []
+
+    async def perform_dispatch(
+        dispatch: continuation_frontier.Dispatch, *, iter_num: int
+    ) -> continuation_frontier.DispatchOutcome:
+        dispatched.append(iter_num)
+        return continuation_frontier.DispatchOutcome(outcome="complete")
+
+    bare._perform_dispatch = perform_dispatch
+
+    exit_code = await bare.drive()
+
+    assert exit_code == 0
+    assert dispatched == [1, 2]
+    assert [event["type"] for event in bare._emitted] == [
+        events.WRAPPER_SKILL_POLICY_RESOLVED,
+        events.WRAPPER_RUN_START,
+        events.WRAPPER_CONTINUATION_DISPATCH_STARTED,
+        events.WRAPPER_CONTINUATION_DISPATCH_ENDED,
+        events.WRAPPER_CONTINUATION_DISPATCH_STARTED,
+        events.WRAPPER_CONTINUATION_DISPATCH_ENDED,
+        events.WRAPPER_CONTINUATION_STOPPED,
+        events.WRAPPER_RUN_END,
+    ]
+    start, stopped, end = bare._emitted[1], bare._emitted[-2], bare._emitted[-1]
+    assert start["iter_num"] is None
+    assert stopped["mode"] == continuation_frontier.MODE
+    assert stopped["reason"] == "frontier-drained"
+    assert stopped["successor_executed"] is False
+    assert end["outcome"] == "empty_pool"
+    assert end["iterations_run"] == 0
+    # Non-vacuity: with a zero cap configured, "reported 0" and "reported the
+    # cap" would be the same assertion, and emitting the cap would pass.
+    assert bare._config.max_iterations != 0
+
+
+@pytest.mark.asyncio
+async def test_a_run_needing_attention_closes_its_envelope_without_a_strike(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unclean envelope, and the accounting it still must not touch.
+
+    A Dispatch that fails is a Runner problem: it earns no §9 reason, so the Run
+    closes on `stuck` rather than on a boundary it never reached. What it must
+    *not* do is become retry accounting --- `iterations_run` stays 0 on this path
+    too, because a Dispatch that failed is still not an Iteration, and letting it
+    count as one would spend a Strike on work the Strike machine never drove.
+    """
+    github = _live_transport()
+    _publish(_publish_request(key="first", target=239, evidence=7001), github)
+    monkeypatch.setattr(continuation, "make_github_client", lambda: github)
+    bare = _runner_loop(_plan(), source=_ForbiddenPool())
+
+    async def perform_dispatch(
+        dispatch: continuation_frontier.Dispatch, *, iter_num: int
+    ) -> continuation_frontier.DispatchOutcome:
+        return continuation_frontier.DispatchOutcome(outcome="failed")
+
+    bare._perform_dispatch = perform_dispatch
+
+    exit_code = await bare.drive()
+
+    assert exit_code == 1
+    end = bare._emitted[-1]
+    assert end["type"] == events.WRAPPER_RUN_END
+    assert end["outcome"] == "stuck"
+    assert end["iterations_run"] == 0
+    assert not [
+        event
+        for event in bare._emitted
+        if event["type"] == events.WRAPPER_CONTINUATION_STOPPED
+    ]
+    # The accounting claim, made directly rather than inferred from the
+    # envelope: a Dispatch that failed must not spend a Strike, so no Strike
+    # Event may be emitted at all.
+    assert not [
+        event for event in bare._emitted if event["type"] == events.WRAPPER_STRIKE
+    ]
 
 
 def test_every_covered_repository_freezes_before_any_of_them_dispatches() -> None:
