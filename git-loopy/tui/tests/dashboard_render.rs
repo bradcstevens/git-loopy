@@ -278,6 +278,8 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "Outcome",
             "Duration",
             "Model",
+            "Credits",
+            "Premium",
             "Tokens in",
             "Tokens out",
             "Observed tokens",
@@ -289,8 +291,9 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "PR advances",
             "Strikes",
         ],
-        "cumulative context-like accounting is labelled Observed tokens, and \
-         Skills consulted sits beside the skill-call count"
+        "billed Credits and the premium requests beside them take the place the \
+         deleted estimate held, cumulative context-like accounting is labelled \
+         Observed tokens, and Skills consulted sits beside the skill-call count"
     );
     assert_eq!(
         cells(&summary[1]),
@@ -299,6 +302,8 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "closed",
             "0:00:04",
             "gpt-5.6-sol",
+            "—",
+            "—",
             "100",
             "50",
             "150",
@@ -310,7 +315,94 @@ fn the_summary_band_carries_the_normalized_iteration_rollup() {
             "0",
             "0",
         ],
-        "an empty consulted-Skill list is the unknown placeholder, not a name"
+        "an empty consulted-Skill list is the unknown placeholder, not a name, \
+         and an Iteration the harness has not billed reports no Cost rather \
+         than a zero one"
+    );
+}
+
+#[test]
+fn the_summary_band_renders_the_bill_the_iteration_rollup_reported() {
+    // The per-Iteration `Cost` column went with the estimate `03e9941` deleted,
+    // and nothing took its place. The projection has carried billed **AI
+    // Credits** and the premium-request count on every Summary row since —
+    // `SummaryRow.credits` and `.premium_requests` are pinned in the shared
+    // fixture's field inventory — and the renderer read neither. A figure the
+    // core projects and no band shows understates a Run exactly as silently as
+    // a zero would, and it leaves the Summary unable to disagree with the Queue
+    // only because it says nothing at all.
+    let view = fixture_view("pre-marker-attribution-and-conflicting-marker");
+    let row = &view.dashboard.summary.rows[0];
+    assert_eq!(
+        row.credits,
+        Some(0.849_545),
+        "the fixture pins an Iteration the harness billed"
+    );
+    assert_eq!(row.premium_requests, Some(0.33));
+
+    let lines = render_lines(&view, 200, 44, TerminalCapabilities::default());
+    let summary = band(&lines, "Summary");
+    let headings = cells(&summary[0]);
+    let credits = headings
+        .iter()
+        .position(|heading| heading == "Credits")
+        .expect("the Summary band carries the billed Credits it projects");
+    let premium = headings
+        .iter()
+        .position(|heading| heading == "Premium")
+        .expect("and the premium-request count beside it");
+    assert_eq!(
+        premium,
+        credits + 1,
+        "the two Cost cells sit together, in the order ADR-0026 reports them"
+    );
+
+    let billed = cells(&summary[1]);
+    assert_eq!(
+        billed[credits], "0.8495",
+        "billed Credits render to four places, as they do in the Queue"
+    );
+    assert_eq!(
+        billed[premium], "0.33",
+        "and a fractional premium multiplier is not rounded into a wrong whole number"
+    );
+}
+
+#[test]
+fn an_iteration_no_orchestrator_can_price_says_which_kind_of_unknown_it_is() {
+    // The Summary band answers to the same Run-start declaration the Queue and
+    // the drill-in do (ADR-0026): a band that spelled *unmeasurable* as the
+    // unknown placeholder would put the collapse back in the one band that
+    // audits what the Orchestrator reported.
+    let unable = fixture_view("native-orchestrator-unavailable-capabilities");
+    assert_eq!(unable.dashboard.header.cost.availability, "unavailable");
+    let lines = render_lines(&unable, 200, 44, TerminalCapabilities::default());
+    let summary = band(&lines, "Summary");
+    let headings = cells(&summary[0]);
+    let credits = headings
+        .iter()
+        .position(|heading| heading == "Credits")
+        .expect("the Summary band carries a Credits column");
+    for row in &summary[1..] {
+        let drawn = cells(row);
+        assert_eq!(
+            &drawn[credits..credits + 2],
+            ["n/a", "n/a"],
+            "an Orchestrator that can never report Cost says so, rather than \
+             leaving the operator waiting for a figure that is not coming"
+        );
+    }
+
+    let unbilled = fixture_view("baseline-closed-iteration");
+    assert_eq!(unbilled.dashboard.header.cost.availability, "available");
+    let lines = render_lines(&unbilled, 200, 44, TerminalCapabilities::default());
+    let summary = band(&lines, "Summary");
+    let drawn = cells(&summary[1]);
+    assert_eq!(
+        &drawn[credits..credits + 2],
+        ["—", "—"],
+        "while an Iteration whose harness has not billed yet keeps the unknown \
+         placeholder, and neither ever renders as an observed zero"
     );
 }
 
@@ -323,15 +415,18 @@ fn a_summary_row_declares_every_measurement_its_orchestrator_cannot_take() {
     assert_eq!(
         cells(&summary[1]),
         [
-            "1", "advanced", "0:00:29", "—", "—", "—", "—", "—", "—", "—", "2", "0", "1", "0",
+            "1", "advanced", "0:00:29", "—", "n/a", "n/a", "—", "—", "—", "—", "—", "—", "2", "0",
+            "1", "0",
         ],
         "commits, closures, advances, and Strikes stay observable even when \
-         Consumption is not"
+         Consumption is not, and the two Cost cells say which kind of unknown \
+         they are rather than sharing the placeholder"
     );
     assert_eq!(
         cells(&summary[2]),
         [
-            "2", "closed", "0:00:19", "—", "—", "—", "—", "—", "—", "—", "1", "1", "0", "0",
+            "2", "closed", "0:00:19", "—", "n/a", "n/a", "—", "—", "—", "—", "—", "—", "1", "1",
+            "0", "0",
         ],
     );
 }

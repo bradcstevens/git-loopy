@@ -291,3 +291,54 @@ fn a_resolved_rate_card_and_an_undeclared_one_are_different_facts() {
         serde_json::json!("not_declared")
     );
 }
+
+#[test]
+fn one_issue_the_harness_could_not_price_leaves_every_other_row_reported() {
+    // The all-or-nothing latch is per row, never per Run. #335 asks it of a
+    // model the **Rate card** does not list; ADR-0026 removed the card from the
+    // arithmetic, and what survives is the same rule about the figure itself —
+    // an issue whose bill never arrived renders unavailable *for that row
+    // only*, so one unreportable issue cannot take down a **Summary** whose
+    // other rows were billed in full.
+    let events = vec![
+        serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+        serde_json::json!({
+            "type": "wrapper.iteration.end", "iter": 1, "outcome": "closed",
+            "issues": [
+                {
+                    "issue": 42, "status": "closed",
+                    "consumption": {
+                        "model": "gpt-5.6-sol", "tokens_in": 100, "tokens_out": 50,
+                        "credits": 1.5, "premium_requests": 2.0
+                    }
+                },
+                {
+                    "issue": 43, "status": "no-progress",
+                    "consumption": {"model": "gpt-5.6-sol", "tokens_in": 10, "tokens_out": 5}
+                }
+            ]
+        }),
+    ];
+    let projected = reduce(&events, IssueRef::number(42));
+
+    let billed = queue_row(&projected, 42);
+    assert_eq!(
+        billed["credits"],
+        serde_json::json!(1.5),
+        "a row the harness billed keeps its figure, whatever its neighbour reported"
+    );
+    assert_eq!(billed["premium_requests"], serde_json::json!(2.0));
+
+    let unbilled = queue_row(&projected, 43);
+    assert!(
+        unbilled["credits"].is_null(),
+        "and the row nobody billed is unknown rather than free"
+    );
+    assert!(unbilled["premium_requests"].is_null());
+    assert_eq!(
+        unbilled["tokens_in"],
+        serde_json::json!(10),
+        "an unreported bill costs only the Cost figures: what *was* reported \
+         for that row still reaches the operator"
+    );
+}

@@ -26,9 +26,9 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Summary ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted                                 Commits   Closures   PR advances   Strikes │
-│1      advanced    0:00:29    —               —           —            —                 —       —        —                                                2         0          1             0       │
-│2      closed      0:00:19    —               —           —            —                 —       —        —                                                1         1          0             0       │
+│Iter   Outcome     Duration   Model           Credits      Premium    Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted         Commits   Closures   PR advances   Strikes │
+│1      advanced    0:00:29    —               n/a          n/a        —           —            —                 —       —        —                        2         0          1             0       │
+│2      closed      0:00:19    —               n/a          n/a        —           —            —                 —       —        —                        1         1          0             0       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │

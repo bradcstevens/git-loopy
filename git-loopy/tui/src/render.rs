@@ -93,20 +93,30 @@ const QUEUE_COLUMNS: [Column; 10] = [
 ];
 
 /// The locked Summary columns, in the locked order.
-const SUMMARY_COLUMNS: [Column; 14] = [
+///
+/// Billed **AI Credits** and the premium-request count read immediately after
+/// the model that incurred them, together and in the order ADR-0026 reports
+/// them — the model, then what it was billed, then the counters that explain
+/// the figure. They are given up *first* on a narrow terminal, as they already
+/// are in the Queue and the Iteration breakdown: one rule across every band
+/// beats three, and an operator who has narrowed the terminal should not have
+/// to remember which band still carries a Cost cell.
+const SUMMARY_COLUMNS: [Column; 16] = [
     fixed("Iter", 5, 0),
     fixed("Outcome", 10, 1),
     fixed("Duration", 9, 2),
     fixed("Model", 14, 5),
-    fixed("Tokens in", 10, 7),
-    fixed("Tokens out", 11, 8),
-    fixed("Observed tokens", 16, 12),
-    fixed("Tools", 6, 10),
-    fixed("Skills", 7, 11),
-    filling("Skills consulted", 18, 14),
+    fixed("Credits", 11, 14),
+    fixed("Premium", 9, 15),
+    fixed("Tokens in", 10, 6),
+    fixed("Tokens out", 11, 7),
+    fixed("Observed tokens", 16, 11),
+    fixed("Tools", 6, 9),
+    fixed("Skills", 7, 10),
+    filling("Skills consulted", 18, 13),
     fixed("Commits", 8, 4),
-    fixed("Closures", 9, 9),
-    fixed("PR advances", 12, 13),
+    fixed("Closures", 9, 8),
+    fixed("PR advances", 12, 12),
     fixed("Strikes", 8, 3),
 ];
 
@@ -192,7 +202,13 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
         &glyphs,
     );
     draw_activity(frame, activity, &view.dashboard.activity, &glyphs);
-    draw_summary(frame, summary, &view.dashboard.summary.rows, &glyphs);
+    draw_summary(
+        frame,
+        summary,
+        &view.dashboard.summary.rows,
+        cost_placeholder(&view.dashboard.header, &glyphs),
+        &glyphs,
+    );
 }
 
 /// How tall the two bands below a scrolling one may be.
@@ -515,7 +531,7 @@ fn grouped(value: i64) -> String {
 ///
 /// Every column is a field of the normalized Iteration rollup, so the band is
 /// an audit of what the Orchestrator reported rather than a second tally.
-fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], glyphs: &Glyphs) {
+fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], cost: &str, glyphs: &Glyphs) {
     draw_table(
         frame,
         area,
@@ -528,6 +544,8 @@ fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], glyphs: &Gly
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.model.clone().unwrap_or_else(|| glyphs.unknown.into()),
+                credits(row.credits, cost),
+                premium(row.premium_requests, cost),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
                 tokens(row.observed_tokens, glyphs),

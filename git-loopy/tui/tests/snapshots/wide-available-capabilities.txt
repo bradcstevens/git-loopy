@@ -26,8 +26,8 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Summary ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Iter   Outcome     Duration   Model           Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted                                 Commits   Closures   PR advances   Strikes │
-│1      closed      0:00:04    gpt-5.6-sol     100         50           150               0       0        —                                                1         1          0             0       │
+│Iter   Outcome     Duration   Model           Credits      Premium    Tokens in   Tokens out   Observed tokens   Tools   Skills   Skills consulted         Commits   Closures   PR advances   Strikes │
+│1      closed      0:00:04    gpt-5.6-sol     —            —          100         50           150               0       0        —                        1         1          0             0       │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
