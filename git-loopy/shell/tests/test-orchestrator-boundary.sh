@@ -2600,4 +2600,170 @@ jq -se '
 assert_equal "4" "$(<"$scripted_github_state")" \
   "denied Skill runs no dispatch before its stop"
 
+# The freeze is a property of the Run, not of each repository's turn. Every
+# covered repository is observed before the first Dispatch, so work published
+# while one repository is dispatching cannot authorize itself in the next one.
+# The fake Copilot writes into the same log the scripted GitHub boundary does,
+# which is what makes the ordering observable at the entrypoint rather than
+# inferred from a call count.
+write_frontier_freeze_tools() {
+  local bin_dir="$1"
+  write_frontier_dispatch_tools "$bin_dir"
+  cat >"$bin_dir/copilot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+calls=0
+[[ -f "$FAKE_COPILOT_CALLS" ]] && calls="$(<"$FAKE_COPILOT_CALLS")"
+printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
+printf 'dispatch\n' >>"$GIT_LOOPY_SCRIPTED_GITHUB_LOG"
+EOF
+  chmod +x "$bin_dir/copilot"
+}
+
+repo="$temp_dir/execute-frontier-freeze"
+fake_bin="$temp_dir/execute-frontier-freeze-bin"
+make_repo "$repo"
+write_frontier_freeze_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/execute-frontier-freeze-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-freeze-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+export FAKE_COPILOT_CALLS="$temp_dir/execute-frontier-freeze-copilot.calls"
+export FAKE_COPILOT_FRONTIER_ARGS="$temp_dir/execute-frontier-freeze-copilot.args"
+scripted_github_log="$temp_dir/execute-frontier-freeze-scripted.log"
+scripted_github_script="$temp_dir/execute-frontier-freeze-script.json"
+scripted_github_state="$temp_dir/execute-frontier-freeze-script.state"
+export GIT_LOOPY_SCRIPTED_GITHUB_LOG="$scripted_github_log"
+export GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$scripted_github_script"
+export GIT_LOOPY_SCRIPTED_GITHUB_STATE="$scripted_github_state"
+# `octo/other` carries no Continuation Workstream at all, so observing it costs
+# exactly one call and its own drive adds exactly one more. That keeps the
+# script's shape a statement about *when* the second repository is read.
+jq '
+  [.scenarios[]
+   | select(.id == "automation-binds-one-dispatch")
+   | .github_script[]] as $example
+  | [{
+      command: (
+        "issue list --repo octo/other --state all "
+        + "--label git-loopy-continuation --limit 100 "
+        + "--json number,state,url,comments"
+      ),
+      exit_code: 0,
+      stdout_json: []
+    }] as $other
+  | $example + $other + $example + $example + $other
+' "$port_dir/../conformance/continuation-scenarios.json" \
+  >"$GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"
+export GIT_LOOPY_CONTINUATION_MODE="execute-frontier"
+export GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS="planner"
+export GIT_LOOPY_CONTINUATION_ACTOR="runner"
+export GIT_LOOPY_CONTINUATION_REPOSITORIES="octo/example,octo/other"
+export GIT_LOOPY_CONTINUATION_EFFECT_SCOPES="tracker-write"
+
+if ! run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier-freeze.stdout" \
+  "$temp_dir/execute-frontier-freeze.stderr"; then
+  fail "multi-repository execute-frontier lifecycle failed: $(<"$temp_dir/execute-frontier-freeze.stderr")"
+fi
+unset GIT_LOOPY_CONTINUATION_MODE GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS \
+  GIT_LOOPY_CONTINUATION_ACTOR GIT_LOOPY_CONTINUATION_REPOSITORIES \
+  GIT_LOOPY_CONTINUATION_EFFECT_SCOPES GIT_LOOPY_SCRIPTED_GITHUB_LOG \
+  GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT GIT_LOOPY_SCRIPTED_GITHUB_STATE
+
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "the covered repositories were driven serially"
+freeze_ordering="$(
+  awk '
+    /^dispatch$/ { if (!dispatched) { dispatched = NR } }
+    /--repo octo\/other / { if (!observed) { observed = NR } }
+    END { printf "%d %d", observed, dispatched }
+  ' "$scripted_github_log"
+)"
+observed_at="${freeze_ordering%% *}"
+dispatched_at="${freeze_ordering##* }"
+((observed_at > 0)) ||
+  fail "the second covered repository was never observed"
+((dispatched_at > 0)) ||
+  fail "the frozen frontier never reached a Dispatch"
+((observed_at < dispatched_at)) ||
+  fail "the second covered repository was frozen after the first Dispatch"
+jq -se '
+  [.[].type] == [
+    "wrapper.run.start",
+    "wrapper.continuation_dispatch.started",
+    "wrapper.continuation_dispatch.ended",
+    "wrapper.continuation.stopped",
+    "wrapper.continuation.stopped",
+    "wrapper.run.end"
+  ]
+  and .[3].repository == "octo/example"
+  and .[4].repository == "octo/other"
+  and .[4].reason == "frontier-drained"
+  and .[4].dispatched == []
+  and .[5].outcome == "empty_pool"
+  and .[5].iterations_run == 0
+' "$temp_dir/execute-frontier-freeze.stdout" >/dev/null ||
+  fail "a multi-repository frontier Run drifted from its locked Event envelope"
+assert_equal "8" "$(<"$scripted_github_state")" \
+  "every covered repository was frozen once and driven once"
+
+# A Run that cannot take its freeze still closes its own envelope. The failure
+# leaves through the same door an execution failure does, so the replay log
+# never ends on a Run that simply stopped being described.
+repo="$temp_dir/execute-frontier-freeze-fault"
+fake_bin="$temp_dir/execute-frontier-freeze-fault-bin"
+make_repo "$repo"
+write_frontier_freeze_tools "$fake_bin"
+export FAKE_GH_LOG="$temp_dir/execute-frontier-freeze-fault-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/execute-frontier-freeze-fault-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+export FAKE_COPILOT_CALLS="$temp_dir/execute-frontier-freeze-fault-copilot.calls"
+export FAKE_COPILOT_FRONTIER_ARGS="$temp_dir/execute-frontier-freeze-fault-copilot.args"
+scripted_github_log="$temp_dir/execute-frontier-freeze-fault-scripted.log"
+scripted_github_script="$temp_dir/execute-frontier-freeze-fault-script.json"
+scripted_github_state="$temp_dir/execute-frontier-freeze-fault-script.state"
+export GIT_LOOPY_SCRIPTED_GITHUB_LOG="$scripted_github_log"
+export GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT="$scripted_github_script"
+export GIT_LOOPY_SCRIPTED_GITHUB_STATE="$scripted_github_state"
+jq -n '[{
+  command: (
+    "issue list --repo octo/example --state all "
+    + "--label git-loopy-continuation --limit 100 "
+    + "--json number,state,url,comments"
+  ),
+  exit_code: 1,
+  stdout: "",
+  stderr: "carrier discovery unavailable"
+}]' >"$GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT"
+export GIT_LOOPY_CONTINUATION_MODE="execute-frontier"
+export GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS="planner"
+export GIT_LOOPY_CONTINUATION_ACTOR="runner"
+export GIT_LOOPY_CONTINUATION_REPOSITORIES="octo/example,octo/other"
+export GIT_LOOPY_CONTINUATION_EFFECT_SCOPES="tracker-write"
+
+freeze_fault_status=0
+run_entrypoint \
+  "$repo" "$fake_bin" \
+  "$temp_dir/execute-frontier-freeze-fault.stdout" \
+  "$temp_dir/execute-frontier-freeze-fault.stderr" ||
+  freeze_fault_status=$?
+unset GIT_LOOPY_CONTINUATION_MODE GIT_LOOPY_CONTINUATION_TRUSTED_PRODUCERS \
+  GIT_LOOPY_CONTINUATION_ACTOR GIT_LOOPY_CONTINUATION_REPOSITORIES \
+  GIT_LOOPY_CONTINUATION_EFFECT_SCOPES GIT_LOOPY_SCRIPTED_GITHUB_LOG \
+  GIT_LOOPY_SCRIPTED_GITHUB_SCRIPT GIT_LOOPY_SCRIPTED_GITHUB_STATE
+
+assert_equal "1" "$freeze_fault_status" \
+  "a Run that could not freeze exited as success"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an unfrozen frontier still created a Dispatch session"
+jq -se '
+  [.[].type] == ["wrapper.run.start", "wrapper.run.end"]
+  and .[1].outcome == "stuck"
+  and .[1].iterations_run == 0
+' "$temp_dir/execute-frontier-freeze-fault.stdout" >/dev/null ||
+  fail "a Run that could not freeze did not close its own envelope"
+
 printf 'shell Orchestrator boundary: ok\n'

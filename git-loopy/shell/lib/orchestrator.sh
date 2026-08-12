@@ -2221,6 +2221,24 @@ _git_loopy_frontier_in_coverage_actions() {
   ' <<<"$actions"
 }
 
+_git_loopy_frontier_observe() {
+  local repository="$1"
+  local trusted_producers request
+  trusted_producers="$(
+    jq -c '.trusted_producers' <<<"$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON"
+  )" || return 1
+  request="$(
+    jq -cn \
+      --arg repository "$repository" \
+      --argjson trusted_producers "$trusted_producers" \
+      '{repository: $repository, trusted_producers: $trusted_producers}'
+  )" || return 1
+  # Deliberately `automation`-free: the grants a Run dispatches under are derived
+  # from what this read-only observation already contains, so asking for an
+  # authorization here would ask a question whose answer has not been computed.
+  _git_loopy_frontier_reconcile "$request"
+}
+
 _git_loopy_frontier_freeze() {
   local result="$1" repositories="$2"
   local actions covered
@@ -2533,29 +2551,7 @@ _git_loopy_frontier_run_dispatch() {
 
 git_loopy_run_continuation_frontier_repository() {
   local repository="$1"
-  local authority="$GIT_LOOPY_CONTINUATION_AUTHORITY_JSON"
-  local repositories effect_kinds trusted_producers observation
-  repositories="$(jq -c '.ceilings.repositories' <<<"$authority")" || return 1
-  effect_kinds="$(jq -c '.ceilings.effect_scopes' <<<"$authority")" || return 1
-  trusted_producers="$(jq -c '.trusted_producers' <<<"$authority")" || return 1
-
-  local observation_request
-  observation_request="$(
-    jq -cn \
-      --arg repository "$repository" \
-      --argjson trusted_producers "$trusted_producers" \
-      '{repository: $repository, trusted_producers: $trusted_producers}'
-  )" || return 1
-  observation="$(_git_loopy_frontier_reconcile "$observation_request")" ||
-    return 1
-
-  local frontier grants satisfied
-  frontier="$(_git_loopy_frontier_freeze "$observation" "$repositories")" ||
-    return 1
-  grants="$(_git_loopy_frontier_grants \
-    "$observation" "$repositories" "$effect_kinds")" || return 1
-  satisfied="$(_git_loopy_frontier_satisfied_requirements \
-    "$observation" "$repositories" "$effect_kinds")" || return 1
+  local frontier="$2" grants="$3" satisfied="$4"
 
   local dispatched='[]' prior='null' refreshed=0 index=0
   while true; do
@@ -2613,13 +2609,53 @@ git_loopy_run_continuation_frontier() {
   _GIT_LOOPY_FRONTIER_EXECUTION_FAILED=0
   _GIT_LOOPY_FRONTIER_ATTENTION_REQUIRED=0
   local failed=0
+
+  # The freeze belongs to the Run, not to each repository's turn. Every covered
+  # repository is observed before the first Dispatch, because a Run that froze
+  # the second one only once the first had finished would let work published
+  # during the first repository's Dispatches authorize itself in the second.
+  local -a repositories=() frozen_frontiers=() frozen_grants=() frozen_satisfied=()
   while IFS= read -r repository; do
     [[ -n "$repository" ]] || continue
-    git_loopy_run_continuation_frontier_repository "$repository" || {
+    repositories+=("$repository")
+  done < <(jq -r '.ceilings.repositories[]' <<<"$authority")
+
+  local covered effect_kinds
+  covered="$(jq -c '.ceilings.repositories' <<<"$authority")" || return 1
+  effect_kinds="$(jq -c '.ceilings.effect_scopes' <<<"$authority")" || return 1
+  for repository in ${repositories[@]+"${repositories[@]}"}; do
+    local observation frontier grants satisfied
+    # Every failure here leaves the Run through the same door an execution
+    # failure does, so a Run that could not freeze still closes its envelope
+    # rather than disappearing without a `wrapper.run.end`.
+    observation="$(_git_loopy_frontier_observe "$repository")" &&
+      frontier="$(_git_loopy_frontier_freeze "$observation" "$covered")" &&
+      grants="$(_git_loopy_frontier_grants \
+        "$observation" "$covered" "$effect_kinds")" &&
+      satisfied="$(_git_loopy_frontier_satisfied_requirements \
+        "$observation" "$covered" "$effect_kinds")" || {
       failed=1
       break
     }
-  done < <(jq -r '.ceilings.repositories[]' <<<"$authority")
+    frozen_frontiers+=("$frontier")
+    frozen_grants+=("$grants")
+    frozen_satisfied+=("$satisfied")
+  done
+
+  local index=0
+  if ((failed == 0)); then
+    for repository in ${repositories[@]+"${repositories[@]}"}; do
+      git_loopy_run_continuation_frontier_repository \
+        "$repository" \
+        "${frozen_frontiers[$index]}" \
+        "${frozen_grants[$index]}" \
+        "${frozen_satisfied[$index]}" || {
+        failed=1
+        break
+      }
+      index=$((index + 1))
+    done
+  fi
 
   local outcome="empty_pool" exit_code=0
   if ((failed || _GIT_LOOPY_FRONTIER_EXECUTION_FAILED ||
