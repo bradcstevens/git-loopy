@@ -134,9 +134,9 @@ _EXECUTE_FRONTIER = ContinuationProfile(
 )
 
 #: Named requirement sets a manifest may be judged against. `execute-frontier` is
-#: present because the Python Runner implements serial fixed-frontier Dispatch
-#: (#264); shell and PowerShell answer `report` until #265 and #266, and the
-#: family-wide rollout gate is #267.
+#: present because every family member implements serial fixed-frontier Dispatch:
+#: the Python Runner (#264), the shell Orchestrator (#265) and the PowerShell
+#: Orchestrator (#266), advertised family-wide by the #267 rollout gate.
 CONTINUATION_PROFILES: Mapping[str, ContinuationProfile] = {
     FOUNDATION_PROFILE: _FOUNDATION,
     REPORT_PROFILE: _REPORT,

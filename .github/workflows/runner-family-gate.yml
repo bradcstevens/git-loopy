@@ -138,6 +138,8 @@ jobs:
           pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-continuation-conformance.ps1
           pwsh -NoLogo -NoProfile -File `
+            git-loopy/powershell/tests/test-continuation-frontier.ps1
+          pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-orchestrator-boundary.ps1
           pwsh -NoLogo -NoProfile -File `
             git-loopy/powershell/tests/test-tui-install.ps1

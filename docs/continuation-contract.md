@@ -135,9 +135,18 @@ Contract 1.3 is the revision that satisfies this precondition and advertises
 `continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
 implication in the direction it was written: coverage gates the advertisement, and the suite fails
 if `report` is advertised while any locked area is unowned. `default` remains `off` — an adopter
-opts in per §10. `execute-frontier` is advertised by the Python Runner and shell
-Orchestrator, which can each dispatch a serial fixed frontier; PowerShell remains
-`false` until it can actually dispatch one.
+opts in per §10 — and `execute-frontier` is advertised only by a distribution that can actually
+dispatch one. The #267 rollout gate is the point at which that became the whole family: the Python
+Runner (#264), the shell Orchestrator (#265) and the PowerShell Orchestrator (#266) each advertise
+`execute-frontier: true`. Advertising the mode is serial Dispatch only; `concurrent_dispatch` stays
+`false` everywhere, so no reader can extrapolate one from the other.
+
+A distribution advertising `execute-frontier: true` is judged by setup against the
+`execute-frontier` capability profile, which adds two requirements to `report`'s:
+`mode-execute-frontier` (the mode is advertised) and `fixed-frontier` (the
+`fixed_frontier_authorization` optional capability §9's authorization is gated by is advertised
+beside it). Each is defeatable on its own, so a refusal names which half of the claim the manifest
+stopped serving.
 
 ## 5. Event observations
 
@@ -641,3 +650,79 @@ and `GIT_LOOPY_CONTINUATION_*` environment overrides into three *uncombined* sou
 over; it never pre-merges. A Runner with its own copy of these rules would be projecting a different
 view of the project than the one an operator can ask for by hand — and the copy that drifts is
 always the one nobody runs directly.
+
+## 11. Staged rollout and adoption
+
+§4 says what a distribution *may* advertise and §10 says what an operator *may* authorize. This
+section is the sequence between them: how a family member reaches an advertisement, how a project
+that predates Continuation joins it, and what an operator does when either goes wrong.
+
+**Setup selects and verifies one native distribution.** An adopter installs one family member and
+runs setup, which judges *the distribution running it* against one named capability profile before
+it writes or installs anything. That is how the selection is recorded without naming a family member
+or committing an executable path: nothing here resolves an entrypoint, and every command in this
+repository's own gates is relative and resolved through `PATH`, because Integration runs them in a
+throwaway worktree on whatever host the operator has. A distribution that fails its profile fails
+*before* the project is configured, rather than during a Run that had already started.
+
+**The rollout gates are staged, and each one is a precondition rather than a target.**
+
+1. `foundation` — the contract version, record format, tracker Adapter, native operations and
+   `default: off` every distribution must clear.
+2. `report` — `foundation` plus `resolve-authority` and `continuation_modes.report`. Complete core
+   Transition-owner coverage gates the advertisement itself; see §4.
+3. `execute-frontier` — `report` plus `mode-execute-frontier` and `fixed-frontier`. A member
+   advertises it only once the mandatory Conformance fixtures pass for it, and the family-wide
+   advertisement is a separate decision from any one member's implementation. `profile_distributions`
+   in the shared fixture is where a narrower profile is recorded, so a member is never judged
+   against a requirement set it has not implemented — and a member that stages a mode ahead of the
+   others is a registered narrowing rather than a surprise in a Run.
+
+`default` stays `off` at every gate: adoption is the operator's decision per §10, not the
+distribution's. The first execute-frontier release is **serial only**. `concurrent_dispatch` stays
+`false` across the whole family and is a later family-wide capability gate, not something a port
+reaches on its own; general concurrency needs issue-backed `parallel-safe` together with the
+Prerequisite, Target and effect-scope checks §9 does not perform, and serial Dispatch is not a step
+towards it that a reader may extrapolate from.
+
+**Migration is by publication, never by backfill.** A Workstream that predates Continuation carries
+no marked record, and Reconciliation projects records rather than inventing them, so such a
+Workstream is simply absent from the projection. It is adopted at the moment its next recognized
+Transition owner publishes the first trusted root for it — one ordinary `publish`, authenticated the
+way every other record is. Nothing infers, converts or mass-backfills Producer semantics from
+labels, prose, unmarked comments, local files or conversation history: an unmarked comment is never
+parsed, a record whose embedded Producer disagrees with its comment author is discarded, and the
+discovery label is an index only.
+
+This is why mixed coverage is reported explicitly rather than smoothed over. A project part-way
+through adoption reads as `waiting` — `complete` is never inferred from an empty Action list, and a
+discovery path that cannot perform a complete paginated read never has closed coverage and so can
+never claim project-wide `complete`. An unadopted Workstream therefore contributes to no
+authorization and to no terminal-completion claim, which is the property that makes a partial
+migration safe to run against: the one moment "everything is finished" is least true is exactly the
+moment an empty projection would otherwise say it.
+
+**Failure recovery.** Each failure has one place it surfaces and one thing an operator does about
+it.
+
+- *Setup refuses the distribution.* The verdict names the unsatisfied requirements, each defeatable
+  on its own, so the answer is which half of the claim the manifest stopped serving — not a
+  re-install.
+- *A Run refuses the mode.* Configuration narrows and exits `0`; a distribution that cannot serve
+  the effective mode exits `1` with `unsupported_operation` (§10). The remedy is a distribution that
+  advertises the mode or an authority that asks for less — never a Run that quietly resolves
+  `report` or `off` instead.
+- *Authority resolves to `off` unasked.* An empty `repositories` ceiling or an empty
+  `trusted_producers` set carries a typed reason (`coverage-empty`, `trusted-producers-empty`), and
+  `declared_mode` shows the gap between what was configured and what was resolved.
+- *A Dispatch ends in exceptional evidence.* `safety-case-violation` and `uncertain-effect-state`
+  become durable evidence bound to their Performer and stop the Run under §9's locked precedence.
+  Ordinary success and ordinary execution failure stay in the Runner's existing artifacts, Events,
+  retry and Strike paths.
+- *The index disagrees with the records.* Reconciliation reports index diagnostics and never mutates
+  labels; `repair-index` is the explicit, separate operation.
+
+None of these establishes a central continuation issue, an authoritative Markdown snapshot, a
+mutable project queue, an append-only execution journal, a central tombstone ledger or an
+authoritative local cache. Rollout does not earn an exception to §1: a migration that needed one
+would be building the very artifact whose absence makes every record independently verifiable.

@@ -1534,88 +1534,71 @@ function Test-CapabilityVerificationGate {
     # family can see. It lands in the fixture as data and is pinned here against this
     # distribution's own declaration: three members that quietly judged different
     # requirements under one profile name would otherwise never disagree anywhere.
-    $Verification = $Fixture["capability_verification"]
-    $FixtureProfile = $Verification["profiles"]["foundation"]
-    $Declared = Get-GitLoopyContinuationProfile -Name "foundation"
-
-    Assert-True (
-        (@($FixtureProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($Declared["requirements"]) -join ",")
-    ) "the PowerShell foundation profile requires exactly what the fixture pins"
-    Assert-True (
-        [string]$FixtureProfile["continuation_contract_version"] -ceq
-            [string]$Declared["continuation_contract_version"]
-    ) "the PowerShell foundation profile pins the fixture's contract version"
-    Assert-True (
-        [int]$FixtureProfile["record_format"] -eq [int]$Declared["record_format"]
-    ) "the PowerShell foundation profile pins the fixture's record format"
-    Assert-True (
-        [string]$FixtureProfile["tracker_adapter"] -ceq
-            [string]$Declared["tracker_adapter"]
-    ) "the PowerShell foundation profile pins the fixture's tracker Adapter"
-    Assert-True (
-        (@($FixtureProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($Declared["tracker_operations"]) -join ",")
-    ) "the PowerShell foundation profile pins the fixture's tracker operations"
-    Assert-True (
-        (@($FixtureProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($Declared["native_operations"]) -join ",")
-    ) "the PowerShell foundation profile pins the fixture's native operations"
-    Assert-True (
-        [string]$FixtureProfile["mode_default"] -ceq [string]$Declared["mode_default"]
-    ) "the PowerShell foundation profile pins the fixture's default mode"
-
-    # The report profile (#263) additionally requires the `resolve-authority`
-    # operation and the `report` mode to be advertised.
-    $FixtureReportProfile = $Verification["profiles"]["report"]
-    $DeclaredReport = Get-GitLoopyContinuationProfile -Name "report"
-    Assert-True (
-        (@($FixtureReportProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($DeclaredReport["requirements"]) -join ",")
-    ) "the PowerShell report profile requires exactly what the fixture pins"
-    Assert-True (
-        [string]$FixtureReportProfile["continuation_contract_version"] -ceq
-            [string]$DeclaredReport["continuation_contract_version"]
-    ) "the PowerShell report profile pins the fixture's contract version"
-    Assert-True (
-        [int]$FixtureReportProfile["record_format"] -eq [int]$DeclaredReport["record_format"]
-    ) "the PowerShell report profile pins the fixture's record format"
-    Assert-True (
-        [string]$FixtureReportProfile["tracker_adapter"] -ceq
-            [string]$DeclaredReport["tracker_adapter"]
-    ) "the PowerShell report profile pins the fixture's tracker Adapter"
-    Assert-True (
-        (@($FixtureReportProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($DeclaredReport["tracker_operations"]) -join ",")
-    ) "the PowerShell report profile pins the fixture's tracker operations"
-    Assert-True (
-        (@($FixtureReportProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($DeclaredReport["native_operations"]) -join ",")
-    ) "the PowerShell report profile pins the fixture's native operations"
-    Assert-True (
-        [string]$FixtureReportProfile["mode_default"] -ceq [string]$DeclaredReport["mode_default"]
-    ) "the PowerShell report profile pins the fixture's default mode"
-    Assert-True (
-        (@($FixtureReportProfile["required_modes"] | ForEach-Object { [string]$_ }) -join ",") -ceq
-            (@($DeclaredReport["required_modes"]) -join ",")
-    ) "the PowerShell report profile pins the fixture's required modes"
-
-    # The verdict is taken on the manifest this distribution really advertises, so
-    # the chain runs real manifest -> setup verdict with no hand-asserted link.
-    # `verdicts` is nested by profile since #263 added a second named profile.
+    #
     # The profiles judged are read from the fixture's `profile_distributions`
-    # rather than listed here, because `execute-frontier` (#264) is the first
-    # requirement set only one member declares --- and this list is exactly what
-    # #266 changes when this one does.
+    # rather than listed here, because `execute-frontier` is the first requirement
+    # set not every member declares --- shell answers `report` alone until #265.
+    # PowerShell declares all three since #266.
+    $Verification = $Fixture["capability_verification"]
     $Manifest = Get-GitLoopyCapabilityManifest
     $DeclaredProfiles = @(
         $Verification["profile_distributions"].Keys |
             Where-Object { @($Verification["profile_distributions"][$_]) -contains "powershell" }
     )
     Assert-True (
-        (@($DeclaredProfiles | Sort-Object) -join ",") -ceq "foundation,report"
+        (@($DeclaredProfiles | Sort-Object) -join ",") -ceq
+            "execute-frontier,foundation,report"
     ) "the fixture attributes exactly the profiles PowerShell declares"
+
+    # The two profile fields that only a narrower profile carries. Pinned by
+    # presence rather than by name-per-block: a profile that grew one of them
+    # without the fixture agreeing would otherwise pass unexamined.
+    $OptionalFields = @("required_modes", "required_optional_capabilities")
+
     foreach ($ProfileName in $DeclaredProfiles) {
+        $FixtureProfile = $Verification["profiles"][$ProfileName]
+        $Declared = Get-GitLoopyContinuationProfile -Name $ProfileName
+
+        Assert-True (
+            (@($FixtureProfile["requirements"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+                (@($Declared["requirements"]) -join ",")
+        ) "the PowerShell $ProfileName profile requires exactly what the fixture pins"
+        Assert-True (
+            [string]$FixtureProfile["continuation_contract_version"] -ceq
+                [string]$Declared["continuation_contract_version"]
+        ) "the PowerShell $ProfileName profile pins the fixture's contract version"
+        Assert-True (
+            [int]$FixtureProfile["record_format"] -eq [int]$Declared["record_format"]
+        ) "the PowerShell $ProfileName profile pins the fixture's record format"
+        Assert-True (
+            [string]$FixtureProfile["tracker_adapter"] -ceq
+                [string]$Declared["tracker_adapter"]
+        ) "the PowerShell $ProfileName profile pins the fixture's tracker Adapter"
+        Assert-True (
+            (@($FixtureProfile["tracker_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+                (@($Declared["tracker_operations"]) -join ",")
+        ) "the PowerShell $ProfileName profile pins the fixture's tracker operations"
+        Assert-True (
+            (@($FixtureProfile["native_operations"] | ForEach-Object { [string]$_ }) -join ",") -ceq
+                (@($Declared["native_operations"]) -join ",")
+        ) "the PowerShell $ProfileName profile pins the fixture's native operations"
+        Assert-True (
+            [string]$FixtureProfile["mode_default"] -ceq [string]$Declared["mode_default"]
+        ) "the PowerShell $ProfileName profile pins the fixture's default mode"
+        foreach ($Field in $OptionalFields) {
+            Assert-True (
+                $FixtureProfile.Contains($Field) -eq $Declared.Contains($Field)
+            ) "the PowerShell $ProfileName profile agrees with the fixture on $Field"
+            if (-not $FixtureProfile.Contains($Field)) { continue }
+            Assert-True (
+                (@($FixtureProfile[$Field] | ForEach-Object { [string]$_ }) -join ",") -ceq
+                    (@($Declared[$Field]) -join ",")
+            ) "the PowerShell $ProfileName profile pins the fixture's $Field"
+        }
+
+        # The verdict is taken on the manifest this distribution really advertises,
+        # so the chain runs real manifest -> setup verdict with no hand-asserted
+        # link. `verdicts` is nested by profile since #263 added a second profile.
         $Expected = $Verification["verdicts"][$ProfileName]["powershell"]
         $Verdict = Get-GitLoopyContinuationVerification `
             -Manifest $Manifest -Name $ProfileName
@@ -1672,13 +1655,15 @@ function Test-CapabilityVerificationGate {
         ) "refusal $Id names exactly the requirement the fixture pins"
     }
 
-    # An unknown profile is refused rather than silently widened:
-    # `execute-frontier` is a requirement set the fixture attributes to Python
-    # alone until #266, and answering it here would let a pass be read as
-    # readiness for a mode this distribution does not advertise.
+    # An unknown profile is refused rather than silently widened. `report`
+    # graduated out of this check in #263 and `execute-frontier` in #266; both are
+    # pinned by their own profile cases above. What stays is the property those
+    # graduations were tested against: an operator who asks for a requirement set
+    # this distribution has never heard of gets a refusal rather than a pass
+    # computed against whichever profile the name happened to resemble.
     $Widened = $false
     try {
-        Get-GitLoopyContinuationProfile -Name "execute-frontier" | Out-Null
+        Get-GitLoopyContinuationProfile -Name "concurrent-dispatch" | Out-Null
         $Widened = $true
     }
     catch {

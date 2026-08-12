@@ -1437,10 +1437,13 @@ def test_continuation_capability_profiles_name_the_distributions_that_declare_th
 ):
     """A profile narrower than the family says so, rather than being assumed shared.
 
-    `execute-frontier` is the first requirement set only one member declares (#264;
-    shell and PowerShell follow in #265 and #266). Without this axis the other two
-    families would be judged against a profile they have never heard of, and the
-    only record of *why* they are exempt would be a comment in a test loop.
+    `execute-frontier` was the first requirement set not every member declared
+    (#264 for Python, #265 for shell, #266 for PowerShell), and the #267 rollout
+    gate is where it became family-wide. The axis stays because it is the thing
+    that made the staging safe: without it a member is judged against a profile it
+    has never heard of, and the only record of *why* it is exempt is a comment in a
+    test loop. Every profile still has to name its declarers, so a fourth profile
+    cannot be added family-wide by omission.
     """
     verification = _CONTINUATION_SCENARIOS["capability_verification"]
     coverage, _indexed = _coverage_records()
@@ -1584,6 +1587,60 @@ def _pinned_error_code(record: dict[str, Any]) -> str | None:
     return None
 
 
+def test_the_family_advertises_one_continuation_mode_surface() -> None:
+    """#267: staged adoption ends at parity, and drift is the thing that ends it.
+
+    Every gate above judges one distribution against the fixture. None of them
+    compares the members to *each other*, so the family could sit in the state the
+    rollout gate exists to leave --- two members serving `execute-frontier` and one
+    answering `report` --- with every scenario green, because each manifest is
+    pinned separately and each is individually true. That is precisely the
+    cross-family drift an operator cannot see: the same configuration produces a
+    dispatching Run on one member and an `unsupported_operation` on another.
+
+    So the modes are asserted identical across the family, not merely each correct.
+    A member that stages a new mode ahead of the others fails here, which is the
+    signal to record the narrowing as a `mode-absent` scope --- deliberately, with
+    the scenarios it gates widened --- rather than to discover it in a Run.
+    """
+    manifests = _advertised_manifests()
+    assert set(manifests) == {"python", "shell", "powershell"}
+
+    surfaces = {
+        distribution: manifest["continuation_modes"]
+        for distribution, manifest in manifests.items()
+    }
+    reference = surfaces["python"]
+    for distribution, modes in surfaces.items():
+        assert modes == reference, (distribution, modes, reference)
+
+    # Non-vacuity: the surface being compared is the one staging happens on, and it
+    # carries the mode this gate opened rather than an empty mapping that would
+    # make every member trivially equal.
+    assert reference["default"] == "off"
+    assert reference["execute-frontier"] is True
+
+
+def test_the_family_advertises_concurrent_dispatch_unsupported() -> None:
+    """#267: serial Dispatch is not a step towards concurrency a reader may take.
+
+    General concurrency needs issue-backed `parallel-safe` plus Prerequisite,
+    Target and effect-scope checks no member performs, so the first execute-frontier
+    release is serial-only and the manifest is where that stays visible. Stated
+    against every member because a single member flipping it is what a later
+    family-wide capability gate has to decide, not what a port lands on its own.
+    """
+    manifests = _advertised_manifests()
+    assert set(manifests) == {"python", "shell", "powershell"}
+
+    for distribution, manifest in manifests.items():
+        optional = manifest["optional_capabilities"]
+        assert optional["concurrent_dispatch"] is False, distribution
+        # The capability that *is* advertised, so this is not a claim about a
+        # distribution that simply serves nothing.
+        assert optional["fixed_frontier_authorization"] is True, distribution
+
+
 def test_continuation_capability_coverage_registers_every_narrowed_scope() -> None:
     """A scope narrower than the family is a question two distributions never face.
 
@@ -1630,6 +1687,14 @@ def test_continuation_mode_absent_scopes_are_derived_from_the_manifests() -> Non
     Python alone, so a member that starts advertising a mode and does not widen the
     scenarios gated on it fails here rather than being asked a question it now has
     a different answer to.
+
+    No `mode-absent` record survives the #267 rollout gate --- `execute-frontier`
+    is family-wide, so the two scenarios scoped on it retired, one of them (the
+    unadvertised-mode refusal) into each family's own suite because no distribution
+    can play the part any more. The gate stays for the next staged mode, exactly as
+    `capability-absent` does with no record of its own today. The non-vacuity that
+    matters is asserted by the sibling registry gate: a `mode-absent` record that
+    reappears without deriving from the manifests fails here.
     """
     coverage, indexed = _coverage_records()
     manifests = _advertised_manifests()

@@ -1656,4 +1656,82 @@ done < <(
   ' "$fixture"
 )
 
+
+# --- An unadvertised mode fails closed (#267) --------------------------------
+#
+# Before the family-wide rollout gate this was a Conformance scenario, driven by
+# pointing it at whichever member had not yet implemented `execute-frontier`.
+# Every member advertises it now, so no distribution can play that part and the
+# fixture cannot ask the question at all. The refusal is a property of the native
+# command rather than of a member's backlog, so it is pinned family-locally
+# instead --- against a manifest doctored to withhold the mode, exactly as the
+# Python Runner's `test_a_mode_this_distribution_does_not_advertise_fails_closed`
+# does. Only the one advertisement is substituted; every other field is the real
+# manifest, so a Run cannot pass this by answering from a hand-built stub.
+unadvertised_request='{
+  "continuation_contract_version": "1.3",
+  "record_format": 1,
+  "sources": [
+    {
+      "source": "global",
+      "mode": "execute-frontier",
+      "trusted_producers": ["planner"],
+      "ceilings": {
+        "repositories": ["octo/example"],
+        "targets": ["issue"],
+        "action_kinds": ["Implement ticket"],
+        "instruction_modes": ["skill"],
+        "effect_scopes": ["tracker-read"]
+      }
+    }
+  ]
+}'
+
+(
+  # shellcheck source=../lib/continuation.sh
+  source "$port_dir/lib/continuation.sh"
+
+  # The real manifest, minus the one advertisement under test.
+  eval "$(
+    declare -f git_loopy_continuation_capabilities |
+      sed '1s/^git_loopy_continuation_capabilities/_git_loopy_advertised_capabilities/'
+  )"
+  git_loopy_continuation_capabilities() {
+    _git_loopy_advertised_capabilities |
+      jq -c '.capabilities.continuation_modes["execute-frontier"] = false'
+  }
+
+  # Non-vacuity: the doctored manifest is the only thing withheld, and the mode
+  # the Run asks for is one this distribution really does advertise.
+  jq -e '.capabilities.continuation_modes["execute-frontier"] == false' \
+    < <(git_loopy_continuation_capabilities) >/dev/null ||
+    fail "the doctored manifest still advertises execute-frontier"
+  jq -e '.capabilities.continuation_modes["execute-frontier"] == true' \
+    < <(_git_loopy_advertised_capabilities) >/dev/null ||
+    fail "this distribution does not advertise execute-frontier at all"
+
+  set +e
+  unadvertised_stdout="$(
+    printf '%s' "$unadvertised_request" |
+      git_loopy_continuation_main resolve-authority 2>"$tmp/unadvertised.stderr"
+  )"
+  unadvertised_status=$?
+  set -e
+
+  ((unadvertised_status == 1)) ||
+    fail "an unadvertised mode exited $unadvertised_status, expected 1"
+  jq -e '
+    .ok == false
+    and .operation == "resolve-authority"
+    and .error.code == "unsupported_operation"
+    and .error.message ==
+      "continuation mode execute-frontier is not supported by this distribution"
+  ' <<<"$unadvertised_stdout" >/dev/null ||
+    fail "an unadvertised mode did not fail closed: $unadvertised_stdout"
+  grep -F -- \
+    "continuation mode execute-frontier is not supported by this distribution" \
+    "$tmp/unadvertised.stderr" >/dev/null ||
+    fail "an unadvertised mode did not name the mode on stderr"
+)
+
 printf 'shell Continuation conformance: ok\n'

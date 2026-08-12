@@ -340,6 +340,42 @@ def test_ci_gate_runs_on_every_push_and_pull_request() -> None:
         )
 
 
+def test_ci_runs_every_native_port_suite() -> None:
+    """#267 AC1: the family gate runs the *complete* port suites, not a hand list.
+
+    The per-family predicates above name three scripts each, so a port could grow a
+    fourth suite -- automation, CLI framing, Event, exit, boundary, production-seam
+    -- and have it never run in CI while every guard here stayed green. That is the
+    cross-family drift the rollout gate exists to refuse: a member proves the same
+    behaviour as the rest only if everything it wrote to prove it is actually run.
+
+    The claim is therefore made against the tracked suites rather than against a
+    list in this file: every ``tests/test-*.sh`` and ``tests/test-*.ps1`` in a port
+    must be named by some CI job. ``test-continuation-frontier.ps1`` is the suite
+    that arrived this way.
+    """
+    repo_root = _find_repo_root()
+    if repo_root is None:
+        pytest.skip("repo root not found (installed-wheel run) -- nothing to check")
+    workflows = _loaded_workflows()
+
+    gated = "\n".join(
+        _job_run_text(job) for _path, _name, job in _all_jobs(workflows)
+    )
+    for port, pattern in (("shell", "test-*.sh"), ("powershell", "test-*.ps1")):
+        suites = sorted(
+            path.name
+            for path in (repo_root / "git-loopy" / port / "tests").glob(pattern)
+        )
+        assert suites, port
+        ungated = [name for name in suites if name not in gated]
+        assert not ungated, (
+            f"the {port} port ships {ungated} but no CI job runs them. Every native "
+            "suite is part of the family gate; a suite CI never runs cannot refuse "
+            "cross-family drift."
+        )
+
+
 def test_job_platform_helper_reads_matrix_and_runs_on() -> None:
     """Guard the guard: platform extraction covers matrix and bare ``runs-on``."""
     matrixed = {
