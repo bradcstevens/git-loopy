@@ -97,6 +97,7 @@ from git_loopy.config import (
     RunConfig,
     SkillPolicyInput,
     SkillPolicyInputs,
+    TaskTypeError,
     gate_reasoning_effort,
 )
 from git_loopy.model_listing import LiveModelListing
@@ -1895,7 +1896,7 @@ def main(argv: list[str] | None = None) -> int:
             global_=tables.global_,
             measured=tables.measured,
         )
-    except settings.SettingsError as exc:
+    except (settings.SettingsError, TaskTypeError) as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
 
@@ -1935,7 +1936,7 @@ def main(argv: list[str] | None = None) -> int:
                 global_=tables.global_,
                 measured=tables.measured,
             )
-        except settings.SettingsError as exc:
+        except (settings.SettingsError, TaskTypeError) as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
 
@@ -1976,7 +1977,7 @@ def main(argv: list[str] | None = None) -> int:
                 global_=tables.global_,
                 measured=tables.measured,
             )
-        except settings.SettingsError as exc:
+        except (settings.SettingsError, TaskTypeError) as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
         config = resolved.run

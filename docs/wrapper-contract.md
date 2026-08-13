@@ -633,9 +633,12 @@ run-wide default:
   `[routing]` config, honouring the family precedence spine (§11): `[routing]` is a
   **config-file-only** tier that replaces the *single global default* with a per-issue-type
   default — never a flag/env tier — and any explicit `--model` / `--reasoning-effort` (flag or
-  env) suppresses routing run-wide. Selection is fixed: no `task-type:` label, an unknown key,
-  or ≥2 keys resolving to different pairs fall back to the global default (the unknown-key and
-  conflict cases warn); one known key, or ≥2 keys resolving to the same pair, use that pair.
+  env) suppresses routing run-wide. The taxonomy is closed to `planning`, `review`,
+  `implementation`, `test`, `docs`, `chore`, and `bugfix`: an unknown `task-type:` key is
+  refused, naming the value and the permitted keys. Selection among valid labels is fixed: no
+  label, one unconfigured key, or ≥2 keys resolving to different pairs fall back to the global
+  default (only the conflict case warns); one configured key, or ≥2 keys resolving to the same
+  pair, use that pair.
 - **Gate and fall back.** Pass the resolved effort through the shared effort gate against the
   model roster and apply the fallback (an effort the model does not accept drops to "let the
   backend pick"; an unknown model passes through). Routed **and** default pairs are gated

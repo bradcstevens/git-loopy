@@ -137,7 +137,7 @@ from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
-from git_loopy.config import RunConfig, resolve_iteration_model
+from git_loopy.config import RunConfig, TaskTypeError, resolve_iteration_model
 from git_loopy.continuation import (
     CapabilityUnsupported as ContinuationCapabilityUnsupported,
 )
@@ -2533,6 +2533,25 @@ class _ParallelLoop:
             scheduler.release(reservation)
             return
 
+        # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
+        # the structural per-Lane seam per-issue routing hangs off (#148). An
+        # invalid label is refused before a worktree exists. An unlabelled Lane
+        # (or routing-off) yields the gated global default. `start_session`
+        # binds the pair onto the Contribution, reused for this Lane's work AND
+        # its later auto-resolution sessions.
+        try:
+            model, reasoning_effort = resolve_iteration_model(
+                self._config,
+                item.labels,
+                warn=lambda message, _ref=ref: self._diag.warning(
+                    "lane #%s routing: %s", _ref, message
+                ),
+            )
+        except TaskTypeError as exc:
+            self._diag.error("lane #%s routing refused: %s", ref, exc)
+            scheduler.release(reservation)
+            raise
+
         base = self._resolve_base_ref()
         branch = git_module.lane_branch_name(self._run_id, ref)
         path = _lane_worktree_path(self._repo_root, self._run_id, ref)
@@ -2551,21 +2570,6 @@ class _ParallelLoop:
             lane_work.pre_sha = wt_git.head_sha()
         except git_module.GitError as exc:
             self._diag.warning("lane #%s pre head_sha failed: %s", ref, exc)
-
-        # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
-        # the structural per-Lane seam per-issue routing hangs off (#148). An
-        # unknown / conflicting label warns on the existing per-issue
-        # diagnostics channel; an unlabelled Lane (or routing-off) yields the
-        # gated global default. `start_session` binds the pair onto the
-        # Contribution, reused for this Lane's work AND its later
-        # auto-resolution sessions.
-        model, reasoning_effort = resolve_iteration_model(
-            self._config,
-            item.labels,
-            warn=lambda message, _ref=ref: self._diag.warning(
-                "lane #%s routing: %s", _ref, message
-            ),
-        )
 
         # Prepare the freshly created worktree before its agent session
         # starts (#65). Non-fatal: a broken environment still lets the agent

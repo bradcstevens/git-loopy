@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from git_loopy import cli as cli_module
+from git_loopy import settings
 from git_loopy.config import RunConfig
 
 
@@ -301,6 +302,27 @@ def test_main_config_set_then_get_round_trips_through_main(
     assert cli_module.main(["config", "get", "model"]) == 0
     assert capsys.readouterr().out.strip() == "gpt-5.4"
     assert captured == []  # the loop never ran for either op
+
+
+def test_main_refuses_a_persisted_task_type_outside_the_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Legacy custom routing fails cleanly before the loop starts."""
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}},
+    )
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    assert cli_module.main([]) == 1
+    stderr = capsys.readouterr().err
+    assert "custom" in stderr
+    assert "planning" in stderr
+    assert captured == []
 
 
 def test_main_config_path_prints_resolved_location(

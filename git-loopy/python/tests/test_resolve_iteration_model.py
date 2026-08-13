@@ -15,12 +15,11 @@ Source-pair selection (locked, from PRD #144 / decision #109):
 | ----------------------------------------- | ----------- | ------------------------- |
 | none                                      | global default | no (silent — normal)   |
 | one known key                             | that entry's pair | no                  |
-| one unknown key                           | global default | yes — unknown key      |
 | >=2 keys, differing resolved values       | global default | yes — conflict (labels) |
 | >=2 keys, all resolving to the same value | that pair   | no                        |
 
-When routing is suppressed (empty :attr:`RunConfig.routing`) every issue resolves to
-the single gated global/explicit pair, with no label inspection and no warning.
+Labels outside the seven-key taxonomy are refused before routing suppression is
+considered; an accepted but unconfigured key uses the global default silently.
 """
 
 from __future__ import annotations
