@@ -44,11 +44,12 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Callable
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Static
 
 from git_loopy.interactive.state import (
@@ -89,11 +90,28 @@ _STAMP_WIDTH = 11
 #: the ``End`` key).
 _LOG_NEW_LINES_BELOW = "↓ new lines below — End to re-engage auto-scroll"
 
-#: Fixed height (in terminal rows) of the Level-1 **Activity** band, *including*
-#: its one-line header (issue #69, ADR-0011). A **named tunable constant**: the
-#: band is a fixed size so the Queue takes the remaining space (``1fr``) and is
-#: never crushed by it. ~9 rows leaves ~8 lines of live tail below the header.
+#: The Level-1 **Activity** band's **starting requested** height in terminal
+#: rows, *including* its one-line header (issue #69, ADR-0011). A **named
+#: tunable constant**: it was the band's fixed height until ADR-0031 made the
+#: band operator-sized, and is now only where the operator's ``requested``
+#: starts. ~9 rows leaves ~8 lines of live tail below the header.
 _ACTIVITY_BAND_HEIGHT = 9
+
+#: The fewest rows an **Expanded** Activity band occupies: its header plus two
+#: lines of tail (ADR-0021's floor, ADR-0031's state machine). A sizing gesture
+#: that would go below it lands in **Collapsed** instead.
+_ACTIVITY_BAND_MIN_HEIGHT = 3
+
+#: The **Collapsed** band: its one-line header and nothing else (ADR-0031). The
+#: band keeps a row in the layout rather than leaving it, so the operator can
+#: always see that an Activity band exists — and, once the mouse lands, so the
+#: gesture that collapsed it has a handle to undo it with.
+_ACTIVITY_BAND_COLLAPSED_HEIGHT = 1
+
+#: The **Queue**'s own floor in terminal rows (ADR-0021). The band's ceiling is
+#: whatever still leaves the Queue this much, so growing the band can never
+#: crush the Queue it sits under.
+_QUEUE_MIN_HEIGHT = 3
 
 #: The single dimmed placeholder the Activity band shows when the live current
 #: tail is empty — no output yet from the agent (issue #69). Before the working
@@ -159,6 +177,18 @@ class _Dashboard(Vertical):
         table.add_column("Credits", key="credits")
         table.add_column("Premium", key="premium_requests")
 
+    def on_resize(self, event: events.Resize) -> None:
+        """Re-clamp the Activity band when the terminal changes the Dashboard.
+
+        The Dashboard is the container the band's ceiling is measured against,
+        and it flexes with the terminal, so its own resize is where the clamp
+        belongs. A clamp only — the operator's ``requested`` height is untouched
+        (ADR-0031), so growing the terminal back restores it.
+        """
+        self.query_one("#activity", _ActivityBand).note_container_height(
+            event.size.height
+        )
+
 
 class _ActivityScroll(VerticalScroll):
     """The Activity band's **passive, auto-scrolling** live-tail body (issue #69).
@@ -186,18 +216,47 @@ class _ActivityBand(Vertical):
     ``header → Queue → Activity → Summary`` (with the app's Footer below). A
     compact one-line ``#activity-header`` names the **Active issue**
     (:func:`~git_loopy.interactive.state.format_activity_header`) above a
-    fixed-height, non-focusable :class:`_ActivityScroll` holding the
-    ``#activity-body`` tail. The band is a **UI-layer view over existing
-    per-issue Log state** — it renders ``state.log()`` via ``log_line_views``,
-    the same helpers the Level-2 Log uses — so there is no new state buffer.
+    non-focusable :class:`_ActivityScroll` holding the ``#activity-body`` tail.
+    The band is a **UI-layer view over existing per-issue Log state** — it
+    renders ``state.log()`` via ``log_line_views``, the same helpers the Level-2
+    Log uses — so there is no new state buffer.
 
-    Its height is the named :data:`_ACTIVITY_BAND_HEIGHT` constant, set here so
-    that constant is the single source of truth; the Queue takes the remaining
-    space (``1fr``) and is never crushed by the band. The band is a single
-    toggleable ``#activity`` widget: the ``a`` key (issue #70) collapses it
-    (``display = False``) so the Queue's ``1fr`` reclaims the freed height, and
-    expands it again — an in-session toggle only, no persisted state.
+    The band is **operator-sized** (ADR-0031). It holds two numbers, not one:
+    :attr:`requested` is the operator's stated intent in absolute rows, starting
+    at the named :data:`_ACTIVITY_BAND_HEIGHT`, and :attr:`effective` is that
+    intent clamped to what currently fits — the floor
+    :data:`_ACTIVITY_BAND_MIN_HEIGHT` below, and above it the largest height that
+    still leaves the Queue its :data:`_QUEUE_MIN_HEIGHT` rows. The Queue takes
+    whatever is left (``1fr``) and is never crushed by the band.
+
+    Only an explicit gesture writes ``requested`` — which is why it is read-only
+    from outside and moves solely through :meth:`grow` and :meth:`shrink` — so a
+    clamp is never destructive of the operator's setting: a terminal that shrinks
+    and grows again returns the band to the height that was asked for.
+
+    Below the floor the band is **Collapsed** (:meth:`toggle_collapsed`, or
+    :meth:`shrink` past the floor): its one-line header and nothing else, still
+    in the Dashboard layout. That replaces issue #70's ``display = False``, which
+    removed the band — and with it the handle a gesture needs to undo itself
+    (ADR-0031, superseding ADR-0021's snap-to-collapsed clause).
+
+    The state lives on this widget, as issue #70's ``display`` toggle does, so
+    ``LiveRunState`` still imports no Textual (ADR-0001) and no **Config** or
+    ``state.py`` change is implied.
     """
+
+    #: The operator's stated intent, in absolute rows. Written by sizing
+    #: gestures only; a clamp never touches it.
+    _requested: int = _ACTIVITY_BAND_HEIGHT
+
+    #: **Collapsed**: the band renders its one-line header and nothing else,
+    #: keeping :attr:`_requested` for whatever restores it.
+    _collapsed: bool = False
+
+    #: The height of the Dashboard container as last laid out, from which the
+    #: ceiling is derived. Zero until the first layout (and while a Level-2 Log
+    #: hides the Dashboard), which reads as "ceiling unknown".
+    _container_height: int = 0
 
     def compose(self) -> ComposeResult:
         yield Static(id="activity-header")
@@ -205,7 +264,155 @@ class _ActivityBand(Vertical):
             yield Static(id="activity-body")
 
     def on_mount(self) -> None:
-        self.styles.height = _ACTIVITY_BAND_HEIGHT
+        self._apply_height()
+
+    # -- the two numbers ---------------------------------------------------
+
+    @property
+    def requested(self) -> int:
+        """The operator's stated band height, in absolute rows."""
+        return self._requested
+
+    @property
+    def collapsed(self) -> bool:
+        """Whether the band is showing its one-line header stub."""
+        return self._collapsed
+
+    @property
+    def effective(self) -> int:
+        """:attr:`requested`, clamped to what currently fits.
+
+        The floor wins over the ceiling on a terminal too short for both floors:
+        the band keeps its three rows and the Queue is squeezed, rather than the
+        band vanishing into a state no gesture asked for.
+        """
+        ceiling = self._ceiling()
+        if ceiling is None:
+            return max(self._requested, _ACTIVITY_BAND_MIN_HEIGHT)
+        return max(_ACTIVITY_BAND_MIN_HEIGHT, min(self._requested, ceiling))
+
+    def _ceiling(self) -> int | None:
+        """The largest height that still leaves the Queue its floor.
+
+        Derived from the laid-out Dashboard rather than restated from the CSS:
+        every sibling but the flexing Queue is measured as it currently renders,
+        so a band added to or removed from the Dashboard cannot leave a stale
+        constant behind. ``None`` while the Dashboard has no layout to measure.
+        """
+        if self._container_height <= 0:
+            return None
+        parent = self.parent
+        fixed = 0
+        if isinstance(parent, Widget):
+            fixed = sum(
+                child.outer_size.height
+                for child in parent.children
+                if child is not self and child.id != "queue"
+            )
+        return self._container_height - fixed - _QUEUE_MIN_HEIGHT
+
+    def _is_on_the_dashboard(self) -> bool:
+        """Whether the band is currently on screen, i.e. no Level-2 Log is open.
+
+        A hidden Dashboard is not resized with the terminal, so while a Log is
+        open :meth:`_ceiling` holds whatever the terminal was when the Log opened.
+        That is what makes a sizing gesture inert here rather than merely
+        invisible: it would state a request against a ceiling that no longer
+        exists, and Esc would hand the operator back a height they never chose.
+        """
+        parent = self.parent
+        return (
+            isinstance(parent, Widget) and parent.display and parent.size.height > 0
+        )
+
+    def _apply_height(self) -> None:
+        """Render the current state: the stub's one row, or the effective height.
+
+        Collapsed hides the live tail rather than merely starving it of rows, so
+        "the header and nothing else" is what the widget tree says and not only
+        what the arithmetic happens to produce.
+        """
+        collapsed = self._collapsed
+        self.styles.height = (
+            _ACTIVITY_BAND_COLLAPSED_HEIGHT if collapsed else self.effective
+        )
+        self.query_one("#activity-scroll", _ActivityScroll).display = not collapsed
+
+    # -- gestures ----------------------------------------------------------
+
+    def grow(self) -> None:
+        """``shift+up``: state fresh intent one row taller, capped at the ceiling.
+
+        From **Collapsed** it lands on the floor rather than the remembered
+        height: it is a sizing gesture and sizing gestures state fresh intent
+        (ADR-0031). ``a`` is the gesture that restores.
+
+        The cap is written into ``requested`` rather than only into
+        :attr:`effective`, so leaning on the key stores up no pent-up height
+        that would spring out the moment the terminal grows. Inert while a
+        Level-2 Log hides the Dashboard (:meth:`_is_on_the_dashboard`).
+        """
+        if not self._is_on_the_dashboard():
+            return
+        if self._collapsed:
+            self._collapsed = False
+            self._requested = _ACTIVITY_BAND_MIN_HEIGHT
+            self._apply_height()
+            return
+        taller = self.effective + 1
+        ceiling = self._ceiling()
+        self._requested = taller if ceiling is None else min(taller, ceiling)
+        self._apply_height()
+
+    def shrink(self) -> None:
+        """``shift+down``: state fresh intent one row shorter.
+
+        A **sizing** gesture, so it writes ``requested`` — and it counts from
+        :attr:`effective` rather than from ``requested``, so that one press is
+        always one visible row even when a short terminal has the band clamped
+        below what was asked for. Below the floor it collapses; from **Collapsed**
+        there is nothing shorter to ask for, so it is a no-op — as it is while a
+        Level-2 Log hides the Dashboard (:meth:`_is_on_the_dashboard`).
+        """
+        if self._collapsed or not self._is_on_the_dashboard():
+            return
+        self._requested = self.effective - 1
+        if self._requested < _ACTIVITY_BAND_MIN_HEIGHT:
+            self._collapsed = True
+        self._apply_height()
+
+    def toggle_collapsed(self) -> None:
+        """``a``: collapse to the stub, or restore the operator's height.
+
+        A **toggle** gesture, so it preserves ``requested`` rather than writing
+        it (ADR-0031) — which is what gives the restore something of the
+        operator's to come back to.
+        """
+        self._collapsed = not self._collapsed
+        self._apply_height()
+
+    def note_container_height(self, height: int | None = None) -> None:
+        """Re-derive the ceiling from the Dashboard's laid-out height.
+
+        A clamp, not a gesture: ``requested`` is deliberately untouched, so
+        growing the terminal back gives the operator's height back.
+
+        ``height`` is the figure a :class:`~textual.events.Resize` carries;
+        omitting it reads the Dashboard's current size instead, which is what a
+        return from a Level-2 Log needs — the Dashboard is not resized while it
+        is hidden, so a terminal that moved under an open Log leaves the band
+        holding the ceiling of a terminal that no longer exists. A
+        non-positive height is a Dashboard with no layout to measure (it is
+        hidden) and is ignored rather than treated as a ceiling of zero.
+        """
+        if height is None:
+            parent = self.parent
+            height = parent.size.height if isinstance(parent, Widget) else 0
+        if height <= 0:
+            return
+        self._container_height = height
+        self._apply_height()
+
 
 
 class _LogScroll(VerticalScroll):
@@ -298,8 +505,10 @@ class GitLoopyApp(App[None]):
     loop writes via the #22 sink fan-out. ``q`` / ``Ctrl+C`` request a **Stop**
     (the app exits and the interactive driver — the app's peer — Stop-cancels the
     loop task); ``d`` requests a **Detach** (the driver swaps the live sink back
-    to the line printer and the run keeps going); ``a`` collapses / expands the
-    always-on **Activity** band (issue #70, in-session only).
+    to the line printer and the run keeps going); ``a`` collapses the always-on
+    **Activity** band to its one-line header stub and restores it, and
+    ``shift+up`` / ``shift+down`` size it a row at a time (issue #70, ADR-0031 —
+    in-session only).
     """
 
     TITLE = "git-loopy"
@@ -377,6 +586,11 @@ class GitLoopyApp(App[None]):
         # normal (non-priority) binding like `q`/`d`: the Queue does not bind
         # `a`, so it bubbles up even while the Queue holds focus.
         Binding("a", "toggle_activity", "Activity"),
+        # `shift+down` / `shift+up` size the Activity band one row per press
+        # (ADR-0031). The Queue binds neither, so both bubble up to here while
+        # it holds focus, exactly as `a` does.
+        Binding("shift+down", "shrink_activity", "Shorter"),
+        Binding("shift+up", "grow_activity", "Taller"),
         Binding("escape", "dashboard", "Back"),
     ]
 
@@ -454,20 +668,30 @@ class GitLoopyApp(App[None]):
     def action_toggle_activity(self) -> None:
         """``a``: collapse / expand the always-on **Activity** band (issue #70).
 
-        Toggles the band's visibility so a long Queue on a short terminal is not
-        squeezed: collapsing the band (``display = False``) removes it from the
-        Dashboard layout, so the Queue's ``1fr`` reclaims the freed height;
-        pressing ``a`` again restores it and the Queue gives the space back.
+        Collapsing leaves the band's one-line header stub in place rather than
+        removing the band from the layout (ADR-0031, superseding ADR-0021's
+        snap-to-collapsed clause): the Queue's ``1fr`` reclaims every row but
+        that one, and the operator can always see that an Activity band exists.
+        Pressing ``a`` again restores the band at the height they asked for — a
+        **toggle** gesture preserves ``requested`` rather than writing it.
 
-        The toggle is purely **in-session** — the band widget's own ``display``
-        flag is the single source of truth, so there is no persisted Config /
-        settings / ``state.py`` change (ADR-0011 scopes this follow-on to
-        in-session only). It rides the existing display toggle: while a Level-2
-        Log hides the whole Dashboard the flag is untouched, so the collapse
-        state persists when Esc returns to the Dashboard.
+        The toggle is purely **in-session** — the band widget's own state is the
+        single source of truth, so there is no persisted Config / settings /
+        ``state.py`` change (ADR-0011 scopes this follow-on to in-session only,
+        and ADR-0031 defers the ``[tui] activity_height`` key with it). It rides
+        the existing Dashboard display toggle: while a Level-2 Log hides the
+        whole Dashboard the band's state is untouched, so it persists when Esc
+        returns to the Dashboard.
         """
-        band = self.query_one("#activity", _ActivityBand)
-        band.display = not band.display
+        self.query_one("#activity", _ActivityBand).toggle_collapsed()
+
+    def action_shrink_activity(self) -> None:
+        """``shift+down``: size the **Activity** band one row shorter (ADR-0031)."""
+        self.query_one("#activity", _ActivityBand).shrink()
+
+    def action_grow_activity(self) -> None:
+        """``shift+up``: size the **Activity** band one row taller (ADR-0031)."""
+        self.query_one("#activity", _ActivityBand).grow()
 
     # -- Level 2: per-issue Log -------------------------------------------
 
@@ -510,6 +734,14 @@ class GitLoopyApp(App[None]):
         # The Queue's cursor row is retained across the display toggle (the
         # table was never cleared), so focusing it re-engages the same row.
         self.query_one("#queue", DataTable).focus()
+        # A hidden Dashboard is not resized with the terminal, so a terminal
+        # that moved under the open Log leaves the Activity band holding the
+        # ceiling of a terminal that no longer exists. Re-derive it once the
+        # Dashboard has been laid out again — a clamp, so the operator's
+        # requested height is untouched (ADR-0031).
+        self.call_after_refresh(
+            self.query_one("#activity", _ActivityBand).note_container_height
+        )
 
     # -- repaint -----------------------------------------------------------
 

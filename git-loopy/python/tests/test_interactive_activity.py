@@ -32,7 +32,9 @@ from textual.widgets._footer import FooterKey  # noqa: E402
 
 from git_loopy import events as events_module  # noqa: E402
 from git_loopy.interactive.app import (  # noqa: E402
+    _ACTIVITY_BAND_COLLAPSED_HEIGHT,
     _ACTIVITY_BAND_HEIGHT,
+    _ACTIVITY_BAND_MIN_HEIGHT,
     _ActivityBand,
     _Dashboard,
     _LogView,
@@ -254,17 +256,205 @@ async def test_activity_band_is_not_focusable_queue_keeps_focus() -> None:
         assert table.cursor_row == 1
 
 
-async def test_activity_band_is_fixed_height_and_queue_reclaims_the_rest() -> None:
-    """The band height is the named constant; the Queue takes the remaining space
-    (``1fr``) so a long Queue is never crushed by the fixed band."""
+async def test_activity_band_starts_at_the_named_height_and_queue_reclaims_the_rest() -> (
+    None
+):
+    """The band opens at the named starting **requested** height and the Queue
+    takes the remaining space (``1fr``), so a long Queue is never crushed.
+
+    Rewritten from the #69 fixed-height assertion: ADR-0031 makes the band
+    operator-sized, so the constant is its *starting* request rather than an
+    invariant. The Queue still reclaims what the band does not take — but now
+    from a band the operator can size.
+    """
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test():
         band = app.query_one("#activity", _ActivityBand)
         queue = app.query_one("#queue", DataTable)
-        # The band is exactly the named-constant height...
+        # The band opens at the named starting request...
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
         assert band.size.height == _ACTIVITY_BAND_HEIGHT
         # ...and the flexing Queue reclaims the rest, so it is not crushed.
         assert queue.size.height > band.size.height
+
+
+# ---------------------------------------------------------------------------
+# Sizing: ``shift+down`` / ``shift+up`` move the band one row per press
+# (ADR-0031 — the operator sizes the band from the keyboard)
+# ---------------------------------------------------------------------------
+
+
+async def test_shift_down_shrinks_the_band_one_row_and_the_queue_takes_it() -> None:
+    """``shift+down`` is a **sizing** gesture: it writes ``requested`` one row
+    shorter, and the Queue's ``1fr`` takes the freed row."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+
+        await pilot.press("shift+down")
+        await pilot.pause()
+
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 1
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT - 1
+        assert queue.size.height == queue_before + 1
+
+
+async def test_shift_up_grows_the_band_one_row_and_the_queue_gives_it_back() -> None:
+    """``shift+up`` is the peer sizing gesture: one row taller per press, and
+    the Queue gives the row back."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+
+        await pilot.press("shift+up")
+        await pilot.pause()
+
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 1
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 1
+        assert queue.size.height == queue_before - 1
+
+
+async def test_shift_up_never_grows_past_the_queues_three_row_floor() -> None:
+    """The band's ceiling is the largest height that still leaves the Queue its
+    three rows, so leaning on ``shift+up`` cannot crush the Queue."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+
+        for _ in range(30):
+            await pilot.press("shift+up")
+        await pilot.pause()
+
+        # Dashboard (23 rows: the terminal less the Footer) less the #23 header
+        # and the Summary band (1 each), less the Queue's own three-row floor.
+        assert band.size.height == 23 - 2 - 3
+        assert queue.size.height == 3
+        # The cap is on ``requested`` too: the band never asks for more than it
+        # can have, so nothing is stored up to spring out on the next repaint.
+        assert band.requested == band.size.height
+
+
+# ---------------------------------------------------------------------------
+# Collapsed: the band's one-line header stub — a state, not an absence
+# (ADR-0031, superseding ADR-0021's snap-to-collapsed clause)
+# ---------------------------------------------------------------------------
+
+
+async def test_shift_down_below_the_floor_collapses_to_the_header_stub() -> None:
+    """Sizing the band below its three-row floor lands it in **Collapsed**: the
+    band's one-line header and nothing else.
+
+    The band stays in the Dashboard layout (``display`` is untouched), so the
+    operator can always see that an Activity band is there — and the Queue takes
+    every row the band gave up but that one.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+
+        # Down to the floor, which is still Expanded.
+        for _ in range(_ACTIVITY_BAND_HEIGHT - _ACTIVITY_BAND_MIN_HEIGHT):
+            await pilot.press("shift+down")
+        await pilot.pause()
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_MIN_HEIGHT
+
+        # One press past it collapses to the stub.
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert band.collapsed is True
+        # A state, not an absence: still in the layout, still one row tall.
+        assert band.display is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        # The header survives; the live tail below it does not.
+        assert app.query_one("#activity-scroll", VerticalScroll).display is False
+        assert (
+            str(app.query_one("#activity-header", Static).renderable)
+            == "Activity · #26"
+        )
+        assert queue.size.height == (
+            queue_before + _ACTIVITY_BAND_HEIGHT - _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        )
+        # The press that crossed the floor still stated its intent — sizing
+        # gestures write ``requested`` even when the state changes under them —
+        # so the restore comes back to the floor rather than to the old height.
+        assert band.requested == _ACTIVITY_BAND_MIN_HEIGHT - 1
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_MIN_HEIGHT
+
+
+async def test_a_sizing_gesture_counts_from_the_height_on_screen() -> None:
+    """One press is one *visible* row, even while a short terminal has the band
+    clamped below what was asked for.
+
+    Counting from ``requested`` instead would spend a press moving a number the
+    operator cannot see — pressing ``shift+down`` on a band clamped from 9 to 8
+    would set ``requested`` to 8 and move nothing.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+
+        # 15 rows -> a ceiling of 9... 14 -> 8, one short of the request.
+        await pilot.resize_terminal(80, 14)
+        await pilot.pause()
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+        assert band.size.height == 8
+
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert band.size.height == 7
+        assert band.requested == 7
+
+
+async def test_shift_up_from_the_stub_reopens_the_band_at_its_floor() -> None:
+    """``shift+up`` out of **Collapsed** lands on the three-row floor, not on the
+    remembered height: it is a sizing gesture, and sizing gestures state fresh
+    intent (ADR-0031). ``a`` is the gesture that restores."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is True
+        # The remembered height is still the one ``a`` would restore...
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+        await pilot.press("shift+up")
+        await pilot.pause()
+        # ...but ``shift+up`` states fresh intent: the floor.
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_MIN_HEIGHT
+        assert band.size.height == _ACTIVITY_BAND_MIN_HEIGHT
+        assert app.query_one("#activity-scroll", VerticalScroll).display is True
+
+
+async def test_shift_down_from_the_stub_is_a_no_op() -> None:
+    """There is nothing shorter than the stub to ask for, so ``shift+down`` from
+    **Collapsed** changes neither the state nor the remembered height."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test() as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        await pilot.press("a")
+        await pilot.pause()
+
+        for _ in range(3):
+            await pilot.press("shift+down")
+        await pilot.pause()
+
+        assert band.collapsed is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
 
 
 # ---------------------------------------------------------------------------
@@ -321,43 +511,60 @@ async def test_detach_tears_down_the_band_with_the_tui() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_a_key_collapses_and_expands_the_band_queue_reclaims_space() -> None:
-    """``a`` toggles the always-on band: collapsing it hides the band and the
-    Queue's ``1fr`` reclaims the freed height; ``a`` again restores it, and the
-    Queue gives the space back (issue #70). Purely in-session — no state change.
+async def test_a_key_toggles_between_the_stub_and_the_requested_height() -> None:
+    """``a`` is a **toggle** gesture: it collapses the band to its one-line
+    header stub and restores it at the operator's ``requested`` height, which it
+    preserves throughout (ADR-0031).
+
+    It no longer removes the band from the layout (issue #70's ``display =
+    False``): the Queue reclaims one row fewer, and in exchange the operator can
+    always see that an Activity band exists.
     """
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test() as pilot:
         band = app.query_one("#activity", _ActivityBand)
         queue = app.query_one("#queue", DataTable)
-        # Visible by default: the band is exactly its named-constant height.
-        assert band.display is True
+        # Expanded by default, at the named starting request.
+        assert band.collapsed is False
         assert band.size.height == _ACTIVITY_BAND_HEIGHT
         queue_expanded = queue.size.height
 
-        # ``a`` collapses the band -> hidden, and the Queue reclaims the space.
-        await pilot.press("a")
+        # Size it first, so the restore has something of the operator's to keep.
+        await pilot.press("shift+down")
         await pilot.pause()
-        assert band.display is False
-        assert band.size.height == 0
-        assert queue.size.height == queue_expanded + _ACTIVITY_BAND_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 1
 
-        # ``a`` again restores the band -> the Queue gives the space back.
+        # ``a`` collapses to the stub -> the Queue reclaims all but that one row.
         await pilot.press("a")
         await pilot.pause()
+        assert band.collapsed is True
         assert band.display is True
-        assert band.size.height == _ACTIVITY_BAND_HEIGHT
-        assert queue.size.height == queue_expanded
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 1
+        assert queue.size.height == (
+            queue_expanded + _ACTIVITY_BAND_HEIGHT - _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        )
+
+        # ``a`` again restores the operator's height, not the named default.
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT - 1
+        assert queue.size.height == queue_expanded + 1
 
 
 async def test_activity_binding_appears_in_footer_labelled_activity() -> None:
-    """The ``a`` collapse/expand binding is surfaced in the Footer, labelled
-    "Activity" (issue #70) — alongside the unchanged Stop / Detach / Back."""
+    """The band's three keyboard gestures are surfaced in the Footer — ``a`` to
+    collapse/expand (issue #70) and ``shift+up`` / ``shift+down`` to size it
+    (ADR-0031) — alongside the unchanged Stop / Detach / Back."""
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test():
         entries = {key.key: key.description for key in app.query(FooterKey)}
-        # The new ``a`` -> Activity entry is present...
+        # The ``a`` -> Activity entry is present...
         assert entries.get("a") == "Activity"
+        # ...the sizing keys are discoverable beside it...
+        assert entries.get("shift+up") == "Taller"
+        assert entries.get("shift+down") == "Shorter"
         # ...and the existing bindings are unaffected.
         assert entries.get("q") == "Stop"
         assert entries.get("d") == "Detach"
@@ -366,8 +573,8 @@ async def test_activity_binding_appears_in_footer_labelled_activity() -> None:
 
 async def test_collapse_state_persists_across_a_log_open_and_close() -> None:
     """The in-session collapse rides the existing Log open/close display toggle:
-    collapse the band, open then Esc-close a Level-2 Log, and it stays collapsed
-    (issue #70 — in-session only, no new teardown/state)."""
+    collapse the band, open then Esc-close a Level-2 Log, and it comes back
+    collapsed — with the operator's requested height still remembered."""
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test() as pilot:
         band = app.query_one("#activity", _ActivityBand)
@@ -376,7 +583,7 @@ async def test_collapse_state_persists_across_a_log_open_and_close() -> None:
         # Collapse the band on the Dashboard.
         await pilot.press("a")
         await pilot.pause()
-        assert band.display is False
+        assert band.collapsed is True
 
         # Open the active issue's Log (hides the whole Dashboard)...
         await pilot.press("enter")
@@ -387,7 +594,104 @@ async def test_collapse_state_persists_across_a_log_open_and_close() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert dashboard.display is True
-        assert band.display is False
+        assert band.collapsed is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+
+# ---------------------------------------------------------------------------
+# Resize: a clamp is never destructive of the operator's setting (ADR-0031)
+# ---------------------------------------------------------------------------
+
+
+async def test_shrinking_the_terminal_clamps_the_band_and_growing_restores_it() -> None:
+    """A terminal too short for the requested height clamps ``effective`` and
+    leaves ``requested`` alone, so growing it back returns the band to the
+    height the operator asked for — not to whatever a transient geometry
+    allowed."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+
+        # 14 rows: a 13-row Dashboard, less the header and Summary band, less
+        # the Queue's floor -> a ceiling of 8, one short of the request.
+        await pilot.resize_terminal(80, 14)
+        await pilot.pause()
+        assert band.size.height == 8
+        assert queue.size.height == 3
+        # The clamp did not touch what was asked for.
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+        # Grow it back: the operator's height returns.
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+
+async def test_a_collapsed_band_stays_collapsed_across_a_terminal_resize() -> None:
+    """Resizing re-clamps ``effective`` and nothing else, so a **Collapsed** band
+    stays collapsed however the terminal moves — and the height it is holding for
+    the operator survives the trip."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        # Size it away from the named default first, so a clamp that reset the
+        # request to that default could not pass unnoticed.
+        await pilot.press("shift+up")
+        await pilot.press("shift+up")
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is True
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 2
+
+        await pilot.resize_terminal(80, 14)
+        await pilot.pause()
+        assert band.collapsed is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+
+        await pilot.resize_terminal(80, 40)
+        await pilot.pause()
+        assert band.collapsed is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        # And ``a`` still restores the height the operator asked for.
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 2
+
+
+async def test_sizing_is_inert_while_a_log_hides_the_dashboard() -> None:
+    """A sizing gesture states intent about a band the operator can see.
+
+    While a Level-2 Log hides the Dashboard there is no band on screen and no
+    current ceiling to cap against — the Dashboard stops being resized with the
+    terminal — so ``shift+up`` / ``shift+down`` do nothing rather than writing a
+    request against a stale ceiling that Esc would then hand back clamped.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#dashboard", _Dashboard).display is False
+
+        # The terminal moves under the open Log, then the operator leans on the
+        # sizing keys anyway.
+        await pilot.resize_terminal(80, 14)
+        for _ in range(5):
+            await pilot.press("shift+up")
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+        # Esc back: the band is the operator's height, clamped to what now fits.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+        assert band.size.height == 8
 
 
 
