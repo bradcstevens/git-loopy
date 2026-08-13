@@ -441,9 +441,11 @@ malformed receipt is an `invalid_revision` quarantine in every distribution alik
 **author** receipts it cannot project, so `completion.retirements` on a `publish` request is a
 structural rejection there.
 
-That read guarantee is scoped to revision-protocol reconciliation. A distribution's label-indexed
-path is only required to read atomic-root records; whether it can also read lineage-bearing records
-is a separate, independently advertised concern (tracked in #298).
+That read guarantee holds on the label-indexed path as well as under the revision protocol. Every
+distribution reads lineage-bearing records discovered through the label index and digests them by
+the same rules the revision-protocol reader applies, so the path a record was discovered on never
+decides whether its lineage survives. The shared scenario
+`reconcile-reads-a-lineage-record-from-the-label-index` pins this for all three distributions.
 
 **Workstream outcomes (result `outcomes`).** Each terminal Workstream head contributes one outcome
 entry (`workstream_anchor`, `kind`, `destination_satisfied`, durable `evidence`) alongside any other
