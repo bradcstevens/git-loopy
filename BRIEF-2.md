@@ -1,1 +1,0 @@
-Add support for input of a prompt to git-loopy. For example: `git-loopy -p "issue #5 is currently being worked on in a different terminal. Queue up all issues to work on except #5" 
