@@ -82,7 +82,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Collection, Mapping
+from typing import TYPE_CHECKING, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -98,7 +98,9 @@ from git_loopy.config import (
     SkillPolicyInput,
     SkillPolicyInputs,
     TaskTypeError,
+    task_type_refusal,
     gate_reasoning_effort,
+    validate_task_type_key,
 )
 from git_loopy.model_listing import LiveModelListing
 from git_loopy.rate_card import resolve_rate_card
@@ -1330,6 +1332,8 @@ def merge_routing_tiers(
     never measured (#376). They route identically; only the tier they are
     attributed to differs, so a reporting surface can say so.
     """
+    _validate_config_routing_keys(global_, scope="global")
+    _validate_config_routing_keys(project, scope="project")
     provisional = frozenset(measured_provisional)
     merged: dict[str, tuple[RoutingTier, tuple[str, str]]] = {}
     for tier, table in (
@@ -1338,6 +1342,7 @@ def merge_routing_tiers(
         (RoutingTier.PROJECT, settings.table_routing(project, scope="project")),
     ):
         for key, pair in table.items():
+            validate_task_type_key(key)
             merged[key] = (
                 RoutingTier.PROVISIONAL
                 if tier is RoutingTier.MEASURED and key in provisional
@@ -1345,6 +1350,23 @@ def merge_routing_tiers(
                 pair,
             )
     return merged
+
+
+def _validate_config_routing_keys(
+    table: Mapping[str, object], *, scope: Literal["global", "project"]
+) -> None:
+    """Refuse persisted unknown Task types before parsing route values.
+
+    An explicit model or effort override suppresses route selection, not the
+    closed taxonomy. Validation therefore has to precede the suppression return,
+    while parsing inactive route values would make an irrelevant malformed value
+    block the override.
+    """
+    raw = table.get("routing")
+    if not isinstance(raw, dict):
+        return
+    for key in raw:
+        validate_task_type_key(key, scope=scope)
 
 
 def routing_suppressed_by(
@@ -1406,6 +1428,8 @@ def _resolve_routing(
     tier can never name something other than the value in force (#364).
     """
     if _explicit_model_or_effort_override(args, env):
+        _validate_config_routing_keys(global_, scope="global")
+        _validate_config_routing_keys(project, scope="project")
         return {}, {}
     walked = merge_routing_tiers(project, global_, measured, measured_provisional)
     merged = {key: pair for key, (_tier, pair) in walked.items()}
@@ -1923,7 +1947,10 @@ def main(argv: list[str] | None = None) -> int:
             measured=tables.measured,
             measured_provisional=tables.measured_provisional,
         )
-    except (settings.SettingsError, TaskTypeError) as exc:
+    except TaskTypeError as exc:
+        print(f"git-loopy: error: {task_type_refusal(exc)}", file=sys.stderr)
+        return 1
+    except settings.SettingsError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
 

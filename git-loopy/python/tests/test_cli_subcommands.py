@@ -325,6 +325,30 @@ def test_main_refuses_a_persisted_task_type_outside_the_taxonomy(
     assert captured == []
 
 
+def test_main_refusal_names_the_command_that_clears_the_offending_route(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A blocked Run is where the remedy matters most, so the Run path names it.
+
+    The closed taxonomy (#375) stops a Run whose Config carries a pre-closure
+    routing key. Every other surface that could fix that Config refuses on the
+    same key, so the message has to carry the one command that does not.
+    """
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}},
+    )
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    assert cli_module.main([]) == 1
+    assert "config routing unset custom" in capsys.readouterr().err
+    assert captured == []
+
+
 def test_main_config_path_prints_resolved_location(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

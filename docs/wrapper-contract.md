@@ -607,6 +607,9 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 - **Checkpoint message** — the runner-authored subject/body/trailer per Active issue, its
   close-keyword freedom, and its detectability (§7).
 - **Exit-code table** — the input → exit-code matrix of §10.
+- **Task-type taxonomy** — the closed set of permitted `task-type:` keys, and the refusal an
+  unknown key meets: never a warn-and-default, and the refusal names the value and the permitted
+  keys (§14).
 - **Event schema** — exact type literals and envelope-first, sorted-payload JSON serialization
   (§12).
 - **Dashboard Insights** — normalized Event prefixes and expected renderer-neutral Dashboard and
@@ -634,8 +637,11 @@ run-wide default:
   **config-file-only** tier that replaces the *single global default* with a per-issue-type
   default — never a flag/env tier — and any explicit `--model` / `--reasoning-effort` (flag or
   env) suppresses routing run-wide. The taxonomy is closed to `planning`, `review`,
-  `implementation`, `test`, `docs`, `chore`, and `bugfix`: an unknown `task-type:` key is
-  refused, naming the value and the permitted keys. Selection among valid labels is fixed: no
+  `implementation`, `test`, `docs`, `chore`, and `bugfix` — the set
+  `routing-resolution.json` states as `task_type_taxonomy`, matched exactly (a recased key is
+  unknown): an unknown `task-type:` key is refused, naming the value and the permitted keys.
+  Suppressing routing run-wide does **not** excuse the refusal — an unknown key is refused before
+  the routing map is consulted. Selection among valid labels is fixed: no
   label, one unconfigured key, or ≥2 keys resolving to different pairs fall back to the global
   default (only the conflict case warns); one configured key, or ≥2 keys resolving to the same
   pair, use that pair.

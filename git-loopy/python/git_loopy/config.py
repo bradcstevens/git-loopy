@@ -48,6 +48,7 @@ __all__ = [
     "RECOMMENDED_ROUTING",
     "TaskTypeError",
     "validate_task_type_key",
+    "task_type_refusal",
     "EffortGateWarning",
     "GatedEffort",
     "gate_reasoning_effort",
@@ -192,17 +193,56 @@ TASK_TYPE_KEYS: tuple[str, ...] = tuple(RECOMMENDED_ROUTING)
 
 
 class TaskTypeError(ValueError):
-    """A task type outside :data:`TASK_TYPE_KEYS` was supplied."""
+    """A task type outside :data:`TASK_TYPE_KEYS` was supplied.
+
+    Carries the offending ``key`` alongside the message so a caller can name the
+    remedy — a refusal an operator cannot act on locks them out of the Config
+    they need to correct (#375).
+    """
+
+    def __init__(
+        self, message: str, *, key: str, scope: Literal["global", "project"] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.key = key
+        self.scope = scope
 
 
-def validate_task_type_key(key: str) -> str:
+def validate_task_type_key(
+    key: str, *, scope: Literal["global", "project"] | None = None
+) -> str:
     """Return ``key`` when it belongs to the closed task-type taxonomy."""
     if key not in TASK_TYPE_KEYS:
         raise TaskTypeError(
             f"unsupported task type {key!r}; permitted keys: "
-            f"{', '.join(TASK_TYPE_KEYS)}"
+            f"{', '.join(TASK_TYPE_KEYS)}",
+            key=key,
+            scope=scope,
         )
     return key
+
+
+def task_type_refusal(exc: TaskTypeError) -> str:
+    """Render a *persisted* out-of-taxonomy **Task type** with the way to clear it.
+
+    Lives beside the taxonomy because complying with a closed set is part of the
+    set: the closure (#375) refuses an unknown key at every write seam, but a
+    Config written before it already carries one, and every surface that reads
+    that file — a Run, ``config list``, ``config get``, ``config routing set`` —
+    is refused by the same key. Without a stated remedy the operator is locked
+    out of the Config they have to correct, and hand-edited TOML is the only way
+    back.
+
+    The offending key is named because it is usually **not** the one that was
+    typed: ``routing set docs`` against a Config carrying a legacy ``custom`` is
+    refused by ``custom``, and a message naming only that reads as the tool
+    rejecting ``docs``.
+    """
+    scope = f" --{exc.scope}" if exc.scope is not None else ""
+    return (
+        f"{exc}. Clear it with `git-loopy config routing unset {exc.key}{scope}`, or "
+        f"edit the [routing] table in the file `git-loopy config path` names."
+    )
 
 
 #: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for
@@ -620,8 +660,10 @@ def resolve_iteration_model(
                 validate_task_type_key(key)
             except TaskTypeError:
                 raise TaskTypeError(
-                    f"unsupported task-type label {label!r}; permitted keys: "
-                    f"{', '.join(TASK_TYPE_KEYS)}"
+                    f"unsupported task-type label {label!r} with key {key!r}; "
+                    f"permitted keys: "
+                    f"{', '.join(TASK_TYPE_KEYS)}",
+                    key=key,
                 ) from None
             if key not in keys:
                 keys.append(key)

@@ -646,6 +646,42 @@ def test_resolve_explicit_env_suppresses_routing(env: dict[str, str]) -> None:
     assert dict(run.routing) == {}
 
 
+@pytest.mark.parametrize(
+    ("argv", "env"),
+    [
+        (["--model", "gpt-5-mini"], {}),
+        ([], {"GIT_LOOPY_REASONING_EFFORT": "low"}),
+    ],
+)
+def test_suppressed_routing_still_refuses_a_persisted_unknown_task_type(
+    argv: list[str], env: dict[str, str]
+) -> None:
+    """Suppression disables selection, not validation of persisted Task types."""
+    from git_loopy.config import TaskTypeError
+
+    with pytest.raises(TaskTypeError, match="custom"):
+        _resolve(
+            argv,
+            env=env,
+            global_={
+                "routing": {
+                    "custom": {"model": "gpt-5-mini", "effort": "medium"}
+                }
+            },
+        )
+
+
+def test_suppressed_routing_refuses_an_unknown_key_before_parsing_its_route() -> None:
+    """A suppressed map validates Task types without loading inactive route values."""
+    from git_loopy.config import TaskTypeError
+
+    with pytest.raises(TaskTypeError, match="custom"):
+        _resolve(
+            ["--model", "gpt-5-mini"],
+            global_={"routing": {"custom": {"model": 42, "effort": "medium"}}},
+        )
+
+
 def test_resolve_config_file_model_does_not_suppress_routing() -> None:
     """A `model` key in a config *file* is the same tier as routing, not an override."""
     run = _resolve(global_={"model": "gpt-5-mini", **_ROUTING_GLOBAL}).run

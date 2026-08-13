@@ -510,25 +510,40 @@ _Avoid_: container, jail, VM.
 ### Issues and attribution
 
 **Active issue**:
-The single issue the agent is working during the current iteration, self-selected
-from the pool and bound immutably by the first valid **Working marker** or the
-runner's closure, commit, or single-member-**Pool** fallback. In **Parallel mode**
-each **Lane** has its own Active issue, assigned by the runner at pickup rather than
-self-selected.
+The single issue the agent is working during the current iteration, chosen by the
+runner from the pool at **Pickup** and bound for the length of that work. In
+**Parallel mode** each **Lane** has its own Active issue. The agent is told which
+issue it is working; it does not choose.
 _Avoid_: current task, current ticket.
 
 **Working marker**:
-The agent's explicit, up-front declaration of its active issue, used to attribute the
-iteration's timing and streamed output to that issue in real time. The first valid
-marker immutably binds a serial **Iteration**; later conflicting markers do not
-reassign its work.
+The agent's explicit, up-front restatement of its active issue, used to attribute the
+iteration's timing and streamed output to that issue in real time. Because the runner
+binds the Active issue at **Pickup**, the marker confirms that binding rather than
+creating it; a marker naming a different issue is a disagreement to record, not a
+reassignment.
 
 **Pickup**:
 The instant the runner binds one issue to a unit of work, before that unit's agent
 session begins. Because the issue is known first, pickup is where its **Routed pair**
-resolves. Each **Lane** binds its **Active issue** at pickup; a serial **Iteration**
-has no pickup — its Active issue is self-selected mid-session.
+resolves and where its **Lease** is taken. Every unit of work has a pickup — a serial
+**Iteration** as much as a **Lane**.
 _Avoid_: assignment, dispatch, selection.
+
+**Lease**:
+A run's exclusive right to work one issue, taken at **Pickup**, held while its owner
+stays alive, and expiring on its own if the owner stops. It names the run that holds
+it, so a run that dies frees its issues without anyone intervening. Leases are what
+let several runs share one tracker: an issue under another run's live Lease is not
+available to this run.
+_Avoid_: claim, lock, reservation, hold.
+
+**Priority**:
+The axis on which an issue is worked ahead of older ones, carried as a label and read
+at selection. It is orthogonal to **Task type**, which selects a **Routed pair** and
+never affects order. Priority reorders work; it does not change what is eligible, and
+it never lets an issue past a **Lease**.
+_Avoid_: severity, urgency, task type.
 
 **Queue**:
 The per-run ledger of every issue seen in any pool during the run, each carrying a
@@ -765,9 +780,9 @@ _Avoid_: local (ambiguous), workspace.
 The classification an issue carries as a `task-type:<key>` label. Either set by an operator or
 inferred from the issue's own content by the **Task-type classifier** and written back to the
 tracker, where the two are thereafter indistinguishable (ADR-0029). The taxonomy is **closed**:
-only the seven shipped keys may be written, and a classifier proposing any other value is
-refused rather than warned about. A task type selects a **Routed pair** and nothing else: it
-does not order or prioritise work.
+only the seven shipped keys are valid, and a classifier proposing or a label carrying any other
+value is refused rather than warned about, even when a run-wide override suppresses routing. A
+task type selects a **Routed pair** and nothing else: it does not order or prioritise work.
 _Avoid_: category, priority, issue kind.
 
 **Task-type classifier**:
@@ -781,8 +796,8 @@ _Avoid_: triage, categoriser, router (that is **Routing**).
 Resolving an issue's **Task type** to the model and reasoning effort its work runs on,
 replacing the single run-wide default with a per-task-type default. A **Config**-file-only
 tier: any explicit model or reasoning-effort flag or environment override suppresses routing
-for the whole run. An unlabelled issue, an unknown key, or two keys disagreeing all fall back
-to the run-wide default.
+for the whole run. An unlabelled issue or two keys disagreeing fall back to the run-wide default;
+an unknown key is refused before selection.
 _Avoid_: model selection (that is the operator-facing picker), dispatch, assignment.
 
 **Routed pair**:
@@ -1195,8 +1210,13 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   the **Routed pair**, fixed at **Pickup**. The billed model reported in **Consumption**
   is a third, observed thing and is neither.
 - `task type` was read as implying work order — resolved: a **Task type** selects a
-  **Routed pair** only. Scheduling priority is a separate, currently unmodelled axis and
-  must not be folded into the `task-type:` label vocabulary.
+  **Routed pair** only. Scheduling priority is a separate axis, now modelled as
+  **Priority** and carried on its own label (ADR-0032); it must not be folded into the
+  `task-type:` label vocabulary, and selection never reads a task type.
+- `self-selected` was stated of the **Active issue** and `a serial Iteration has no
+  pickup` of **Pickup** — resolved: both are reversed (ADR-0032). The runner picks the
+  issue, in serial **Iterations** as much as in **Lanes**, so every unit of work has a
+  **Pickup** and the **Working marker** confirms a binding it no longer creates.
 - `read, never inferred` and `an open, operator-extensible taxonomy` were both stated of
   **Task type** — resolved: **both are reversed, and they reverse in opposite directions**
   (ADR-0029). Inference is now permitted, because a **Proving set** cannot be stratified

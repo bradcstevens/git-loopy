@@ -1,6 +1,15 @@
 {
   "schema_version": 1,
   "contract_version": "1.1",
+  "task_type_taxonomy": [
+    "planning",
+    "review",
+    "implementation",
+    "test",
+    "docs",
+    "chore",
+    "bugfix"
+  ],
   "cases": [
     {
       "id": "no-task-type-label-uses-global-default",
@@ -74,6 +83,43 @@
       "labels": ["ready-for-agent"],
       "expected": {"model": "gpt-5-mini", "effort": null},
       "warns": false
+    }
+  ],
+  "refusal_cases": [
+    {
+      "id": "an-unknown-task-type-key-is-refused-not-defaulted",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:migrations"],
+      "refused": "migrations"
+    },
+    {
+      "id": "an-empty-routing-map-does-not-excuse-an-unknown-key",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {},
+      "labels": ["task-type:migrations"],
+      "refused": "migrations"
+    },
+    {
+      "id": "a-known-key-beside-an-unknown-one-is-still-refused",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:docs", "task-type:migrations"],
+      "refused": "migrations"
+    },
+    {
+      "id": "the-taxonomy-is-matched-exactly-so-a-recased-key-is-refused",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:Docs"],
+      "refused": "Docs"
+    },
+    {
+      "id": "a-bare-task-type-prefix-carries-no-key-and-is-refused",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:"],
+      "refused": ""
     }
   ],
   "precedence_cases": [

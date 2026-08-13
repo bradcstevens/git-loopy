@@ -1,7 +1,15 @@
 # Activity windows: one per Agent, operator-sized, follow-with-release
 
 **Status:** accepted — supersedes [ADR-0011](0011-active-only-activity-band.md) (active-only
-Activity band); extends [ADR-0003](0003-tabless-two-level-live-interface.md)
+Activity band); extends [ADR-0003](0003-tabless-two-level-live-interface.md). Its
+**snap-to-collapsed clause only** is superseded by
+[ADR-0031](0031-collapsed-activity-band-keeps-its-handle.md). Collapsing into the state the
+`a` key produces (`display = False`) removes the band from the layout, header included — so a
+drag that snaps into it *deletes the handle it is being performed with*, and the mouse path
+becomes one-way, which is the fault the Context below diagnoses in the wheel. A collapsed band
+keeps its one-line header instead, and `a` adopts that same state. The four other decisions
+below — one window per Agent, degradation in slot order, follow-with-release, and per-window
+facts — stand unchanged.
 
 ## Context
 

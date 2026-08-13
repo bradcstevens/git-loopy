@@ -51,6 +51,7 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
+    TASK_TYPE_KEYS,
     TASK_TYPE_LABEL_PREFIX,
     TaskTypeError,
     gate_reasoning_effort,
@@ -350,20 +351,23 @@ def _routing_key(raw: str, *, closed: bool = True) -> str:
     ``closed=False`` is for **removal only**. The taxonomy is a rule about what
     may be written, and an operator deleting a key that predates the closure is
     complying with it, not breaking it — so ``routing unset`` accepts a key the
-    rest of the surface refuses. The syntactic checks still apply: an empty or
-    malformed type is a typo whichever operation asked for it.
+    rest of the surface refuses. The syntactic charset check is relaxed with it,
+    because a pre-closure Config could hold any quoted TOML key: applied to
+    removal it would strand exactly the keys with no other way out, leaving the
+    refusal naming a command that refuses itself. An empty type is still a typo
+    whichever operation asked for it.
     """
     key = raw.strip()
     if key.startswith("task-type:"):
         key = key.removeprefix("task-type:")
     if not key:
         raise ConfigCommandError("routing type must not be empty")
+    if not closed:
+        return key
     if re.fullmatch(r"[A-Za-z0-9_-]+", key) is None:
         raise ConfigCommandError(
             "routing type must contain only letters, numbers, hyphens, or underscores"
         )
-    if not closed:
-        return key
     try:
         return validate_task_type_key(key)
     except TaskTypeError as exc:
@@ -404,7 +408,7 @@ def _writable_routing(
         normalized = _routing_key(key, closed=False)
         if closed:
             try:
-                validate_task_type_key(normalized)
+                validate_task_type_key(normalized, scope=scope)
             except TaskTypeError as exc:
                 raise ConfigCommandError(task_type_refusal(exc)) from None
         routing[normalized] = {"model": model, "effort": effort}
@@ -452,7 +456,7 @@ def run_routing_unset(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Remove exactly one task-type route from the chosen Config scope.
+    """Remove one task-type route from the chosen Config scope.
 
     The one routing op open to a key outside the closed taxonomy, because it is
     the remedy every other surface's refusal names (#375): a Config carrying a
@@ -460,24 +464,50 @@ def run_routing_unset(
     if removal were refused too the only way to comply would be hand-edited
     TOML. Sibling entries are rewritten untouched, valid or not — this op was
     asked to remove one key, not to launder the file.
+
+    An out-of-taxonomy key with **no explicit scope** is cleared from *every*
+    scope that carries it, because such a key is invalid in all of them and the
+    refusal that sent the operator here cannot say which file it came from.
+    Scope otherwise defaults to project inside a repo, so the advertised remedy
+    would report success against the project file while a global key kept the
+    Run blocked. An explicit ``--project`` / ``--global`` still narrows it, and
+    a key inside the taxonomy is a scoped edit as before.
     """
     try:
         key = _routing_key(task_type, closed=False)
-        resolved_scope = _resolve_scope(scope, repo_root)
-        path = _scope_config_path(resolved_scope, repo_root, env)
-        table = dict(settings.load_config_table(path))
-        routing = _writable_routing(table, scope=resolved_scope, closed=False)
-        routing.pop(key, None)
-        if routing:
-            table["routing"] = routing
-        else:
-            table.pop("routing", None)
-        settings.write_config(path, table)
+        repair = scope is None and key not in TASK_TYPE_KEYS
+        scopes = (
+            _repairable_scopes(repo_root)
+            if repair
+            else (_resolve_scope(scope, repo_root),)
+        )
+        cleared: list[str] = []
+        for resolved_scope in scopes:
+            path = _scope_config_path(resolved_scope, repo_root, env)
+            table = dict(settings.load_config_table(path))
+            routing = _writable_routing(table, scope=resolved_scope, closed=False)
+            if repair and key not in routing:
+                continue
+            routing.pop(key, None)
+            if routing:
+                table["routing"] = routing
+            else:
+                table.pop("routing", None)
+            settings.write_config(path, table)
+            cleared.append(f"the {resolved_scope} config ({path})")
     except (ConfigCommandError, settings.SettingsError) as exc:
         err(f"git-loopy: error: {exc}")
         return 1
-    out(f"Unset task-type:{key} in the {resolved_scope} config ({path})")
+    if not cleared:
+        out(f"task-type:{key} is not set in any config; nothing to unset.")
+        return 0
+    out(f"Unset task-type:{key} in {', '.join(cleared)}")
     return 0
+
+
+def _repairable_scopes(repo_root: Path | None) -> tuple[str, ...]:
+    """Every scope an out-of-taxonomy key could be hiding in, nearest first."""
+    return ("project", "global") if repo_root is not None else ("global",)
 
 
 def run_routing_list(

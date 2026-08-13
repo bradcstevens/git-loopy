@@ -418,6 +418,17 @@ git-loopy config edit --global
   the report says so rather than naming a tier whose value is not in force. A
   hand-written `[routing]` entry beats a provisional one exactly as it beats a
   measured one — the fourth status changes what is *reported*, never the chain.
+- **The Task-type taxonomy is closed** to `planning`, `review`,
+  `implementation`, `test`, `docs`, `chore`, and `bugfix`. Anything else is
+  **refused**, naming the value and the permitted keys — never warned about and
+  quietly routed to the global default, because the classifier writes these
+  labels unattended and the label-writing path *creates* a label before
+  attaching it, so an invented key would become a permanent tracker label
+  routing to the default forever. A Config written before the taxonomy closed
+  can still carry one, and it blocks a Run and every `config` read surface until
+  it is gone: clear it with `git-loopy config routing unset <type>`, which is
+  the one routing op that accepts a key outside the seven, precisely so
+  complying does not require hand-editing TOML.
 - **`path`** prints the resolved `config.toml` path(s) — both scopes labelled by
   default, or a single bare path with `--global` / `--project`. There is no
   measured scope for `path` or `edit`: the artifact is machine-written and never

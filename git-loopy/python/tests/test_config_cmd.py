@@ -1254,6 +1254,25 @@ def test_the_refusal_names_the_command_that_clears_the_offending_key(
     assert "config routing unset custom" in err.text
 
 
+def test_a_global_legacy_route_names_the_global_recovery_command(
+    tmp_path: Path,
+) -> None:
+    """A recovery command must target the scope that carries the legacy key."""
+    env = _env(tmp_path)
+    settings.write_config(
+        settings.global_config_path(env),
+        {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}},
+    )
+    err = _Sink()
+
+    rc = configcmd.run_routing_list(
+        repo_root=tmp_path, env=env, out=_Sink(), err=err
+    )
+
+    assert rc == 1
+    assert "config routing unset custom --global" in err.text
+
+
 def test_routing_unset_clears_a_key_outside_the_taxonomy(tmp_path: Path) -> None:
     """Removal is how an operator complies, so it is the one op the closure allows.
 
@@ -1309,3 +1328,55 @@ def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
     assert rc == 1
     assert "config routing unset custom" in err.text
     assert "custom" in path.read_text(encoding="utf-8")  # refused, not laundered
+
+
+def test_the_remedy_clears_a_legacy_key_living_in_the_global_scope(
+    tmp_path: Path,
+) -> None:
+    """The advertised command has to reach the key wherever it actually lives.
+
+    Scope defaults to *project* inside a repo, so an unscoped ``routing unset``
+    aimed at a global legacy key would report success, write the project file,
+    and leave the Run blocked by the key it claimed to clear. An out-of-taxonomy
+    key is invalid in every scope, so clearing it is a repair rather than a
+    scoped edit.
+    """
+    env = _env(tmp_path)
+    global_path = settings.global_config_path(env)
+    settings.write_config(
+        global_path, {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    out, err = _Sink(), _Sink()
+
+    rc = configcmd.run_routing_unset(
+        "custom", scope=None, repo_root=tmp_path, env=env, out=out, err=err
+    )
+
+    assert rc == 0, err.text
+    assert "custom" not in global_path.read_text(encoding="utf-8")
+
+
+def test_the_remedy_clears_a_legacy_key_whose_spelling_no_write_op_accepts(
+    tmp_path: Path,
+) -> None:
+    """A pre-closure Config could hold any quoted TOML key, so removal accepts any.
+
+    The syntactic charset check exists to catch a typo in a key being *written*.
+    Applied to removal it strands exactly the keys with no other way out — the
+    refusal would name a command that refuses itself.
+    """
+    path = settings.project_config_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[routing]\n"migration v2" = { model = "gpt-5.4", effort = "high" }\n',
+        encoding="utf-8",
+    )
+    out, err = _Sink(), _Sink()
+
+    rc = configcmd.run_routing_unset(
+        "migration v2", scope="project", repo_root=tmp_path, env=_env(tmp_path),
+        out=out, err=err,
+    )
+
+    assert rc == 0, err.text
+    assert "migration v2" not in path.read_text(encoding="utf-8")

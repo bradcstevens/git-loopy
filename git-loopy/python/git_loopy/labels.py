@@ -23,9 +23,12 @@ Design:
   ``ready-for-agent``, and the runner reads it directly from
   :data:`git_loopy.sources.LABEL_PARALLEL_SAFE`. So it is appended from that
   constant rather than looked up in the role table.
-* **Task types are fixed.** Their seven labels are derived from the routing
-  vocabulary, so the labels an unattended classifier may apply always exist in
-  the tracker and cannot drift from the keys routing accepts.
+* **The Task-type taxonomy is closed.** Its seven labels come from
+  :data:`~git_loopy.config.TASK_TYPE_KEYS`, so the labels an unattended
+  classifier may apply always exist in the tracker and cannot drift from the
+  keys routing accepts. This matters more than the other rows: the label-writing
+  path *creates* a label before attaching it, so an invented key would become a
+  real, permanent tracker label routing to the default forever (#375, ADR-0029).
 * **Ensure, never reconcile.** :func:`bootstrap_labels` creates what is absent and
   leaves what exists exactly as it is — colour and description included. An
   operator who recoloured ``ready-for-agent`` keeps their colour, and a re-run
@@ -42,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
-from git_loopy.config import RECOMMENDED_ROUTING, TASK_TYPE_LABEL_PREFIX
+from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 __all__ = [
@@ -131,14 +134,21 @@ PARALLEL_SAFE_ROLE: LabelSpec = LabelSpec(
     ),
 )
 
+#: The seven ``task-type:`` labels, one per key of the **closed** taxonomy.
+#:
+#: Derived from :data:`~git_loopy.config.TASK_TYPE_KEYS` — the taxonomy itself —
+#: and deliberately *not* from ``RECOMMENDED_ROUTING``, which is a **seeding**
+#: core rather than the vocabulary: a key the recommendations happened to stop
+#: naming would silently vanish from the tracker while routing still accepted
+#: it, leaving an unattended writer with a permitted key it cannot attach.
 TASK_TYPE_LABELS: tuple[LabelSpec, ...] = tuple(
     LabelSpec(
-        role=f"task-type:{key}",
+        role=f"{TASK_TYPE_LABEL_PREFIX}{key}",
         name=f"{TASK_TYPE_LABEL_PREFIX}{key}",
         color="1d76db",
         description=f"Classifies an issue as a {key} task for git-loopy routing.",
     )
-    for key in RECOMMENDED_ROUTING
+    for key in TASK_TYPE_KEYS
 )
 
 

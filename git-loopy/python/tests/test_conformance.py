@@ -21,9 +21,11 @@ from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
+    TASK_TYPE_KEYS,
     RunConfig,
     SkillPolicyInput,
     SkillPolicyInputs,
+    TaskTypeError,
     gate_reasoning_effort,
     resolve_iteration_model,
 )
@@ -2808,3 +2810,53 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     sides of that comparison are data.
     """
     assert continuation_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
+
+
+_TASK_TYPE_TAXONOMY = _ROUTING_RESOLUTION["task_type_taxonomy"]
+
+
+def test_task_type_taxonomy_fixture_is_the_closed_set() -> None:
+    """The seven keys are pinned language-neutrally, in presentation order (#375).
+
+    The taxonomy is closed (Wrapper contract §14), which means the permitted keys
+    are a *contract* rather than one Orchestrator's constant: a native port has
+    to refuse the same values the Python reference refuses. Stating them in the
+    fixture is what makes "closed" checkable from outside any one language.
+    """
+    assert tuple(_TASK_TYPE_TAXONOMY) == TASK_TYPE_KEYS
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ROUTING_RESOLUTION["refusal_cases"],
+    ids=lambda case: case["id"],
+)
+def test_routing_refusal_fixture(case: dict[str, Any]) -> None:
+    """An unknown ``task-type:`` key is refused, naming it and the permitted keys.
+
+    The refusal is the load-bearing half of the closure: an unattended writer
+    creates a label before attaching it, so a key that merely warned-and-defaulted
+    would become a real tracker label that routes to the default forever (#375,
+    ADR-0029). These cases pin that it is refused rather than absorbed — including
+    where routing is suppressed run-wide, which is the one path that returns
+    before consulting the routing map.
+    """
+    routing = {
+        key: (entry["model"], entry["effort"]) for key, entry in case["routing"].items()
+    }
+    config = RunConfig(
+        model=case["default"]["model"],
+        reasoning_effort=case["default"]["effort"],
+        routing=routing,
+    )
+    warnings: list[str] = []
+
+    with pytest.raises(TaskTypeError) as refusal:
+        resolve_iteration_model(config, case["labels"], warn=warnings.append)
+
+    assert refusal.value.key == case["refused"]
+    message = str(refusal.value)
+    assert repr(case["refused"]) in message
+    for key in _TASK_TYPE_TAXONOMY:
+        assert key in message
+    assert warnings == []
