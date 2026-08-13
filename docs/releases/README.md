@@ -8,6 +8,33 @@ tagged source archive identity checks pass.
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
+## What a Release owes
+
+A `vX.Y.Z` **GitHub milestone** is the one record of what a Release is answerable
+for. An issue carrying that milestone is owed to that Release; an issue carrying
+none is backlog — real work, committed to nothing. Nothing infers this from a
+label, a PRD, or a Wayfinder map: `ready-for-agent` says an agent *could* start,
+not that a Release is *waiting*, and the two answer different questions.
+
+The milestone is assigned when the work is claimed, not when the issue is filed,
+so a backlog with no milestones is the normal resting state rather than a lapse.
+A milestone is closed when its content is on `main`, which is not the same event
+as its being published — content can sit merged and unreleased, and the milestone
+records delivery while the `v<VERSION>` tag records publication.
+
+Because the milestone is a promise about a Release, it is only ever one that
+exists. List them rather than inventing one:
+
+```sh
+gh api repos/{owner}/{repo}/milestones --jq '.[] | "\(.title)\t\(.state)"'
+gh issue edit <number> --milestone "vX.Y.Z"
+```
+
+Three kinds of issue are deliberately left unmilestoned until a human moves them:
+`wayfinder:grilling` decisions, whose outcome is unknown until the session runs;
+`ready-for-human` issues, which are blocked on a judgment rather than on capacity;
+and any PRD whose remaining scope has not been chartered into live tickets.
+
 ## Platform trust for helper artifacts
 
 The `git-loopy-tui` helper Release (`.github/workflows/tui-release.yml`) is

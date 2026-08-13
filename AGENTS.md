@@ -76,6 +76,14 @@ All five canonical triage roles use their default label strings (`needs-triage`,
 `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
 `docs/agents/triage-labels.md`.
 
+### Release milestones
+
+A `vX.Y.Z` GitHub milestone is what marks an issue as owed to a Release. An issue
+with no milestone is backlog: real, but not committed to anything. Assign one only
+when the work is actually claimed by that Release, and never invent a milestone —
+`gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the ones that exist.
+See `docs/releases/README.md#what-a-release-owes`.
+
 ### Domain docs
 
 Single-context layout: one `CONTEXT.md` and `docs/adr/` at the repo root. See
