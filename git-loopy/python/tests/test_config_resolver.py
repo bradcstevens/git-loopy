@@ -42,6 +42,7 @@ def _resolve(
     env: dict[str, str] | None = None,
     project: dict[str, object] | None = None,
     global_: dict[str, object] | None = None,
+    measured: dict[str, tuple[str, str]] | None = None,
     warn=cli._warn,
 ):
     return cli.resolve_config(
@@ -49,6 +50,7 @@ def _resolve(
         env or {},
         project=project or {},
         global_=global_ or {},
+        measured=measured or {},
         warn=warn,
     )
 
@@ -707,3 +709,96 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     )
     assert not any(model in w for w in warnings)
 
+
+
+# ---------------------------------------------------------------------------
+# Measured routing (#361, ADR-0028): one machine-written tier between global
+# Config and the built-in default. It fills gaps and never wins an argument.
+#
+# Synthetic model identifiers throughout — the merge is a precedence question,
+# not a roster question, so a vendor catalogue change must not invalidate these.
+# The off-roster advisory is silenced by an injected `warn` where it would
+# otherwise be noise.
+# ---------------------------------------------------------------------------
+
+_MEASURED = {"docs": ("synthetic-cheap-1", "low")}
+
+
+def test_measured_entry_supplies_a_pair_where_the_operator_is_silent() -> None:
+    """A Task type nobody configured gets the measured value."""
+    run = _resolve(measured=_MEASURED, warn=lambda _m: None).run
+    assert dict(run.routing) == {"docs": ("synthetic-cheap-1", "low")}
+
+
+@pytest.mark.parametrize("scope", ["project", "global_"])
+def test_hand_written_routing_beats_the_measured_entry(scope: str) -> None:
+    """A hand-written `[routing]` entry wins forever, with no flag to make it do so."""
+    hand = {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}}
+    run = _resolve(measured=_MEASURED, warn=lambda _m: None, **{scope: hand}).run
+    assert dict(run.routing) == {"docs": ("synthetic-fancy-9", "high")}
+
+
+def test_measured_fills_only_the_task_types_config_leaves_alone() -> None:
+    """Measured routing fills gaps; it never overrules, and never removes."""
+    run = _resolve(
+        measured={
+            "docs": ("synthetic-cheap-1", "low"),
+            "test": ("synthetic-cheap-2", "medium"),
+        },
+        global_={"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+        project={"routing": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}}},
+        warn=lambda _m: None,
+    ).run
+    assert dict(run.routing) == {
+        "docs": ("synthetic-fancy-9", "high"),  # global Config beats measured
+        "test": ("synthetic-cheap-2", "medium"),  # measured fills the gap
+        "planning": ("synthetic-fancy-9", "max"),  # project-only survives
+    }
+
+
+@pytest.mark.parametrize(
+    ("argv", "env"),
+    [
+        (["--model", "gpt-5-mini"], {}),
+        (["--reasoning-effort", "low"], {}),
+        ([], {"GIT_LOOPY_MODEL": "gpt-5-mini"}),
+        ([], {"GIT_LOOPY_REASONING_EFFORT": "low"}),
+    ],
+)
+def test_explicit_override_suppresses_the_measured_tier_too(
+    argv: list[str], env: dict[str, str]
+) -> None:
+    """The existing run-wide suppression extends unchanged — measured included."""
+    run = _resolve(argv, env=env, measured=_MEASURED, warn=lambda _m: None).run
+    assert dict(run.routing) == {}
+
+
+def test_absent_measured_tier_changes_nothing() -> None:
+    """An absent artifact is the ordinary case and warns about nothing."""
+    warnings: list[str] = []
+    run = _resolve(global_=_ROUTING_GLOBAL, warn=warnings.append).run
+    assert dict(run.routing) == {"planning": ("claude-opus-4.8", "max")}
+    assert warnings == []
+
+
+def test_measured_entry_beats_the_builtin_default_for_a_labelled_issue() -> None:
+    """The tier is only real if an **Iteration** actually runs on it.
+
+    The two halves of the chain meet here: ``resolve_config`` merges the tiers
+    into ``RunConfig.routing``, and ``resolve_iteration_model`` resolves one
+    issue's **Task type** against that map. A measured entry must beat the
+    run-wide built-in default, and an unmeasured Task type must still fall
+    through to it.
+    """
+    from git_loopy.config import resolve_iteration_model
+
+    run = _resolve(measured=_MEASURED, warn=lambda _m: None).run
+
+    assert resolve_iteration_model(run, ["task-type:docs"]) == (
+        "synthetic-cheap-1",
+        "low",
+    )
+    assert resolve_iteration_model(run, ["ready-for-agent"]) == (
+        run.model,
+        run.reasoning_effort,
+    )

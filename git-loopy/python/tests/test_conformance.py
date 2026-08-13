@@ -15,6 +15,7 @@ from rich.console import Console
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
+from git_loopy import config as config_module
 from git_loopy import continuation as continuation_module
 from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
@@ -2149,6 +2150,76 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
 
     assert result == (case["expected"]["model"], case["expected"]["effort"])
     assert bool(warnings) is case["warns"]
+
+
+_ROUTING_PRECEDENCE = _ROUTING_RESOLUTION["precedence_cases"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ROUTING_PRECEDENCE,
+    ids=lambda case: case["id"],
+)
+def test_routing_precedence_fixture(case: dict[str, Any], monkeypatch) -> None:
+    """The **Measured routing** tier sits below global **Config** (#361, ADR-0028).
+
+    Drives the production Config resolver, so the fixture pins the chain a Run
+    actually walks — CLI flag > env > project > global > **measured** > built-in
+    default — rather than a restatement of it. Every case declares the roster it
+    runs against and names only synthetic models (ADR-0019's fixture correction),
+    so a vendor catalogue change cannot silently invalidate a precedence test.
+    """
+    roster = {
+        model: frozenset(efforts) for model, efforts in case["roster"].items()
+    }
+    monkeypatch.setattr(config_module, "MODEL_REASONING_EFFORTS", roster)
+    monkeypatch.setattr(cli_module, "SUPPORTED_MODELS", frozenset(roster))
+
+    def _table(entries: Mapping[str, Any]) -> dict[str, Any]:
+        return {"routing": dict(entries)} if entries else {}
+
+    override = case.get("override", {})
+    argv = (
+        [f"--{override['flag'].replace('_', '-')}", override["value"]]
+        if "flag" in override
+        else []
+    )
+    env = {override["env"]: override["value"]} if "env" in override else {}
+
+    warnings: list[str] = []
+    resolved = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(argv),
+        env,
+        project=_table(case["project"]),
+        global_=_table(case["global"]),
+        measured={
+            key: (entry["model"], entry["effort"])
+            for key, entry in case["measured"].items()
+        },
+        warn=warnings.append,
+    )
+
+    assert dict(resolved.run.routing) == {
+        key: (entry["model"], entry["effort"])
+        for key, entry in case["expected"].items()
+    }
+    # The declared roster is load-bearing, not decorative: every model these
+    # cases name is on it, so the off-roster typo-catch advisory stays silent.
+    assert [w for w in warnings if "not in the kit's supported set" in w] == []
+
+
+def test_routing_precedence_fixture_names_no_real_model() -> None:
+    """A behavioural fixture that names a live model is a vendor-timed failure.
+
+    ADR-0019 corrected ``effort-gate.json`` for exactly this; the precedence
+    cases are born correct rather than corrected later, and this pins it.
+    """
+    for case in _ROUTING_PRECEDENCE:
+        declared = set(case["roster"])
+        assert declared and not (declared & set(MODEL_REASONING_EFFORTS)), case["id"]
+        for tier in ("measured", "global", "project"):
+            for entry in case[tier].values():
+                assert entry["model"] in declared, case["id"]
 
 
 def test_dashboard_fixture_pins_unavailable_capability_semantics() -> None:

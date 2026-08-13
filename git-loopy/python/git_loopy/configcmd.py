@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
-from git_loopy import settings
+from git_loopy import measured_routing, settings
 from git_loopy.config import (
     RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
@@ -438,10 +438,11 @@ def run_routing_list(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Print the effective project-over-global task-type routing map."""
+    """Print the effective project-over-global-over-measured task-type routing map."""
     try:
-        project, global_ = _load_tables(repo_root, env)
+        project, global_, measured = _load_tables(repo_root, env)
         routing = {
+            **measured,
             **settings.table_routing(global_, scope="global"),
             **settings.table_routing(project, scope="project"),
         }
@@ -540,15 +541,27 @@ def run_routing_guided(
 
 def _load_tables(
     repo_root: Path | None, env: Mapping[str, str]
-) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    """Load the (project, global) raw config tables; project is ``{}`` off-repo."""
+) -> tuple[Mapping[str, object], Mapping[str, object], Mapping[str, tuple[str, str]]]:
+    """Load the (project, global, measured) tiers; the first and last are ``{}`` off-repo.
+
+    The **Measured routing** tier (ADR-0028) is per-repository by construction —
+    off-repo there is no artifact to read, so it resolves empty exactly as the
+    project scope does.
+    """
     project: Mapping[str, object] = (
         settings.load_config_table(settings.project_config_path(repo_root))
         if repo_root is not None
         else {}
     )
     global_ = settings.load_config_table(settings.global_config_path(env))
-    return project, global_
+    measured: Mapping[str, tuple[str, str]] = (
+        measured_routing.load_measured_routing(
+            measured_routing.measured_routing_path(repo_root)
+        ).routing
+        if repo_root is not None
+        else {}
+    )
+    return project, global_, measured
 
 
 def _resolve(
@@ -567,8 +580,10 @@ def _resolve(
     from git_loopy import cli
 
     args = cli.build_parser().parse_args([])
-    project, global_ = _load_tables(repo_root, env)
-    return cli.resolve_config(args, env, project=project, global_=global_, warn=warn)
+    project, global_, measured = _load_tables(repo_root, env)
+    return cli.resolve_config(
+        args, env, project=project, global_=global_, measured=measured, warn=warn
+    )
 
 
 def run_get(

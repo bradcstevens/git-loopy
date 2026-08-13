@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy import configcmd, settings
+from git_loopy import configcmd, measured_routing, settings
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +369,67 @@ def test_routing_list_prints_effective_project_over_global_map(
     assert out.lines == [
         "task-type:docs = gpt-5-mini @ medium",
         "task-type:planning = claude-opus-4.8 @ max",
+    ]
+
+
+def test_routing_list_shows_measured_entries_the_operator_has_not_configured(
+    tmp_path: Path,
+) -> None:
+    """The **Measured routing** tier fills gaps in what `config routing list` reports.
+
+    A tier a Run honours but the reporting command cannot see would leave an
+    operator reading one map while the loop routes on another (#361, ADR-0028).
+    """
+    env = _env(tmp_path)
+    def _measured(model: str, effort: str) -> measured_routing.MeasuredEntry:
+        return measured_routing.MeasuredEntry(
+            status=measured_routing.MeasuredStatus.MEASURED,
+            model=model,
+            effort=effort,
+            trials_passed=5,
+            trials_total=5,
+            rungs_walked=1,
+            credits=412.0,
+            wall_clock_seconds=903,
+            rungs=(
+                measured_routing.Rung(
+                    model=model, effort=effort, passed=5, total=5, credits=412.0
+                ),
+            ),
+            proving_tasks=(
+                measured_routing.ProvingTask(
+                    issue=214, base_commit="9747237", oracle_commit="e31ceab"
+                ),
+            ),
+        )
+
+    measured_routing.write_measured_routing(
+        tmp_path,
+        measured_routing.MeasuredRouting(
+            entries={
+                "docs": _measured("synthetic-cheap-1", "low"),
+                "test": _measured("synthetic-cheap-2", "medium"),
+            },
+            provenance=measured_routing.Provenance(
+                cli_version="1.0.67",
+                calibrated_at="2026-08-13T14:02:11Z",
+                candidate_count=85,
+                gate_loops=("Python suite",),
+            ),
+        ),
+    )
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+    )
+    out = _Sink()
+
+    rc = configcmd.run_routing_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    assert out.lines == [
+        "task-type:docs = synthetic-fancy-9 @ high",  # hand-written wins
+        "task-type:test = synthetic-cheap-2 @ medium",  # measured fills the gap
     ]
 
 

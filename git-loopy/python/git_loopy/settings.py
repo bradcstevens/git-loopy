@@ -34,7 +34,7 @@ import os
 import secrets
 import stat
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
@@ -93,14 +93,24 @@ class SettingsError(ValueError):
 
 @dataclass(frozen=True)
 class ConfigTables:
-    """The two parsed Config scopes.
+    """The two parsed Config scopes, plus the Measured routing tier beneath them.
 
     ``project`` overrides ``global_`` key-by-key in the resolver's precedence
-    chain (CLI flag > env > project > global > default).
+    chain, and ADR-0028 puts one machine-written tier below both:
+
+        CLI flag > env > project > global > **measured** > built-in default
+
+    ``measured`` is not a third Config scope and is deliberately not shaped like
+    one. **Config** is hand-editable; the Measured routing artifact is written by
+    **Calibration** and never hand-edited, and *only routing participates* — no
+    other Config key is machine-written. So this field carries the routing map
+    the artifact supplies (``task-type key -> (model, effort)``) rather than a
+    raw table, and nothing else about the artifact reaches the resolver.
     """
 
     project: Mapping[str, object]
     global_: Mapping[str, object]
+    measured: Mapping[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def global_dir(env: Mapping[str, str]) -> Path:
@@ -171,19 +181,32 @@ def load_config_table(path: Path | None) -> dict[str, object]:
 
 
 def load_configs(repo_root: Path, env: Mapping[str, str]) -> ConfigTables:
-    """Load both Config scopes for a run.
+    """Load both Config scopes for a run, plus the Measured routing tier.
 
     Args:
-        repo_root: The enclosing repository root (for the project scope).
+        repo_root: The enclosing repository root (for the project scope and the
+            committed Measured routing artifact).
         env: An environment mapping (for the global scope's XDG resolution).
 
     Returns:
         A :class:`ConfigTables` bundling the parsed ``project`` and ``global_``
-        tables (each ``{}`` when that scope has no config).
+        tables (each ``{}`` when that scope has no config) and the ``measured``
+        routing map (``{}`` when there is no artifact — the ordinary case).
+
+    Raises:
+        SettingsError: On malformed TOML in any of the three, naming the file.
     """
     project = load_config_table(project_config_path(repo_root))
     global_ = load_config_table(global_config_path(env))
-    return ConfigTables(project=project, global_=global_)
+    # Deferred so the layering stays one-way: `measured_routing` builds on this
+    # module's `SettingsError`, so importing it at module scope would be a cycle.
+    from git_loopy.measured_routing import (
+        load_measured_routing,
+        measured_routing_path,
+    )
+
+    measured = load_measured_routing(measured_routing_path(repo_root)).routing
+    return ConfigTables(project=project, global_=global_, measured=measured)
 
 
 # ---------------------------------------------------------------------------

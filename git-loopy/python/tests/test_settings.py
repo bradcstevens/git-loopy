@@ -501,3 +501,51 @@ def test_settings_module_imports_only_stdlib() -> None:
     source = inspect.getsource(mod)
     for forbidden in ("import rich", "import textual", "import copilot", "opentelemetry"):
         assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# The Measured routing tier (#361, ADR-0028). The loader that reads the two
+# hand-editable Config scopes also resolves the one machine-written artifact, so
+# a Run has all three tiers in hand from a single call.
+# ---------------------------------------------------------------------------
+
+
+def test_load_configs_reads_the_measured_routing_artifact(tmp_path: Path) -> None:
+    """The artifact's routing arrives beside the two Config scopes."""
+    scope = tmp_path / "git-loopy"
+    scope.mkdir()
+    (scope / "routing.measured.toml").write_text(
+        "schema_version = 1\n\n[provenance]\n"
+        'cli_version = "1.0.67"\ncalibrated_at = "2026-08-13T14:02:11Z"\n'
+        "candidate_count = 85\ngate_loops = [\"Python suite\"]\n\n"
+        '[routing.docs]\nstatus = "measured"\n'
+        'model = "synthetic-cheap-1"\neffort = "low"\ntrials_passed = 5\n'
+        "trials_total = 5\nrungs_walked = 1\ncredits = 1.0\n"
+        "wall_clock_seconds = 2\n\n[[routing.docs.rung]]\n"
+        'model = "synthetic-cheap-1"\neffort = "low"\npassed = 5\ntotal = 5\n'
+        "credits = 1.0\n\n[[routing.docs.proving_task]]\nissue = 214\n"
+        'base_commit = "9747237"\noracle_commit = "e31ceab"\n',
+        encoding="utf-8",
+    )
+
+    tables = settings.load_configs(tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "xdg")})
+
+    assert dict(tables.measured) == {"docs": ("synthetic-cheap-1", "low")}
+
+
+def test_load_configs_with_no_artifact_reports_an_empty_measured_tier(
+    tmp_path: Path,
+) -> None:
+    """An absent artifact is the ordinary case — the tier is simply empty."""
+    tables = settings.load_configs(tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "xdg")})
+    assert dict(tables.measured) == {}
+
+
+def test_load_configs_surfaces_a_malformed_artifact(tmp_path: Path) -> None:
+    """A machine-written file that is quietly half-read is worse than a loud failure."""
+    scope = tmp_path / "git-loopy"
+    scope.mkdir()
+    (scope / "routing.measured.toml").write_text("schema_version = 9\n", encoding="utf-8")
+
+    with pytest.raises(settings.SettingsError, match="schema_version 9"):
+        settings.load_configs(tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "xdg")})

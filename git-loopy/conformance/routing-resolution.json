@@ -75,5 +75,73 @@
       "expected": {"model": "gpt-5-mini", "effort": null},
       "warns": false
     }
+  ],
+  "precedence_cases": [
+    {
+      "id": "measured-supplies-a-task-type-config-leaves-alone",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}},
+      "global": {},
+      "project": {},
+      "expected": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}}
+    },
+    {
+      "id": "project-routing-beats-measured-for-the-same-task-type",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}},
+      "global": {},
+      "project": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}},
+      "expected": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}
+    },
+    {
+      "id": "global-routing-beats-measured-for-the-same-task-type",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}},
+      "global": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}},
+      "project": {},
+      "expected": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}
+    },
+    {
+      "id": "measured-fills-gaps-beside-both-hand-written-scopes",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}, "test": {"model": "synthetic-cheap-2", "effort": "medium"}},
+      "global": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}},
+      "project": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}},
+      "expected": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}, "test": {"model": "synthetic-cheap-2", "effort": "medium"}, "planning": {"model": "synthetic-fancy-9", "effort": "max"}}
+    },
+    {
+      "id": "explicit-model-flag-suppresses-the-measured-tier-run-wide",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}},
+      "global": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}},
+      "project": {},
+      "override": {"flag": "model", "value": "synthetic-fancy-9"},
+      "expected": {}
+    },
+    {
+      "id": "explicit-reasoning-effort-env-suppresses-the-measured-tier-run-wide",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}},
+      "global": {},
+      "project": {},
+      "override": {"env": "GIT_LOOPY_REASONING_EFFORT", "value": "low"},
+      "expected": {}
+    },
+    {
+      "id": "an-absent-measured-tier-changes-nothing",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {},
+      "global": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}},
+      "project": {},
+      "expected": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}}
+    },
+    {
+      "id": "an-effort-incapable-measured-model-carries-an-empty-effort",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-effortless-0", "effort": ""}},
+      "global": {},
+      "project": {},
+      "expected": {"docs": {"model": "synthetic-effortless-0", "effort": ""}}
+    }
   ]
 }

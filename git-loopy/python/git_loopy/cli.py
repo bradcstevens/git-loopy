@@ -80,6 +80,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from git_loopy import settings
@@ -1257,26 +1258,38 @@ def _resolve_routing(
     env: Mapping[str, str],
     project: Mapping[str, object],
     global_: Mapping[str, object],
+    measured: Mapping[str, tuple[str, str]],
     *,
     warn: Callable[[str], None],
 ) -> dict[str, tuple[str, str]]:
-    """Resolve the effective per-issue routing map (issue #146).
+    """Resolve the effective per-issue routing map (issue #146, #361).
 
-    Merges the two ``[routing]`` tables **project-over-global per task-type
-    key** — a project entry replaces the whole ``{model, effort}`` pair for that
-    key, global-only keys survive, project-only keys are added. Returns ``{}``
-    (routing off, run-wide) when an explicit model/effort override is present
-    (:func:`_explicit_model_or_effort_override`). A well-formed entry naming a
-    model outside the kit roster raises only a **non-fatal** load-time advisory
-    (typo-catch), never an abort; malformed *shapes* still raise loudly from
-    :func:`settings.table_routing`, naming the offending scope + key.
+    Merges three tiers **per task-type key**, lowest first, so a later tier
+    replaces the whole ``{model, effort}`` pair for that key while keys only a
+    lower tier names survive:
 
-    Nothing consumes the map in this slice — the per-issue resolver (#147)
-    reads :attr:`RunConfig.routing` and gates each pair.
+        **measured** < global ``[routing]`` < project ``[routing]``
+
+    ``measured`` is the machine-written **Measured routing** tier ADR-0028 puts
+    between global **Config** and the built-in default. It **fills gaps and never
+    wins an argument**: a hand-written ``[routing]`` entry for a task type beats
+    it forever, with no override flag and no special case, because that is the
+    precedence chain that already shipped. A task type nobody configured in
+    either scope takes the measured value; one nobody measured either falls
+    through to the run-wide default at resolution time.
+
+    Returns ``{}`` (routing off, run-wide) when an explicit model/effort override
+    is present (:func:`_explicit_model_or_effort_override`) — the existing
+    suppression rule, extended unchanged to cover the measured tier. A
+    well-formed entry naming a model outside the kit roster raises only a
+    **non-fatal** load-time advisory (typo-catch), never an abort; malformed
+    *shapes* still raise loudly from :func:`settings.table_routing` or
+    :func:`git_loopy.measured_routing.load_measured_routing`, naming the scope.
     """
     if _explicit_model_or_effort_override(args, env):
         return {}
     merged: dict[str, tuple[str, str]] = {
+        **measured,
         **settings.table_routing(global_, scope="global"),
         **settings.table_routing(project, scope="project"),
     }
@@ -1453,6 +1466,7 @@ def resolve_config(
     *,
     project: Mapping[str, object],
     global_: Mapping[str, object],
+    measured: Mapping[str, tuple[str, str]] = MappingProxyType({}),
     warn: Callable[[str], None] = _warn,
 ) -> ResolvedConfig:
     """Merge CLI args + env + the two config tables into a :class:`ResolvedConfig`.
@@ -1471,10 +1485,11 @@ def resolve_config(
     ``parallel`` and temporary Skill overlays) are NEVER read from a config
     file — they resolve from flags / env only.
 
-    ``[routing]`` is a **config-file-only** tier: it merges project-over-global
-    per task-type key, and any explicit ``--model`` / ``--reasoning-effort``
-    (flag or env) suppresses it to an empty map run-wide
-    (:func:`_resolve_routing`).
+    ``[routing]`` is a **config-file-only** tier with one machine-written rung
+    beneath it: it merges project-over-global-over-**measured** per task-type key,
+    and any explicit ``--model`` / ``--reasoning-effort`` (flag or env)
+    suppresses the lot to an empty map run-wide (:func:`_resolve_routing`).
+    ``measured`` is the Measured routing tier (ADR-0028), absent by default.
 
     The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
     per-model capability gate) sits at the *bottom* of the chain, fed the raw
@@ -1531,7 +1546,7 @@ def resolve_config(
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
-    routing = _resolve_routing(args, env, project, global_, warn=warn)
+    routing = _resolve_routing(args, env, project, global_, measured, warn=warn)
 
     run = RunConfig(
         continuation=continuation,
@@ -1753,7 +1768,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         tables = settings.load_configs(repo_root, os.environ)
         resolved = resolve_config(
-            args, os.environ, project=tables.project, global_=tables.global_
+            args,
+            os.environ,
+            project=tables.project,
+            global_=tables.global_,
+            measured=tables.measured,
         )
     except settings.SettingsError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
@@ -1789,7 +1808,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             tables = settings.load_configs(repo_root, os.environ)
             resolved = resolve_config(
-                args, os.environ, project=tables.project, global_=tables.global_
+                args,
+                os.environ,
+                project=tables.project,
+                global_=tables.global_,
+                measured=tables.measured,
             )
         except settings.SettingsError as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
@@ -1826,7 +1849,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             tables = settings.load_configs(repo_root, os.environ)
             resolved = resolve_config(
-                args, os.environ, project=tables.project, global_=tables.global_
+                args,
+                os.environ,
+                project=tables.project,
+                global_=tables.global_,
+                measured=tables.measured,
             )
         except settings.SettingsError as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)

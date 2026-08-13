@@ -19,7 +19,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
-| `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns (§14) |
+| `routing-resolution.json` | Per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns, plus the **Measured routing** precedence cases — CLI flag > env > project > global > measured > built-in default — each declaring the synthetic roster it runs against (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
@@ -577,8 +577,11 @@ The Python reference adapter additionally pins the phase-3 per-issue routing
 decisions (Wrapper contract §14): it drives `routing-resolution.json` and
 `effort-gate.json` through the production `resolve_iteration_model` and
 `gate_reasoning_effort` seams and asserts its in-language model roster equals
-`model-roster.json`. Native ports do not implement routing yet, so these three
-fixtures are Python-adapter-only.
+`model-roster.json`. `routing-resolution.json`'s `precedence_cases` are driven
+through the production `resolve_config` instead, because tier precedence is a
+question about the merge and `resolve_iteration_model` receives one already-merged
+mapping. Native ports do not implement routing yet, so these three fixtures are
+Python-adapter-only.
 
 The family-level terminal Release adapter
 [`python/tests/test_release_identity_conformance.py`](../python/tests/test_release_identity_conformance.py)
