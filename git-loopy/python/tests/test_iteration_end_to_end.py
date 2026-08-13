@@ -268,7 +268,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     # -- 1) Fake repo on disk ---------------------------------------------
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "You are ralph. Implement the AFK-ready issues.\n",
+        "You are the agent. Implement the AFK-ready issues.\n",
         encoding="utf-8",
     )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
@@ -389,7 +389,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert "Issue #42" in prompt
     # #43 lacks the discriminator and must be filtered out.
     assert "Issue #43" not in prompt
-    assert "You are ralph" in prompt
+    assert "You are the agent" in prompt
     assert timeout > 60.0, f"send_and_wait timeout must exceed SDK default; got {timeout}"
 
     # Auto-close fired for #42, not for any other issue.
@@ -633,7 +633,7 @@ def test_skill_policy_failure_stops_before_source_collection_or_work(
 def test_loop_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     """An empty AFK-ready pool short-circuits with exit code 0 — no SDK call."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -677,7 +677,7 @@ def test_loop_reports_pool_exclusions_as_events(tmp_path, monkeypatch) -> None:
     deliberately triaged it had no way to learn the runner was ignoring it.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -729,7 +729,7 @@ def test_loop_emits_no_exclusion_events_when_nothing_is_dropped(
 ) -> None:
     """A clean Pool's output is unchanged — this slice only adds visibility."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
     monkeypatch.setattr(
@@ -764,7 +764,7 @@ def test_loop_reports_an_all_excluded_pool_distinctly(
     do next, not in whether the Run failed.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
     monkeypatch.setattr(
@@ -792,7 +792,7 @@ def test_loop_reports_an_all_excluded_pool_distinctly(
 def test_loop_reports_prds_pool_exclusions(tmp_path, monkeypatch) -> None:
     """The local-markdown backend shares the discriminator, so it reports too."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     slice_dir = tmp_path / "prds" / "featA"
     slice_dir.mkdir(parents=True)
     (slice_dir / "001-incomplete.md").write_text(
@@ -845,7 +845,7 @@ def _wire_single_issue_github(
     and inspect the ``add_all`` / ``commit`` / ``push`` spies.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     issue = _make_issue(issue_number)
     fake_git = FakeGitClient(
@@ -1128,7 +1128,7 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
     """
     # -- 1) Fake repo on disk with a PRDs fixture tree --------------------
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
     ready_md = tmp_path / "prds" / "featA" / "001-ready.md"
@@ -1295,7 +1295,7 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
 def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     """An absent ``prds/`` directory short-circuits with exit 0 — no SDK call."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     # NB: no `prds/` directory created.
 
     fake_git = FakeGitClient(tmp_path)
@@ -1322,7 +1322,7 @@ def test_loop_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
 def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> None:
     """If ``gh auth status`` is not authenticated, the loop aborts with exit 1."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1348,7 +1348,7 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     aborts on iteration 3.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1387,7 +1387,7 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     SDK failure is contained to "no progress" semantics.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1438,7 +1438,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     strike machine from running.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1489,7 +1489,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
 def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> None:
     """If ``_make_client()`` raises, ``run()`` returns 1 with no traceback escape."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     monkeypatch.setattr(
         loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
@@ -1516,7 +1516,7 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     strikes), so the cap is the only stopping condition.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1603,7 +1603,7 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
     # -- 1) Fake repo on disk ---------------------------------------------
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "You are ralph.\n",
+        "You are the agent.\n",
         encoding="utf-8",
     )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
@@ -1751,7 +1751,7 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     # -- repo on disk -----------------------------------------------------
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "You are ralph. Advance the AFK-ready PRs.\n", encoding="utf-8"
+        "You are the agent. Advance the AFK-ready PRs.\n", encoding="utf-8"
     )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
@@ -2057,7 +2057,7 @@ def _persisted_policy_repo(tmp_path: Path) -> tuple[Path, Path]:
     withheld = _write_project_skill(skills_root, "team-deploy")
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "---\nrequired-skills:\n  - tdd\n---\nYou are ralph.\n",
+        "---\nrequired-skills:\n  - tdd\n---\nYou are the agent.\n",
         encoding="utf-8",
     )
     (tmp_path / "git-loopy" / "config.toml").write_text(

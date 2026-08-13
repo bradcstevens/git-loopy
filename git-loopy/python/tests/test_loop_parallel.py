@@ -375,7 +375,7 @@ def _wire_repo(
 ) -> FakeGitClient:
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "You are ralph. Implement the AFK-ready issues.\n", encoding="utf-8"
+        "You are the agent. Implement the AFK-ready issues.\n", encoding="utf-8"
     )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
     return FakeGitClient(

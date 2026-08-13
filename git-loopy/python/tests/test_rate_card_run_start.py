@@ -47,7 +47,7 @@ def empty_pool_run(tmp_path, monkeypatch):
     the Run-start record under test is reached without a scripted session.
     """
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
     monkeypatch.setattr(
         loop_module,

@@ -51,7 +51,7 @@ def test_commits_between_is_positional_and_excludes_checkpoint(
     git.simulate_agent_commit(subject="feat", body="Closes #42", sha="agent")
     head = git.head_sha()
     # Runner Checkpoint lands AFTER head is captured.
-    checkpoint = git.commit("chore(ralph): checkpoint")
+    checkpoint = git.commit("chore(git-loopy): checkpoint")
     between = git.commits_between(pre, head)
     assert [c.sha for c in between] == ["agent"]
     assert checkpoint not in [c.sha for c in between]

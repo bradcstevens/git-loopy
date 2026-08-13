@@ -742,7 +742,7 @@ def test_commits_between_excludes_a_runner_checkpoint(tmp_path: Path) -> None:
     # The runner Checkpoints *after* ``head`` is read.
     (tmp_path / "leftover.txt").write_text("uncommitted scratch")
     git.add_all()
-    checkpoint_sha = git.commit("chore(ralph): checkpoint")
+    checkpoint_sha = git.commit("chore(git-loopy): checkpoint")
     assert checkpoint_sha != head
 
     between = git.commits_between(pre, head)

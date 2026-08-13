@@ -1,7 +1,7 @@
 """``git_loopy.interactive`` — the opt-in, TTY-gated interactive runtime.
 
 Introduced by issue #23 as an **additive** layer over the line-printer runner
-(design decisions D0/D3, ADR-0001 — the *observer* control model). The Ralph
+(design decisions D0/D3, ADR-0001 — the *observer* control model). The autonomous
 loop runs as a **peer asyncio task**; a Textual app merely *observes* a
 Textual-agnostic :class:`~git_loopy.interactive.state.LiveRunState` that is fed
 through the issue #22 sink fan-out. The app never *owns* the run, so a later

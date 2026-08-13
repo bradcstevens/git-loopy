@@ -140,7 +140,7 @@ class _SkippingDriver:
 def _wire_empty_pool_repo(tmp_path: Any, monkeypatch: Any) -> _FakeClient:
     """Stub git/gh/SDK so ``run`` reaches the empty-pool clean exit."""
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("ralph prompt\n", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("agent prompt\n", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
 
     fake_git = FakeGitClient(tmp_path)

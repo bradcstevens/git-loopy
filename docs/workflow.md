@@ -22,6 +22,11 @@ change can begin at a well-written issue. Ambiguous or cross-cutting work should
 move through the full path so intent, evidence, and decisions survive into each
 fresh execution context.
 
+This path is not a checklist you walk once. It is the workflow you are encoding:
+each pass makes the next one cheaper, because the vocabulary, the acceptance
+criteria, the routing, and the feedback loops it leaves behind are reused by
+every later Run ([concepts](concepts.md#the-compounding-workflow)).
+
 ## Planning phase: human-led
 
 The loop engineer owns intent, domain language, issue slicing, acceptance

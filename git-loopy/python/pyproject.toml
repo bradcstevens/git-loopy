@@ -1,7 +1,7 @@
 [project]
 name = "git-loopy"
 version = "0.2.0-dev.0"
-description = "git-loopy — an autonomous Ralph loop runner on the GitHub Copilot Python SDK."
+description = "git-loopy — encode engineering knowledge into repeatable, autonomous workflows on the GitHub Copilot Python SDK."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

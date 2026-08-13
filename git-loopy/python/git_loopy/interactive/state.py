@@ -1,7 +1,7 @@
 """``git_loopy.interactive.state`` — the Textual-agnostic live run model.
 
 :class:`LiveRunState` is the **interactive sink** in the issue #22 fan-out
-(ADR-0001): the ralph loop dispatches every wrapper event — and every streaming
+(ADR-0001): the autonomous loop dispatches every wrapper event — and every streaming
 reasoning/message delta — to it, and the Textual app *observes* it to paint the
 screen. The app reads; the loop writes; both run on the one asyncio event loop,
 so no locking is needed.

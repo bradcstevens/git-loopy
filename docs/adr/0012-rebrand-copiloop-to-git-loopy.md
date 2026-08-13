@@ -1,6 +1,7 @@
 # Rebrand copiloop to git-loopy
 
-**Status:** accepted
+**Status:** accepted — the "Ralph loop" concept this ADR left untouched was later retired by
+[ADR-0031](0031-encoded-workflows-retire-the-loop-name.md); the rename itself stands.
 
 ## Context
 

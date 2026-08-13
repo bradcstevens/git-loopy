@@ -35,9 +35,8 @@ venv/
 .python-version
 *.egg-info/
 
-# Ralph runtime
+# git-loopy runtime scratch
 git-loopy/.tmp/
-.ralph-grill.lock
 
 # git-loopy/python/ persisted observability artefacts (JSONL event logs +
 # per-run summary JSONs; never commit).

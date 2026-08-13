@@ -337,7 +337,7 @@ def test_git_loopy_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     # Provide a prompt file so we don't fail on prompt resolution.
     (tmp_path / "git-loopy").mkdir()
-    (tmp_path / "git-loopy" / "prompt.md").write_text("be ralph", encoding="utf-8")
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setenv("GIT_LOOPY_ISSUE_SOURCE", "prds")
     result = subprocess.run(
         _git_loopy_command(),

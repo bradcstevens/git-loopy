@@ -1,7 +1,7 @@
 """``git_loopy.interactive.driver`` — peer-task orchestration (ADR-0001).
 
 The interactive driver realises the **observer** control model: it launches the
-ralph loop and a Textual app as **peer asyncio tasks** (not parent/child) and
+autonomous loop and a Textual app as **peer asyncio tasks** (not parent/child) and
 waits for whichever finishes first.
 
 * If the **loop** finishes first (the run reached a natural outcome), the app is

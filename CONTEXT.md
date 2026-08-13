@@ -1,11 +1,11 @@
 # git-loopy and Loop Engineering
 
-**git-loopy** is the GitHub Copilot SDK framework and brand for orchestrating
-automated Ralph loops over agentic-engineering work. **Loop engineering** is the
-practice of shaping that work into explicit, reviewable units, setting guardrails
-and feedback loops, and supervising autonomous execution. This glossary fixes the
-vocabulary shared by the planning skills, issue tracker, Runner family, and live
-interface.
+**git-loopy** is the GitHub Copilot SDK framework and brand for encoding
+specialized engineering knowledge into repeatable, autonomous workflows over
+agentic-engineering work. **Loop engineering** is the practice of shaping that
+work into explicit, reviewable units, setting guardrails and feedback loops, and
+supervising autonomous execution. This glossary fixes the vocabulary shared by
+the planning skills, issue tracker, Runner family, and live interface.
 
 ## Two-phase model
 
@@ -25,15 +25,25 @@ interface.
 ### The practice
 
 **Loop engineering**:
-The practice of designing, operating, and improving autonomous agent loops. It
-connects human-led planning and context engineering to small triaged issues,
-explicit acceptance criteria, feedback loops, guardrails, and human review so
-autonomous execution stays aligned.
+The practice of encoding an engineer's or organization's specialized engineering
+knowledge into repeatable workflows, then operating and improving them. It connects
+human-led planning and context engineering to small triaged issues, explicit
+acceptance criteria, feedback loops, guardrails, and human review so autonomous
+execution stays aligned. Its unit of value is a workflow that can run hundreds of
+times, not a single conversation that ends with its session.
 
 **Loop engineer**:
 The human who designs, triages, and supervises the loop. The loop engineer owns
 intent, domain language, issue slicing, acceptance criteria, guardrails, and final
 judgment; git-loopy owns repeatable execution.
+
+**Meta-engineering**:
+Working on the system that builds and operates the software rather than on the
+software directly. The loop engineer's leverage: an improvement to a workflow,
+a prompt, a routing decision, or a feedback loop is paid back by every subsequent
+**Run**, which is why evidence from a Run is fed back into the system and not only
+into the branch.
+_Avoid_: automation (too broad), tooling work, prompt engineering (a part, not the whole).
 
 ### Workflow continuation
 
@@ -692,10 +702,10 @@ _Avoid_: picker mode, interactive model prompt.
 ### Framework and configuration
 
 **git-loopy**:
-The GitHub Copilot SDK loop-engineering framework and brand for orchestrating
-automated Ralph loops for agentic engineering. It ships a **Runner family**: the
-Python reference runner (the globally-installed `git-loopy` console command;
-`git loopy` also works as a git subcommand) plus the planned **shell**,
+The GitHub Copilot SDK loop-engineering framework and brand for encoding specialized
+engineering knowledge into repeatable, autonomous workflows. It ships a **Runner
+family**: the Python reference runner (the globally-installed `git-loopy` console
+command; `git loopy` also works as a git subcommand) plus the planned **shell**,
 **PowerShell**, and **Rust** ports, all implementing one **Wrapper contract**.
 Written `git-loopy` as the distribution, console command, and on-disk/brand
 spelling; `git_loopy` as the importable Python package. Supersedes the retired
@@ -714,11 +724,13 @@ The planned **Release version** to which an issue contributes. It states deliver
 intent without changing the issue's workflow readiness or dependency relationships.
 _Avoid_: version label, release label.
 
-**Ralph loop**:
-The *technique* git-loopy orchestrates — an unattended, iterative execution loop
-that drives the Copilot agent to work triaged issues one at a time. A concept,
-never a code identifier; "ralph" survives only in this sense.
-_Avoid_: ralph-afk (the retired brand); "ralph" as a symbol, directory, or env-var.
+**Autonomous loop**:
+The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
+drives the Copilot agent to work triaged issues one at a time, bounded by feedback
+loops, **Strikes**, and human review. Realized as a **Run** of **Iterations**; a
+concept, never a code identifier. Named the "Ralph loop" until
+[ADR-0031](docs/adr/0031-encoded-workflows-retire-the-loop-name.md) retired that name.
+_Avoid_: Ralph loop (retired), ralph-afk (the retired brand), "ralph" in any form.
 
 **Config**:
 The persisted settings (model, reasoning effort, strike policy, denylists, ...) that carry across
@@ -1149,12 +1161,15 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   vocabulary and now has its own glossary entry saying so.
 - `ralph` / `ralph-afk` / `copiloop` / `git-loopy` were used interchangeably for the tool —
   resolved: **git-loopy** is the framework, CLI, and brand (`git-loopy` as the distribution and
-  console command, `git_loopy` as the importable Python package); a **Ralph loop** is the
-  retained *concept* (the loop technique). Two product brands are now retired: **ralph-afk**
+  console command, `git_loopy` as the importable Python package); the technique it orchestrates
+  is the **Autonomous loop**. Two product brands are retired: **ralph-afk**
   (every `ralph` / `ralph_afk` identifier, the `ralph/` and `.ralph/` directories, and the
   `RALPH_*` env vars — ADR-0005) and **copiloop** (every `copiloop` / `Copiloop` identifier, the
   `copiloop/` and `.copiloop/` directories, the `copiloop.*` spans, and the `COPILOOP_*` env
   vars — ADR-0012), both in favour of `git-loopy`, `git_loopy`, `.git-loopy/`, and `GIT_LOOPY_*`.
+  ADR-0005 had retained "Ralph loop" as the name of the *technique*;
+  [ADR-0031](docs/adr/0031-encoded-workflows-retire-the-loop-name.md) retires that last use too, so `ralph`
+  now survives only in the point-in-time records that narrate the renames.
 - `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
   to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
   per-issue because every issue boundary is also an **Iteration** boundary.

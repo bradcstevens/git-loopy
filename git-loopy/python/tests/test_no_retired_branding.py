@@ -18,26 +18,22 @@ comes back. Scanning the *tracked* surface (not a raw filesystem walk) keeps the
 check deterministic and immune to whatever untracked runtime artefacts,
 virtualenvs, or scratch files happen to sit in a working tree.
 
-The *technique* the tool orchestrates keeps its name -- the "Ralph loop" (an
-unattended, iterative loop that drives the Copilot CLI). That phrase matches
-none of the forbidden patterns below, so it is exempt by construction, never by
-allowlist.
+The *technique* the tool orchestrates is now the **Autonomous loop**
+(ADR-0031). It was called the "Ralph loop" until that ADR retired the last
+retained use of ``ralph``, so the bare word is forbidden here too and no
+narrower brand-only patterns are needed to protect it.
 
 Forbidden (matched case-insensitively) substrings::
 
-    ralph_afk    the retired ralph-afk importable module / OTel span prefix
-    ralph-afk    the retired ralph-afk distribution / console-script name
-    RALPH_       the retired ralph-afk environment-variable prefix
-    .ralph/      the retired ralph-afk runtime-artefact directory
-    ralph/       the retired ralph-afk source directory
+    ralph        every retired ralph-afk form (module, distribution, console
+                 script, ``RALPH_*`` env prefix, ``ralph/`` and ``.ralph/``
+                 directories, the ``github-copilot-ralph-starter-kit`` slug)
+                 *and* the retired "Ralph loop" concept name (ADR-0031) -- one
+                 plain substring now that nothing legitimate survives
     copiloop     the retired copiloop brand in every form (module, script,
                  distribution, ``COPILOOP_*`` env prefix, ``copiloop/`` /
                  ``.copiloop/`` directories) -- a unique coinage, so a plain
                  case-insensitive substring catches all of them at once
-
-The ``ralph`` forms stay narrow on purpose so the retained "Ralph loop" concept
-and the repo slug's ``ralph-starter`` segment do not trip the guard; ``copiloop``
-is a plain substring because the whole brand is retired with no surviving use.
 
 A small allowlist of files legitimately narrates the retirements themselves --
 the rename ADRs and their siblings, the raw feature-request intake, the domain
@@ -52,12 +48,12 @@ from pathlib import Path
 
 import pytest
 
-# The retired-branding patterns, matched case-insensitively. ``.ralph/`` is a
-# subset of ``ralph/`` but is spelled out for clarity of intent in failures.
-# ``copiloop`` is a plain substring: the coinage is unique to the retired brand,
-# so every cased form (COPILOOP_, Copiloop, copiloop/, .copiloop/) is covered.
+# The retired-branding patterns, matched case-insensitively. Both are plain
+# substrings: ``copiloop`` is a coinage unique to the retired brand, and
+# ``ralph`` no longer has any retained use to carve out (ADR-0031), so every
+# cased form (RALPH_, .ralph/, COPILOOP_, Copiloop, ...) is covered.
 FORBIDDEN = re.compile(
-    r"ralph_afk|ralph-afk|RALPH_|\.ralph/|ralph/|copiloop",
+    r"ralph|copiloop",
     re.IGNORECASE,
 )
 
@@ -159,7 +155,7 @@ def test_no_retired_branding_in_tracked_files() -> None:
 def test_forbidden_pattern_matches_retired_names_but_not_retained_ones() -> None:
     """Guard the guard: the pattern flags every retired form and no retained one."""
     must_flag = (
-        # retired ralph-afk brand (ADR-0005)
+        # retired ralph-afk brand (ADR-0005) and the retired concept (ADR-0031)
         "ralph_afk",
         "import ralph_afk.loop",
         "ralph-afk",
@@ -168,6 +164,8 @@ def test_forbidden_pattern_matches_retired_names_but_not_retained_ones() -> None
         "RALPH_OTEL_ENABLED=1",
         ".ralph/logs/run.jsonl",
         "ralph/python/ralph_afk",
+        "the Ralph loop technique",
+        "github-copilot-ralph-starter-kit",
         # retired copiloop brand (ADR-0012)
         "copiloop",
         "import copiloop.loop",
@@ -190,9 +188,8 @@ def test_forbidden_pattern_matches_retired_names_but_not_retained_ones() -> None
         ".git-loopy/logs/run.jsonl",
         "git-loopy/python",
         "git_loopy.run",
-        # retained concept + former repo slug -- no _, -afk, ralph/, or copiloop
-        "the Ralph loop technique",
-        "github-copilot-ralph-starter-kit",
+        # the renamed concept (ADR-0031) -- the replacement must stay clean
+        "the Autonomous loop technique",
     )
     for sample in must_not_flag:
         assert not FORBIDDEN.search(sample), f"did not expect {sample!r} to be flagged"
