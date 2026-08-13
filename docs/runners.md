@@ -181,10 +181,15 @@ and the [recommended workflow skill catalog install path](skills-setup.md).
 Managing Config: `git-loopy config` is a fast (SDK-free) convenience group over
 hand-editing `config.toml`. `config set <key> <value>` persists one key to a
 scope; `config get <key>` / `config list` print the **effective merged** value(s)
-a run would use (across CLI > env > project > global > default, not one file);
+a run would use (across CLI > env > project > global > **measured** > default,
+not one file), and for a routing key they also name the **tier** that supplied
+it — `project Config`, `global Config`, `measured`, or `built-in default` — so a
+**Routed pair** no operator typed can still be traced to its source;
 `config path` prints the resolved location(s); `config edit` opens the scope's
 file in `$VISUAL` / `$EDITOR`. Scope (`--global` / `--project`, default
-project-in-a-repo-else-global) matches the `init` wizard. See
+project-in-a-repo-else-global) matches the `init` wizard; there is deliberately
+no measured scope, because that artifact is machine-written and never
+hand-edited. See
 [`git-loopy/python/README.md`](../git-loopy/python/README.md#managing-config-git-loopy-config).
 
 ## Per-iteration flow

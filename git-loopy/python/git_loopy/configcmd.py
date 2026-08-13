@@ -6,8 +6,9 @@ and let you inspect what a run will actually use:
 
 * ``config edit``  — open the scope's ``config.toml`` in ``$VISUAL`` / ``$EDITOR``.
 * ``config set K V`` — persist one key to a scope, no editor (typed + validated).
-* ``config get K``  — print the **effective merged** value of one key.
-* ``config list``   — print every effective merged key = value.
+* ``config get K``  — print the **effective merged** value of one key, and for a
+  ``task-type:<key>`` key the **tier** that supplied it.
+* ``config list``   — print every effective merged key = value, routing included.
 * ``config path``   — print the resolved ``config.toml`` location(s).
 * ``config routing`` — author or inspect per-task-type model + effort routes.
 
@@ -50,6 +51,7 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
+    TASK_TYPE_LABEL_PREFIX,
     gate_reasoning_effort,
 )
 
@@ -264,9 +266,20 @@ def _resolve_scope(scope: str | None, repo_root: Path | None) -> str:
 
     With no flag the default is **project** inside a git repo, else **global**.
     The project scope needs a repo — requesting it outside one is a clean error.
+    There are exactly two scopes: the **Measured routing** tier is machine-written
+    and never hand-edited (ADR-0028), so it is not one of them and asking for it
+    is refused by name (#364).
     """
     if scope is None:
         scope = "project" if repo_root is not None else "global"
+    if scope not in ("project", "global"):
+        raise ConfigCommandError(
+            f"unknown config scope {scope!r}; the scopes are 'project' and "
+            f"'global'. The measured routing tier is machine-written and never "
+            f"hand-edited — delete the "
+            f"{measured_routing.MEASURED_ROUTING_FILENAME} artifact to drop it, "
+            f"or write a [routing] entry that beats it."
+        )
     if scope == "project" and repo_root is None:
         raise ConfigCommandError(
             "the project scope needs a git repository; run inside one or use "
@@ -438,20 +451,35 @@ def run_routing_list(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Print the effective project-over-global-over-measured task-type routing map."""
+    """Print the effective project-over-global-over-measured task-type routing map.
+
+    Every entry names the tier that supplied it (#364), because a map that mixes
+    hand-written and machine-written entries is unreadable without one. When an
+    explicit ``--model`` / ``--reasoning-effort`` override has routing suppressed
+    run-wide the map is still printed — it is what the Config says — with a note
+    to stderr that none of it is currently in force.
+    """
+    from git_loopy import cli
+
     try:
         project, global_, measured = _load_tables(repo_root, env)
-        routing = {
-            **measured,
-            **settings.table_routing(global_, scope="global"),
-            **settings.table_routing(project, scope="project"),
-        }
+        walked = cli.merge_routing_tiers(project, global_, measured)
+        resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
-    for key in sorted(routing):
-        model, effort = routing[key]
-        out(f"task-type:{key} = {model} @ {effort}")
+    suppressed_by = resolved.routing_suppressed_by
+    if suppressed_by is not None:
+        err(
+            f"git-loopy: note: an explicit model / reasoning-effort override "
+            f"({suppressed_by}) suppresses routing run-wide; none of the entries "
+            f"below is in force."
+        )
+    for key in sorted(walked):
+        tier, (model, effort) = walked[key]
+        out(f"task-type:{key} = {model} @ {effort} ({tier})")
+    if walked:
+        _note_routing_inert_in_serial(resolved, err)
     return 0
 
 
@@ -586,6 +614,122 @@ def _resolve(
     )
 
 
+# ---------------------------------------------------------------------------
+# Routing provenance (#364) — naming the tier that supplied a Routed pair.
+#
+# Every answer below is *read off* the resolver's own result: the pair comes from
+# `resolve_iteration_model` (the seam a Run resolves an issue through) and the
+# tier from `ResolvedConfig.routing_provenance` (the merge the resolver walked).
+# Neither is restated here, so a reported tier cannot disagree with the value.
+# ---------------------------------------------------------------------------
+
+
+def _addressed_task_type(key: str) -> str | None:
+    """The **Task type** ``key`` addresses, or ``None`` if it is a scalar key.
+
+    Only the fully-prefixed ``task-type:<key>`` spelling addresses the routing
+    chain — a bare ``docs`` stays an unknown scalar key, so a typo'd setting
+    name is still an error rather than a silently-answered routing lookup. The
+    key itself is validated by the same :func:`_routing_key` the write ops use,
+    so ``get`` and ``set`` agree on what a well-formed Task type is.
+    """
+    if not key.startswith(TASK_TYPE_LABEL_PREFIX):
+        return None
+    return _routing_key(key)
+
+
+def _render_pair(model: str | None, effort: str | None) -> str:
+    """Render a **Routed pair** for display, dropping an absent half.
+
+    A ``None`` effort is not "empty" — it is the shared effort gate having
+    dropped an effort the model does not accept, leaving the backend to choose.
+    Printing a bare ``model @`` would read as a truncation, so the ``@ effort``
+    tail is omitted entirely. A ``None`` model likewise means the SDK picks.
+    """
+    parts = [_display_value(model) or "(backend default)"]
+    if effort is not None:
+        parts.append(f"@ {effort}")
+    return " ".join(parts)
+
+
+def _routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
+    """The gated ``(model, effort)`` display and tier label for one task-type key.
+
+    The pair is resolved through :func:`git_loopy.config.resolve_iteration_model`
+    against a synthetic ``task-type:<key>`` label, so what is printed is exactly
+    what an **Iteration** carrying that label would run on — effort gated against
+    the model included. The tier comes from the resolver's own provenance, with
+    two rungs it cannot carry filled in here:
+
+    * a key no tier names falls through to the run-wide pair, which is the
+      **built-in default** rung — so a repository still on ``RECOMMENDED_ROUTING``
+      (or on nothing) is never mistaken for one that has been **Calibrated**;
+    * routing suppressed run-wide by an explicit ``--model`` /
+      ``--reasoning-effort`` names the suppressing tier *and says it suppressed
+      routing*, rather than naming a tier whose value is not in force.
+    """
+    from git_loopy.cli import RoutingTier
+    from git_loopy.config import resolve_iteration_model
+
+    model, effort = resolve_iteration_model(
+        resolved.run, [TASK_TYPE_LABEL_PREFIX + key]
+    )
+    value = _render_pair(model, effort)
+    suppressed_by = resolved.routing_suppressed_by
+    if suppressed_by is not None:
+        return value, f"{suppressed_by} — routing suppressed run-wide"
+    tier = resolved.routing_provenance.get(key, RoutingTier.BUILTIN)
+    return value, str(tier)
+
+
+def _note_routing_inert_in_serial(
+    resolved: "ResolvedConfig", err: Callable[[str], None]
+) -> None:
+    """Note that routing has no effect at ``parallel == 1`` (ADR-0028).
+
+    **Routing** resolves at **Pickup**, and a serial **Iteration** has no pickup
+    — its Active issue is self-selected mid-session — so the whole chain, the
+    **Measured routing** tier included, is inert in the default serial mode.
+    Naming a winning tier without saying that reports a value that has no
+    effect, which is the same unexplainability #364 exists to remove. It goes to
+    stderr so ``$(git-loopy config get task-type:docs)`` still captures only the
+    value.
+    """
+    if resolved.run.parallel > 1 or resolved.routing_suppressed_by is not None:
+        return
+    err(
+        "git-loopy: note: routing resolves at Pickup, which only Parallel mode "
+        "has — in serial mode (parallel = 1) every tier is inert and each "
+        "Iteration runs on the run-wide pair."
+    )
+
+
+def _note_unadopted_recommended_route(
+    key: str, tier: str, err: Callable[[str], None]
+) -> None:
+    """Point at the recommended core when a Task type it names routes nowhere.
+
+    ``RECOMMENDED_ROUTING`` is a **seeding** core, not a resolution tier: ``init``
+    and ``config routing use-recommended`` write it into a Config scope, and
+    nothing consults it at resolution time. So a Task type it names but no scope
+    holds genuinely resolves to the run-wide **built-in default** — and reporting
+    only that would leave an operator unable to tell "there is no recommendation"
+    from "there is one you have not adopted" (ADR-0028 demotes the core to a
+    bootstrap default). Advisory only: it changes no value.
+    """
+    from git_loopy.cli import RoutingTier
+
+    if tier != str(RoutingTier.BUILTIN) or key not in RECOMMENDED_ROUTING:
+        return
+    model, effort = RECOMMENDED_ROUTING[key]
+    err(
+        f"git-loopy: note: the recommended core suggests {model} @ {effort} for "
+        f"task-type:{key}, but no Config scope holds it and nothing has measured "
+        f"it — the recommended core seeds Config, it never resolves. Adopt it "
+        f"with `git-loopy config routing use-recommended`."
+    )
+
+
 def run_get(
     key: str,
     *,
@@ -597,11 +741,20 @@ def run_get(
     """Print one key's **effective merged** value (env > project > global > default).
 
     Ignores scope by design — it shows what a run resolves, not one file's
-    contents. Returns 0 on success, 1 on an unknown key or a malformed config
+    contents. A ``task-type:<key>`` key addresses the **Routing** chain instead
+    and is answered with the **Routed pair** *and the tier that supplied it*
+    (#364), because a machine-written tier makes an unattributed value
+    untraceable. Returns 0 on success, 1 on an unknown key or a malformed config
     file.
     """
+    task_type: str | None
+    try:
+        task_type = _addressed_task_type(key)
+    except ConfigCommandError as exc:
+        err(f"git-loopy: error: {exc}")
+        return 1
     entry = _KEYS.get(key)
-    if entry is None:
+    if entry is None and task_type is None:
         err(f"git-loopy: error: {_unknown_key_message(key)}")
         return 1
     try:
@@ -609,6 +762,13 @@ def run_get(
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
+    if task_type is not None:
+        value, tier = _routing_report(resolved, task_type)
+        out(f"{value} ({tier})")
+        _note_unadopted_recommended_route(task_type, tier, err)
+        _note_routing_inert_in_serial(resolved, err)
+        return 0
+    assert entry is not None  # guarded above
     out(_display_value(entry.read(resolved)))
     return 0
 
@@ -620,14 +780,34 @@ def run_list(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Print every persisted key's effective merged value as ``key = value``."""
+    """Print every persisted key's effective merged value as ``key = value``.
+
+    Routing entries follow the scalar keys, one ``task-type:<key> = pair (tier)``
+    line each, so the map a run routes on is visible beside the settings — and
+    every one of them names the tier that supplied it (#364).
+
+    The **keys** come from the tier walk rather than from the effective map, so a
+    run-wide override does not silently delete the section: suppression is
+    reported as a tier that says it suppressed routing, beside the pair that is
+    actually in force. An absence would be indistinguishable from a repository
+    that configured no routing at all.
+    """
+    from git_loopy import cli
+
     try:
+        project, global_, measured = _load_tables(repo_root, env)
+        walked = cli.merge_routing_tiers(project, global_, measured)
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
     for name in SETTABLE_KEYS:
         out(f"{name} = {_display_value(_KEYS[name].read(resolved))}")
+    for task_type in sorted(walked):
+        value, tier = _routing_report(resolved, task_type)
+        out(f"{TASK_TYPE_LABEL_PREFIX}{task_type} = {value} ({tier})")
+    if walked:
+        _note_routing_inert_in_serial(resolved, err)
     return 0
 
 

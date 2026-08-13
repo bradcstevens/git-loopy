@@ -802,3 +802,88 @@ def test_measured_entry_beats_the_builtin_default_for_a_labelled_issue() -> None
         run.model,
         run.reasoning_effort,
     )
+
+
+# ---------------------------------------------------------------------------
+# Routing provenance (#364): the resolver names the tier that supplied each
+# **Routed pair**, so "why is this model set?" has an answer once a tier exists
+# that no operator typed.
+# ---------------------------------------------------------------------------
+
+
+def test_routing_provenance_names_the_tier_each_entry_came_from() -> None:
+    """Each task-type key is attributed to the tier whose value is in force."""
+    resolved = _resolve(
+        measured={
+            "docs": ("synthetic-cheap-1", "low"),
+            "test": ("synthetic-cheap-2", "medium"),
+        },
+        global_={"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+        project={
+            "routing": {"planning": {"model": "synthetic-fancy-9", "effort": "max"}}
+        },
+        warn=lambda _m: None,
+    )
+    assert dict(resolved.routing_provenance) == {
+        "docs": cli.RoutingTier.GLOBAL,
+        "test": cli.RoutingTier.MEASURED,
+        "planning": cli.RoutingTier.PROJECT,
+    }
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "tier"),
+    [
+        (["--model", "gpt-5-mini"], {}, cli.RoutingTier.CLI_FLAG),
+        (["--reasoning-effort", "low"], {}, cli.RoutingTier.CLI_FLAG),
+        ([], {"GIT_LOOPY_MODEL": "gpt-5-mini"}, cli.RoutingTier.ENVIRONMENT),
+        ([], {"GIT_LOOPY_REASONING_EFFORT": "low"}, cli.RoutingTier.ENVIRONMENT),
+    ],
+)
+def test_run_wide_suppression_is_reported_as_a_tier_not_as_an_empty_map(
+    argv: list[str], env: dict[str, str], tier: "cli.RoutingTier"
+) -> None:
+    """A suppressed report must say *suppressed*, not name a dead tier.
+
+    With routing off run-wide there is no winning tier to name, so the
+    provenance map is empty and the tier that turned it off is named instead.
+    """
+    resolved = _resolve(argv, env=env, measured=_MEASURED, warn=lambda _m: None)
+    assert dict(resolved.routing_provenance) == {}
+    assert resolved.routing_suppressed_by is tier
+
+
+def test_routing_provenance_covers_exactly_the_effective_routing_map() -> None:
+    """Provenance is derived from the merge, so it cannot name a different set.
+
+    Every key the loop routes on has a tier, and no key that is not routed has
+    one — the property that keeps the report and the resolver from drifting.
+    """
+    resolved = _resolve(
+        measured={"docs": ("synthetic-cheap-1", "low")},
+        global_={"routing": {"test": {"model": "synthetic-fancy-9", "effort": "high"}}},
+        project={"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "max"}}},
+        warn=lambda _m: None,
+    )
+    assert set(resolved.routing_provenance) == set(resolved.run.routing)
+    assert resolved.routing_suppressed_by is None
+
+
+def test_the_suppression_predicate_and_the_reported_tier_are_one_decision() -> None:
+    """The boolean the resolver acts on is the tier the report names.
+
+    Two independent copies of "is routing suppressed?" is exactly the drift
+    #364 exists to remove, so the predicate is derived from the tier.
+    """
+    for argv, env in (
+        ([], {}),
+        (["--model", "gpt-5-mini"], {}),
+        (["--reasoning-effort", "low"], {}),
+        ([], {"GIT_LOOPY_MODEL": "gpt-5-mini"}),
+        ([], {"GIT_LOOPY_MODEL": "   "}),
+        ([], {"GIT_LOOPY_REASONING_EFFORT": "low"}),
+    ):
+        args = _args(argv)
+        assert cli._explicit_model_or_effort_override(args, env) is (
+            cli.routing_suppressed_by(args, env) is not None
+        )

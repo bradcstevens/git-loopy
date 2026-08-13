@@ -79,6 +79,7 @@ import dataclasses
 import os
 import subprocess
 import sys
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Mapping
@@ -662,17 +663,25 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "Print the effective merged value of one key across all sources "
             "(env > project > global > built-in default), i.e. what a run would "
-            "actually use — not one file's contents."
+            "actually use — not one file's contents. A task-type:<key> key "
+            "addresses routing instead and reports the Routed pair together "
+            "with the tier that supplied it."
         ),
     )
-    get.add_argument("key", metavar="KEY", help="The setting name (e.g. model).")
+    get.add_argument(
+        "key",
+        metavar="KEY",
+        help="The setting name (e.g. model), or task-type:<key> for a route.",
+    )
 
     config_sub.add_parser(
         "list",
         help="Print every setting's effective merged value.",
         description=(
             "Print every persisted key's effective merged value (env > project "
-            "> global > built-in default), one `key = value` per line."
+            "> global > built-in default), one `key = value` per line, followed "
+            "by the effective routing map with the tier that supplied each "
+            "entry."
         ),
     )
 
@@ -715,7 +724,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     routing_unset.add_argument("task_type", metavar="TYPE")
 
     routing_sub.add_parser(
-        "list", help="Print the effective project-over-global routing map."
+        "list",
+        help=(
+            "Print the effective project-over-global-over-measured routing map, "
+            "naming the tier behind each entry."
+        ),
     )
 
     routing_recommended = routing_sub.add_parser(
@@ -1241,16 +1254,91 @@ def _explicit_model_or_effort_override(
     operator asked for one model for the whole run, so per-issue routing is
     suppressed run-wide. A ``model`` / ``reasoning_effort`` key in a config
     *file* is the **same tier** as ``[routing]`` and does **not** suppress it.
+
+    The predicate and the *reported* suppression tier are the same decision, so
+    this is the boolean face of :func:`routing_suppressed_by` rather than a
+    second copy of the rule (#364) — a report that could disagree with the
+    resolver is the failure that ticket exists to remove.
+    """
+    return routing_suppressed_by(args, env) is not None
+
+
+class RoutingTier(str, Enum):
+    """The rungs of the routing precedence chain, named for an operator (#364).
+
+    The chain ADR-0006 shipped, with ADR-0028's machine-written rung in place::
+
+        CLI flag > env var > project Config > global Config > measured > built-in default
+
+    A tier is what :func:`git-loopy config get <git_loopy.configcmd.run_get>` and
+    ``config list`` report alongside a **Routed pair**, so a value the operator
+    never typed can be traced to the thing that supplied it. The two flag tiers
+    only ever appear through run-wide *suppression* — an explicit ``--model`` /
+    ``--reasoning-effort`` turns routing off entirely rather than winning one
+    task-type key — which is why they are named here but never appear in
+    :attr:`ResolvedConfig.routing_provenance`.
+
+    :data:`BUILTIN` is the bottom rung: a **Task type** no tier names resolves to
+    the run-wide default at :func:`~git_loopy.config.resolve_iteration_model`
+    time, so a repository that has never run a **Calibration** — one still on the
+    ``RECOMMENDED_ROUTING`` core, or on nothing at all — is never mistaken for one
+    that has.
+    """
+
+    CLI_FLAG = "CLI flag"
+    ENVIRONMENT = "environment variable"
+    PROJECT = "project Config"
+    GLOBAL = "global Config"
+    MEASURED = "measured"
+    BUILTIN = "built-in default"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.value
+
+
+def merge_routing_tiers(
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+    measured: Mapping[str, tuple[str, str]],
+) -> dict[str, tuple[RoutingTier, tuple[str, str]]]:
+    """Walk the routing tiers lowest-first, keeping each key's *last* writer.
+
+    The single walk both :func:`_resolve_routing` and
+    :attr:`ResolvedConfig.routing_provenance` are built from, so the value and
+    the tier that supplied it are decided in one place and cannot disagree
+    (#364). Later-wins per task-type key is the whole precedence rule: a tier
+    replaces the entire ``(model, effort)`` pair for a key it names, and keys
+    only a lower tier names survive untouched.
+    """
+    merged: dict[str, tuple[RoutingTier, tuple[str, str]]] = {}
+    for tier, table in (
+        (RoutingTier.MEASURED, dict(measured)),
+        (RoutingTier.GLOBAL, settings.table_routing(global_, scope="global")),
+        (RoutingTier.PROJECT, settings.table_routing(project, scope="project")),
+    ):
+        for key, pair in table.items():
+            merged[key] = (tier, pair)
+    return merged
+
+
+def routing_suppressed_by(
+    args: argparse.Namespace, env: Mapping[str, str]
+) -> RoutingTier | None:
+    """Which tier's explicit override suppresses routing run-wide, if any (#364).
+
+    The same condition :func:`_explicit_model_or_effort_override` tests, reported
+    as the tier that caused it: a flag outranks an env var, matching the chain.
+    Returns ``None`` when routing is in force.
     """
     if getattr(args, "model", None) is not None:
-        return True
+        return RoutingTier.CLI_FLAG
     if getattr(args, "reasoning_effort", None) is not None:
-        return True
+        return RoutingTier.CLI_FLAG
     for var in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
         raw = env.get(var)
         if raw is not None and raw.strip():
-            return True
-    return False
+            return RoutingTier.ENVIRONMENT
+    return None
 
 
 def _resolve_routing(
@@ -1261,7 +1349,7 @@ def _resolve_routing(
     measured: Mapping[str, tuple[str, str]],
     *,
     warn: Callable[[str], None],
-) -> dict[str, tuple[str, str]]:
+) -> tuple[dict[str, tuple[str, str]], dict[str, RoutingTier]]:
     """Resolve the effective per-issue routing map (issue #146, #361).
 
     Merges three tiers **per task-type key**, lowest first, so a later tier
@@ -1278,21 +1366,23 @@ def _resolve_routing(
     either scope takes the measured value; one nobody measured either falls
     through to the run-wide default at resolution time.
 
-    Returns ``{}`` (routing off, run-wide) when an explicit model/effort override
-    is present (:func:`_explicit_model_or_effort_override`) — the existing
-    suppression rule, extended unchanged to cover the measured tier. A
+    Returns ``({}, {})`` (routing off, run-wide) when an explicit model/effort
+    override is present (:func:`_explicit_model_or_effort_override`) — the
+    existing suppression rule, extended unchanged to cover the measured tier. A
     well-formed entry naming a model outside the kit roster raises only a
     **non-fatal** load-time advisory (typo-catch), never an abort; malformed
     *shapes* still raise loudly from :func:`settings.table_routing` or
     :func:`git_loopy.measured_routing.load_measured_routing`, naming the scope.
+
+    Returns the merged ``{key: (model, effort)}`` map and, beside it, the
+    ``{key: tier}`` **provenance** it was merged from — one walk, so a reported
+    tier can never name something other than the value in force (#364).
     """
     if _explicit_model_or_effort_override(args, env):
-        return {}
-    merged: dict[str, tuple[str, str]] = {
-        **measured,
-        **settings.table_routing(global_, scope="global"),
-        **settings.table_routing(project, scope="project"),
-    }
+        return {}, {}
+    walked = merge_routing_tiers(project, global_, measured)
+    merged = {key: pair for key, (_tier, pair) in walked.items()}
+    provenance = {key: tier for key, (tier, _pair) in walked.items()}
     off_roster = sorted(
         {model for model, _effort in merged.values() if model not in SUPPORTED_MODELS}
     )
@@ -1303,7 +1393,7 @@ def _resolve_routing(
             f"(the Copilot CLI is the final authority on model validity) — check "
             f"for a typo."
         )
-    return merged
+    return merged, provenance
 
 
 def _warn(message: str) -> None:
@@ -1454,10 +1544,30 @@ class ResolvedConfig:
     (flag > env > project > global > ``None``); it is kept *outside* ``RunConfig``
     because the loop never consumes it — the live TTY / ``[tui]`` gating happens
     in :func:`_should_run_interactive`.
+
+    ``routing_provenance`` and ``routing_suppressed_by`` are the *reporting* half
+    of routing (#364), likewise outside ``RunConfig`` because no **Run** consumes
+    them: they exist so ``git-loopy config get`` / ``config list`` can name the
+    tier that supplied a **Routed pair** rather than printing a value with no
+    traceable origin. ``routing_provenance`` names one
+    :class:`RoutingTier` per key of :attr:`RunConfig.routing`, and is empty
+    exactly when that map is. ``routing_suppressed_by`` names the tier whose
+    explicit override turned routing off run-wide, and is ``None`` otherwise —
+    so a suppressed report says *suppressed* rather than naming a tier whose
+    value is not in force.
     """
 
     run: RunConfig
     interactive: bool | None
+    routing_provenance: Mapping[str, RoutingTier] = dataclasses.field(
+        default_factory=dict
+    )
+    routing_suppressed_by: RoutingTier | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "routing_provenance", MappingProxyType(dict(self.routing_provenance))
+        )
 
 
 def resolve_config(
@@ -1546,7 +1656,9 @@ def resolve_config(
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
-    routing = _resolve_routing(args, env, project, global_, measured, warn=warn)
+    routing, routing_provenance = _resolve_routing(
+        args, env, project, global_, measured, warn=warn
+    )
 
     run = RunConfig(
         continuation=continuation,
@@ -1567,7 +1679,12 @@ def resolve_config(
         skill_policy=skill_policy,
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
-    return ResolvedConfig(run=run, interactive=interactive)
+    return ResolvedConfig(
+        run=run,
+        interactive=interactive,
+        routing_provenance=routing_provenance,
+        routing_suppressed_by=routing_suppressed_by(args, env),
+    )
 
 
 def _should_run_interactive(interactive: bool | None) -> bool:

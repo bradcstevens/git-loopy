@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from git_loopy import configcmd, measured_routing, settings
+from git_loopy.config import RECOMMENDED_ROUTING
 
 
 # ---------------------------------------------------------------------------
@@ -367,8 +368,8 @@ def test_routing_list_prints_effective_project_over_global_map(
 
     assert rc == 0
     assert out.lines == [
-        "task-type:docs = gpt-5-mini @ medium",
-        "task-type:planning = claude-opus-4.8 @ max",
+        "task-type:docs = gpt-5-mini @ medium (project Config)",
+        "task-type:planning = claude-opus-4.8 @ max (global Config)",
     ]
 
 
@@ -428,8 +429,8 @@ def test_routing_list_shows_measured_entries_the_operator_has_not_configured(
 
     assert rc == 0
     assert out.lines == [
-        "task-type:docs = synthetic-fancy-9 @ high",  # hand-written wins
-        "task-type:test = synthetic-cheap-2 @ medium",  # measured fills the gap
+        "task-type:docs = synthetic-fancy-9 @ high (project Config)",  # hand-written wins
+        "task-type:test = synthetic-cheap-2 @ medium (measured)",  # measured fills the gap
     ]
 
 
@@ -816,3 +817,303 @@ def test_edit_returns_editor_exit_code(tmp_path: Path) -> None:
         out=_Sink(), err=_Sink(), launch_editor=_FakeEditor(rc=3),
     )
     assert rc == 3
+
+
+# ---------------------------------------------------------------------------
+# Routing provenance (#364) — `get` / `list` / `routing list` name the tier that
+# supplied a **Routed pair**, so a value the operator never typed can be traced.
+# ---------------------------------------------------------------------------
+
+
+def _write_measured(repo_root: Path, **pairs: tuple[str, str]) -> None:
+    """Hand-place a **Measured routing** artifact carrying ``pairs``."""
+
+    def _entry(model: str, effort: str) -> measured_routing.MeasuredEntry:
+        return measured_routing.MeasuredEntry(
+            status=measured_routing.MeasuredStatus.MEASURED,
+            model=model,
+            effort=effort,
+            trials_passed=5,
+            trials_total=5,
+            rungs_walked=1,
+            credits=412.0,
+            wall_clock_seconds=903,
+            rungs=(
+                measured_routing.Rung(
+                    model=model, effort=effort, passed=5, total=5, credits=412.0
+                ),
+            ),
+            proving_tasks=(
+                measured_routing.ProvingTask(
+                    issue=214, base_commit="9747237", oracle_commit="e31ceab"
+                ),
+            ),
+        )
+
+    measured_routing.write_measured_routing(
+        repo_root,
+        measured_routing.MeasuredRouting(
+            entries={key: _entry(*pair) for key, pair in pairs.items()},
+            provenance=measured_routing.Provenance(
+                cli_version="1.0.67",
+                calibrated_at="2026-08-13T14:02:11Z",
+                candidate_count=85,
+                gate_loops=("Python suite",),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope_table", "expected"),
+    [
+        (None, "synthetic-cheap-1 @ low (measured)"),
+        ("project", "synthetic-fancy-9 @ high (project Config)"),
+        ("global", "synthetic-fancy-9 @ high (global Config)"),
+    ],
+)
+def test_get_on_a_routing_key_names_the_tier_that_supplied_it(
+    tmp_path: Path, scope_table: str | None, expected: str
+) -> None:
+    """A **Routed pair** is reported with the tier whose value is in force."""
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    if scope_table is not None:
+        path = (
+            settings.project_config_path(tmp_path)
+            if scope_table == "project"
+            else settings.global_config_path(env)
+        )
+        settings.write_config(
+            path,
+            {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+        )
+    out = _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:docs", repo_root=tmp_path, env=env, out=out, err=_Sink()
+    )
+
+    assert rc == 0
+    assert out.text == expected
+
+
+def test_get_on_an_unrouted_task_type_names_the_builtin_default(
+    tmp_path: Path,
+) -> None:
+    """A Task type no tier names falls through, and says so.
+
+    ``RECOMMENDED_ROUTING`` is a seeding core, not a resolution tier: a
+    repository that has never been **Calibrated** must not have its unrouted
+    Task types reported as if some tier had supplied them.
+    """
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"model": "gpt-5.4", "reasoning_effort": "high"},
+    )
+    out, err = _Sink(), _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:planning", repo_root=tmp_path, env=env, out=out, err=err
+    )
+
+    assert rc == 0
+    # The run-wide pair, not the RECOMMENDED_ROUTING entry for `planning`
+    # (claude-opus-5 @ max) — the recommended core seeds Config, it does not
+    # resolve, and the report must not imply otherwise.
+    assert out.text == "gpt-5.4 @ high (built-in default)"
+    assert RECOMMENDED_ROUTING["planning"][0] not in out.text
+    # ...but the operator is told the recommended core exists and is unadopted,
+    # so "built-in default" is not mistaken for "nothing is available".
+    assert "use-recommended" in err.text
+
+
+@pytest.mark.parametrize(
+    ("env_extra", "tier"),
+    [
+        ({"GIT_LOOPY_MODEL": "gpt-5-mini"}, "environment variable"),
+        ({"GIT_LOOPY_REASONING_EFFORT": "low"}, "environment variable"),
+    ],
+)
+def test_get_reports_run_wide_suppression_rather_than_a_dead_tier(
+    tmp_path: Path, env_extra: dict[str, str], tier: str
+) -> None:
+    """With routing off run-wide, the measured value is not in force — say so."""
+    env = _env(tmp_path, **env_extra)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    out = _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:docs", repo_root=tmp_path, env=env, out=out, err=_Sink()
+    )
+
+    assert rc == 0
+    assert f"({tier} — routing suppressed run-wide)" in out.text
+    assert "synthetic-cheap-1" not in out.text
+
+
+def test_get_rejects_a_malformed_task_type_key(tmp_path: Path) -> None:
+    err = _Sink()
+    rc = configcmd.run_get(
+        "task-type:", repo_root=tmp_path, env=_env(tmp_path), out=_Sink(), err=err
+    )
+    assert rc == 1
+    assert "empty" in err.text
+
+
+def test_list_names_the_tier_for_every_routing_entry_it_renders(
+    tmp_path: Path,
+) -> None:
+    """`config list` renders the routing map beside the settings, tiers named."""
+    env = _env(tmp_path)
+    _write_measured(
+        tmp_path,
+        docs=("synthetic-cheap-1", "low"),
+        test=("synthetic-cheap-2", "medium"),
+    )
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+    )
+    out = _Sink()
+
+    rc = configcmd.run_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    routing_lines = [line for line in out.lines if line.startswith("task-type:")]
+    assert routing_lines == [
+        "task-type:docs = synthetic-fancy-9 @ high (project Config)",
+        "task-type:test = synthetic-cheap-2 @ medium (measured)",
+    ]
+    # The scalar keys are untouched by the addition.
+    assert len(out.lines) == len(configcmd.SETTABLE_KEYS) + len(routing_lines)
+
+
+def test_routing_list_names_the_tier_for_every_entry(tmp_path: Path) -> None:
+    """The routing-only surface answers "why is this model set?" too."""
+    env = _env(tmp_path)
+    _write_measured(tmp_path, test=("synthetic-cheap-2", "medium"))
+    settings.write_config(
+        settings.global_config_path(env),
+        {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+    )
+    out = _Sink()
+
+    rc = configcmd.run_routing_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    assert out.lines == [
+        "task-type:docs = synthetic-fancy-9 @ high (global Config)",
+        "task-type:test = synthetic-cheap-2 @ medium (measured)",
+    ]
+
+
+@pytest.mark.parametrize("op", ["path", "edit"])
+def test_no_scope_op_accepts_a_measured_scope(tmp_path: Path, op: str) -> None:
+    """The artifact is machine-written, so there is no scope to edit or point at.
+
+    An operator who wants rid of a measured value deletes the file; one who wants
+    to overrule it writes a Config entry that wins (ADR-0028).
+    """
+    env = _env(tmp_path)
+    err = _Sink()
+    kwargs: dict[str, object] = {
+        "scope": "measured",
+        "repo_root": tmp_path,
+        "env": env,
+        "out": _Sink(),
+        "err": err,
+    }
+    if op == "edit":
+        kwargs["launch_editor"] = lambda _argv: pytest.fail("no editor may launch")
+
+    rc = getattr(configcmd, f"run_{op}")(**kwargs)
+
+    assert rc == 1
+    assert "measured" in err.text
+    assert not (tmp_path / "git-loopy" / "routing.measured.toml").exists()
+
+
+def test_get_on_a_routing_key_notes_that_routing_is_inert_in_serial_mode(
+    tmp_path: Path,
+) -> None:
+    """A tier with no effect in the default mode must say so (ADR-0028).
+
+    **Routing** resolves at **Pickup**, and a serial **Iteration** has no
+    pickup — so at ``parallel == 1`` the whole chain, measured tier included, is
+    inert. Reporting a winning tier without that is reporting a value that has
+    no effect. The note goes to stderr so the value stays scriptable.
+    """
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    out, err = _Sink(), _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:docs", repo_root=tmp_path, env=env, out=out, err=err
+    )
+
+    assert rc == 0
+    assert out.text == "synthetic-cheap-1 @ low (measured)"
+    assert "inert" in err.text and "serial" in err.text
+
+
+def test_no_inert_note_when_the_run_is_parallel(tmp_path: Path) -> None:
+    env = _env(tmp_path, GIT_LOOPY_MAX_PARALLEL="3")
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    err = _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:docs", repo_root=tmp_path, env=env, out=_Sink(), err=err
+    )
+
+    assert rc == 0
+    assert "inert" not in err.text
+
+
+def test_list_reports_suppression_rather_than_dropping_the_routing_map(
+    tmp_path: Path,
+) -> None:
+    """Suppression must be *said*, not shown as an absence.
+
+    A run-wide override empties the effective routing map, and a `config list`
+    that simply stops printing routing looks identical to a repository that
+    configured none — the operator is told nothing about why their routes are
+    not in force.
+    """
+    env = _env(tmp_path, GIT_LOOPY_MODEL="gpt-5-mini")
+    _write_measured(tmp_path, test=("synthetic-cheap-2", "medium"))
+    settings.write_config(
+        settings.project_config_path(tmp_path),
+        {"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}}},
+    )
+    out = _Sink()
+
+    rc = configcmd.run_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    routing_lines = [line for line in out.lines if line.startswith("task-type:")]
+    assert routing_lines == [
+        "task-type:docs = gpt-5-mini "
+        "(environment variable — routing suppressed run-wide)",
+        "task-type:test = gpt-5-mini "
+        "(environment variable — routing suppressed run-wide)",
+    ]
+
+
+def test_no_recommended_hint_for_a_task_type_the_core_does_not_name(
+    tmp_path: Path,
+) -> None:
+    """The taxonomy is open, so an operator-invented key has nothing to suggest."""
+    err = _Sink()
+    rc = configcmd.run_get(
+        "task-type:migrations",
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        out=_Sink(),
+        err=err,
+    )
+    assert rc == 0
+    assert "migrations" not in RECOMMENDED_ROUTING
+    assert "use-recommended" not in err.text

@@ -374,9 +374,10 @@ git-loopy config set deny_tools "bash, write"   # list keys take a comma list
 git-loopy config set --global reasoning_effort high
 
 # Show the EFFECTIVE value a run would use, merged across
-# CLI > env > project > global > built-in default (not just one file).
+# CLI > env > project > global > measured > built-in default (not just one file).
 git-loopy config get model
-git-loopy config list                # every persisted key, one per line
+git-loopy config get task-type:docs  # the Routed pair AND the tier behind it
+git-loopy config list                # every persisted key, then the routing map
 
 # Print the resolved config.toml location(s) — scriptable.
 git-loopy config path                # both scopes, labelled
@@ -394,8 +395,24 @@ git-loopy config edit --global
   uses, so they report the **effective** value (env vars and both config scopes
   folded in), not one file's raw contents. Values go to **stdout**, warnings to
   **stderr**, so they script cleanly.
+- **Routing provenance.** `get task-type:<key>` reports a **Routed pair** with
+  the **tier** that supplied it, and `list` names the tier for every routing
+  entry it prints. The tier is one of `CLI flag`, `environment variable`,
+  `project Config`, `global Config`, `measured`, or `built-in default` — read
+  straight off the resolver's own merge, so the name cannot disagree with the
+  value. A `measured` entry comes from the machine-written
+  [`git-loopy/routing.measured.toml`](../../docs/adr/0028-measured-routing-is-a-committed-tier.md)
+  artifact, which is why
+  a model nobody typed can appear in the effective config; `built-in default`
+  means no tier named that Task type at all, so a repository that has never been
+  **Calibrated** is never mistaken for one that has. An explicit `--model` /
+  `--reasoning-effort` (or its env equivalent) suppresses routing run-wide, and
+  the report says so rather than naming a tier whose value is not in force.
 - **`path`** prints the resolved `config.toml` path(s) — both scopes labelled by
-  default, or a single bare path with `--global` / `--project`.
+  default, or a single bare path with `--global` / `--project`. There is no
+  measured scope for `path` or `edit`: the artifact is machine-written and never
+  hand-edited, so you drop a measured value by deleting the file and overrule
+  one by writing a `[routing]` entry that wins.
 - **`edit`** opens the scope's file in `$VISUAL` (else `$EDITOR`); it seeds an
   empty `config.toml` first if none exists, and errors if neither editor var is
   set.
