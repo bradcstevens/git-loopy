@@ -362,7 +362,12 @@ if ($CanRunFabricatedHelper) {
 # clone-local helper.
 
 $ActivateDir = New-Scratch -Name activate
-$Destination = Join-Path $ActivateDir "repo/.git-loopy/bin/git-loopy-tui"
+# Windows names an executable by its extension, so the installer stages
+# `git-loopy-tui.exe` there and that is the only name the Orchestrator's finder
+# looks for. Hard-coding the POSIX name here would stage into a slot nothing
+# discovers, and the discovery assertion below would be testing the wrong file.
+$HelperFileName = if ($IsWindows) { "git-loopy-tui.exe" } else { "git-loopy-tui" }
+$Destination = Join-Path $ActivateDir (Join-Path "repo/.git-loopy/bin" $HelperFileName)
 $Workspace = New-GitLoopyTuiWorkspace -Destination $Destination
 Assert-Equal (Split-Path -Parent $Destination) (Split-Path -Parent $Workspace) `
     "the staging workspace is a sibling of the destination"

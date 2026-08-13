@@ -2291,8 +2291,14 @@ assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
   "the stuck Run ran under the live interface"
 [[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
   fail "the interactive stuck Run never reached the agent process"
-[[ ! -s "$FAKE_COPILOT_SIGNALS" ]] ||
-  fail "the live interface left SIGPIPE ignored for the agent process: $(<"$FAKE_COPILOT_SIGNALS")"
+# The guarantee is that the live interface *added* no ignore, not that SIGPIPE
+# reaches the agent at its default. POSIX has a non-interactive shell unable to
+# trap or reset a signal that was already ignored on entry, so under a parent
+# that ignores SIGPIPE -- the CI runner does -- no Orchestrator can hand the
+# default back. Comparing against what this suite itself inherited keeps the
+# check on the one thing the live interface controls.
+assert_equal "$(trap -p PIPE)" "$(<"$FAKE_COPILOT_SIGNALS")" \
+  "the live interface changed SIGPIPE for the agent process"
 unset FAKE_COPILOT_SIGNALS
 jq -se '
   .[-1].type == "wrapper.run.end" and .[-1].outcome == "stuck"

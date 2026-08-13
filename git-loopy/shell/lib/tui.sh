@@ -210,6 +210,12 @@ git_loopy_tui_live_sink() {
   # Run would be inherited through `exec` by the agent process and every tool it
   # starts, quietly changing how they behave on a closed pipe; a Run's live
   # interface has no business reaching that far.
+  #
+  # `trap -` restores what this shell was started with, which is the most a shell
+  # can promise: POSIX has a non-interactive shell unable to trap or reset a
+  # signal that was already ignored on entry, so an Orchestrator launched by a
+  # parent that ignores SIGPIPE -- a CI runner, a supervisor -- cannot hand the
+  # default back to anyone. What it can guarantee is that it added nothing.
   local delivered=0
   trap '' PIPE
   if eval "printf '%s\n' \"\$line\" >&$_GIT_LOOPY_TUI_FD" 2>/dev/null; then

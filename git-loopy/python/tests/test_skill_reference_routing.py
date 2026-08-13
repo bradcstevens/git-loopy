@@ -49,7 +49,6 @@ _REPOSITORY_SKILL_TREE = re.compile(r"(?:^|/)\.copilot/skills(?:/|$)")
 #: Repo-relative POSIX prefixes whose Skill references are not navigation.
 _EXEMPT_PREFIXES: tuple[str, ...] = (
     "docs/adr/",  # architecture decision records are immutable history
-    ".reference/",  # third-party notes captured verbatim
 )
 
 

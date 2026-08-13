@@ -2530,8 +2530,24 @@ function Invoke-GitLoopyGitHub {
     $StartInfo.RedirectStandardInput = $true
     $StartInfo.RedirectStandardOutput = $true
     $StartInfo.RedirectStandardError = $true
-    foreach ($Argument in $Arguments) {
-        $StartInfo.ArgumentList.Add($Argument)
+    # A `gh` that resolves to a `.cmd`/`.bat` shim -- Scoop and npm publish those,
+    # and the Windows Conformance harness is one -- is started through `cmd.exe`,
+    # which re-parses the command line *after* .NET has escaped it. .NET quotes
+    # only arguments holding whitespace or a quote, so the bare `&` in a paginated
+    # `gh api ...?state=all&per_page=100&page=1` arrives at cmd as a command
+    # separator: the request is truncated at the first `&` and the rest is run as
+    # commands. Quoting each argument for that second parse makes cmd read the one
+    # literal argument every other platform already receives.
+    $Extension = [IO.Path]::GetExtension($GitHubCommand.Source)
+    if ($Extension.ToLowerInvariant() -in @(".cmd", ".bat")) {
+        $StartInfo.Arguments = (
+            $Arguments | ForEach-Object { '"' + ($_ -replace '"', '""') + '"' }
+        ) -join " "
+    }
+    else {
+        foreach ($Argument in $Arguments) {
+            $StartInfo.ArgumentList.Add($Argument)
+        }
     }
 
     $Process = $null

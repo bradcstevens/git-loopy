@@ -107,12 +107,14 @@ fn render_mode_draws_to_the_terminal_and_exits_at_end_of_input() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("the binary target is built alongside this test");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin is piped")
-        .write_all(fixture_trace().as_bytes())
-        .expect("the trace is written");
+    {
+        // Where there is no controlling terminal -- CI, a detached session --
+        // the helper exits before it reads any of this, so the write loses its
+        // reader. That outcome is what the assertions below are *for*; failing
+        // the write instead would hide it behind a broken pipe.
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let _ = stdin.write_all(fixture_trace().as_bytes());
+    }
 
     let output = child.wait_with_output().expect("the helper terminates");
     let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
