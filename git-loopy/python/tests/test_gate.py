@@ -18,12 +18,17 @@ Two layers are exercised here:
 from __future__ import annotations
 
 import os
+import shlex
+import signal
+import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
 
 import pytest
 
+from git_loopy import gate
 from git_loopy.gate import (
     DEFAULT_GATE_TIMEOUT_SECONDS,
     GATE_TIMEOUT_ENV_VAR,
@@ -293,11 +298,106 @@ def test_timeout_reaps_the_whole_process_tree(tmp_path: Path) -> None:
     assert elapsed < 4
 
 
+@requires_posix
+def test_a_drain_that_cannot_finish_still_releases_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A descendant that escapes the group kill must not leak a zombie or its pipes.
+
+    The group kill reaps the whole tree in the ordinary case, so the post-kill
+    drain finishes and ``communicate`` closes the pipes and reaps the shell for
+    us. A descendant that put *itself* in a new session escapes that kill, keeps
+    the pipes open, and the drain then expires — at which point the runner has to
+    do both jobs itself. Integration runs this gate after every Lane merge for the
+    whole life of one long Run, so leaking a zombie and two descriptors per
+    timed-out loop is unbounded growth in exactly the unattended path the bound
+    exists to protect.
+    """
+    escaped = (
+        f"{shlex.quote(sys.executable)} -c "
+        f"{shlex.quote('import os, time; os.setsid(); time.sleep(30)')} & sleep 30"
+    )
+    _write_agents(tmp_path, [("Hang", escaped)])
+    monkeypatch.setattr(gate, "_DRAIN_GRACE_SECONDS", 0.5)
+
+    spawned: list[subprocess.Popen[str]] = []
+    real_popen = subprocess.Popen
+
+    def _recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(gate.subprocess, "Popen", _recording_popen)
+
+    result = AgentsMdGateRunner(timeout_seconds=0.5).run(tmp_path)
+    assert result.failure is not None and result.failure.timed_out is True
+
+    assert len(spawned) == 1, "the gate spawned something other than the one loop"
+    process = spawned[0]
+    assert process.returncode is not None, "the killed loop was never reaped"
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
+
+
 def test_runner_refuses_a_non_positive_bound() -> None:
     """There is no value meaning "unbounded" — that is the whole point (#374)."""
     for bad in (0, -1, -0.5):
         with pytest.raises(ValueError):
             AgentsMdGateRunner(timeout_seconds=bad)
+
+
+def test_runner_refuses_an_infinite_bound() -> None:
+    """``inf`` *is* a value meaning "unbounded", so it is refused like the rest.
+
+    It also cannot be honoured even if it were wanted: ``communicate(timeout=inf)``
+    raises :exc:`OverflowError`, which is not a :exc:`~git_loopy.gate.GateError`,
+    so it would escape Integration's red-gate handling entirely and take the Run
+    down while leaving the loop running.
+    """
+    for unbounded in (float("inf"), float("nan"), float("-inf")):
+        with pytest.raises(ValueError):
+            AgentsMdGateRunner(timeout_seconds=unbounded)
+
+
+@requires_posix
+def test_an_interrupted_gate_does_not_orphan_the_loop_it_was_waiting_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling a Run must not leave a loop writing into the Integration worktree.
+
+    The bound handles the loop that hangs; this is the loop that was behaving
+    perfectly well when the *operator* stopped. Without cleanup on the way out,
+    the gate's child survives the interrupt still holding — and still mutating —
+    the private Integration stage the runner is about to reap.
+    """
+    _write_agents(tmp_path, [("Hang", "sleep 30")])
+
+    spawned: list[subprocess.Popen[str]] = []
+    real_popen = subprocess.Popen
+
+    def _interrupting_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(process)
+        original = process.communicate
+
+        def _interrupt_once(*a: object, **k: object) -> tuple[str, str]:
+            process.communicate = original  # type: ignore[method-assign]
+            raise KeyboardInterrupt
+
+        process.communicate = _interrupt_once  # type: ignore[method-assign]
+        return process
+
+    monkeypatch.setattr(gate.subprocess, "Popen", _interrupting_popen)
+
+    with pytest.raises(KeyboardInterrupt):
+        AgentsMdGateRunner(timeout_seconds=30).run(tmp_path)
+
+    assert len(spawned) == 1
+    process = spawned[0]
+    assert process.returncode == -signal.SIGKILL, "the loop outlived the interrupt"
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
 
 
 def test_gate_timeout_resolves_from_the_environment() -> None:
@@ -308,6 +408,15 @@ def test_gate_timeout_resolves_from_the_environment() -> None:
     for stray in ("", "   ", "abc", "0", "-30"):
         assert (
             resolve_gate_timeout_seconds({GATE_TIMEOUT_ENV_VAR: stray})
+            == DEFAULT_GATE_TIMEOUT_SECONDS
+        )
+
+
+def test_gate_timeout_env_var_cannot_spell_unbounded() -> None:
+    """``float`` parses these; none of them may reach the runner as a bound."""
+    for unbounded in ("inf", "Infinity", "-inf", "nan", "1e400"):
+        assert (
+            resolve_gate_timeout_seconds({GATE_TIMEOUT_ENV_VAR: unbounded})
             == DEFAULT_GATE_TIMEOUT_SECONDS
         )
 

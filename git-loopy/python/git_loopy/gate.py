@@ -58,11 +58,17 @@ Design notes:
   Exceeding it is a red gate naming that loop, reported as a *timeout* rather than
   collapsed into a non-zero exit. The kill goes to the loop's whole **process group**:
   the command is a shell whose children hold the same pipes, so killing only the shell
-  leaves those pipes open and the "bounded" run hangs anyway.
+  leaves those pipes open and the "bounded" run hangs anyway. A descendant that put
+  *itself* in a new session escapes even that, so the post-kill drain is itself bounded
+  and the runner then closes the pipes and reaps the child by hand — the bound has to
+  bound the loop's *resources* too, or one Run leaks a zombie per timed-out loop. The
+  same teardown runs when the gate is **interrupted**: a cancelled Run must not orphan
+  a loop that is still writing into the private Integration stage it is about to reap.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import signal
@@ -344,10 +350,12 @@ def resolve_gate_timeout_seconds(env: Mapping[str, str]) -> float:
     """Resolve the per-loop wall-clock bound from the environment.
 
     ``GIT_LOOPY_GATE_TIMEOUT_SECONDS`` > :data:`DEFAULT_GATE_TIMEOUT_SECONDS`.
-    A malformed or non-positive value falls through to the default rather than
-    aborting, matching ``_resolve_send_timeout_seconds``'s leniency — a stray
-    value must not stop a Run from gating, and it can never *widen* the bound to
-    "unbounded", because no value means that.
+    A malformed, non-positive or non-finite value falls through to the default
+    rather than aborting, matching ``_resolve_send_timeout_seconds``'s leniency —
+    a stray value must not stop a Run from gating, and it can never *widen* the
+    bound to "unbounded", because no value means that. ``inf`` is refused for
+    that reason and not as a formality: ``float`` parses it, it satisfies
+    ``> 0``, and it is precisely a request for no bound at all.
     """
     raw = env.get(GATE_TIMEOUT_ENV_VAR)
     if raw is None or not raw.strip():
@@ -356,7 +364,9 @@ def resolve_gate_timeout_seconds(env: Mapping[str, str]) -> float:
         value = float(raw)
     except ValueError:
         return DEFAULT_GATE_TIMEOUT_SECONDS
-    return value if value > 0 else DEFAULT_GATE_TIMEOUT_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_GATE_TIMEOUT_SECONDS
+    return value
 
 
 @dataclass(frozen=True)
@@ -389,6 +399,41 @@ def _kill_process_group(process: subprocess.Popen[str]) -> None:
         pass
 
 
+def _release_after_failed_drain(process: subprocess.Popen[str]) -> None:
+    """Close our pipe ends and reap a killed loop whose drain never finished.
+
+    ``communicate`` normally does both jobs, but it only returns once the pipes
+    reach EOF — and a descendant that put itself in a *new session* escapes the
+    group kill, holds the write ends open, and keeps that from ever happening.
+    Giving up on the output must not mean giving up on the process: **Integration**
+    runs this gate after every Lane merge for the whole life of one Run, so a
+    leaked zombie and two leaked descriptors per timed-out loop grow without bound
+    in exactly the unattended path the bound exists to protect.
+    """
+    for pipe in (process.stdout, process.stderr):
+        if pipe is not None:
+            try:
+                pipe.close()
+            except OSError:
+                pass
+    try:
+        # The direct child already took SIGKILL, so this reaps rather than waits.
+        process.wait(timeout=_DRAIN_GRACE_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
+def _kill_and_release(process: subprocess.Popen[str]) -> str:
+    """Kill a loop's whole tree and settle it, returning whatever it had emitted."""
+    _kill_process_group(process)
+    try:
+        stdout, stderr = process.communicate(timeout=_DRAIN_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        _release_after_failed_drain(process)
+        return ""
+    return (stdout or "") + (stderr or "")
+
+
 def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Completed:
     """Run one loop command with ``cwd`` set to ``cwd``, bounded by wall clock."""
     process = subprocess.Popen(
@@ -405,16 +450,18 @@ def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Complet
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        _kill_process_group(process)
-        try:
-            stdout, stderr = process.communicate(timeout=_DRAIN_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            stdout, stderr = "", ""
         return _Completed(
             returncode=None,
-            output=(stdout or "") + (stderr or ""),
+            output=_kill_and_release(process),
             timed_out=True,
         )
+    except BaseException:
+        # Cancellation (Ctrl-C, a cancelled Run) or any other error on the way
+        # out. The loop is a live process inside the private Integration stage
+        # the runner is about to reap, so it has to die with us rather than be
+        # orphaned still writing into a worktree nobody owns any more.
+        _kill_and_release(process)
+        raise
     return _Completed(
         returncode=process.returncode,
         output=(stdout or "") + (stderr or ""),
@@ -440,8 +487,11 @@ class AgentsMdGateRunner:
         output_tail_limit: int = _OUTPUT_TAIL_LIMIT,
         timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
     ) -> None:
-        if timeout_seconds <= 0:
-            raise ValueError(f"timeout_seconds must be > 0, got {timeout_seconds}")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError(
+                f"timeout_seconds must be a positive finite number, "
+                f"got {timeout_seconds}"
+            )
         self._agents_filename = agents_filename
         self._output_tail_limit = output_tail_limit
         self._timeout_seconds = float(timeout_seconds)

@@ -181,7 +181,8 @@ worth knowing before you fill it in:
   on a socket, a prompt or a lock cannot block Integration forever. A loop that
   exceeds its bound is a red gate naming that loop, reported as a *timeout* rather
   than as a test failure. Set `GIT_LOOPY_GATE_TIMEOUT_SECONDS` when your slowest
-  honest loop needs more room — there is no value meaning "unbounded".
+  honest loop needs more room — there is no value meaning "unbounded", and `inf` is
+  refused along with the rest.
 
 git-loopy's own [`AGENTS.md`](../AGENTS.md) is the worked example: it declares one
 row per Runner-family member, ordered cheapest-first so a fail-fast gate reports the
