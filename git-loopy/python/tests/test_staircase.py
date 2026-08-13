@@ -16,11 +16,20 @@ construction.
 
 from __future__ import annotations
 
+import ast
+import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from git_loopy import staircase as staircase_module
+from git_loopy.model_listing import LiveModelListing
 from git_loopy.rate_card import ModelPrices, ModelRate, RateCard
-from git_loopy.staircase import StaircaseRefusal, build_price_staircase
+from git_loopy.staircase import (
+    StaircaseRefusal,
+    build_price_staircase,
+    resolve_price_staircase,
+)
 
 
 @dataclass
@@ -29,6 +38,7 @@ class _FakeModel:
 
     id: str
     supported_reasoning_efforts: Sequence[str] = field(default_factory=tuple)
+    billing: Any = None
 
 
 def _roster(declared: Mapping[str, Sequence[str]]) -> list[_FakeModel]:
@@ -210,3 +220,222 @@ def test_an_empty_roster_refuses_rather_than_answering_an_empty_walk() -> None:
     assert staircase.refusal is StaircaseRefusal.EMPTY_ROSTER
     assert not staircase.available
     assert "no models" in staircase.reason()
+
+
+def test_two_models_at_one_price_break_the_tie_on_model_identifier() -> None:
+    """One roster yields one staircase, whatever order the listing answered in.
+
+    A Rate card prices plenty of models identically, so ties are ordinary rather
+    than exotic — and an ordering that inherits the listing's order for them is
+    an ordering the harness can permute between two Calibrations, which would
+    make a re-measurement of the same roster walk a different staircase.
+    """
+    declared = {"synth-beta-1": ("low", "high"), "synth-alpha-1": ("low", "high")}
+    prices = {"synth-alpha-1": 1.0, "synth-beta-1": 1.0}
+
+    staircase = build_price_staircase(_roster(declared), _card(prices))
+    permuted = build_price_staircase(
+        _roster(dict(reversed(list(declared.items())))), _card(prices)
+    )
+
+    assert _pairs(staircase) == [
+        ("synth-alpha-1", "low"),
+        ("synth-alpha-1", "high"),
+        ("synth-beta-1", "low"),
+        ("synth-beta-1", "high"),
+    ]
+    assert _pairs(permuted) == _pairs(staircase)
+
+
+# ---------------------------------------------------------------------------
+# No prior enters (#363, ADR-0027)
+# ---------------------------------------------------------------------------
+
+
+def test_the_recommended_routing_prior_does_not_move_a_single_rung() -> None:
+    """A hardcoded human guess is not a starting position (ADR-0027).
+
+    ``RECOMMENDED_ROUTING`` is a *seeding* core for a fresh Config, not a
+    reading of anything, and a search seeded from it starts where somebody
+    guessed and never escapes it. So its pairs are held to the Rate card like
+    every other pair: priced dearly, every one of them sits **above** a cheap
+    model nobody recommended, and the walk starts at the rung the billing data
+    put at the bottom.
+    """
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    recommended = {model: (effort,) for model, effort in RECOMMENDED_ROUTING.values()}
+    staircase = build_price_staircase(
+        _roster({"synth-thrifty-1": (), **recommended}),
+        _card({"synth-thrifty-1": 0.1, **{model: 9.0 for model in recommended}}),
+    )
+
+    walked = _pairs(staircase)
+    assert walked[0] == ("synth-thrifty-1", None)
+    assert {model for model, _ in walked[1:]} == set(recommended)
+
+
+def test_the_staircase_module_never_reaches_for_the_prior() -> None:
+    """Structural, because "influenced by" is not something a case can exhaust.
+
+    The behavioural pin above shows the prior does not reorder *that* roster.
+    Only the import guard shows it cannot reorder any of them — and it is the
+    guard that survives the next reader who reaches for a familiar table.
+    Held in the same terms as the kit's other purity guards (ADR-0001): stdlib
+    plus the two first-party modules the projection actually reads.
+    """
+    source = Path(staircase_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    allow = {
+        "__future__",
+        "dataclasses",
+        "enum",
+        "typing",
+        "git_loopy.config",
+        "git_loopy.model_listing",
+        "git_loopy.rate_card",
+    }
+    seen: set[str] = set()
+    imported_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                seen.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0, "staircase.py must use absolute imports only"
+            assert node.module is not None, "from-import with no module name"
+            seen.add(node.module)
+            imported_names.update(alias.name for alias in node.names)
+    leaked = seen - allow
+    assert not leaked, f"staircase.py imports non-allowlisted modules: {leaked}"
+    assert "RECOMMENDED_ROUTING" not in imported_names
+    assert "copilot" not in seen, "the staircase must not import the SDK"
+
+
+# ---------------------------------------------------------------------------
+# resolve_price_staircase: the roster and the card are one live reading (#331)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeBilling:
+    multiplier: float | None = None
+    token_prices: Any = None
+
+
+@dataclass
+class _FakePrices:
+    batch_size: int = 1_000_000
+    input_price: float = 1.0
+
+
+def _billed(model: str, multiplier: float, efforts: Sequence[str]) -> _FakeModel:
+    """A listing entry carrying both readings: advertised efforts and a price."""
+    return _FakeModel(
+        id=model,
+        supported_reasoning_efforts=tuple(efforts),
+        billing=_FakeBilling(multiplier=multiplier, token_prices=_FakePrices()),
+    )
+
+
+def _listing_of(models: Sequence[_FakeModel]) -> Any:
+    """An async fetch answering one fixed listing."""
+
+    async def _fetch() -> Sequence[_FakeModel]:
+        return models
+
+    return _fetch
+
+
+def test_the_staircase_is_read_off_the_runs_own_live_listing() -> None:
+    """The roster and the Rate card are two readings of **one** ``models.list``.
+
+    ADR-0019 makes the live roster the authority — a packaged fixture cannot be
+    correct under an operator-relocated harness — and ADR-0026's card must be
+    read off the same answer, because a staircase whose order came from a later
+    listing than its rungs is ordered by prices that never applied to them. The
+    shared :class:`~git_loopy.model_listing.LiveModelListing` is what makes that
+    one reading rather than two, at the cost of one fetch.
+    """
+    fetches: list[None] = []
+
+    async def _fetch() -> list[_FakeModel]:
+        fetches.append(None)
+        return [
+            _billed("synth-dear-1", 4.0, ("low", "high")),
+            _billed("synth-thrifty-1", 0.1, ()),
+        ]
+
+    listing = LiveModelListing(fetch=_fetch)
+    warnings: list[str] = []
+
+    staircase = asyncio.run(resolve_price_staircase(listing, warn=warnings.append))
+
+    assert _pairs(staircase) == [
+        ("synth-thrifty-1", None),
+        ("synth-dear-1", "low"),
+        ("synth-dear-1", "high"),
+    ]
+    assert fetches == [None]
+    assert warnings == []
+
+
+def test_an_unreadable_listing_refuses_the_walk_and_reports_the_outage_once() -> None:
+    """Offline is not an empty roster, and one outage is one warning.
+
+    A listing that never answered and a listing that answered with nothing are
+    different facts an operator acts on differently — retry versus a harness
+    that offers no model — so they are different refusals. The single warning
+    is the Rate card's own, in the voice the kit already uses for this fetch;
+    a second sentence would report one failure twice.
+    """
+
+    async def _explode() -> list[_FakeModel]:
+        raise RuntimeError("unauthenticated")
+
+    listing = LiveModelListing(fetch=_explode)
+    warnings: list[str] = []
+
+    staircase = asyncio.run(resolve_price_staircase(listing, warn=warnings.append))
+
+    assert staircase.refusal is StaircaseRefusal.UNREADABLE_ROSTER
+    assert staircase.candidates == ()
+    assert len(warnings) == 1
+    assert "could not load the live model list" in warnings[0]
+    assert "could not be read" in staircase.reason()
+
+
+def test_a_listing_that_prices_nothing_refuses_on_the_cards_own_terms() -> None:
+    """An absent card costs a **Calibration**, where it costs a Run nothing.
+
+    ADR-0026 lets a Run proceed without a card because nothing is derived from
+    it. A staircase *is* derived from it, so the same absence that a Run merely
+    records is the thing that stops a Calibration — and it must say so as a
+    missing Rate card rather than as a missing roster, which is present here.
+    """
+    listing = LiveModelListing(
+        fetch=_listing_of([_FakeModel(id="synth-solo-1", supported_reasoning_efforts=("low",))])
+    )
+    warnings: list[str] = []
+
+    staircase = asyncio.run(resolve_price_staircase(listing, warn=warnings.append))
+
+    assert staircase.refusal is StaircaseRefusal.NO_RATE_CARD
+    assert "Rate card" in staircase.reason()
+    assert warnings and "carries no prices" in warnings[0]
+
+
+def test_a_listing_that_offers_nothing_is_an_empty_roster_not_an_absent_card() -> None:
+    """The roster is diagnosed before the card, because it is the prior fact.
+
+    A listing offering no model prices nothing either, so both refusals are
+    true of it — and only one is useful. "No candidate pair exists" is what the
+    operator has to act on; "no Rate card" would send them looking for a
+    pricing problem behind a harness that offered them no model at all.
+    """
+    listing = LiveModelListing(fetch=_listing_of([]))
+
+    staircase = asyncio.run(resolve_price_staircase(listing, warn=lambda _: None))
+
+    assert staircase.refusal is StaircaseRefusal.EMPTY_ROSTER
+

@@ -15,11 +15,15 @@ order.
 
 Design notes:
 
-* **Pure.** Stdlib plus :mod:`git_loopy.config` and :mod:`git_loopy.rate_card`;
-  no SDK import, no I/O, no network. The listing's ``ModelInfo`` objects are
-  consumed by **duck typing** exactly as :mod:`git_loopy.rate_card` and
-  :mod:`git_loopy.interactive.models` consume them, so the whole projection is
-  testable offline against a roster a test declares for itself.
+* **Pure projection, injected reading.** :func:`build_price_staircase` is the
+  whole of the behaviour and is pure: no SDK import, no I/O, no network. The
+  listing's ``ModelInfo`` objects are consumed by **duck typing** exactly as
+  :mod:`git_loopy.rate_card` and :mod:`git_loopy.interactive.models` consume
+  them, so the projection is testable offline against a roster a test declares
+  for itself. :func:`resolve_price_staircase` is the thin seam above it that
+  takes both readings off the Run's one shared
+  :class:`~git_loopy.model_listing.LiveModelListing`, so "live roster, never a
+  packaged fixture" is structural rather than a caller's discipline.
 * **No prior enters.** The staircase is not seeded from, reordered by, or
   otherwise influenced by ``RECOMMENDED_ROUTING``. A hardcoded human guess as a
   starting position biases where the search lands and is never escaped — the
@@ -34,20 +38,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     gate_reasoning_effort,
 )
-from git_loopy.rate_card import RateCard
+from git_loopy.model_listing import LiveModelListing
+from git_loopy.rate_card import RateCard, resolve_rate_card
 
 __all__ = [
     "Candidate",
     "StaircaseRefusal",
     "PriceStaircase",
     "build_price_staircase",
+    "resolve_price_staircase",
 ]
 
 
@@ -68,6 +74,10 @@ class StaircaseRefusal(Enum):
     #: The card resolved but publishes no premium multiplier for some model the
     #: roster offers, so any ordering over those pairs would be invented.
     UNPRICED_MODELS = "unpriced_models"
+    #: The live listing could not be read at all — offline, unauthenticated, or
+    #: a harness that did not answer. Distinct from an empty roster, which is a
+    #: listing that answered and offered nothing.
+    UNREADABLE_ROSTER = "unreadable_roster"
 
 
 @dataclass(frozen=True)
@@ -144,6 +154,12 @@ class PriceStaircase:
                 "pairs is measured billing data; a Calibration walks the price "
                 "staircase cheapest-first and will not invent an order to walk"
             )
+        if self.refusal is StaircaseRefusal.UNREADABLE_ROSTER:
+            return (
+                "the live model listing could not be read, so neither the "
+                "candidate pairs nor their prices are known; a Calibration "
+                "walks the roster the harness will actually be spawned against"
+            )
         return (
             "the Rate card publishes no premium multiplier for "
             f"{list(self.unpriced_models)}, so those pairs cannot be placed; a "
@@ -190,6 +206,40 @@ def build_price_staircase(
     ]
     candidates.sort(key=_expected_spend)
     return PriceStaircase(candidates=tuple(candidates))
+
+
+async def resolve_price_staircase(
+    listing: LiveModelListing, *, warn: Callable[[str], None]
+) -> PriceStaircase:
+    """Resolve the staircase from the **Run**'s one live model listing.
+
+    The seam that makes ADR-0019's "live roster, never a packaged fixture" a
+    structural fact rather than a caller's discipline: both readings the
+    staircase needs come off the single shared
+    :class:`~git_loopy.model_listing.LiveModelListing`, so no caller can order
+    one listing's rungs by another listing's prices.
+
+    Args:
+        listing: The shared live model listing, fetched at most once and held
+            fixed for the Run. Read twice here — once through
+            :func:`~git_loopy.rate_card.resolve_rate_card` and once for the
+            roster — which costs one fetch, not two.
+        warn: Non-fatal warning sink, passed through to the card's resolution so
+            an unreadable listing is reported in the one voice the kit already
+            uses for it.
+
+    Returns:
+        The ordered staircase, or a refusal naming why no ordering is measured
+        data. Never a partial one.
+    """
+    card = await resolve_rate_card(listing, warn=warn)
+    try:
+        models = await listing.models()
+    except Exception:
+        # The card's resolution has already warned about this same failure and
+        # said what it costs; a second sentence would report one outage twice.
+        return PriceStaircase(refusal=StaircaseRefusal.UNREADABLE_ROSTER)
+    return build_price_staircase(models, card)
 
 
 def _offering(models: Sequence[Any], identifier: str) -> Any:
