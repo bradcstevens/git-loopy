@@ -54,6 +54,7 @@ from git_loopy.config import (
     TASK_TYPE_LABEL_PREFIX,
     TaskTypeError,
     gate_reasoning_effort,
+    task_type_refusal,
     validate_task_type_key,
 )
 
@@ -343,7 +344,15 @@ def run_set(
 # ---------------------------------------------------------------------------
 
 
-def _routing_key(raw: str) -> str:
+def _routing_key(raw: str, *, closed: bool = True) -> str:
+    """Normalize one routing type, refusing anything outside the taxonomy.
+
+    ``closed=False`` is for **removal only**. The taxonomy is a rule about what
+    may be written, and an operator deleting a key that predates the closure is
+    complying with it, not breaking it — so ``routing unset`` accepts a key the
+    rest of the surface refuses. The syntactic checks still apply: an empty or
+    malformed type is a typo whichever operation asked for it.
+    """
     key = raw.strip()
     if key.startswith("task-type:"):
         key = key.removeprefix("task-type:")
@@ -353,6 +362,8 @@ def _routing_key(raw: str) -> str:
         raise ConfigCommandError(
             "routing type must contain only letters, numbers, hyphens, or underscores"
         )
+    if not closed:
+        return key
     try:
         return validate_task_type_key(key)
     except TaskTypeError as exc:
@@ -380,12 +391,24 @@ def _validated_route(model: str, effort: str) -> tuple[str, str]:
 
 
 def _writable_routing(
-    table: Mapping[str, object], *, scope: str
+    table: Mapping[str, object], *, scope: str, closed: bool = True
 ) -> dict[str, dict[str, str]]:
-    return {
-        _routing_key(key): {"model": model, "effort": effort}
-        for key, (model, effort) in settings.table_routing(table, scope=scope).items()
-    }
+    """Re-render a persisted ``[routing]`` table as a writable map.
+
+    Every key here comes off disk rather than off the command line, so an
+    out-of-taxonomy one is reported through :func:`_taxonomy_refusal` — naming
+    the key *and* the remedy, since it is rarely the key the operator typed.
+    """
+    routing: dict[str, dict[str, str]] = {}
+    for key, (model, effort) in settings.table_routing(table, scope=scope).items():
+        normalized = _routing_key(key, closed=False)
+        if closed:
+            try:
+                validate_task_type_key(normalized)
+            except TaskTypeError as exc:
+                raise ConfigCommandError(task_type_refusal(exc)) from None
+        routing[normalized] = {"model": model, "effort": effort}
+    return routing
 
 
 def run_routing_set(
@@ -429,13 +452,21 @@ def run_routing_unset(
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
 ) -> int:
-    """Remove exactly one task-type route from the chosen Config scope."""
+    """Remove exactly one task-type route from the chosen Config scope.
+
+    The one routing op open to a key outside the closed taxonomy, because it is
+    the remedy every other surface's refusal names (#375): a Config carrying a
+    pre-closure key is refused by ``routing set`` and by every read surface, so
+    if removal were refused too the only way to comply would be hand-edited
+    TOML. Sibling entries are rewritten untouched, valid or not — this op was
+    asked to remove one key, not to launder the file.
+    """
     try:
-        key = _routing_key(task_type)
+        key = _routing_key(task_type, closed=False)
         resolved_scope = _resolve_scope(scope, repo_root)
         path = _scope_config_path(resolved_scope, repo_root, env)
         table = dict(settings.load_config_table(path))
-        routing = _writable_routing(table, scope=resolved_scope)
+        routing = _writable_routing(table, scope=resolved_scope, closed=False)
         routing.pop(key, None)
         if routing:
             table["routing"] = routing
@@ -472,6 +503,9 @@ def run_routing_list(
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
+        return 1
+    except TaskTypeError as exc:
+        err(f"git-loopy: error: {task_type_refusal(exc)}")
         return 1
     suppressed_by = resolved.routing_suppressed_by
     if suppressed_by is not None:
@@ -782,6 +816,9 @@ def run_get(
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
+    except TaskTypeError as exc:
+        err(f"git-loopy: error: {task_type_refusal(exc)}")
+        return 1
     if task_type is not None:
         value, tier = _routing_report(resolved, task_type)
         out(f"{value} ({tier})")
@@ -820,6 +857,9 @@ def run_list(
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
+        return 1
+    except TaskTypeError as exc:
+        err(f"git-loopy: error: {task_type_refusal(exc)}")
         return 1
     for name in SETTABLE_KEYS:
         out(f"{name} = {_display_value(_KEYS[name].read(resolved))}")

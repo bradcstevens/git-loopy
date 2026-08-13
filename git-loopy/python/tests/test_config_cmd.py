@@ -1190,3 +1190,122 @@ def test_get_refuses_a_task_type_outside_the_closed_taxonomy(
     assert "migrations" in err.text
     for key in RECOMMENDED_ROUTING:
         assert key in err.text
+
+
+# ---------------------------------------------------------------------------
+# A persisted Task type outside the closed taxonomy (#375)
+# ---------------------------------------------------------------------------
+#
+# Closing the taxonomy refuses an out-of-taxonomy key at every *write* seam, but
+# a repository configured before the closure already carries one on disk. The
+# refusal an operator meets there has to be a refusal — a named reason on the
+# error channel and a non-zero status — rather than a traceback out of the
+# resolver, and it has to leave them a way back: a taxonomy that can only be
+# complied with by hand-editing TOML is not closed, it is stuck.
+
+
+def _legacy_routing_config(tmp_path: Path, key: str = "custom") -> Path:
+    """Write a project Config carrying one routing key outside the taxonomy."""
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(
+        path, {"routing": {key: {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["list", "routing_list", "get"],
+    ids=["config-list", "config-routing-list", "config-get"],
+)
+def test_a_read_surface_refuses_a_persisted_task_type_it_cannot_route(
+    tmp_path: Path, operation: str
+) -> None:
+    """Reading a Config carrying a legacy key refuses; it never raises."""
+    _legacy_routing_config(tmp_path)
+    err = _Sink()
+    kwargs = dict(repo_root=tmp_path, env=_env(tmp_path), out=_Sink(), err=err)
+
+    if operation == "list":
+        rc = configcmd.run_list(**kwargs)
+    elif operation == "routing_list":
+        rc = configcmd.run_routing_list(**kwargs)
+    else:
+        rc = configcmd.run_get("task-type:docs", **kwargs)
+
+    assert rc == 1
+    assert "custom" in err.text
+    for key in RECOMMENDED_ROUTING:
+        assert key in err.text
+
+
+def test_the_refusal_names_the_command_that_clears_the_offending_key(
+    tmp_path: Path,
+) -> None:
+    """A refusal an operator cannot act on is a lockout, so it names the remedy."""
+    _legacy_routing_config(tmp_path)
+    err = _Sink()
+
+    rc = configcmd.run_routing_list(
+        repo_root=tmp_path, env=_env(tmp_path), out=_Sink(), err=err
+    )
+
+    assert rc == 1
+    assert "config routing unset custom" in err.text
+
+
+def test_routing_unset_clears_a_key_outside_the_taxonomy(tmp_path: Path) -> None:
+    """Removal is how an operator complies, so it is the one op the closure allows.
+
+    Refusing a key is a rule about what may be *written*; deleting one already
+    on disk is the operator agreeing with the rule. Refusing that too would make
+    the taxonomy uncloseable in practice — hand-edited TOML would be the only
+    way to comply with it.
+    """
+    path = _legacy_routing_config(tmp_path)
+    out, err = _Sink(), _Sink()
+
+    rc = configcmd.run_routing_unset(
+        "custom", scope="project", repo_root=tmp_path, env=_env(tmp_path),
+        out=out, err=err,
+    )
+
+    assert rc == 0, err.text
+    assert "custom" not in path.read_text(encoding="utf-8")
+
+
+def test_routing_unset_leaves_the_taxonomy_closed_to_writes(tmp_path: Path) -> None:
+    """``set`` still refuses an out-of-taxonomy key; only removal is permitted."""
+    err = _Sink()
+
+    rc = configcmd.run_routing_set(
+        "custom", "gpt-5.4", "high", scope="project", repo_root=tmp_path,
+        env=_env(tmp_path), out=_Sink(), err=err,
+    )
+
+    assert rc == 1
+    assert "custom" in err.text
+    assert not settings.project_config_path(tmp_path).exists()
+
+
+def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
+    tmp_path: Path,
+) -> None:
+    """Setting a *valid* route is refused by a legacy sibling, so the error says which.
+
+    The operator typed ``docs``; the key the closure objects to is ``custom``,
+    already on disk. An error naming only "unsupported task type 'custom'" reads
+    as the tool rejecting what was just typed, so the refusal has to say the key
+    came from the Config and how to clear it.
+    """
+    path = _legacy_routing_config(tmp_path)
+    err = _Sink()
+
+    rc = configcmd.run_routing_set(
+        "docs", "gpt-5.4", "high", scope="project", repo_root=tmp_path,
+        env=_env(tmp_path), out=_Sink(), err=err,
+    )
+
+    assert rc == 1
+    assert "config routing unset custom" in err.text
+    assert "custom" in path.read_text(encoding="utf-8")  # refused, not laundered
