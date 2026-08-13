@@ -7,11 +7,19 @@ import re
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any, Mapping
+from decimal import Decimal
+from typing import Any, Mapping, Sequence
 
 import pytest
 from rich.console import Console
 
+from git_loopy.calibration_search import (
+    PROMOTION_TRIALS,
+    SearchBudget,
+    SearchStop,
+    TrialResult,
+    search_price_staircase,
+)
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
@@ -30,6 +38,8 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
+from git_loopy.measured_routing import ProvingTask
+from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy.rollup import IterationRollupAccumulator
@@ -2860,3 +2870,168 @@ def test_routing_refusal_fixture(case: dict[str, Any]) -> None:
     for key in _TASK_TYPE_TAXONOMY:
         assert key in message
     assert warnings == []
+
+
+_CALIBRATION_SEARCH = _load_fixture("calibration-search.json")
+
+
+class _FixtureTrialRunner:
+    """A **Trial runner** answering from a fixture case's per-rung script.
+
+    The only fake the search needs, because everything expensive sits behind the
+    :class:`~git_loopy.calibration_search.TrialRunner` seam. A script entry of
+    ``{"interrupt": true}`` raises instead of answering, which is how a fixture
+    expresses an operator's Ctrl-C without a clock or a signal.
+    """
+
+    def __init__(self, script: Sequence[Sequence[Mapping[str, Any]]]) -> None:
+        self._script = [list(rung) for rung in script]
+        self._order: list[tuple[str, str | None]] = []
+        self.trials_run: list[int] = [0] * len(script)
+
+    def index_staircase(self, candidates: Sequence[Candidate]) -> None:
+        self._order = [(rung.model, rung.effort) for rung in candidates]
+
+    def run(self, candidate: Candidate, task: ProvingTask) -> TrialResult:
+        rung = self._order.index((candidate.model, candidate.effort))
+        scripted = self._script[rung][self.trials_run[rung]]
+        self.trials_run[rung] += 1
+        if scripted.get("interrupt"):
+            raise KeyboardInterrupt
+        credits = scripted["credits"]
+        return TrialResult(
+            passed=scripted["passed"],
+            credits=None if credits is None else Decimal(str(credits)),
+            wall_clock_seconds=scripted["wall_clock_seconds"],
+            failure=scripted.get("failure"),
+        )
+
+
+def _search_staircase(case: Mapping[str, Any]) -> tuple[Candidate, ...]:
+    """The case's staircase, priced from the fixture's declared synthetic roster."""
+    roster = _CALIBRATION_SEARCH["roster"]
+    return tuple(
+        Candidate(
+            model=rung["model"],
+            effort=rung["effort"],
+            multiplier=roster[rung["model"]]["multiplier"],
+        )
+        for rung in case["staircase"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _CALIBRATION_SEARCH["cases"],
+    ids=lambda case: case["id"],
+)
+def test_calibration_search_fixture(case: dict[str, Any]) -> None:
+    """The **Calibration** search walks the staircase cheapest-first (#365, ADR-0027).
+
+    Drives the production :func:`~git_loopy.calibration_search.search_price_staircase`
+    over scripted **Trial** results, so the fixture pins the walk a Calibration
+    actually performs — five-of-five unanimity, early rung abandonment, both
+    ceilings and the record a stopped search publishes — rather than a
+    restatement of the rules. Every case names only synthetic models from the
+    fixture's own declared roster (ADR-0019's fixture correction), so a vendor
+    catalogue change cannot invalidate a behavioural test.
+    """
+    candidates = _search_staircase(case)
+    runner = _FixtureTrialRunner(case["trials"])
+    runner.index_staircase(candidates)
+    budget = SearchBudget(
+        credit_ceiling=Decimal(str(case["budget"]["credits"])),
+        wall_clock_ceiling_seconds=case["budget"]["wall_clock_seconds"],
+    )
+
+    result = search_price_staircase(
+        candidates=candidates,
+        proving_set=tuple(
+            ProvingTask(issue=issue, base_commit=f"base{issue}", oracle_commit=f"fix{issue}")
+            for issue in case["proving_set"]
+        ),
+        budget=budget,
+        runner=runner,
+    )
+
+    expected = case["expected"]
+    assert result.stop.value == expected["stop"]
+    if expected["winner"] is None:
+        assert result.winner is None
+    else:
+        assert result.winner is not None
+        assert (result.winner.model, result.winner.effort) == (
+            expected["winner"]["model"],
+            expected["winner"]["effort"],
+        )
+    assert result.stopped_at_rung == expected["stopped_at_rung"]
+    assert result.rungs_available == expected["rungs_available"]
+    assert runner.trials_run == expected["trials_run"]
+    assert [task.issue for task in result.proving_tasks] == expected["proving_tasks"]
+    assert result.credits == (
+        None if expected["credits"] is None else Decimal(str(expected["credits"]))
+    )
+    assert result.wall_clock_seconds == pytest.approx(expected["wall_clock_seconds"])
+    assert [
+        {
+            "model": rung.candidate.model,
+            "effort": rung.candidate.effort,
+            "passed": rung.passed,
+            "total": rung.total,
+            "credits": None if rung.credits is None else float(rung.credits),
+            "wall_clock_seconds": rung.wall_clock_seconds,
+        }
+        for rung in result.rungs
+    ] == expected["rungs"]
+
+
+def test_calibration_search_fixture_declares_the_promotion_rule_it_walks() -> None:
+    """The fixture states five-of-five itself, so a second Orchestrator can read it.
+
+    A member implementing the search from this fixture must know the bar as well
+    as the cases; deriving it by counting the Trials in a winning case would make
+    the rule an accident of the sample rather than the decision it is (ADR-0027).
+    """
+    assert _CALIBRATION_SEARCH["promotion_trials"] == PROMOTION_TRIALS
+
+    unanimous = [
+        case
+        for case in _CALIBRATION_SEARCH["cases"]
+        if case["expected"]["stop"] == "winner"
+    ]
+    assert unanimous, "no case promotes a pair"
+    for case in unanimous:
+        winning = case["expected"]["rungs"][-1]
+        assert winning["passed"] == winning["total"] == PROMOTION_TRIALS, case["id"]
+
+
+def test_calibration_search_fixture_names_no_real_model() -> None:
+    """A behavioural fixture that names a live model is a vendor-timed failure.
+
+    ADR-0019 corrected ``effort-gate.json`` for exactly this; these cases are
+    born correct rather than corrected later, and this pins it.
+    """
+    declared = set(_CALIBRATION_SEARCH["roster"])
+    assert declared and not (declared & set(MODEL_REASONING_EFFORTS))
+    for case in _CALIBRATION_SEARCH["cases"]:
+        for rung in case["staircase"]:
+            assert rung["model"] in declared, case["id"]
+            assert rung["effort"] in _CALIBRATION_SEARCH["roster"][rung["model"]]["efforts"], (
+                case["id"]
+            )
+
+
+def test_calibration_search_fixture_pins_every_way_a_search_can_stop() -> None:
+    """No stop reason ships without a case, and only a winner carries a pair.
+
+    A stop the family gate never exercises is a stop a second Orchestrator can
+    get wrong silently — and *"an incomplete result publishes no winner"* is the
+    one rule that must hold across every one of them, so it is asserted over the
+    whole fixture rather than case by case.
+    """
+    stops = {case["expected"]["stop"] for case in _CALIBRATION_SEARCH["cases"]}
+    assert stops == {stop.value for stop in SearchStop}
+
+    for case in _CALIBRATION_SEARCH["cases"]:
+        if case["expected"]["stop"] != "winner":
+            assert case["expected"]["winner"] is None, case["id"]
