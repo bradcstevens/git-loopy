@@ -750,11 +750,20 @@ governs *which* settings and assets resolve for a run, not which binary runs.
 _Avoid_: local (ambiguous), workspace.
 
 **Task type**:
-The classification an issue carries as a `task-type:<key>` label. Read, never inferred —
-no title, body, or other content may imply it. The taxonomy is open and
-operator-extensible; the shipped keys are a recommended starting point, not a closed set.
-A task type selects a **Routed pair** and nothing else: it does not order or prioritise work.
+The classification an issue carries as a `task-type:<key>` label. Either set by an operator or
+inferred from the issue's own content by the **Task-type classifier** and written back to the
+tracker, where the two are thereafter indistinguishable (ADR-0029). The taxonomy is **closed**:
+only the seven shipped keys may be written, and a classifier proposing any other value is
+refused rather than warned about. A task type selects a **Routed pair** and nothing else: it
+does not order or prioritise work.
 _Avoid_: category, priority, issue kind.
+
+**Task-type classifier**:
+The agent call that reads an unlabelled issue's own content and proposes its **Task type**.
+Runs on its own configured pair — defaulting to the cheapest pair on the live roster, never
+the run-wide default, so the prior it introduces is named rather than implicit. Its spend is
+folded into the run's cost like any other session, and it never ticks a **Strike**.
+_Avoid_: triage, categoriser, router (that is **Routing**).
 
 **Routing**:
 Resolving an issue's **Task type** to the model and reasoning effort its work runs on,
@@ -1173,6 +1182,15 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
 - `task type` was read as implying work order — resolved: a **Task type** selects a
   **Routed pair** only. Scheduling priority is a separate, currently unmodelled axis and
   must not be folded into the `task-type:` label vocabulary.
+- `read, never inferred` and `an open, operator-extensible taxonomy` were both stated of
+  **Task type** — resolved: **both are reversed, and they reverse in opposite directions**
+  (ADR-0029). Inference is now permitted, because a **Proving set** cannot be stratified
+  without it and no `task-type:` label exists on any of the 334 closed issues; the taxonomy is
+  now *closed*, because an unattended classifier that may invent keys writes them permanently
+  into the tracker and silently corrupts those same strata. The invariant that survives is
+  narrower and is the one that was actually load-bearing: **the label is authoritative, and
+  the runner routes on the label rather than on content.** Inference happens once, before the
+  label exists; routing never re-reads the body.
 - `cost` was rendered in dollars, from a hand-authored list-price table git-loopy
   maintained itself, and was described as derived from **Consumption** by multiplying
   tokens by a per-model price — resolved: Cost is the harness's own reported billing,

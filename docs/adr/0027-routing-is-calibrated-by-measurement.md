@@ -47,6 +47,12 @@ self-prefer and to reward verbosity — a bias pointing the same way as the miss
 term. No weighted composite, because the weights would be chosen by the same judgment the
 measurement replaces.
 
+> **Amended: "cleared the gate" is narrower than it first appears.** The whole-repo gate is a
+> bar for *the tree*, not an oracle for *a task*, and a Proving task needs both. Scoring is
+> therefore **fail-to-pass on the replayed fix's own tests**, with the full gate retained as a
+> **pass-to-pass regression guard** so nothing that breaks the tree can win. See *The Trial's
+> oracle is narrower than the gate* below. The lexicographic ordering is unchanged.
+
 The consequence is deliberate and load-bearing: **the gate becomes the definition of
 quality.** A weak gate elects a cheap model that writes bad code that passes. Under this
 decision, strengthening the AGENTS.md table is how routing improves — a far healthier loop
@@ -142,6 +148,50 @@ A Trial contains an agent session, which anywhere else in git-loopy would be an
 the Strike counter, and a Trial must do neither — otherwise a Calibration could strike out
 and end something. A Trial belongs to a **Calibration**; an Iteration belongs to a Run.
 
+### The Trial's oracle is narrower than the gate
+
+*(Added by amendment.)* Three facts make the whole-repo gate unusable as a per-task scorer.
+
+`AgentsMdGateRunner.run(worktree)` reads **`<worktree>/AGENTS.md`** (`gate.py:293-360`), and a
+Proving task's worktree sits at a months-old base commit — so it runs *that commit's*
+feedback-loop table. **This severs the improvement path claimed above:** strengthening today's
+AGENTS.md has no effect on a frozen set replayed at old commits. Refreshing the Proving set,
+not editing the table, is what propagates a stronger gate.
+
+The gate is also fail-fast and whole-repo. A base commit that is red for **any** unrelated
+reason — a flaky test, a since-fixed lint, a toolchain drift — fails *every* pair at *every*
+rung, so the search walks the entire staircase and records "incomplete." Nothing distinguishes
+"this model is too weak" from "this task was never runnable."
+
+And "ships a test change" — the 87% figure above — does not imply that test **fails before the
+fix and passes after**, which is the property that makes a replay mean anything.
+
+So: score on **fail-to-pass over the replayed fix's own tests**; keep the **full gate at the
+base commit as a pass-to-pass regression guard**, so a cheap model that satisfies the fix's
+tests while breaking a neighbouring suite still cannot win; and admit a task to the Proving set
+only after a **mandatory validation pass** replays it with its real historical fix and confirms
+fail-before / pass-after. That admission pass is also the only thing that filters out red base
+commits, and it turns "87% ship test changes" from a hopeful proxy into a verified property of
+every task in the set.
+
+### Calibration only affects Parallel mode
+
+*(Added by amendment.)* `resolve_iteration_model` is called from exactly one place —
+`_run_lane_lifecycle` (`loop.py:2554`) — and **`parallel: 1` is the default, which is serial**
+(`config.py:425-429`). Routing therefore does nothing out of the box, and neither does anything
+built on it.
+
+It is not merely unimplemented in serial but incoherent there: the serial path folds the entire
+pool into a *single* prompt (`loop.py:1125`) and runs it on the run-wide default
+(`loop.py:1153`). One session, many issues, many task types, one model — there is no per-issue
+thing to route, and fixing that would abandon ADR-0008's deliberate promise that serial runs
+*"byte-for-byte unchanged."*
+
+So this is declared a **Parallel-mode feature**: `git-loopy calibrate` refuses or warns when
+`parallel == 1`, and `config get` reports the measured tier as inert in serial. Silence is the
+worst option available — it yields a feature that appears to work, commits evidence, and
+changes nothing.
+
 ### Learning from observational history is rejected outright
 
 The tempting design — mine `.git-loopy/runs/*.json` and rank pairs by how they did — is not
@@ -155,6 +205,13 @@ docstring" and "fix the race in rolling dispatch" — it only hides the confound
 smaller sample.
 
 ### The Proving set needs human labels, and may not infer them
+
+> **Amended and reversed by [ADR-0029](0029-agents-infer-the-task-type.md).** The section below
+> is retained as written because it states the problem correctly; only its *conclusion* is
+> overturned. Agents now infer the Task type — unattended, at Pickup as well as here — and the
+> taxonomy closes to seven keys in exchange. The paragraph beginning "They cannot be backfilled
+> automatically" no longer holds, and the corresponding entry under *Considered options* is
+> likewise reversed. The hand-labelling prerequisite below is **discharged**, not deferred.
 
 Calibration is per task type, and **zero of 328 closed issues carry a `task-type:` label.**
 There is no per-task-type corpus.
@@ -197,19 +254,44 @@ run.
 - **A large `k` for a genuine rate estimate** — rejected. Thousands of sessions, which is
   the arithmetic that killed the exhaustive tournament.
 - **Have an agent label historical issues by task type** — rejected. `CONTEXT.md` forbids
-  inferring a Task type from content.
+  inferring a Task type from content. **Reversed by
+  [ADR-0029](0029-agents-infer-the-task-type.md)**, which reads the invariant as protecting the
+  runtime property (routing reads a label, never content) rather than the act of inference, and
+  pays for the exemption by closing the taxonomy to seven keys.
 
 ## Consequences
 
 - **Routing will pick smaller models than anyone expects.** "Cheapest that clears the bar"
   is a materially different system from "most capable," and the results will look wrong to
   someone who has not read this entry. That is the reason it is written down.
+- **Wall clock, not spend, is the practical limit.** Each Trial runs the full five-loop
+  AGENTS.md gate — `cargo` twice, pytest, and the shell and PowerShell suites. The stop
+  rule in [ADR-0028](0028-measured-routing-is-a-committed-tier.md) is denominated in
+  credits and does not bound this. **Resolved by amendment:** a **wall-clock ceiling** is added
+  alongside the credit ceiling, both landing on ADR-0028's existing *"incomplete — stopped at
+  rung N of M"* path, and Trials run **in parallel across worktrees** reusing ADR-0008's
+  machinery, bounded by an operator concurrency setting. The credit ceiling alone was pointed
+  the wrong way: cheapest-first spends its early rungs on the cheapest pairs, while the gate
+  costs the same wall clock on every rung regardless of the model under test — so credits trip
+  last in exactly the pathological case the ceiling was written for. The arithmetic: 5 Trials ×
+  3–8 rungs × 7 task types is **105–280 sessions**, each with a full gate run.
+- **The gate subprocess is unbounded today.** `gate.py:326-334` runs each loop with **no
+  `timeout=`**, and no workflow sets `timeout-minutes:`. One hung loop blocks forever. This is a
+  latent hang in Integration (ADR-0009) already, so it is fixed **separately** from this work
+  rather than as part of it — but Calibration multiplies its blast radius by 105–280 and runs
+  unattended.
 - **The gate is now load-bearing.** Its weakness is silently inherited by every routing
   decision. Strengthening the AGENTS.md table is the improvement path.
 - **The Proving set expires.** It measures the project you *were*. It needs a refresh
-  policy, or in a year today's work is routed on 2025's tasks.
+  policy, or in a year today's work is routed on 2025's tasks. **Resolved by amendment:**
+  refresh when the pinned classifier pair changes ([ADR-0029](0029-agents-infer-the-task-type.md))
+  **or** on a stated interval, whichever comes first. The classifier pin matters because it runs
+  on "the cheapest pair on the live roster," which moves with the roster — so the taxonomy drifts
+  underneath a deliberately frozen set unless a pin change forces a re-base.
 - **35 hand-labelled issues are a hard prerequisite**, and per-task-type Calibration is
-  blocked until they exist.
+  blocked until they exist. **Discharged by [ADR-0029](0029-agents-infer-the-task-type.md):**
+  the labels are inferred by an agent in a single backfill over the 334 closed issues, so no
+  human labelling sitting is required and nothing is blocked on one.
 - **Trials must be excluded from Strike accounting and from Run attribution**, or a
   Calibration can end a Run. This is a real change to how sessions are accounted.
 - **Wall clock, not spend, is the practical limit.** Each Trial runs the full five-loop

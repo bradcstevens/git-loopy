@@ -87,6 +87,13 @@ the Proving tasks used. "Has the roster changed?" is then *live roster vs. the r
 stamped on the distillate* — no second file, no second truth, and the provenance sits on
 the thing it justifies.
 
+> **Amended:** provenance also stamps the **pinned classifier pair**
+> ([ADR-0029](0029-agents-infer-the-task-type.md)). The classifier runs on the cheapest pair on
+> the live roster, so it moves when the roster does, and the Task-type taxonomy would otherwise
+> drift underneath a deliberately frozen Proving set. Pinning it makes the refresh rule
+> self-justifying rather than an arbitrary interval: **refresh when the pin changes or on a
+> stated interval, whichever comes first.**
+
 This is [ADR-0019](0019-roster-derived-from-the-pinned-harness.md)'s own finding applied one
 level up. That entry diagnosed a persisted roster whose *"real defect is that it names no
 version at all"* — a record that drifted twice and eventually aborted Iterations in
@@ -137,6 +144,13 @@ Cheapest-first search has a pathological case: nothing cheap passes and it walks
 it **stops, keeps the incumbent, and records "incomplete — stopped at rung N of M"** on the
 distillate.
 
+> **Amended: the credit ceiling does not bind.** Cheapest-first spends its early rungs on the
+> cheapest pairs, while the gate costs the same wall clock on every rung regardless of the model
+> under test — so credits trip *last* in precisely the pathological case above. A **wall-clock
+> ceiling** is added alongside, landing on this same "incomplete" path. The shipped schema
+> already anticipated it: `INCOMPLETE`'s field set carries `wall_clock_seconds` next to
+> `credits`.
+
 A partial search is never presented as a finished one — the same discipline
 [ADR-0026](0026-billed-cost-and-the-live-rate-card.md) applied when it required an unknown
 cost to render as unavailable and never as zero.
@@ -184,6 +198,22 @@ when it found a roster that named no version at all.
   for less. The contract, the conformance fixtures and eventually the shell and PowerShell
   Orchestrators are all in scope — though ADR-0019 already records that routing is
   Python-only today, so the cross-language cost is deferred rather than discharged.
+  **Corrected by amendment:** the Wrapper contract is now at **1.8**
+  (`git-loopy/shell/lib/continuation.sh:18`), not 1.5 — that figure was stale on the day it was
+  written and would mislead whoever implements this. **Resolved by amendment:** a
+  `measured-routing` conformance fixture is added and the contract bumped **now**, with the
+  shell and PowerShell *implementations* still deferred. Of the 17 fixtures in
+  `git-loopy/conformance/` there is a `routing-resolution.json` but no measured-routing fixture,
+  so the tier that has already shipped in Python is invisible to the family gate — the fixture
+  is what makes the deferral honest and visible rather than an undocumented gap.
+- **The measured tier is inert in serial mode**, which is the default. See ADR-0027's
+  *Calibration only affects Parallel mode*: `calibrate` refuses or warns at `parallel == 1`, and
+  `config get` must report the tier as inert rather than merely reporting a value that has no
+  effect.
+- **A fourth `MeasuredStatus` is required.** [ADR-0030](0030-demotion-is-measured-per-pair.md)
+  demotes *upward* into a pair nobody measured, and the three shipped states cannot represent
+  that — `DEMOTED` clears the pair outright. A provisional pair carrying `status = measured`
+  would be the same failure as a stopped search that looks finished.
 - **`config get` / `list` / `path` gain a provenance obligation** they do not have today.
 - **`RECOMMENDED_ROUTING` is demoted to a bootstrap default.** Calibration will disagree
   with it, and by design the measurement wins. A repository with no closed-issue history
@@ -193,9 +223,15 @@ when it found a roster that named no version at all.
 - **Demotion writes to a committed file** during a Run, which means an unattended Run can
   produce a commit to the distillate. How that interacts with **Checkpoint** and push
   durability ([ADR-0004](0004-runner-checkpoint-and-push-durability.md)) is unresolved and
-  needs its own decision.
+  needs its own decision. **Resolved by [ADR-0030](0030-demotion-is-measured-per-pair.md)**,
+  which moves Demotion to *after* the Run and so removes the interaction rather than resolving
+  it: no Lane is running, so there is no race on the shared tracked file and no need for a
+  mid-Run commit mechanism that does not exist today.
 - **The vocabulary is recorded here rather than in `CONTEXT.md`.** ADR-0019 set the
   precedent — *"`CONTEXT.md` is deliberately untouched. It is a glossary of shipped reality,
   and none of this has shipped."* The terms **Calibration**, **Proving set**, **Trial**,
   **Measured routing** and **Demotion** are fixed by these two entries and move into the
-  glossary when they ship.
+  glossary when they ship. **Partially departed from by amendment:** `CONTEXT.md`'s **Task
+  type** entry is rewritten *now*, ahead of the code, because
+  [ADR-0029](0029-agents-infer-the-task-type.md) reverses two clauses that are currently stated
+  there as fact. The five terms above still wait for ship; only the reversed claims move early.
