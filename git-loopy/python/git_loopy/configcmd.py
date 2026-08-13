@@ -399,19 +399,26 @@ def _writable_routing(
 ) -> dict[str, dict[str, str]]:
     """Re-render a persisted ``[routing]`` table as a writable map.
 
+    Keys are taken **literally**, never renormalized. Stripping a ``task-type:``
+    prefix here is convenience the command line wants and a persisted file must
+    not have: ``resolve_iteration_model`` refuses ``task-type:docs`` as a routing
+    *key* — the permitted keys are the bare seven — so folding it onto ``docs``
+    made this surface disagree with the resolver about what the file says, and
+    where both spellings were present they collided and one of the operator's
+    routes was silently dropped on the next write.
+
     Every key here comes off disk rather than off the command line, so an
-    out-of-taxonomy one is reported through :func:`_taxonomy_refusal` — naming
+    out-of-taxonomy one is reported through :func:`task_type_refusal` — naming
     the key *and* the remedy, since it is rarely the key the operator typed.
     """
     routing: dict[str, dict[str, str]] = {}
     for key, (model, effort) in settings.table_routing(table, scope=scope).items():
-        normalized = _routing_key(key, closed=False)
         if closed:
             try:
-                validate_task_type_key(normalized, scope=scope)
+                validate_task_type_key(key, scope=scope)
             except TaskTypeError as exc:
                 raise ConfigCommandError(task_type_refusal(exc)) from None
-        routing[normalized] = {"model": model, "effort": effort}
+        routing[key] = {"model": model, "effort": effort}
     return routing
 
 
@@ -472,9 +479,18 @@ def run_routing_unset(
     would report success against the project file while a global key kept the
     Run blocked. An explicit ``--project`` / ``--global`` still narrows it, and
     a key inside the taxonomy is a scoped edit as before.
+
+    The key removed is the one **as spelled**, because a persisted table is read
+    literally: ``task-type:docs`` and ``docs`` are two keys a Config can carry
+    at once, and the refusal names whichever one it objected to verbatim. Taking
+    the spelling as given is what makes that message and this command agree, and
+    what stops removing one from deleting the other.
     """
     try:
         key = _routing_key(task_type, closed=False)
+        spelled = task_type.strip()
+        prefixed = spelled.startswith(TASK_TYPE_LABEL_PREFIX)
+        target = spelled if prefixed else key
         repair = scope is None and key not in TASK_TYPE_KEYS
         scopes = (
             _repairable_scopes(repo_root)
@@ -486,9 +502,9 @@ def run_routing_unset(
             path = _scope_config_path(resolved_scope, repo_root, env)
             table = dict(settings.load_config_table(path))
             routing = _writable_routing(table, scope=resolved_scope, closed=False)
-            if repair and key not in routing:
+            if repair and target not in routing:
                 continue
-            routing.pop(key, None)
+            routing.pop(target, None)
             if routing:
                 table["routing"] = routing
             else:
@@ -499,9 +515,9 @@ def run_routing_unset(
         err(f"git-loopy: error: {exc}")
         return 1
     if not cleared:
-        out(f"task-type:{key} is not set in any config; nothing to unset.")
+        out(f"{TASK_TYPE_LABEL_PREFIX}{key} is not set in any config; nothing to unset.")
         return 0
-    out(f"Unset task-type:{key} in {', '.join(cleared)}")
+    out(f"Unset {TASK_TYPE_LABEL_PREFIX}{key} in {', '.join(cleared)}")
     return 0
 
 

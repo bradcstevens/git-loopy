@@ -1380,3 +1380,61 @@ def test_the_remedy_clears_a_legacy_key_whose_spelling_no_write_op_accepts(
 
     assert rc == 0, err.text
     assert "migration v2" not in path.read_text(encoding="utf-8")
+
+
+def _write_raw_routing(tmp_path: Path, body: str) -> Path:
+    """Write a project Config whose ``[routing]`` table is exactly ``body``."""
+    path = settings.project_config_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"[routing]\n{body}", encoding="utf-8")
+    return path
+
+
+def test_a_persisted_routing_key_is_read_literally_not_renormalized(
+    tmp_path: Path,
+) -> None:
+    """A prefixed ``[routing]`` key is refused, never folded onto the bare one.
+
+    ``resolve_iteration_model`` already refuses ``task-type:docs`` as a routing
+    *key* — the permitted keys are the bare seven — so a Config carrying it has
+    never routed. Silently stripping the prefix on write made the write surface
+    disagree with the resolver, and where the bare key was also present the two
+    collapsed and one route was dropped from the operator's file.
+    """
+    path = _write_raw_routing(
+        tmp_path,
+        '"task-type:docs" = { model = "gpt-5.4", effort = "high" }\n'
+        'docs = { model = "gpt-5-mini", effort = "medium" }\n',
+    )
+    err = _Sink()
+
+    rc = configcmd.run_routing_set(
+        "test", "gpt-5-mini", "medium", scope="project", repo_root=tmp_path,
+        env=_env(tmp_path), out=_Sink(), err=err,
+    )
+
+    assert rc == 1
+    assert "task-type:docs" in err.text
+    assert path.read_text(encoding="utf-8").count("model") == 2  # nothing dropped
+
+
+def test_the_remedy_clears_a_prefixed_routing_key_by_its_literal_spelling(
+    tmp_path: Path,
+) -> None:
+    """The refusal names ``unset task-type:docs``, so that has to clear that key."""
+    path = _write_raw_routing(
+        tmp_path,
+        '"task-type:docs" = { model = "gpt-5.4", effort = "high" }\n'
+        'docs = { model = "gpt-5-mini", effort = "medium" }\n',
+    )
+    err = _Sink()
+
+    rc = configcmd.run_routing_unset(
+        "task-type:docs", scope="project", repo_root=tmp_path,
+        env=_env(tmp_path), out=_Sink(), err=err,
+    )
+
+    assert rc == 0, err.text
+    remaining = path.read_text(encoding="utf-8")
+    assert "task-type:docs" not in remaining
+    assert "docs = " in remaining  # the bare route it collided with survives
