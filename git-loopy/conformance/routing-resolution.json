@@ -142,6 +142,24 @@
       "global": {},
       "project": {},
       "expected": {"docs": {"model": "synthetic-effortless-0", "effort": ""}}
+    },
+    {
+      "id": "a-provisional-measured-entry-routes-and-is-reported-unmeasured",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}, "test": {"model": "synthetic-cheap-2", "effort": "medium", "status": "provisional"}},
+      "global": {},
+      "project": {},
+      "expected": {"docs": {"model": "synthetic-cheap-1", "effort": "low"}, "test": {"model": "synthetic-cheap-2", "effort": "medium"}},
+      "expected_tiers": {"docs": "measured", "test": "provisional (unmeasured)"}
+    },
+    {
+      "id": "hand-written-routing-still-beats-a-provisional-measured-entry",
+      "roster": {"synthetic-cheap-1": ["low", "medium"], "synthetic-cheap-2": ["low", "medium", "high"], "synthetic-fancy-9": ["low", "medium", "high", "max"], "synthetic-effortless-0": []},
+      "measured": {"docs": {"model": "synthetic-cheap-2", "effort": "medium", "status": "provisional"}},
+      "global": {},
+      "project": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}},
+      "expected": {"docs": {"model": "synthetic-fancy-9", "effort": "high"}},
+      "expected_tiers": {"docs": "project Config"}
     }
   ]
 }

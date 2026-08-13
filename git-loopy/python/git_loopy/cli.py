@@ -82,7 +82,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Collection, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -1288,6 +1288,14 @@ class RoutingTier(str, Enum):
     time, so a repository that has never run a **Calibration** — one still on the
     ``RECOMMENDED_ROUTING`` core, or on nothing at all — is never mistaken for one
     that has.
+
+    :data:`PROVISIONAL` is the *same rung* as :data:`MEASURED` — the artifact —
+    named apart because that rung can hold a pair that was never measured: what
+    **Demotion** installs when it steps up the price staircase into a rung nobody
+    trialled (#376, ADR-0030). It is not a fourth precedence position: a
+    hand-written entry beats it exactly as it beats a measured one. Reporting a
+    provisional pair as ``measured`` would be the failure ADR-0030 names — *an
+    unmeasured pair must look unmeasured*.
     """
 
     CLI_FLAG = "CLI flag"
@@ -1295,6 +1303,7 @@ class RoutingTier(str, Enum):
     PROJECT = "project Config"
     GLOBAL = "global Config"
     MEASURED = "measured"
+    PROVISIONAL = "provisional (unmeasured)"
     BUILTIN = "built-in default"
 
     def __str__(self) -> str:  # pragma: no cover - trivial
@@ -1305,6 +1314,7 @@ def merge_routing_tiers(
     project: Mapping[str, object],
     global_: Mapping[str, object],
     measured: Mapping[str, tuple[str, str]],
+    measured_provisional: Collection[str] = (),
 ) -> dict[str, tuple[RoutingTier, tuple[str, str]]]:
     """Walk the routing tiers lowest-first, keeping each key's *last* writer.
 
@@ -1314,7 +1324,13 @@ def merge_routing_tiers(
     (#364). Later-wins per task-type key is the whole precedence rule: a tier
     replaces the entire ``(model, effort)`` pair for a key it names, and keys
     only a lower tier names survive untouched.
+
+    ``measured_provisional`` names the subset of ``measured`` keys whose record is
+    :attr:`~git_loopy.measured_routing.MeasuredStatus.PROVISIONAL` — in force and
+    never measured (#376). They route identically; only the tier they are
+    attributed to differs, so a reporting surface can say so.
     """
+    provisional = frozenset(measured_provisional)
     merged: dict[str, tuple[RoutingTier, tuple[str, str]]] = {}
     for tier, table in (
         (RoutingTier.MEASURED, dict(measured)),
@@ -1322,7 +1338,12 @@ def merge_routing_tiers(
         (RoutingTier.PROJECT, settings.table_routing(project, scope="project")),
     ):
         for key, pair in table.items():
-            merged[key] = (tier, pair)
+            merged[key] = (
+                RoutingTier.PROVISIONAL
+                if tier is RoutingTier.MEASURED and key in provisional
+                else tier,
+                pair,
+            )
     return merged
 
 
@@ -1352,6 +1373,7 @@ def _resolve_routing(
     project: Mapping[str, object],
     global_: Mapping[str, object],
     measured: Mapping[str, tuple[str, str]],
+    measured_provisional: Collection[str] = (),
     *,
     warn: Callable[[str], None],
 ) -> tuple[dict[str, tuple[str, str]], dict[str, RoutingTier]]:
@@ -1385,7 +1407,7 @@ def _resolve_routing(
     """
     if _explicit_model_or_effort_override(args, env):
         return {}, {}
-    walked = merge_routing_tiers(project, global_, measured)
+    walked = merge_routing_tiers(project, global_, measured, measured_provisional)
     merged = {key: pair for key, (_tier, pair) in walked.items()}
     provenance = {key: tier for key, (tier, _pair) in walked.items()}
     off_roster = sorted(
@@ -1582,6 +1604,7 @@ def resolve_config(
     project: Mapping[str, object],
     global_: Mapping[str, object],
     measured: Mapping[str, tuple[str, str]] = MappingProxyType({}),
+    measured_provisional: Collection[str] = (),
     warn: Callable[[str], None] = _warn,
 ) -> ResolvedConfig:
     """Merge CLI args + env + the two config tables into a :class:`ResolvedConfig`.
@@ -1604,7 +1627,10 @@ def resolve_config(
     beneath it: it merges project-over-global-over-**measured** per task-type key,
     and any explicit ``--model`` / ``--reasoning-effort`` (flag or env)
     suppresses the lot to an empty map run-wide (:func:`_resolve_routing`).
-    ``measured`` is the Measured routing tier (ADR-0028), absent by default.
+    ``measured`` is the Measured routing tier (ADR-0028), absent by default, and
+    ``measured_provisional`` names the subset of its keys whose pair is in force
+    without having been measured (#376) — a reporting distinction, not a
+    precedence one.
 
     The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
     per-model capability gate) sits at the *bottom* of the chain, fed the raw
@@ -1662,7 +1688,7 @@ def resolve_config(
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
     routing, routing_provenance = _resolve_routing(
-        args, env, project, global_, measured, warn=warn
+        args, env, project, global_, measured, measured_provisional, warn=warn
     )
 
     run = RunConfig(
@@ -1895,6 +1921,7 @@ def main(argv: list[str] | None = None) -> int:
             project=tables.project,
             global_=tables.global_,
             measured=tables.measured,
+            measured_provisional=tables.measured_provisional,
         )
     except (settings.SettingsError, TaskTypeError) as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
@@ -1935,6 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=tables.project,
                 global_=tables.global_,
                 measured=tables.measured,
+                measured_provisional=tables.measured_provisional,
             )
         except (settings.SettingsError, TaskTypeError) as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
@@ -1976,6 +2004,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=tables.project,
                 global_=tables.global_,
                 measured=tables.measured,
+                measured_provisional=tables.measured_provisional,
             )
         except (settings.SettingsError, TaskTypeError) as exc:
             print(f"git-loopy: error: {exc}", file=sys.stderr)

@@ -106,11 +106,19 @@ class ConfigTables:
     other Config key is machine-written. So this field carries the routing map
     the artifact supplies (``task-type key -> (model, effort)``) rather than a
     raw table, and nothing else about the artifact reaches the resolver.
+
+    ``measured_provisional`` is the one thing about the artifact that must reach
+    the resolver *beside* the map: which of those keys are in force without ever
+    having been measured (#376, ADR-0030). They route identically — hence one map
+    — but a surface that reported them as measured would be exactly the failure
+    that state exists to prevent. Both are derived from a single artifact load, so
+    the map and the subset cannot name different things.
     """
 
     project: Mapping[str, object]
     global_: Mapping[str, object]
     measured: Mapping[str, tuple[str, str]] = field(default_factory=dict)
+    measured_provisional: frozenset[str] = frozenset()
 
 
 def global_dir(env: Mapping[str, str]) -> Path:
@@ -190,8 +198,9 @@ def load_configs(repo_root: Path, env: Mapping[str, str]) -> ConfigTables:
 
     Returns:
         A :class:`ConfigTables` bundling the parsed ``project`` and ``global_``
-        tables (each ``{}`` when that scope has no config) and the ``measured``
-        routing map (``{}`` when there is no artifact — the ordinary case).
+        tables (each ``{}`` when that scope has no config), the ``measured``
+        routing map (``{}`` when there is no artifact — the ordinary case) and the
+        subset of its keys that are in force without having been measured.
 
     Raises:
         SettingsError: On malformed TOML in any of the three, naming the file.
@@ -205,8 +214,13 @@ def load_configs(repo_root: Path, env: Mapping[str, str]) -> ConfigTables:
         measured_routing_path,
     )
 
-    measured = load_measured_routing(measured_routing_path(repo_root)).routing
-    return ConfigTables(project=project, global_=global_, measured=measured)
+    artifact = load_measured_routing(measured_routing_path(repo_root))
+    return ConfigTables(
+        project=project,
+        global_=global_,
+        measured=artifact.routing,
+        measured_provisional=artifact.provisional_keys,
+    )
 
 
 # ---------------------------------------------------------------------------

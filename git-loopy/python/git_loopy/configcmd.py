@@ -467,8 +467,8 @@ def run_routing_list(
     from git_loopy import cli
 
     try:
-        project, global_, measured = _load_tables(repo_root, env)
-        walked = cli.merge_routing_tiers(project, global_, measured)
+        project, global_, measured, provisional = _load_tables(repo_root, env)
+        walked = cli.merge_routing_tiers(project, global_, measured, provisional)
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
@@ -574,12 +574,21 @@ def run_routing_guided(
 
 def _load_tables(
     repo_root: Path | None, env: Mapping[str, str]
-) -> tuple[Mapping[str, object], Mapping[str, object], Mapping[str, tuple[str, str]]]:
+) -> tuple[
+    Mapping[str, object],
+    Mapping[str, object],
+    Mapping[str, tuple[str, str]],
+    frozenset[str],
+]:
     """Load the (project, global, measured) tiers; the first and last are ``{}`` off-repo.
 
     The **Measured routing** tier (ADR-0028) is per-repository by construction —
     off-repo there is no artifact to read, so it resolves empty exactly as the
     project scope does.
+
+    The fourth element names the measured keys whose pair is **provisional** — in
+    force, never measured (#376) — so every reporting surface below can attribute
+    it apart from a measured one without a second read of the artifact.
     """
     project: Mapping[str, object] = (
         settings.load_config_table(settings.project_config_path(repo_root))
@@ -587,14 +596,14 @@ def _load_tables(
         else {}
     )
     global_ = settings.load_config_table(settings.global_config_path(env))
-    measured: Mapping[str, tuple[str, str]] = (
+    artifact = (
         measured_routing.load_measured_routing(
             measured_routing.measured_routing_path(repo_root)
-        ).routing
+        )
         if repo_root is not None
-        else {}
+        else measured_routing.MeasuredRouting()
     )
-    return project, global_, measured
+    return project, global_, artifact.routing, artifact.provisional_keys
 
 
 def _resolve(
@@ -613,9 +622,15 @@ def _resolve(
     from git_loopy import cli
 
     args = cli.build_parser().parse_args([])
-    project, global_, measured = _load_tables(repo_root, env)
+    project, global_, measured, provisional = _load_tables(repo_root, env)
     return cli.resolve_config(
-        args, env, project=project, global_=global_, measured=measured, warn=warn
+        args,
+        env,
+        project=project,
+        global_=global_,
+        measured=measured,
+        measured_provisional=provisional,
+        warn=warn,
     )
 
 
@@ -800,8 +815,8 @@ def run_list(
     from git_loopy import cli
 
     try:
-        project, global_, measured = _load_tables(repo_root, env)
-        walked = cli.merge_routing_tiers(project, global_, measured)
+        project, global_, measured, provisional = _load_tables(repo_root, env)
+        walked = cli.merge_routing_tiers(project, global_, measured, provisional)
         resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")

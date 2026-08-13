@@ -43,6 +43,7 @@ def _resolve(
     project: dict[str, object] | None = None,
     global_: dict[str, object] | None = None,
     measured: dict[str, tuple[str, str]] | None = None,
+    measured_provisional: frozenset[str] | None = None,
     warn=cli._warn,
 ):
     return cli.resolve_config(
@@ -51,6 +52,7 @@ def _resolve(
         project=project or {},
         global_=global_ or {},
         measured=measured or {},
+        measured_provisional=measured_provisional or frozenset(),
         warn=warn,
     )
 
@@ -829,6 +831,44 @@ def test_routing_provenance_names_the_tier_each_entry_came_from() -> None:
         "test": cli.RoutingTier.MEASURED,
         "planning": cli.RoutingTier.PROJECT,
     }
+
+
+def test_a_provisional_measured_entry_routes_but_is_attributed_separately() -> None:
+    """An unmeasured pair in force supplies routing and never reads as measured.
+
+    **Demotion** (ADR-0030) steps up into a rung nobody trialled, so the tier can
+    hold a pair that is genuinely in force and genuinely unmeasured. It routes —
+    otherwise the demotion would be a work stoppage — but the tier reported for it
+    is its own, so no reader mistakes it for evidence (#376).
+    """
+    resolved = _resolve(
+        measured={
+            "docs": ("synthetic-cheap-1", "low"),
+            "test": ("synthetic-cheap-2", "medium"),
+        },
+        measured_provisional=frozenset({"test"}),
+        warn=lambda _m: None,
+    )
+    assert dict(resolved.run.routing) == {
+        "docs": ("synthetic-cheap-1", "low"),
+        "test": ("synthetic-cheap-2", "medium"),
+    }
+    assert dict(resolved.routing_provenance) == {
+        "docs": cli.RoutingTier.MEASURED,
+        "test": cli.RoutingTier.PROVISIONAL,
+    }
+
+
+def test_a_hand_written_entry_still_beats_a_provisional_one() -> None:
+    """The provisional state changes the *label*, never the precedence chain."""
+    resolved = _resolve(
+        measured={"docs": ("synthetic-cheap-1", "low")},
+        measured_provisional=frozenset({"docs"}),
+        project={"routing": {"docs": {"model": "synthetic-fancy-9", "effort": "max"}}},
+        warn=lambda _m: None,
+    )
+    assert dict(resolved.run.routing) == {"docs": ("synthetic-fancy-9", "max")}
+    assert dict(resolved.routing_provenance) == {"docs": cli.RoutingTier.PROJECT}
 
 
 @pytest.mark.parametrize(

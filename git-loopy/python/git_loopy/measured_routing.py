@@ -27,11 +27,15 @@ Design notes:
 * **Current state only.** Git is the ledger: ``git log -p`` is every past
   **Calibration** in order, ``git blame`` names which one set a **Task type**'s
   model, and ``git revert`` undoes a bad one.
-* **Three states, each honest about itself.** ``measured`` carries a winning
+* **Four states, each honest about itself.** ``measured`` carries a winning
   pair; ``incomplete`` carries where the search stopped and **no pair at all**,
   because an unfinished search publishes no winner; ``demoted`` carries the pair
   that failed and the **Strike** count that removed it, so a later Calibration
-  knows it was tried in production. Only ``measured`` supplies a Routed pair.
+  knows it was tried in production; ``provisional`` carries a pair that is **in
+  force and was never measured** (#376, ADR-0030) — what **Demotion** produces
+  when it steps *up* the price staircase, since cheapest-first stops at the first
+  pass and so nothing above the winner was ever trialled. ``measured`` and
+  ``provisional`` supply a Routed pair; only ``measured`` is evidence.
 * **I/O confined to the load/write functions**, mirroring
   :mod:`git_loopy.settings`. Everything else is pure.
 * **Evidence never pools across repositories.** The artifact is per-repository
@@ -56,6 +60,7 @@ __all__ = [
     "MEASURED_ROUTING_FILENAME",
     "SCHEMA_VERSION",
     "MeasuredStatus",
+    "ProvisionalReason",
     "Provenance",
     "Rung",
     "ProvingTask",
@@ -73,6 +78,14 @@ MEASURED_ROUTING_FILENAME = "routing.measured.toml"
 #: The artifact schema this build reads and writes. Enforced, not advisory: a
 #: file stamped with anything else is rejected by name rather than
 #: half-understood.
+#:
+#: The fourth record state (``provisional``, #376) deliberately **does not** bump
+#: this. The reader accepts exactly one version, so a bump would make this build
+#: reject every artifact already written against schema 1 — a real regression, in
+#: exchange for nothing: an older build meeting a ``provisional`` record already
+#: fails at load *naming the status it does not know*, which is the diagnosis the
+#: version would have bought. The states are additive and the loader's
+#: unknown-key and unknown-status rejections are what keep the addition honest.
 SCHEMA_VERSION = 1
 
 #: The project scope directory the artifact shares with ``config.toml``.
@@ -103,9 +116,11 @@ _EVIDENCE_KEYS = frozenset({"rung", "proving_task"})
 class MeasuredStatus(Enum):
     """What a **Task type**'s record in the artifact actually says.
 
-    Only :attr:`MEASURED` supplies a **Routed pair**. The other two exist so a
-    search that did not finish, and a pair production disagreed with, are both
-    representable *as themselves* rather than as an absence.
+    :attr:`MEASURED` and :attr:`PROVISIONAL` supply a **Routed pair**; only the
+    first of them is *evidence*. The other states exist so a search that did not
+    finish, a pair production disagreed with, and a pair in force that nobody
+    measured are each representable *as themselves* rather than as an absence — or,
+    worse, as a measurement.
     """
 
     #: A completed **Calibration** with a winning pair.
@@ -116,6 +131,25 @@ class MeasuredStatus(Enum):
     #: A measured pair removed after consecutive **Strikes** on real work. The
     #: pair is cleared; which pair failed, and after how many Strikes, is kept.
     DEMOTED = "demoted"
+    #: A pair that is **in force and was never measured** (#376, ADR-0030): what
+    #: **Demotion** installs when it steps up the price staircase into a rung
+    #: nobody trialled. Carries the pair now in force, the pair it replaced and
+    #: why, and — deliberately — no evidence at all.
+    PROVISIONAL = "provisional"
+
+
+class ProvisionalReason(Enum):
+    """Why a :attr:`~MeasuredStatus.PROVISIONAL` pair is in force.
+
+    A **closed vocabulary**, not a sentence. ADR-0028 forbids a free-text field
+    anywhere in the artifact — the moment one exists something writes an opinion
+    into it — so "why" is a value the loader can check rather than prose a reader
+    has to trust.
+    """
+
+    #: **Demotion** (ADR-0030) replaced a measured pair that stopped making
+    #: progress on real work with the next pair up the price staircase.
+    DEMOTION = "demotion"
 
 
 @dataclass(frozen=True)
@@ -176,6 +210,9 @@ class MeasuredEntry:
     demoted_model: str | None = None
     demoted_effort: str | None = None
     demoted_after_strikes: int | None = None
+    replaced_model: str | None = None
+    replaced_effort: str | None = None
+    reason: ProvisionalReason | None = None
     rungs: tuple[Rung, ...] = ()
     proving_tasks: tuple[ProvingTask, ...] = ()
 
@@ -199,6 +236,8 @@ class MeasuredEntry:
             raise ValueError(f"a {self.status.value!r} record may not carry {present}")
         if self.status is MeasuredStatus.MEASURED:
             self._check_it_stands_on_its_own()
+        if self.status is MeasuredStatus.PROVISIONAL:
+            self._check_it_looks_unmeasured()
 
     def _check_it_stands_on_its_own(self) -> None:
         """A winner must carry the evidence that chose it, and agree with it.
@@ -231,16 +270,52 @@ class MeasuredEntry:
         if self.rungs_walked is not None and self.rungs_walked < 1:
             raise ValueError("a 'measured' record walked at least one rung")
 
+    def _check_it_looks_unmeasured(self) -> None:
+        """A provisional row must be readable at a glance as *not* evidence.
+
+        Three things are enforced beyond the state's own key set. ``reason`` must
+        be the closed :class:`ProvisionalReason` vocabulary and not merely
+        *present*, because a bare string satisfies "not ``None``" and would be
+        written straight through — the one provisional key that could have been
+        prose, holding ADR-0028's "no free text" only on the way in. A
+        replacement that names the pair it replaced replaced nothing, so the two
+        pairs must differ. And a provisional pair has been through no **Trial** at
+        all — the rungs of the **Calibration** that chose the pair it *replaced*
+        sitting beside it would be another pair's evidence read as its own, which
+        is the exact confusion this state exists to prevent (ADR-0030).
+        """
+        if not isinstance(self.reason, ProvisionalReason):
+            raise ValueError(
+                f"a 'provisional' record's reason is a ProvisionalReason, not "
+                f"{self.reason!r}; permitted: "
+                f"{sorted(member.value for member in ProvisionalReason)}"
+            )
+        if (self.model, self.effort) == (self.replaced_model, self.replaced_effort):
+            raise ValueError(
+                f"a 'provisional' record replaces a pair with a different one; "
+                f"{self.model} @ {self.effort} replaced itself"
+            )
+        if self.rungs or self.proving_tasks:
+            raise ValueError(
+                "a 'provisional' record carries no rung and no proving_task: "
+                "nothing measured this pair, and evidence beside it would read "
+                "as though something had"
+            )
+
     @property
     def routed_pair(self) -> tuple[str, str] | None:
         """The ``(model, effort)`` this record supplies, or ``None``.
 
-        Only a :attr:`~MeasuredStatus.MEASURED` record supplies one. An
+        A :attr:`~MeasuredStatus.MEASURED` record supplies the pair a
+        **Calibration** measured; a :attr:`~MeasuredStatus.PROVISIONAL` one
+        supplies the pair **Demotion** put in force without measuring. Both are
+        genuinely the Routed pair for their **Task type**, which is why the tier
+        contributes both — what separates them is the status, not the routing. An
         ``incomplete`` search publishes no winner and a ``demoted`` entry has had
         its pair cleared, so both fall through to the next tier. The record's own
-        invariant guarantees a measured record has both halves of the pair.
+        invariant guarantees a pair-carrying record has both halves of the pair.
         """
-        if self.status is not MeasuredStatus.MEASURED:
+        if self.status not in _PAIR_SUPPLYING_STATES:
             return None
         return (cast("str", self.model), cast("str", self.effort))
 
@@ -259,12 +334,27 @@ class MeasuredRouting:
 
     @property
     def routing(self) -> dict[str, tuple[str, str]]:
-        """The routing map this tier contributes — measured records only."""
+        """The routing map this tier contributes — measured and provisional records."""
         return {
             key: pair
             for key, entry in self.entries.items()
             if (pair := entry.routed_pair) is not None
         }
+
+    @property
+    def provisional_keys(self) -> frozenset[str]:
+        """Which keys of :attr:`routing` are in force without having been measured.
+
+        Read beside the map rather than folded into it: the pair is genuinely
+        what routes, so it belongs in :attr:`routing` — but a reporting surface
+        that printed it as ``measured`` would be the failure this state exists to
+        prevent, and this is what lets the tier be named honestly (#376).
+        """
+        return frozenset(
+            key
+            for key, entry in self.entries.items()
+            if entry.status is MeasuredStatus.PROVISIONAL
+        )
 
 
 def measured_routing_path(repo_root: Path) -> Path:
@@ -375,7 +465,8 @@ def _parse_entry(key: str, raw: object, path: Path) -> MeasuredEntry:
             f"{sorted(member.value for member in MeasuredStatus)}",
         ) from None
     required = _REQUIRED_KEYS[status]
-    _reject_unknown(entry, required | _EVIDENCE_KEYS, where=where, path=path)
+    evidence = _EVIDENCE_KEYS if status in _EVIDENCE_STATES else frozenset()
+    _reject_unknown(entry, required | evidence, where=where, path=path)
     _require(entry, required, where=where, path=path)
     fields: dict[str, object] = {
         "status": status,
@@ -504,6 +595,27 @@ def _str_tuple(
     return tuple(cast("list[str]", value))
 
 
+def _reason(
+    table: Mapping[str, object], key: str, where: str, path: Path
+) -> ProvisionalReason:
+    """Read one ``reason`` against its closed vocabulary.
+
+    Rejecting an unrecognised value by name is what keeps ``reason`` a vocabulary
+    rather than the free-text field ADR-0028 forbids: prose would parse.
+    """
+    value = table.get(key)
+    if not isinstance(value, str):
+        raise _error(path, f"{where}.{key} must be a string, got {value!r}")
+    try:
+        return ProvisionalReason(value)
+    except ValueError:
+        raise _error(
+            path,
+            f"{where}.{key} is {value!r}; expected one of "
+            f"{sorted(member.value for member in ProvisionalReason)}",
+        ) from None
+
+
 #: Per-state scalar readers, so a key's type is declared once.
 _SCALAR_READERS: Mapping[str, object] = {
     "model": _str,
@@ -518,6 +630,9 @@ _SCALAR_READERS: Mapping[str, object] = {
     "demoted_model": _str,
     "demoted_effort": _str,
     "demoted_after_strikes": _int,
+    "replaced_model": _str,
+    "replaced_effort": _str,
+    "reason": _reason,
 }
 
 #: Every state-governed scalar field. A record may carry exactly the ones its own
@@ -557,7 +672,31 @@ _REQUIRED_KEYS: Mapping[MeasuredStatus, frozenset[str]] = {
             "demoted_after_strikes",
         }
     ),
+    MeasuredStatus.PROVISIONAL: frozenset(
+        {
+            "status",
+            "model",
+            "effort",
+            "replaced_model",
+            "replaced_effort",
+            "reason",
+        }
+    ),
 }
+
+#: The states that supply a **Routed pair** to the precedence chain. ``measured``
+#: because a Calibration chose it; ``provisional`` because **Demotion** put it in
+#: force. What separates them is the status, not whether they route.
+_PAIR_SUPPLYING_STATES: frozenset[MeasuredStatus] = frozenset(
+    {MeasuredStatus.MEASURED, MeasuredStatus.PROVISIONAL}
+)
+
+#: The states whose records may carry the evidence arrays at all. ``provisional``
+#: is excluded by construction: nothing trialled the pair, so any rung beside it
+#: would belong to the pair it replaced (ADR-0030).
+_EVIDENCE_STATES: frozenset[MeasuredStatus] = frozenset(
+    {MeasuredStatus.MEASURED, MeasuredStatus.INCOMPLETE, MeasuredStatus.DEMOTED}
+)
 
 
 def dump_measured_routing(artifact: MeasuredRouting) -> str:
@@ -659,6 +798,10 @@ def _toml_key(key: str) -> str:
 
 
 def _toml_scalar(value: object) -> str:
+    if isinstance(value, Enum):
+        # A closed vocabulary is written as its value, exactly as `status` is —
+        # never as its Python repr, which no reader of this artifact accepts.
+        return _toml_scalar(value.value)
     if isinstance(value, str):
         return _toml_str(value)
     if isinstance(value, float):

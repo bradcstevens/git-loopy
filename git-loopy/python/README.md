@@ -399,16 +399,25 @@ git-loopy config edit --global
 - **Routing provenance.** `get task-type:<key>` reports a **Routed pair** with
   the **tier** that supplied it, and `list` names the tier for every routing
   entry it prints. The tier is one of `CLI flag`, `environment variable`,
-  `project Config`, `global Config`, `measured`, or `built-in default` — read
+  `project Config`, `global Config`, `measured`, `provisional (unmeasured)`, or
+  `built-in default` — read
   straight off the resolver's own merge, so the name cannot disagree with the
   value. A `measured` entry comes from the machine-written
   [`git-loopy/routing.measured.toml`](../../docs/adr/0028-measured-routing-is-a-committed-tier.md)
   artifact, which is why
-  a model nobody typed can appear in the effective config; `built-in default`
+  a model nobody typed can appear in the effective config;
+  `provisional (unmeasured)` comes from the same artifact but names a pair that is
+  **in force without ever having been measured** — what
+  [Demotion](../../docs/adr/0030-demotion-is-measured-per-pair.md) installs when it
+  steps *up* the price staircase into a rung nobody trialled, recorded under the
+  artifact's `provisional` status with the pair it replaced and why, so an
+  unmeasured pair never reads as evidence; `built-in default`
   means no tier named that Task type at all, so a repository that has never been
   **Calibrated** is never mistaken for one that has. An explicit `--model` /
   `--reasoning-effort` (or its env equivalent) suppresses routing run-wide, and
-  the report says so rather than naming a tier whose value is not in force.
+  the report says so rather than naming a tier whose value is not in force. A
+  hand-written `[routing]` entry beats a provisional one exactly as it beats a
+  measured one — the fourth status changes what is *reported*, never the chain.
 - **`path`** prints the resolved `config.toml` path(s) — both scopes labelled by
   default, or a single bare path with `--global` / `--project`. There is no
   measured scope for `path` or `edit`: the artifact is machine-written and never

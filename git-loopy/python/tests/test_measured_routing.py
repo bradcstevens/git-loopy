@@ -302,13 +302,189 @@ def test_demoted_record_missing_its_strike_count_is_rejected(tmp_path: Path) -> 
         measured_routing.load_measured_routing(path)
 
 
-def test_only_measured_task_types_reach_the_routing_map(tmp_path: Path) -> None:
-    """One artifact, three states: exactly one of them supplies a Routed pair."""
-    body = "\n".join([_MEASURED_TOML, _INCOMPLETE_TOML, _DEMOTED_TOML])
+# ---------------------------------------------------------------------------
+# `provisional` — in force, and never measured (#376, ADR-0030).
+#
+# **Demotion** steps *up* the price staircase into a pair nobody trialled, because
+# cheapest-first stops at the first pass and so every measured rung sits *below*
+# the winner and failed. The pair is genuinely in force and genuinely unmeasured,
+# and the three shipped states can each express only one of those at a time.
+# ---------------------------------------------------------------------------
+
+_PROVISIONAL_TOML = textwrap.dedent(
+    """\
+    [routing.chore]
+    status = "provisional"
+    model = "synthetic-cheap-2"
+    effort = "medium"
+    replaced_model = "synthetic-cheap-1"
+    replaced_effort = "low"
+    reason = "demotion"
+    """
+)
+
+
+def test_provisional_record_supplies_a_pair_and_says_it_is_unmeasured(
+    tmp_path: Path,
+) -> None:
+    """The pair now in force, the pair it replaced, and why — and nothing else."""
+    artifact = measured_routing.load_measured_routing(
+        _write(tmp_path, _artifact(_PROVISIONAL_TOML))
+    )
+
+    entry = artifact.entries["chore"]
+    assert entry.status is measured_routing.MeasuredStatus.PROVISIONAL
+    assert entry.routed_pair == ("synthetic-cheap-2", "medium")
+    assert artifact.routing == {"chore": ("synthetic-cheap-2", "medium")}
+    assert (entry.replaced_model, entry.replaced_effort) == ("synthetic-cheap-1", "low")
+    assert entry.reason is measured_routing.ProvisionalReason.DEMOTION
+
+
+def test_provisional_keys_name_the_unmeasured_half_of_the_routing_map(
+    tmp_path: Path,
+) -> None:
+    """Which of the pairs the tier supplies are evidence, and which are not."""
+    body = "\n".join([_MEASURED_TOML, _PROVISIONAL_TOML])
     artifact = measured_routing.load_measured_routing(_write(tmp_path, body))
 
-    assert set(artifact.entries) == {"docs", "implementation", "test"}
-    assert artifact.routing == {"docs": ("synthetic-cheap-1", "")}
+    assert set(artifact.routing) == {"docs", "chore"}
+    assert artifact.provisional_keys == frozenset({"chore"})
+
+
+def test_provisional_record_missing_what_it_replaced_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Without the pair it replaced there is no way to see it is a replacement."""
+    path = _write(
+        tmp_path, _artifact(_PROVISIONAL_TOML).replace('replaced_effort = "low"\n', "")
+    )
+    with pytest.raises(SettingsError, match="replaced_effort"):
+        measured_routing.load_measured_routing(path)
+
+
+def test_provisional_record_may_not_carry_a_measured_tally(tmp_path: Path) -> None:
+    """The state's own key set is what stops it dressing as a measured winner."""
+    path = _write(tmp_path, _artifact(_PROVISIONAL_TOML) + "trials_passed = 5\n")
+    with pytest.raises(SettingsError, match="trials_passed"):
+        measured_routing.load_measured_routing(path)
+
+
+def test_provisional_record_may_not_carry_trial_evidence(tmp_path: Path) -> None:
+    """A row that is not evidence may not carry any: nothing trialled this pair.
+
+    ``incomplete`` keeps the rungs it walked and ``demoted`` the pair that failed,
+    but a provisional pair has been through no **Trial** at all — rungs beside it
+    would be another pair's evidence read as its own.
+    """
+    path = _write(
+        tmp_path,
+        _artifact(_PROVISIONAL_TOML)
+        + textwrap.dedent(
+            """\
+
+            [[routing.chore.rung]]
+            model = "synthetic-cheap-2"
+            effort = "medium"
+            passed = 5
+            total = 5
+            credits = 1.0
+            """
+        ),
+    )
+    with pytest.raises(SettingsError, match="rung"):
+        measured_routing.load_measured_routing(path)
+
+
+def test_provisional_reason_outside_the_closed_vocabulary_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """``reason`` is a closed vocabulary, never the free-text ADR-0028 forbids."""
+    path = _write(
+        tmp_path,
+        _artifact(_PROVISIONAL_TOML).replace(
+            'reason = "demotion"', 'reason = "it seemed best"'
+        ),
+    )
+    with pytest.raises(SettingsError, match="it seemed best"):
+        measured_routing.load_measured_routing(path)
+
+
+def test_provisional_record_replacing_the_same_pair_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A replacement that names the pair it replaced replaced nothing."""
+    path = _write(
+        tmp_path,
+        _artifact(_PROVISIONAL_TOML).replace(
+            'replaced_model = "synthetic-cheap-1"\nreplaced_effort = "low"',
+            'replaced_model = "synthetic-cheap-2"\nreplaced_effort = "medium"',
+        ),
+    )
+    with pytest.raises(SettingsError, match="replaced"):
+        measured_routing.load_measured_routing(path)
+
+
+def test_a_provisional_entry_cannot_be_constructed_as_a_measured_one() -> None:
+    """The in-memory half of the seam holds the same line as the on-disk half."""
+    with pytest.raises(ValueError, match="trials_passed"):
+        measured_routing.MeasuredEntry(
+            status=measured_routing.MeasuredStatus.PROVISIONAL,
+            model="synthetic-cheap-2",
+            effort="medium",
+            replaced_model="synthetic-cheap-1",
+            replaced_effort="low",
+            reason=measured_routing.ProvisionalReason.DEMOTION,
+            trials_passed=5,
+        )
+
+
+def test_a_free_text_reason_cannot_be_constructed_let_alone_written() -> None:
+    """The closed vocabulary is enforced at construction, not only at load.
+
+    ``reason`` is the one provisional key that could have been prose. A bare
+    string satisfies "not ``None``", so without this the writer would happily
+    emit an opinion its own reader then rejects — the two halves of the seam
+    disagreeing, and ADR-0028's "no free text" holding only on the way in.
+    """
+    with pytest.raises(ValueError, match="reason"):
+        measured_routing.MeasuredEntry(
+            status=measured_routing.MeasuredStatus.PROVISIONAL,
+            model="synthetic-cheap-2",
+            effort="medium",
+            replaced_model="synthetic-cheap-1",
+            replaced_effort="low",
+            reason="it seemed best",  # type: ignore[arg-type]
+        )
+
+
+def test_even_a_well_spelled_reason_string_is_refused() -> None:
+    """A record built from the vocabulary's *spelling* would not round-trip equal."""
+    with pytest.raises(ValueError, match="reason"):
+        measured_routing.MeasuredEntry(
+            status=measured_routing.MeasuredStatus.PROVISIONAL,
+            model="synthetic-cheap-2",
+            effort="medium",
+            replaced_model="synthetic-cheap-1",
+            replaced_effort="low",
+            reason="demotion",  # type: ignore[arg-type]
+        )
+
+
+def test_only_measured_and_provisional_task_types_reach_the_routing_map(
+    tmp_path: Path,
+) -> None:
+    """One artifact, four states: exactly two of them supply a Routed pair."""
+    body = "\n".join(
+        [_MEASURED_TOML, _INCOMPLETE_TOML, _DEMOTED_TOML, _PROVISIONAL_TOML]
+    )
+    artifact = measured_routing.load_measured_routing(_write(tmp_path, body))
+
+    assert set(artifact.entries) == {"docs", "implementation", "test", "chore"}
+    assert artifact.routing == {
+        "docs": ("synthetic-cheap-1", ""),
+        "chore": ("synthetic-cheap-2", "medium"),
+    }
+    assert artifact.provisional_keys == frozenset({"chore"})
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +493,10 @@ def test_only_measured_task_types_reach_the_routing_map(tmp_path: Path) -> None:
 
 
 def test_artifact_round_trips_through_the_writer(tmp_path: Path) -> None:
-    """Written, read back, compared equal — across all three record states."""
-    body = "\n".join([_MEASURED_TOML, _INCOMPLETE_TOML, _DEMOTED_TOML])
+    """Written, read back, compared equal — across all four record states."""
+    body = "\n".join(
+        [_MEASURED_TOML, _INCOMPLETE_TOML, _DEMOTED_TOML, _PROVISIONAL_TOML]
+    )
     original = measured_routing.load_measured_routing(_write(tmp_path, body))
 
     round_tripped = measured_routing.load_measured_routing(
@@ -326,6 +504,20 @@ def test_artifact_round_trips_through_the_writer(tmp_path: Path) -> None:
     )
 
     assert round_tripped == original
+    assert round_tripped.provisional_keys == frozenset({"chore"})
+
+
+def test_a_provisional_record_is_written_as_its_own_state(tmp_path: Path) -> None:
+    """The writer emits the state's value, never a Python repr of the vocabulary."""
+    original = measured_routing.load_measured_routing(
+        _write(tmp_path, _artifact(_PROVISIONAL_TOML))
+    )
+
+    dumped = measured_routing.dump_measured_routing(original)
+
+    assert 'status = "provisional"' in dumped
+    assert 'reason = "demotion"' in dumped
+    assert "ProvisionalReason" not in dumped
 
 
 def test_written_artifact_is_read_from_the_conventional_path(tmp_path: Path) -> None:
@@ -397,6 +589,12 @@ def test_artifact_carries_no_free_text_field() -> None:
         "demoted_model",
         "demoted_effort",
         "demoted_after_strikes",
+        # provisional. `reason` is the one key here that could have been prose
+        # and deliberately is not: it is read against the closed
+        # `ProvisionalReason` vocabulary, so an opinion cannot be written into it.
+        "replaced_model",
+        "replaced_effort",
+        "reason",
         # Rung / Proving task
         "passed",
         "total",

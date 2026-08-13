@@ -2168,6 +2168,12 @@ def test_routing_precedence_fixture(case: dict[str, Any], monkeypatch) -> None:
     default — rather than a restatement of it. Every case declares the roster it
     runs against and names only synthetic models (ADR-0019's fixture correction),
     so a vendor catalogue change cannot silently invalidate a precedence test.
+
+    A measured entry may declare ``"status": "provisional"`` — a pair in force
+    that nobody measured (#376, ADR-0030). It routes exactly as a measured one
+    does, so precedence is unchanged; what a case pins through ``expected_tiers``
+    is that it is *attributed* apart, because an unmeasured pair must look
+    unmeasured.
     """
     roster = {
         model: frozenset(efforts) for model, efforts in case["roster"].items()
@@ -2196,6 +2202,11 @@ def test_routing_precedence_fixture(case: dict[str, Any], monkeypatch) -> None:
             key: (entry["model"], entry["effort"])
             for key, entry in case["measured"].items()
         },
+        measured_provisional=frozenset(
+            key
+            for key, entry in case["measured"].items()
+            if entry.get("status", "measured") == "provisional"
+        ),
         warn=warnings.append,
     )
 
@@ -2203,9 +2214,37 @@ def test_routing_precedence_fixture(case: dict[str, Any], monkeypatch) -> None:
         key: (entry["model"], entry["effort"])
         for key, entry in case["expected"].items()
     }
+    if "expected_tiers" in case:
+        assert {
+            key: str(tier) for key, tier in resolved.routing_provenance.items()
+        } == case["expected_tiers"]
     # The declared roster is load-bearing, not decorative: every model these
     # cases name is on it, so the off-roster typo-catch advisory stays silent.
     assert [w for w in warnings if "not in the kit's supported set" in w] == []
+
+
+def test_routing_precedence_fixture_pins_the_provisional_measured_state() -> None:
+    """The measured tier's fixture covers the fourth status (#376), not only three.
+
+    A schema state no fixture exercises is a state the family gate cannot see —
+    the same gap ADR-0028 closed by adding measured cases here in the first place.
+    """
+    provisional = [
+        case
+        for case in _ROUTING_PRECEDENCE
+        if any(
+            entry.get("status") == "provisional"
+            for entry in case["measured"].values()
+        )
+    ]
+    assert provisional, "no precedence case exercises a provisional measured entry"
+    for case in provisional:
+        assert "expected_tiers" in case, case["id"]
+        # Whatever else a case pins, none of its provisional keys may be
+        # attributed to the measured tier.
+        for key, entry in case["measured"].items():
+            if entry.get("status") == "provisional":
+                assert case["expected_tiers"].get(key) != "measured", case["id"]
 
 
 def test_routing_precedence_fixture_names_no_real_model() -> None:

@@ -953,6 +953,79 @@ def test_get_reports_run_wide_suppression_rather_than_a_dead_tier(
     assert "synthetic-cheap-1" not in out.text
 
 
+# ---------------------------------------------------------------------------
+# The fourth status (#376, ADR-0030): a pair in force that nobody measured must
+# never be reported as a measured one.
+# ---------------------------------------------------------------------------
+
+
+def _write_provisional(repo_root: Path, key: str) -> None:
+    """Hand-place an artifact whose one record is **provisional**, not measured."""
+    measured_routing.write_measured_routing(
+        repo_root,
+        measured_routing.MeasuredRouting(
+            entries={
+                key: measured_routing.MeasuredEntry(
+                    status=measured_routing.MeasuredStatus.PROVISIONAL,
+                    model="synthetic-cheap-2",
+                    effort="medium",
+                    replaced_model="synthetic-cheap-1",
+                    replaced_effort="low",
+                    reason=measured_routing.ProvisionalReason.DEMOTION,
+                )
+            },
+            provenance=measured_routing.Provenance(
+                cli_version="1.0.67",
+                calibrated_at="2026-08-13T14:02:11Z",
+                candidate_count=85,
+                gate_loops=("Python suite",),
+            ),
+        ),
+    )
+
+
+def test_get_names_a_provisional_pair_as_unmeasured(tmp_path: Path) -> None:
+    """The pair is in force, so it is reported — under its own tier, never as measured."""
+    env = _env(tmp_path)
+    _write_provisional(tmp_path, "docs")
+    out = _Sink()
+
+    rc = configcmd.run_get(
+        "task-type:docs", repo_root=tmp_path, env=env, out=out, err=_Sink()
+    )
+
+    assert rc == 0
+    assert out.text == "synthetic-cheap-2 @ medium (provisional (unmeasured))"
+    assert "(measured)" not in out.text
+
+
+def test_list_names_a_provisional_pair_as_unmeasured(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    _write_provisional(tmp_path, "docs")
+    out = _Sink()
+
+    rc = configcmd.run_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    assert (
+        "task-type:docs = synthetic-cheap-2 @ medium (provisional (unmeasured))"
+        in out.lines
+    )
+
+
+def test_routing_list_names_a_provisional_pair_as_unmeasured(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    _write_provisional(tmp_path, "docs")
+    out = _Sink()
+
+    rc = configcmd.run_routing_list(repo_root=tmp_path, env=env, out=out, err=_Sink())
+
+    assert rc == 0
+    assert out.lines == [
+        "task-type:docs = synthetic-cheap-2 @ medium (provisional (unmeasured))"
+    ]
+
+
 def test_get_rejects_a_malformed_task_type_key(tmp_path: Path) -> None:
     err = _Sink()
     rc = configcmd.run_get(
