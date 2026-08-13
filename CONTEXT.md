@@ -1182,3 +1182,17 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   deleted; the live **Rate card** replaces none of them, being provenance rather than
   arithmetic. An operator-supplied rate, an offline price fallback and any recompute of a
   figure the harness already billed all stay rejected.
+- `assessment` / `analysis` / `conclusions` were used for the act of choosing which model
+  each **Task type** should route to, implying a considered review of the project that
+  produces a written judgment — resolved: it is a measured search, not a review, and the
+  canonical term is **Calibration** (ADR-0027). It walks a price-ordered candidate list and
+  stops at the cheapest **Routed pair** that clears the AGENTS.md gate on every
+  **Proving task**, so its output is a measurement table and an argmax with **no written
+  analysis and no prose conclusions at all** — a free-text rationale field is the
+  inferential judgment the measurement replaced, returning by the back door (ADR-0028). The
+  objective is inverted from the obvious reading: the gate is a bar rather than a gradient,
+  so the target is the *cheapest* pair that reliably clears it, never the most capable one.
+  A **Trial** is one candidate pair working one Proving task and is deliberately **not** an
+  **Iteration** — it is attributed to a Calibration rather than a **Run**, and never ticks
+  a **Strike**. Terms still to enter **Language** when this ships: **Calibration**,
+  **Proving set**, **Trial**, **Measured routing**, **Demotion**.
