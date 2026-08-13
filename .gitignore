@@ -88,3 +88,6 @@ docs/feature-requests/
 # reproducible copy of an upstream commit, so committing it would only vendor
 # the same content a third time.
 .git-loopy/
+
+WAYFINDER-MAP.md
+OPERATIONAL-SURFACES.md
