@@ -1119,6 +1119,12 @@ class LiveRunState:
                     str(model) if model else None,
                     max(0, _coerce_int(event.get("input"), 0)),
                     max(0, _coerce_int(event.get("output"), 0)),
+                    # A Lane reads the harness's billing through the same one
+                    # parser the serial path does (#329). Omitting it here left
+                    # every Lane's Credits, premium requests and cache split
+                    # latched to unknown under the mode git-loopy actually runs
+                    # in — a bill the harness reported and the Queue threw away.
+                    BillingSample.from_event(event),
                 )
                 entry.usage_observed = True
 

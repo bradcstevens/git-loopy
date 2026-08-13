@@ -992,6 +992,75 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert breakdown[0]["duration_seconds"] == 4.0
 
 
+def test_the_dashboard_fixture_pins_an_unbilled_row_beside_a_billed_sibling() -> None:
+    """One issue's missing bill is that issue's, not the **Run**'s (#332).
+
+    ADR-0026 declined #332's USD derivation — the **Rate card**'s prices are
+    denominated in the same **AI Credits** the harness already billed — and what
+    survives is the rule about the figure: a bill that never arrived is
+    unavailable *for that row only*. That rule is only enforceable family-wide if
+    a shared case actually reaches the corner, and a fixture can satisfy every
+    other Cost gate without ever putting a billed row next to an unbilled one:
+    before this gate the whole case set carried exactly one billed row in total,
+    so a **Queue** that latched the entire Run off one unpriced Lane would have
+    replayed green in every language.
+
+    The sibling must also keep its **Consumption**. An unpriceable bill costs the
+    bill, never the token counts beside it — otherwise *the harness sent no
+    figure* and *the Orchestrator saw no work* collapse into one blank row.
+    """
+    found = 0
+    for case in _DASHBOARD_INSIGHTS["cases"]:
+        for snapshot in case["snapshots"]:
+            rows = snapshot["expected"]["dashboard"]["queue"]["rows"]
+            billed = [row for row in rows if row["credits"] is not None]
+            unbilled = [
+                row
+                for row in rows
+                if row["credits"] is None and row["tokens_in"] is not None
+            ]
+            if not billed or not unbilled:
+                continue
+            for row in billed:
+                # Unknown is `null`, never a zero that reads as free work.
+                assert row["credits"] != 0, case["id"]
+            for row in unbilled:
+                assert row["credits"] is None, case["id"]
+                assert row["tokens_in"] > 0, case["id"]
+            found += 1
+    assert found, (
+        "no Dashboard case pins a billed Queue row beside an unbilled sibling"
+    )
+
+
+def test_the_dashboard_fixture_bills_a_run_that_resolved_no_rate_card() -> None:
+    """An absent **Rate card** never costs a figure (ADR-0026, #332).
+
+    Nothing is derived from the card, so *no rate card* is provenance rather than
+    a third kind of unknown Cost. The claim is only pinned if some case declares
+    the card unavailable **while Cost is available and a row actually carries
+    Credits**: with `rate_card` false reachable only on the two native cases —
+    which declare Cost false too — the fixture could not tell *this Run resolved
+    no prices* from *this Orchestrator reports no Cost*, which is the collapse
+    the separate declaration exists to end.
+    """
+    for case in _DASHBOARD_INSIGHTS["cases"]:
+        for snapshot in case["snapshots"]:
+            header = snapshot["expected"]["dashboard"]["header"]
+            if header["cost"]["availability"] != "available":
+                continue
+            if header["rate_card"]["availability"] != "unavailable":
+                continue
+            if any(
+                row["credits"] is not None
+                for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+            ):
+                return
+    raise AssertionError(
+        "no Dashboard case bills a Run whose Rate card is declared unavailable"
+    )
+
+
 def test_every_pinned_cache_split_stays_inside_its_token_total() -> None:
     """The split decomposes ``tokens_in``; it is never a figure beside it (#333).
 

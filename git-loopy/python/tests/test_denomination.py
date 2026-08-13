@@ -258,6 +258,81 @@ def test_billed_credits_is_unknown_without_billing_telemetry() -> None:
     assert BilledCreditsDenomination().cost(usage) is None
 
 
+def test_an_unbilled_issue_does_not_cost_a_billed_sibling_its_figure() -> None:
+    """A bill that never arrived is unavailable *for that row only* (#332).
+
+    The surviving half of #332 once ADR-0026 declined its USD derivation: the
+    rule is about the figure rather than about the **Rate card**, so it is
+    stated against the reference **Orchestrator**'s own projection. Two Lanes
+    both report **Consumption**; only one reports what it was billed. The billed
+    row must keep its figure, the unbilled row must read *unknown* rather than
+    zero, and its token counts must still reach the operator — a Run-scoped
+    latch would take all three away, and is an easy thing to reach for because
+    the per-**Iteration** total genuinely does latch.
+    """
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    for event in (
+        {"type": "wrapper.iteration.start", "iter": 1},
+        {"type": "wrapper.afk_ready.collected", "iter": 1, "issues": [601, 602]},
+        {
+            "type": "wrapper.issue.activated",
+            "iter": 1,
+            "issue": 601,
+            "activated_at": "2026-05-20T00:00:01.000Z",
+            "binding_source": "lane_pickup",
+            "lane_issue": 601,
+        },
+        {
+            "type": "wrapper.issue.activated",
+            "iter": 1,
+            "issue": 602,
+            "activated_at": "2026-05-20T00:00:01.000Z",
+            "binding_source": "lane_pickup",
+            "lane_issue": 602,
+        },
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "claude-opus-4.8",
+            "input": 900,
+            "output": 40,
+            "credits": 1.5,
+            "premium_requests": 0.5,
+            "lane_issue": 601,
+        },
+        # The same shape with the billing keys absent: the harness observed the
+        # work and reported no bill for it.
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "claude-opus-4.8",
+            "input": 700,
+            "output": 30,
+            "lane_issue": 602,
+        },
+    ):
+        state.render(event)
+
+    rows = {
+        row["issue"]: row
+        for row in project_run_view(state, None, issue=601)["dashboard"]["queue"]["rows"]
+    }
+
+    assert rows[601]["credits"] == 1.5
+    assert rows[601]["premium_requests"] == 0.5
+    assert rows[602]["credits"] is None
+    assert rows[602]["premium_requests"] is None
+    # Unknown is *not* zero: a falsy check would pass on either, and zero is the
+    # reading that silently understates a Run.
+    assert rows[602]["credits"] != 0
+    # An unpriceable bill costs the bill, never the Consumption beside it.
+    assert rows[602]["tokens_in"] == 700
+    assert rows[602]["tokens_out"] == 30
+
+
 def test_billed_credits_provenance_names_the_harness_not_a_price_list() -> None:
     """The run-end caveat says who authored the figure."""
     provenance = BilledCreditsDenomination().provenance

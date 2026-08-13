@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from operator import itemgetter
+
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy.rollup import IterationRollupAccumulator
 
@@ -474,6 +476,76 @@ def test_rollup_reports_billing_it_never_saw_as_unknown_not_zero() -> None:
     assert summary["cache_read"] is None
     assert summary["cache_write"] is None
     assert summary["tokens_in"] == 10
+
+
+def test_rollup_leaves_one_lane_s_missing_bill_to_that_lane() -> None:
+    """One Lane's missing bill latches the Iteration, never its sibling (#332).
+
+    The producer half of what survives #332 after ADR-0026 declined its USD
+    derivation. Two Lanes report the same work and only one reports a bill, so
+    the two rules have to hold at once and they pull in opposite directions: the
+    per-**Iteration** total *must* latch to unknown — a partial sum an operator
+    would read as complete is the understatement this arc removes — while each
+    **Lane contribution** keeps its own answer. A latch that reached the
+    contributions would look identical on a single-Lane Run and would silently
+    unprice every parallel one.
+    """
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    for issue in (601, 602):
+        rollup.observe(
+            {
+                "type": "wrapper.issue.activated",
+                "iter": 1,
+                "issue": issue,
+                "activated_at": "2026-08-02T00:00:00.000Z",
+                "binding_source": "lane_pickup",
+                "lane_issue": issue,
+            }
+        )
+    rollup.observe(
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "gpt-5.6-terra",
+            "input": 13312,
+            "output": 5,
+            "credits": 1.5,
+            "premium_requests": 0.5,
+            "cache_read": 0,
+            "cache_write": 13309,
+            "lane_issue": 601,
+        }
+    )
+    # The same shape with every billing key absent.
+    rollup.observe(
+        {
+            "type": "usage.tokens",
+            "iter": 1,
+            "model": "gpt-5.6-terra",
+            "input": 9004,
+            "output": 4,
+            "lane_issue": 602,
+        }
+    )
+    payload = rollup.finish(iter_num=1, strikes=0, outcome="ok")
+
+    billed, unbilled = (
+        issue["consumption"]
+        for issue in sorted(payload["issues"], key=itemgetter("issue"))
+    )
+    assert billed["credits"] == pytest.approx(1.5)
+    assert billed["premium_requests"] == pytest.approx(0.5)
+    assert billed["cache_write"] == 13309
+    assert unbilled["credits"] is None
+    assert unbilled["premium_requests"] is None
+    # Unknown never renders as zero, and the Consumption beside it survives.
+    assert unbilled["credits"] != 0
+    assert unbilled["tokens_in"] == 9004
+
+    summary = payload["summary"]
+    assert summary["credits"] is None, "a total missing a term is unknown, not partial"
+    assert summary["tokens_in"] == 22316
 
 
 def test_rollup_never_sums_a_subagent_s_self_reported_totals() -> None:

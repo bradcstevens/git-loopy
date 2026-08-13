@@ -3261,6 +3261,460 @@
           }
         }
       ]
+    },
+    {
+      "id": "unbilled-lane-does-not-poison-its-billed-sibling",
+      "inputs": {
+        "model": "claude-opus-4.8",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -300,
+        "drill_in_issue": 601
+      },
+      "events": [
+        {
+          "ts": "2026-05-21T12:00:00.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.2.0-dev.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "rate_card": false
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": false
+          },
+          "rate_card": null,
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-21T12:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-21T12:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            601,
+            602
+          ]
+        },
+        {
+          "ts": "2026-05-21T12:00:02.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 601,
+          "activated_at": "2026-05-21T12:00:02.000Z",
+          "binding_source": "lane_pickup",
+          "lane_issue": 601
+        },
+        {
+          "ts": "2026-05-21T12:00:02.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 602,
+          "activated_at": "2026-05-21T12:00:02.000Z",
+          "binding_source": "lane_pickup",
+          "lane_issue": 602
+        },
+        {
+          "ts": "2026-05-21T12:00:03.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "agent.output",
+          "text": "Lane A: the harness billed this call",
+          "kind": "unclassified",
+          "lane_issue": 601
+        },
+        {
+          "ts": "2026-05-21T12:00:04.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "usage.tokens",
+          "model": "claude-opus-4.8",
+          "input": 13512,
+          "output": 240,
+          "credits": 1.5,
+          "premium_requests": 0.5,
+          "cache_read": 8267,
+          "cache_write": 5235,
+          "lane_issue": 601
+        },
+        {
+          "ts": "2026-05-21T12:00:05.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "agent.output",
+          "text": "Lane B: same work, no bill on the wire",
+          "kind": "unclassified",
+          "lane_issue": 602
+        },
+        {
+          "ts": "2026-05-21T12:00:06.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "usage.tokens",
+          "model": "claude-opus-4.8",
+          "input": 9004,
+          "output": 180,
+          "lane_issue": 602
+        },
+        {
+          "ts": "2026-05-21T12:00:07.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.commit.recorded",
+          "sha": "c0ffee1d2e3f",
+          "subject": "fix(billing): read the bill the Lane was handed",
+          "lane_issue": 601
+        },
+        {
+          "ts": "2026-05-21T12:00:29.000Z",
+          "run_id": "01HXR0000000000000000000RC",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "advanced",
+          "duration_seconds": 28.0,
+          "summary": {
+            "model": "claude-opus-4.8",
+            "tokens_in": 22516,
+            "tokens_out": 420,
+            "observed_tokens": 22936,
+            "credits": null,
+            "premium_requests": null,
+            "cache_read": null,
+            "cache_write": null,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 601,
+              "status": "advanced",
+              "first_started_at": "2026-05-21T12:00:02.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 27.0,
+              "cumulative_active_seconds": 27.0,
+              "consumption": {
+                "model": "claude-opus-4.8",
+                "tokens_in": 13512,
+                "tokens_out": 240,
+                "credits": 1.5,
+                "premium_requests": 0.5,
+                "cache_read": 8267,
+                "cache_write": 5235
+              },
+              "peak_context_window": null
+            },
+            {
+              "issue": 602,
+              "status": "no-progress",
+              "first_started_at": "2026-05-21T12:00:02.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 27.0,
+              "cumulative_active_seconds": 27.0,
+              "consumption": {
+                "model": "claude-opus-4.8",
+                "tokens_in": 9004,
+                "tokens_out": 180,
+                "credits": null,
+                "premium_requests": null,
+                "cache_read": null,
+                "cache_write": null
+              },
+              "peak_context_window": null
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 9,
+          "render_at_utc": "2026-05-21T12:00:07.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RC",
+                "model": "claude-opus-4.8",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-21T07:00:00-05:00",
+                "elapsed_seconds": 7.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 601,
+                    "status": "active",
+                    "started_at": "2026-05-21T07:00:02-05:00",
+                    "active_seconds": 5.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": 13512,
+                    "tokens_out": 240,
+                    "credits": 1.5,
+                    "premium_requests": 0.5
+                  },
+                  {
+                    "issue": 602,
+                    "status": "active",
+                    "started_at": "2026-05-21T07:00:02-05:00",
+                    "active_seconds": 5.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "tokens_in": 9004,
+                    "tokens_out": 180,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 601,
+                "status": "active",
+                "started_at": "2026-05-21T07:00:02-05:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 5.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 601,
+                "lines": [
+                  {
+                    "at": "2026-05-21T07:00:03-05:00",
+                    "kind": "unclassified",
+                    "text": "Lane A: the harness billed this call"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 11,
+          "render_at_utc": "2026-05-21T12:00:30.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RC",
+                "model": "claude-opus-4.8",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-21T07:00:00-05:00",
+                "elapsed_seconds": 30.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "unavailable"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 601,
+                    "status": "advanced",
+                    "started_at": "2026-05-21T07:00:02-05:00",
+                    "active_seconds": 27.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "tokens_in": 13512,
+                    "tokens_out": 240,
+                    "credits": 1.5,
+                    "premium_requests": 0.5
+                  },
+                  {
+                    "issue": 602,
+                    "status": "no-progress",
+                    "started_at": "2026-05-21T07:00:02-05:00",
+                    "active_seconds": 27.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "tokens_in": 9004,
+                    "tokens_out": 180,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 28.0,
+                    "model": "claude-opus-4.8",
+                    "tokens_in": 22516,
+                    "tokens_out": 420,
+                    "observed_tokens": 22936,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 601,
+                "status": "advanced",
+                "started_at": "2026-05-21T07:00:02-05:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 27.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "lane",
+                    "iteration": null,
+                    "lane": 601,
+                    "outcome": "advanced",
+                    "duration_seconds": 28.0,
+                    "status": "advanced",
+                    "active_seconds": 27.0,
+                    "consumption": {
+                      "model": "claude-opus-4.8",
+                      "tokens_in": 13512,
+                      "tokens_out": 240,
+                      "cache_read": 8267,
+                      "cache_write": 5235
+                    },
+                    "credits": 1.5,
+                    "premium_requests": 0.5,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 601,
+                "lines": [
+                  {
+                    "at": "2026-05-21T07:00:03-05:00",
+                    "kind": "unclassified",
+                    "text": "Lane A: the harness billed this call"
+                  },
+                  {
+                    "at": "2026-05-21T07:00:07-05:00",
+                    "kind": "event",
+                    "text": "✓ commit c0ffee1d2e  fix(billing): read the bill the Lane was handed"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     }
   ],
   "future_consumer": {
