@@ -176,6 +176,12 @@ worth knowing before you fill it in:
 - **Every row is blocking.** A command that is already failing for unrelated reasons
   (a lint backlog, a flaky suite) makes Integration permanently red. Leave it out of
   the table until it is green, and note in prose why.
+- **Every row is bounded.** Each command runs under a wall-clock bound (default one
+  hour) and its whole process tree is killed when it exceeds it, so one loop waiting
+  on a socket, a prompt or a lock cannot block Integration forever. A loop that
+  exceeds its bound is a red gate naming that loop, reported as a *timeout* rather
+  than as a test failure. Set `GIT_LOOPY_GATE_TIMEOUT_SECONDS` when your slowest
+  honest loop needs more room — there is no value meaning "unbounded".
 
 git-loopy's own [`AGENTS.md`](../AGENTS.md) is the worked example: it declares one
 row per Runner-family member, ordered cheapest-first so a fail-fast gate reports the

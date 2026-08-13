@@ -26,13 +26,16 @@ Public surface:
   :attr:`~FeedbackLoop.runnable` screens out empty and still-``<PLACEHOLDER>`` rows
   from a not-yet-filled ``AGENTS.md``.
 * :class:`LoopFailure` — the detail of the first loop that went red
-  (``name`` / ``command`` / ``returncode`` / bounded ``output_tail``).
+  (``name`` / ``command`` / ``returncode`` / bounded ``output_tail``), plus the
+  ``timed_out`` / ``timeout_seconds`` pair that keeps "exceeded its bound" a
+  *distinct* red cause from "ran and exited non-zero".
 * :class:`GateResult` — ``passed`` plus the loop names that ``ran`` and, when red,
   the :class:`LoopFailure`. Build with :meth:`GateResult.green` / :meth:`GateResult.red`.
 * :class:`GateRunner` — the injectable Protocol: ``run(worktree) -> GateResult``.
 * :class:`AgentsMdGateRunner` — the production adapter: read ``<worktree>/AGENTS.md``,
   parse its ``## Feedback loops`` table, and run the runnable commands *in that
-  worktree*, **fail-fast** on the first non-zero exit.
+  worktree*, **fail-fast** on the first non-zero exit and **bounded** per loop.
+* :func:`resolve_gate_timeout_seconds` — the per-loop bound's env resolution.
 * :func:`parse_feedback_loops` — the pure table parser, separately tested.
 
 Design notes:
@@ -46,15 +49,27 @@ Design notes:
 * **Fail-fast.** The gate stops at the first red loop — a gate needs one red to fail,
   and stopping early avoids paying for slower downstream loops once the merge is known
   bad. :attr:`GateResult.ran` records exactly the loops attempted (ending at the red).
+* **Every loop is bounded** (#374). Integration runs this table unattended after every
+  Lane merge, and a loop waiting on a socket, a prompt or a lock would otherwise block
+  the gate forever — no workflow here sets a job timeout either, so the only ceiling in
+  effect would be the CI platform's own default. The bound is
+  :data:`DEFAULT_GATE_TIMEOUT_SECONDS`, overridable through
+  :data:`GATE_TIMEOUT_ENV_VAR`; there is deliberately **no value meaning "unbounded"**.
+  Exceeding it is a red gate naming that loop, reported as a *timeout* rather than
+  collapsed into a non-zero exit. The kill goes to the loop's whole **process group**:
+  the command is a shell whose children hold the same pipes, so killing only the shell
+  leaves those pipes open and the "bounded" run hangs anyway.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Iterable, Protocol, Sequence, runtime_checkable
+from typing import Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 __all__ = [
     "GateError",
@@ -63,11 +78,33 @@ __all__ = [
     "GateResult",
     "GateRunner",
     "AgentsMdGateRunner",
+    "DEFAULT_GATE_TIMEOUT_SECONDS",
+    "GATE_TIMEOUT_ENV_VAR",
     "parse_feedback_loops",
+    "resolve_gate_timeout_seconds",
 ]
 
 _AGENTS_FILENAME: Final[str] = "AGENTS.md"
 _OUTPUT_TAIL_LIMIT: Final[int] = 2000
+
+#: Default per-loop wall-clock bound, in seconds (#374). Sized as a **hang
+#: catcher**, not a performance budget: it must comfortably clear the slowest
+#: honest loop a repo declares (this repo's Rust loop compiles from cold) while
+#: still ending a loop that is waiting on a socket, a prompt or a lock. One
+#: number serves every loop for that job — a fast loop that hangs is simply
+#: caught at the slow loop's bound — which is why the knob is one value and not
+#: a per-loop table.
+DEFAULT_GATE_TIMEOUT_SECONDS: Final[float] = 3600.0
+
+#: The env var that overrides :data:`DEFAULT_GATE_TIMEOUT_SECONDS`. Env-only,
+#: like ``GIT_LOOPY_WORKTREE_SETUP``: both are **Parallel mode**-only seam knobs
+#: resolved inside their zero-argument ``git_loopy.loop._make_*`` factory.
+GATE_TIMEOUT_ENV_VAR: Final[str] = "GIT_LOOPY_GATE_TIMEOUT_SECONDS"
+
+#: How long to wait for a killed loop's pipes to drain before giving up on its
+#: output. The kill has already gone to the whole process group, so this only
+#: bounds a pathological unreapable grandchild.
+_DRAIN_GRACE_SECONDS: Final[float] = 5.0
 
 # The `## Feedback loops` heading (any heading level, case-insensitive).
 _SECTION_RE: Final[re.Pattern[str]] = re.compile(
@@ -123,19 +160,51 @@ class FeedbackLoop:
 class LoopFailure:
     """The detail of the first feedback loop that went red.
 
+    Two red causes, kept apart rather than collapsed (#374): the loop **ran and
+    exited non-zero**, or it **exceeded its wall-clock bound**. A timeout is not
+    a test failure and must not read as one, so it carries no ``returncode`` — a
+    synthetic exit code (``124``, ``-9``) would be exactly the collapse this
+    separation exists to prevent.
+
     Attributes:
         name: The failing loop's label.
         command: The command that was run.
         returncode: The command's non-zero exit code (``127`` when the command
-            itself was not found).
+            itself was not found), or ``None`` when the loop timed out and never
+            produced one.
         output_tail: A bounded tail of the command's combined stdout+stderr, for a
-            breadcrumb comment / Log without unbounded output.
+            breadcrumb comment / Log without unbounded output. On a timeout this is
+            whatever the loop had emitted before it was killed.
+        timed_out: ``True`` iff the loop exceeded its bound. Invariant: exactly
+            when ``returncode`` is ``None`` and ``timeout_seconds`` is set.
+        timeout_seconds: The bound the loop exceeded, or ``None`` when it exited.
     """
 
     name: str
     command: str
-    returncode: int
+    returncode: int | None
     output_tail: str
+    timed_out: bool = False
+    timeout_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.timed_out:
+            if self.returncode is not None:
+                raise ValueError("a timed-out loop has no returncode")
+            if self.timeout_seconds is None:
+                raise ValueError("a timed-out loop must name the bound it exceeded")
+        else:
+            if self.returncode is None:
+                raise ValueError("a loop that exited must carry its returncode")
+            if self.timeout_seconds is not None:
+                raise ValueError("only a timed-out loop carries a bound")
+
+    @property
+    def summary(self) -> str:
+        """A one-line reason, naming the timeout as a timeout."""
+        if self.timed_out:
+            return f"timed out after {self.timeout_seconds:g}s"
+        return f"exited {self.returncode}"
 
 
 @dataclass(frozen=True)
@@ -143,7 +212,7 @@ class GateResult:
     """The outcome of running the feedback loops in one worktree.
 
     Attributes:
-        passed: ``True`` iff every runnable loop exited zero.
+        passed: ``True`` iff every runnable loop exited zero within its bound.
         ran: The loop names actually attempted, in order. On a red gate this ends at
             the first failing loop (fail-fast); on green it is every runnable loop.
         failure: The first red loop's detail, or ``None`` on green. Invariant:
@@ -271,14 +340,97 @@ def _tail(text: str, limit: int) -> str:
     return "..." + stripped[-limit:]
 
 
+def resolve_gate_timeout_seconds(env: Mapping[str, str]) -> float:
+    """Resolve the per-loop wall-clock bound from the environment.
+
+    ``GIT_LOOPY_GATE_TIMEOUT_SECONDS`` > :data:`DEFAULT_GATE_TIMEOUT_SECONDS`.
+    A malformed or non-positive value falls through to the default rather than
+    aborting, matching ``_resolve_send_timeout_seconds``'s leniency — a stray
+    value must not stop a Run from gating, and it can never *widen* the bound to
+    "unbounded", because no value means that.
+    """
+    raw = env.get(GATE_TIMEOUT_ENV_VAR)
+    if raw is None or not raw.strip():
+        return DEFAULT_GATE_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_GATE_TIMEOUT_SECONDS
+    return value if value > 0 else DEFAULT_GATE_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
+class _Completed:
+    """The outcome of one bounded loop invocation."""
+
+    returncode: int | None
+    output: str
+    timed_out: bool
+
+
+def _kill_process_group(process: subprocess.Popen[str]) -> None:
+    """Kill a timed-out loop *and everything it spawned*.
+
+    A loop command is run through the shell, so the process the runner holds is
+    a shell whose children hold the same stdout/stderr pipes. Killing only the
+    shell leaves those children alive and the pipes open, which is how a bounded
+    run still hangs. On POSIX the loop is started in its own session, so one
+    ``killpg`` reaps the whole tree; elsewhere the best available is ``kill``.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # fall through to the single-process kill
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Completed:
+    """Run one loop command with ``cwd`` set to ``cwd``, bounded by wall clock."""
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(process)
+        try:
+            stdout, stderr = process.communicate(timeout=_DRAIN_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+        return _Completed(
+            returncode=None,
+            output=(stdout or "") + (stderr or ""),
+            timed_out=True,
+        )
+    return _Completed(
+        returncode=process.returncode,
+        output=(stdout or "") + (stderr or ""),
+        timed_out=False,
+    )
+
+
 class AgentsMdGateRunner:
     """Production :class:`GateRunner`: run a worktree's ``AGENTS.md`` feedback loops.
 
     Reads ``<worktree>/AGENTS.md``, parses its ``## Feedback loops`` table, and runs
     each **runnable** loop's command through the shell with ``cwd`` set to the
-    worktree, **fail-fast** on the first non-zero exit. This is the load-bearing gate
-    the runner runs at **Integration** (ADR-0009) and the "loops green" success check
-    the later auto-resolution agent (#63) uses.
+    worktree, **fail-fast** on the first non-zero exit and each bounded by
+    ``timeout_seconds``. This is the load-bearing gate the runner runs at
+    **Integration** (ADR-0009) and the "loops green" success check the later
+    auto-resolution agent (#63) uses.
     """
 
     def __init__(
@@ -286,9 +438,18 @@ class AgentsMdGateRunner:
         *,
         agents_filename: str = _AGENTS_FILENAME,
         output_tail_limit: int = _OUTPUT_TAIL_LIMIT,
+        timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
     ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError(f"timeout_seconds must be > 0, got {timeout_seconds}")
         self._agents_filename = agents_filename
         self._output_tail_limit = output_tail_limit
+        self._timeout_seconds = float(timeout_seconds)
+
+    @property
+    def timeout_seconds(self) -> float:
+        """The per-loop wall-clock bound, in seconds. Always positive."""
+        return self._timeout_seconds
 
     def run(self, worktree: Path) -> GateResult:
         """Run the worktree's feedback loops and report pass/fail.
@@ -323,25 +484,31 @@ class AgentsMdGateRunner:
         ran: list[str] = []
         for loop in loops:
             ran.append(loop.name)
-            completed = subprocess.run(
+            completed = _run_bounded(
                 loop.command,
-                shell=True,
-                cwd=str(worktree),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
+                cwd=worktree,
+                timeout_seconds=self._timeout_seconds,
             )
+            if completed.timed_out:
+                return GateResult.red(
+                    ran,
+                    LoopFailure(
+                        name=loop.name,
+                        command=loop.command,
+                        returncode=None,
+                        output_tail=_tail(completed.output, self._output_tail_limit),
+                        timed_out=True,
+                        timeout_seconds=self._timeout_seconds,
+                    ),
+                )
             if completed.returncode != 0:
-                combined = (completed.stdout or "") + (completed.stderr or "")
                 return GateResult.red(
                     ran,
                     LoopFailure(
                         name=loop.name,
                         command=loop.command,
                         returncode=completed.returncode,
-                        output_tail=_tail(combined, self._output_tail_limit),
+                        output_tail=_tail(completed.output, self._output_tail_limit),
                     ),
                 )
         return GateResult.green(ran)

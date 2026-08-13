@@ -344,7 +344,7 @@ def test_main_config_routing_primitives_round_trip_without_guided_fetch(
                 "config",
                 "routing",
                 "set",
-                "custom",
+                "docs",
                 "gpt-5.4",
                 "high",
                 "--project",
@@ -355,11 +355,11 @@ def test_main_config_routing_primitives_round_trip_without_guided_fetch(
     capsys.readouterr()
     assert cli_module.main(["config", "routing", "list"]) == 0
     listed = capsys.readouterr().out
-    assert "task-type:custom = gpt-5.4 @ high" in listed
+    assert "task-type:docs = gpt-5.4 @ high" in listed
     assert "task-type:planning = claude-opus-5 @ max" in listed
     assert (
         cli_module.main(
-            ["config", "routing", "unset", "custom", "--project"]
+            ["config", "routing", "unset", "docs", "--project"]
         )
         == 0
     )

@@ -49,6 +49,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, cast
 
+from git_loopy.config import TASK_TYPE_KEYS, TaskTypeError, validate_task_type_key
 from git_loopy.settings import SettingsError
 
 __all__ = [
@@ -251,6 +252,11 @@ class MeasuredRouting:
     entries: Mapping[str, MeasuredEntry] = field(default_factory=dict)
     provenance: Provenance | None = None
 
+    def __post_init__(self) -> None:
+        """Reject records outside the task-type taxonomy before they are written."""
+        for key in self.entries:
+            validate_task_type_key(key)
+
     @property
     def routing(self) -> dict[str, tuple[str, str]]:
         """The routing map this tier contributes — measured records only."""
@@ -316,10 +322,17 @@ def _parse(table: Mapping[str, object], path: Path) -> MeasuredRouting:
     routing = table.get("routing", {})
     if not isinstance(routing, dict):
         raise _error(path, "'routing' must be a table of per-task-type records")
-    entries = {
-        key: _parse_entry(key, entry, path)
-        for key, entry in cast("Mapping[str, object]", routing).items()
-    }
+    entries: dict[str, MeasuredEntry] = {}
+    for key, entry in cast("Mapping[str, object]", routing).items():
+        try:
+            validate_task_type_key(key)
+        except TaskTypeError:
+            raise _error(
+                path,
+                f"routing key {key!r} is unsupported; permitted keys: "
+                f"{', '.join(TASK_TYPE_KEYS)}",
+            ) from None
+        entries[key] = _parse_entry(key, entry, path)
     if entries and provenance is None:
         raise _error(
             path,
@@ -637,7 +650,7 @@ def _toml_str(value: str) -> str:
 def _toml_key(key: str) -> str:
     """Encode one table-header key segment.
 
-    A **Task type** key is an operator-extensible label suffix, so it may hold a
+    A **Task type** key is one of the seven closed label suffixes, so it may hold a
     dot — and a bare ``api.backend`` would be written as two table levels and
     read back as something the artifact never said. Always quoting the segment
     keeps the key one key.

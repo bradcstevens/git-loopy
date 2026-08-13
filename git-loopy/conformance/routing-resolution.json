@@ -22,12 +22,12 @@
       "warns": false
     },
     {
-      "id": "one-unknown-task-type-key-falls-back-to-default-and-warns",
+      "id": "one-unconfigured-canonical-task-type-key-falls-back-to-default-silently",
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
-      "labels": ["task-type:frobnicate"],
+      "labels": ["task-type:chore"],
       "expected": {"model": "claude-opus-4.8", "effort": "max"},
-      "warns": true
+      "warns": false
     },
     {
       "id": "conflicting-keys-fall-back-to-default-and-warn",
@@ -52,10 +52,10 @@
       "warns": false
     },
     {
-      "id": "empty-routing-map-suppresses-routing-silently",
+      "id": "empty-routing-map-suppresses-canonical-routing-silently",
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {},
-      "labels": ["task-type:docs", "task-type:frobnicate"],
+      "labels": ["task-type:docs", "task-type:chore"],
       "expected": {"model": "claude-opus-4.8", "effort": "max"},
       "warns": false
     },

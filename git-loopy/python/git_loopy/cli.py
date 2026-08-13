@@ -274,6 +274,10 @@ def build_parser() -> argparse.ArgumentParser:
             "over this.\n"
             "  GIT_LOOPY_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
             "(default: 7200).\n"
+            "  GIT_LOOPY_GATE_TIMEOUT_SECONDS  Per-feedback-loop wall-clock "
+            "bound for the\n"
+            "                              Parallel-mode Integration gate "
+            "(default: 3600).\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

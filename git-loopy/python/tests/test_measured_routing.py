@@ -466,21 +466,17 @@ def test_an_artifact_with_records_must_carry_its_provenance(tmp_path: Path) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_a_dotted_task_type_key_round_trips_rather_than_nesting(
+def test_a_task_type_outside_the_closed_taxonomy_is_refused_by_the_writer(
     tmp_path: Path,
 ) -> None:
-    """``api.backend`` is a legal **Task type** key, not two table levels."""
+    """The artifact cannot emit an unrecognised task type."""
     original = measured_routing.load_measured_routing(_write(tmp_path, _MEASURED_TOML))
     entry = original.entries["docs"]
-    dotted = measured_routing.MeasuredRouting(
-        entries={"api.backend": entry}, provenance=original.provenance
-    )
 
-    round_tripped = measured_routing.load_measured_routing(
-        _write(tmp_path, measured_routing.dump_measured_routing(dotted))
-    )
-
-    assert round_tripped == dotted
+    with pytest.raises(ValueError, match="api.backend"):
+        measured_routing.MeasuredRouting(
+            entries={"api.backend": entry}, provenance=original.provenance
+        )
 
 
 def test_a_control_character_in_a_value_round_trips(tmp_path: Path) -> None:

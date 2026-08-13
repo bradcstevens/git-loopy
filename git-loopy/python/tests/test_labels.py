@@ -48,7 +48,7 @@ def _write_mapping(repo_root: Path, rows: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_vocabulary_is_the_five_triage_roles_plus_parallel_safe(tmp_path: Path) -> None:
+def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> None:
     """With no documented mapping, the canonical defaults are what init writes."""
     vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
 
@@ -59,6 +59,13 @@ def test_vocabulary_is_the_five_triage_roles_plus_parallel_safe(tmp_path: Path) 
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]
 
 
@@ -86,6 +93,13 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "ready-for-human",
         "closed:wontfix",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]
     assert [spec.role for spec in vocabulary] == [
         "needs-triage",
@@ -94,6 +108,13 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "ready-for-human",
         "wontfix",
         "parallel-safe",
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]
 
 
@@ -128,6 +149,13 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]
 
 
@@ -168,12 +196,26 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "needs-info",
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]
     assert result.created == (
         "needs-triage",
         "needs-info",
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     )
     assert result.existing == (LABEL_READY_FOR_AGENT, "wontfix")
     assert result.unavailable is None
@@ -403,4 +445,11 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        "task-type:planning",
+        "task-type:review",
+        "task-type:implementation",
+        "task-type:test",
+        "task-type:docs",
+        "task-type:chore",
+        "task-type:bugfix",
     ]

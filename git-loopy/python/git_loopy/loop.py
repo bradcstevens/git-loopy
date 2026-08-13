@@ -534,8 +534,16 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
     serial loop never gates from the runner side (the agent runs the loops inside its
     own session), so :func:`run` does not call this factory. It ships now purely as
     the injectable seam the parallel slices consume.
+
+    The per-loop wall-clock bound (#374) is resolved here from
+    ``GIT_LOOPY_GATE_TIMEOUT_SECONDS``, env-only and inside the factory exactly as
+    :func:`_make_worktree_setup` resolves ``GIT_LOOPY_WORKTREE_SETUP`` — both are
+    Parallel-mode-only seam knobs, and keeping the factory zero-argument is what
+    lets every Integration test keep monkeypatching it with a bare ``lambda:``.
     """
-    return gate_module.AgentsMdGateRunner()
+    return gate_module.AgentsMdGateRunner(
+        timeout_seconds=gate_module.resolve_gate_timeout_seconds(os.environ)
+    )
 
 
 def _make_worktree_setup() -> worktree_module.WorktreeSetup:
@@ -3070,10 +3078,12 @@ class _ParallelLoop:
             )
             return False
         if not result.passed:
+            failure = result.failure
             self._diag.warning(
-                "integration #%s: %s gate failed on %r",
+                "integration #%s: %s gate failed on %r (%s)",
                 ref, phase,
-                result.failure.name if result.failure else "unknown",
+                failure.name if failure else "unknown",
+                failure.summary if failure else "no detail",
             )
             return False
         return True

@@ -29,5 +29,13 @@ that exact string. See `CONTEXT.md` and
 
 ## Creating the labels
 
-`git-loopy init`, run inside the repository, creates whichever of these labels are
-absent and leaves the ones that already exist untouched. Re-running it creates nothing.
+`git-loopy init`, run inside the repository, creates whichever triage,
+`parallel-safe`, and Task-type labels are absent and leaves the ones that already
+exist untouched. Re-running it creates nothing.
+
+## Task-type labels
+
+Task type is a closed routing taxonomy. The only valid labels are
+`task-type:planning`, `task-type:review`, `task-type:implementation`,
+`task-type:test`, `task-type:docs`, `task-type:chore`, and
+`task-type:bugfix`. Do not create other `task-type:` labels.

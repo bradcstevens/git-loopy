@@ -115,6 +115,7 @@ from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
 from git_loopy.config import RunConfig
 from git_loopy.events import WRAPPER_DASHBOARD_FAULT
+from git_loopy.gate import LoopFailure
 from git_loopy.interactive.driver import (
     EXIT_DASHBOARD_FAULT,
     InteractiveDriver,
@@ -641,16 +642,14 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
     assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
 
 
-def test_parallel_lane_routing_warning_surfaces_per_issue(
+def test_parallel_lane_with_an_unconfigured_canonical_task_type_uses_default(
     tmp_path, monkeypatch
 ) -> None:
-    """An unknown task-type key warns per-issue on the diagnostics channel (#148).
+    """A canonical key without a configured route uses the global default.
 
-    Issue 42 carries ``task-type:mystery`` — a key with no ``[routing]`` entry —
-    while routing is active, so :func:`resolve_iteration_model` falls the Lane
-    back to the global default AND warns. Asserts the advisory surfaces on the
-    existing per-issue diagnostics channel, scoped to that Lane's issue, and
-    that the Lane still opened on the gated global default.
+    Issue 42 carries ``task-type:chore``, one of the seven accepted keys, but
+    this Run configures only ``docs``. The Lane therefore uses the global
+    default without a routing diagnostic.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -660,7 +659,7 @@ def test_parallel_lane_routing_warning_surfaces_per_issue(
         issues=[
             _make_issue(
                 42,
-                labels=["ready-for-agent", "parallel-safe", "task-type:mystery"],
+                labels=["ready-for-agent", "parallel-safe", "task-type:chore"],
             ),
             _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
         ],
@@ -689,11 +688,10 @@ def test_parallel_lane_routing_warning_surfaces_per_issue(
     exit_code = asyncio.run(loop_module.run(cfg))
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
 
-    # The routing advisory is attributed to Lane #42 on the diagnostics log.
+    # An accepted-but-unconfigured key is not a routing error.
     diag = _diag_log(tmp_path)
-    assert "lane #42 routing:" in diag
-    assert "task-type:mystery" in diag
-    # ...and the unknown-key Lane fell back to the gated global default.
+    assert "lane #42 routing:" not in diag
+    # The unconfigured canonical key falls back to the gated global default.
     by_dir = {
         Path(c["working_directory"]).name: c
         for c in fake_client.create_calls
@@ -2560,6 +2558,41 @@ def test_parallel_lane_runs_worktree_setup_before_own_session(
     for worktree, sessions_at_setup in spy.calls:
         own_session_index = create_dirs.index(str(worktree))
         assert own_session_index >= sessions_at_setup
+
+
+def test_parallel_integration_reports_a_timed_out_loop_as_a_timeout(
+    tmp_path, monkeypatch
+) -> None:
+    """A loop that exceeds its bound is red *as a timeout* (#374).
+
+    A timeout is not a test failure and must not read as one in the record an
+    operator reads to explain a red Integration: the diagnostic names the loop
+    **and** says it timed out, so a hung toolchain is not mistaken for a
+    contribution that broke the suite.
+    """
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    timed_out = LoopFailure(
+        name="Python suite",
+        command="uv run pytest",
+        returncode=None,
+        output_tail="",
+        timed_out=True,
+        timeout_seconds=1800.0,
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: FakeGateRunner(default=False, failure=timed_out),
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    diag = _diag_log(tmp_path)
+    assert "Python suite" in diag
+    assert "timed out after 1800s" in diag
 
 
 def test_parallel_lane_surfaces_worktree_setup_failure_and_continues(

@@ -52,7 +52,9 @@ from git_loopy.config import (
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
     TASK_TYPE_LABEL_PREFIX,
+    TaskTypeError,
     gate_reasoning_effort,
+    validate_task_type_key,
 )
 
 if TYPE_CHECKING:
@@ -351,7 +353,10 @@ def _routing_key(raw: str) -> str:
         raise ConfigCommandError(
             "routing type must contain only letters, numbers, hyphens, or underscores"
         )
-    return key
+    try:
+        return validate_task_type_key(key)
+    except TaskTypeError as exc:
+        raise ConfigCommandError(str(exc)) from None
 
 
 def _validated_route(model: str, effort: str) -> tuple[str, str]:
@@ -378,7 +383,7 @@ def _writable_routing(
     table: Mapping[str, object], *, scope: str
 ) -> dict[str, dict[str, str]]:
     return {
-        key: {"model": model, "effort": effort}
+        _routing_key(key): {"model": model, "effort": effort}
         for key, (model, effort) in settings.table_routing(table, scope=scope).items()
     }
 

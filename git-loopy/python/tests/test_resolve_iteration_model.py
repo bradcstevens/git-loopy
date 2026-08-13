@@ -61,23 +61,21 @@ def test_one_known_task_type_key_uses_that_entry() -> None:
     )
 
 
-def test_one_unknown_task_type_key_warns_and_uses_default() -> None:
-    """A single unknown ``task-type:`` key falls back to the default and warns."""
+def test_one_unknown_task_type_key_is_refused_with_the_permitted_keys() -> None:
+    """A label outside the closed taxonomy cannot silently select the default."""
     cfg = RunConfig(
         model="claude-opus-4.8",
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
     )
-    warnings: list[str] = []
 
-    result = resolve_iteration_model(
-        cfg, ["task-type:frobnicate"], warn=warnings.append
-    )
+    with pytest.raises(ValueError) as exc_info:
+        resolve_iteration_model(cfg, ["task-type:frobnicate"])
 
-    assert result == ("claude-opus-4.8", "max")
-    assert len(warnings) == 1
-    assert "task-type:frobnicate" in warnings[0]
-    assert "default" in warnings[0]
+    message = str(exc_info.value)
+    assert "task-type:frobnicate" in message
+    for key in ("planning", "review", "implementation", "test", "docs", "chore", "bugfix"):
+        assert key in message
 
 
 def test_conflicting_keys_warn_naming_labels_and_use_default() -> None:
@@ -127,24 +125,15 @@ def test_duplicate_value_keys_use_that_pair_silently() -> None:
     assert warnings == []
 
 
-def test_empty_routing_map_is_suppressed_silently() -> None:
+def test_empty_routing_map_still_refuses_an_unknown_task_type() -> None:
     """An empty routing map resolves every issue to the gated default, silently.
 
-    Covers both back-compat (no ``[routing]`` block) and run-wide suppression (an
-    explicit ``--model`` / ``--reasoning-effort`` override) — a labelled issue must
-    NOT raise a spurious unknown-key warning when routing is off.
+    Routing suppression changes model selection, not the closed tracker
+    vocabulary: invalid labels remain invalid even when no route is active.
     """
     cfg = RunConfig(model="claude-opus-4.8", reasoning_effort="max", routing={})
-    warnings: list[str] = []
-
-    result = resolve_iteration_model(
-        cfg,
-        ["task-type:docs", "task-type:frobnicate"],
-        warn=warnings.append,
-    )
-
-    assert result == ("claude-opus-4.8", "max")
-    assert warnings == []
+    with pytest.raises(ValueError, match="task-type:frobnicate"):
+        resolve_iteration_model(cfg, ["task-type:docs", "task-type:frobnicate"])
 
 
 def test_routed_pair_passes_through_the_shared_effort_gate() -> None:

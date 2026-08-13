@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import os
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
 from git_loopy.gate import (
+    DEFAULT_GATE_TIMEOUT_SECONDS,
+    GATE_TIMEOUT_ENV_VAR,
     AgentsMdGateRunner,
     FeedbackLoop,
     GateError,
@@ -31,6 +34,7 @@ from git_loopy.gate import (
     GateRunner,
     LoopFailure,
     parse_feedback_loops,
+    resolve_gate_timeout_seconds,
 )
 
 requires_posix = pytest.mark.skipif(
@@ -219,6 +223,96 @@ def test_runner_raises_gate_error_when_no_runnable_loops(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
+# Timeout — every loop the gate runs is bounded (#374)                         #
+# --------------------------------------------------------------------------- #
+
+
+@requires_posix
+def test_runner_reports_a_loop_that_exceeds_its_bound_as_a_timeout(
+    tmp_path: Path,
+) -> None:
+    """A hung loop is a red gate naming that loop, and the suite does not hang."""
+    _write_agents(tmp_path, [("Hang", "sleep 30"), ("Never", "true")])
+    started = time.monotonic()
+    result = AgentsMdGateRunner(timeout_seconds=0.5).run(tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 20  # bounded: the 30s sleep did not run to completion
+    assert result.passed is False
+    assert result.ran == ("Hang",)  # fail-fast still holds for a timeout
+    assert result.failure is not None
+    assert result.failure.name == "Hang"
+
+
+@requires_posix
+def test_timeout_is_distinguishable_from_a_non_zero_exit(tmp_path: Path) -> None:
+    """A timeout is not a test failure and must not be reported as one."""
+    _write_agents(tmp_path, [("Hang", "sleep 30")])
+    timed_out = AgentsMdGateRunner(timeout_seconds=0.5).run(tmp_path).failure
+    assert timed_out is not None
+    assert timed_out.timed_out is True
+    assert timed_out.returncode is None  # never a synthetic 124 / -9
+    assert timed_out.timeout_seconds == 0.5
+    assert "timed out" in timed_out.summary
+
+    _write_agents(tmp_path, [("Hang", "sh -c 'exit 3'")])
+    exited = AgentsMdGateRunner(timeout_seconds=30).run(tmp_path).failure
+    assert exited is not None
+    assert exited.timed_out is False
+    assert exited.returncode == 3
+    assert exited.timeout_seconds is None
+    assert "timed out" not in exited.summary
+
+
+def test_loop_failure_refuses_a_collapsed_timeout() -> None:
+    """The two red channels cannot be mixed into one another."""
+    with pytest.raises(ValueError):
+        LoopFailure("Tests", "false", 124, "", timed_out=True, timeout_seconds=1.0)
+    with pytest.raises(ValueError):
+        LoopFailure("Tests", "false", None, "", timed_out=True)
+    with pytest.raises(ValueError):
+        LoopFailure("Tests", "false", None, "")
+
+
+@requires_posix
+def test_timeout_reaps_the_whole_process_tree(tmp_path: Path) -> None:
+    """A backgrounded grandchild holding the pipes cannot outlive the bound.
+
+    This is the failure a naive bounded ``subprocess.run`` still has: killing the
+    shell leaves its children holding stdout/stderr, so the *drain* blocks and the
+    "bounded" run hangs anyway. Every loop in this repo's own table is a shell
+    construct that spawns children, so it is the realistic case, not a corner one.
+    """
+    _write_agents(tmp_path, [("Hang", "sleep 30 & wait")])
+    started = time.monotonic()
+    result = AgentsMdGateRunner(timeout_seconds=0.5).run(tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert result.failure is not None and result.failure.timed_out is True
+    # Comfortably under the post-kill drain grace: the group kill freed the pipes.
+    assert elapsed < 4
+
+
+def test_runner_refuses_a_non_positive_bound() -> None:
+    """There is no value meaning "unbounded" — that is the whole point (#374)."""
+    for bad in (0, -1, -0.5):
+        with pytest.raises(ValueError):
+            AgentsMdGateRunner(timeout_seconds=bad)
+
+
+def test_gate_timeout_resolves_from_the_environment() -> None:
+    """The bound is configurable, and a stray value degrades to the default."""
+    assert resolve_gate_timeout_seconds({}) == DEFAULT_GATE_TIMEOUT_SECONDS
+    assert resolve_gate_timeout_seconds({GATE_TIMEOUT_ENV_VAR: "90"}) == 90.0
+    assert resolve_gate_timeout_seconds({GATE_TIMEOUT_ENV_VAR: " 12.5 "}) == 12.5
+    for stray in ("", "   ", "abc", "0", "-30"):
+        assert (
+            resolve_gate_timeout_seconds({GATE_TIMEOUT_ENV_VAR: stray})
+            == DEFAULT_GATE_TIMEOUT_SECONDS
+        )
+
+
+# --------------------------------------------------------------------------- #
 # _make_gate_runner factory — monkeypatchable like the other _make_* factories #
 # --------------------------------------------------------------------------- #
 
@@ -226,7 +320,22 @@ def test_runner_raises_gate_error_when_no_runnable_loops(tmp_path: Path) -> None
 def test_make_gate_runner_builds_the_production_runner() -> None:
     from git_loopy import loop
 
-    assert isinstance(loop._make_gate_runner(), AgentsMdGateRunner)
+    runner = loop._make_gate_runner()
+    assert isinstance(runner, AgentsMdGateRunner)
+    assert runner.timeout_seconds == DEFAULT_GATE_TIMEOUT_SECONDS
+
+
+def test_make_gate_runner_binds_the_configured_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The factory reads ``GIT_LOOPY_GATE_TIMEOUT_SECONDS``, like ``_make_worktree_setup``."""
+    from git_loopy import loop
+
+    monkeypatch.setenv(GATE_TIMEOUT_ENV_VAR, "  45  ")
+    assert loop._make_gate_runner().timeout_seconds == 45.0
+
+    monkeypatch.setenv(GATE_TIMEOUT_ENV_VAR, "nonsense")
+    assert loop._make_gate_runner().timeout_seconds == DEFAULT_GATE_TIMEOUT_SECONDS
 
 
 def test_make_gate_runner_is_monkeypatchable(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,6 +23,9 @@ Design:
   ``ready-for-agent``, and the runner reads it directly from
   :data:`git_loopy.sources.LABEL_PARALLEL_SAFE`. So it is appended from that
   constant rather than looked up in the role table.
+* **Task types are fixed.** Their seven labels are derived from the routing
+  vocabulary, so the labels an unattended classifier may apply always exist in
+  the tracker and cannot drift from the keys routing accepts.
 * **Ensure, never reconcile.** :func:`bootstrap_labels` creates what is absent and
   leaves what exists exactly as it is — colour and description included. An
   operator who recoloured ``ready-for-agent`` keeps their colour, and a re-run
@@ -39,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
+from git_loopy.config import RECOMMENDED_ROUTING, TASK_TYPE_LABEL_PREFIX
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 __all__ = [
@@ -127,13 +131,24 @@ PARALLEL_SAFE_ROLE: LabelSpec = LabelSpec(
     ),
 )
 
+TASK_TYPE_LABELS: tuple[LabelSpec, ...] = tuple(
+    LabelSpec(
+        role=f"task-type:{key}",
+        name=f"{TASK_TYPE_LABEL_PREFIX}{key}",
+        color="1d76db",
+        description=f"Classifies an issue as a {key} task for git-loopy routing.",
+    )
+    for key in RECOMMENDED_ROUTING
+)
+
 
 def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     """Return the labels a Run needs, in the order ``init`` should ensure them.
 
     The five triage roles are read from the repository's documented mapping so
     the vocabulary ``init`` writes is the vocabulary the skills actually apply.
-    ``parallel-safe`` is appended from the runner's own constant.
+    ``parallel-safe`` is appended from the runner's own constant, followed by
+    the seven closed task-type labels.
 
     Args:
         repo_root: Repository root to look for the documented mapping under, or
@@ -151,7 +166,7 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         )
         for spec in TRIAGE_ROLES
     )
-    return (*roles, PARALLEL_SAFE_ROLE)
+    return (*roles, PARALLEL_SAFE_ROLE, *TASK_TYPE_LABELS)
 
 
 #: One ``| `role` | `label` | meaning |`` row of the documented mapping table.

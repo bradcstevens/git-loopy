@@ -434,7 +434,7 @@ def test_routing_list_shows_measured_entries_the_operator_has_not_configured(
     ]
 
 
-def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
+def test_routing_use_recommended_replaces_every_canonical_route(
     tmp_path: Path,
 ) -> None:
     path = settings.project_config_path(tmp_path)
@@ -442,7 +442,7 @@ def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
         path,
         {
             "routing": {
-                "custom": {"model": "gpt-5.4", "effort": "high"},
+                "review": {"model": "gpt-5.4", "effort": "high"},
                 "docs": {"model": "gpt-5.4", "effort": "high"},
             }
         },
@@ -458,11 +458,10 @@ def test_routing_use_recommended_seeds_core_and_preserves_custom_routes(
 
     assert rc == 0
     routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
-    assert routing["custom"] == {"model": "gpt-5.4", "effort": "high"}
+    assert routing["review"] == {"model": "gpt-5.6-sol", "effort": "xhigh"}
     assert routing["planning"] == {"model": "claude-opus-5", "effort": "max"}
     assert routing["docs"] == {"model": "claude-sonnet-5", "effort": "low"}
-    # The seven recommended keys, plus the pre-existing custom route.
-    assert len(routing) == 8
+    assert len(routing) == 7
 
 
 def test_routing_guided_accept_all_commits_recommended_core(tmp_path: Path) -> None:
@@ -1102,10 +1101,10 @@ def test_list_reports_suppression_rather_than_dropping_the_routing_map(
     ]
 
 
-def test_no_recommended_hint_for_a_task_type_the_core_does_not_name(
+def test_get_refuses_a_task_type_outside_the_closed_taxonomy(
     tmp_path: Path,
 ) -> None:
-    """The taxonomy is open, so an operator-invented key has nothing to suggest."""
+    """An invalid task type reports the permitted keys instead of a default."""
     err = _Sink()
     rc = configcmd.run_get(
         "task-type:migrations",
@@ -1114,6 +1113,7 @@ def test_no_recommended_hint_for_a_task_type_the_core_does_not_name(
         out=_Sink(),
         err=err,
     )
-    assert rc == 0
-    assert "migrations" not in RECOMMENDED_ROUTING
-    assert "use-recommended" not in err.text
+    assert rc == 1
+    assert "migrations" in err.text
+    for key in RECOMMENDED_ROUTING:
+        assert key in err.text

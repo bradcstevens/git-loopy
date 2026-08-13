@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from git_loopy import gate
 from git_loopy.gate import AgentsMdGateRunner, GateResult, parse_feedback_loops
 
 _SECTION_HEADING = "## Feedback loops"
@@ -87,16 +88,11 @@ def test_the_production_gate_can_run_this_repository(
     """
     ran_commands: list[str] = []
 
-    class _Completed:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _fake_run(command: str, **kwargs: object) -> _Completed:
+    def _fake_run_bounded(command: str, **kwargs: object) -> gate._Completed:
         ran_commands.append(command)
-        return _Completed()
+        return gate._Completed(returncode=0, output="", timed_out=False)
 
-    monkeypatch.setattr("git_loopy.gate.subprocess.run", _fake_run)
+    monkeypatch.setattr("git_loopy.gate._run_bounded", _fake_run_bounded)
 
     result = AgentsMdGateRunner().run(repo_root)
 
@@ -104,6 +100,30 @@ def test_the_production_gate_can_run_this_repository(
     assert result.passed
     assert ran_commands, "the gate declared loops but executed none of them"
     assert len(result.ran) == len(ran_commands)
+
+
+def test_every_declared_loop_of_this_repository_is_bounded(repo_root: Path) -> None:
+    """Each loop this repo declares is run under a wall-clock bound (#374).
+
+    Integration runs this table unattended after every Lane merge. One loop waiting
+    on a socket, a prompt or a lock would otherwise block the gate forever, and no
+    workflow here sets a job timeout either — so the bound has to be the gate's own.
+    """
+    bounds: list[float | None] = []
+
+    def _record_bound(command: str, **kwargs: object) -> gate._Completed:
+        timeout = kwargs.get("timeout_seconds")
+        bounds.append(timeout if isinstance(timeout, float) else None)
+        return gate._Completed(returncode=0, output="", timed_out=False)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("git_loopy.gate._run_bounded", _record_bound)
+        AgentsMdGateRunner().run(repo_root)
+
+    assert bounds, "the gate declared loops but executed none of them"
+    assert all(
+        bound is not None and bound > 0 for bound in bounds
+    ), f"an unbounded loop can hang Integration forever: {bounds}"
 
 
 def test_declared_loops_commit_no_host_specific_paths(agents_md: str) -> None:

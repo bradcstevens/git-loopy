@@ -44,7 +44,10 @@ __all__ = [
     "SUPPORTED_MODELS",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
+    "TASK_TYPE_KEYS",
     "RECOMMENDED_ROUTING",
+    "TaskTypeError",
+    "validate_task_type_key",
     "EffortGateWarning",
     "GatedEffort",
     "gate_reasoning_effort",
@@ -128,13 +131,9 @@ REASONING_EFFORT_ORDER: tuple[str, ...] = (
 #: syntactic gate (for example, to reject ``"ultra"``).
 REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 
-#: The kit's opinionated, recommended ``task-type`` -> ``(model, effort)`` core
-#: (decision #110) — the "batteries-included" routing mapping the guided-setup
-#: surfaces seed and render (``git-loopy init``'s opt-in routing step and
-#: ``git-loopy config routing use-recommended`` / its guided walk). It is the
-#: *recommended* core, **not** a closed set: the ``task-type:`` taxonomy stays
-#: open and operator-extensible — any key with a ``[routing]`` entry routes, this
-#: is just the shipped starting point.
+#: The seven permitted ``task-type`` -> ``(model, effort)`` routes
+#: (decision #110). The guided setup surfaces, seeds, and renders this fixed
+#: taxonomy; no operator-defined task-type key is accepted.
 #:
 #: Keyed by the bare task-type key (the part *after* :data:`TASK_TYPE_LABEL_PREFIX`,
 #: matching :attr:`RunConfig.routing` and the ``[routing]`` config table), in the
@@ -187,6 +186,24 @@ RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
         "bugfix": ("claude-opus-5", "xhigh"),
     }
 )
+
+#: The closed task-type taxonomy in its stable presentation order.
+TASK_TYPE_KEYS: tuple[str, ...] = tuple(RECOMMENDED_ROUTING)
+
+
+class TaskTypeError(ValueError):
+    """A task type outside :data:`TASK_TYPE_KEYS` was supplied."""
+
+
+def validate_task_type_key(key: str) -> str:
+    """Return ``key`` when it belongs to the closed task-type taxonomy."""
+    if key not in TASK_TYPE_KEYS:
+        raise TaskTypeError(
+            f"unsupported task type {key!r}; permitted keys: "
+            f"{', '.join(TASK_TYPE_KEYS)}"
+        )
+    return key
+
 
 #: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for
 #: an hour or more, so the SDK's own 60s default is far too aggressive. Lives
@@ -516,7 +533,10 @@ class RunConfig:
         # frozen dataclass is genuinely immutable (no aliasing back to the
         # caller's dict, no post-construction mutation) and stays safe to reuse
         # across every Iteration. Built once by the resolver (issue #146).
-        object.__setattr__(self, "routing", MappingProxyType(dict(self.routing)))
+        routing = dict(self.routing)
+        for key in routing:
+            validate_task_type_key(key)
+        object.__setattr__(self, "routing", MappingProxyType(routing))
 
 
 def _ignore_routing_warning(_message: str) -> None:
@@ -552,9 +572,9 @@ def resolve_iteration_model(
     (:data:`TASK_TYPE_LABEL_PREFIX` — the runner *reads* the label, it never infers
     the type), selects a source pair per the locked table below, passes that pair
     through the shared effort gate (:func:`gate_reasoning_effort`, #145), and returns
-    it. The ``[routing]`` table on :attr:`run_config.routing <RunConfig.routing>` is
-    the source of truth for valid keys; the global default is the run config's
-    top-level ``(model, effort)``.
+    it. The fixed :data:`TASK_TYPE_KEYS` taxonomy is the source of truth for
+    valid keys; the global default is the run config's top-level ``(model,
+    effort)``.
 
     Source-pair selection (decision #109):
 
@@ -563,7 +583,6 @@ def resolve_iteration_model(
     ======================================  ===============  =========================
     none                                    global default   no (silent — normal path)
     one known key                           that entry       no
-    one unknown key                         global default   yes — unknown key
     >=2 keys, differing resolved values     global default   yes — conflict (labels)
     >=2 keys, all resolving to same value   that pair         no
     ======================================  ===============  =========================
@@ -571,8 +590,7 @@ def resolve_iteration_model(
     **Suppression / back-compat.** When :attr:`run_config.routing <RunConfig.routing>`
     is empty — no ``[routing]`` block, or an explicit ``--model`` /
     ``--reasoning-effort`` override suppressing routing run-wide — every issue resolves
-    to the single gated global/explicit pair, with **no** label inspection and no
-    warning (so a labelled issue never raises a spurious "unknown key").
+    to the single gated global/explicit pair after validating any task-type labels.
 
     **No I/O.** This function is pure and exhaustively unit-testable; warnings surface
     through the injected ``warn`` callback (default no-op), which a call site wires to
@@ -582,7 +600,7 @@ def resolve_iteration_model(
         run_config: The frozen run configuration carrying the routing map and the
             global-default ``(model, reasoning_effort)``.
         issue_labels: The Active issue's labels (only ``task-type:`` ones matter).
-        warn: Sink for the non-fatal unknown-key / conflict advisories.
+        warn: Sink for non-fatal conflicting-label advisories.
 
     Returns:
         The gated ``(model, effort)`` pair the Iteration should run on. ``model`` is
@@ -594,32 +612,29 @@ def resolve_iteration_model(
     )
     routing = run_config.routing
 
-    # Suppression / back-compat: routing off run-wide -> gated global default, and
-    # we never inspect labels, so a labelled issue raises no spurious warning.
-    if not routing:
-        return _gate_pair(default)
-
     keys: list[str] = []
     for label in issue_labels:
         if label.startswith(TASK_TYPE_LABEL_PREFIX):
             key = label[len(TASK_TYPE_LABEL_PREFIX) :]
+            try:
+                validate_task_type_key(key)
+            except TaskTypeError:
+                raise TaskTypeError(
+                    f"unsupported task-type label {label!r}; permitted keys: "
+                    f"{', '.join(TASK_TYPE_KEYS)}"
+                ) from None
             if key not in keys:
                 keys.append(key)
+
+    # Suppression / back-compat: routing off run-wide -> gated global default.
+    if not routing:
+        return _gate_pair(default)
 
     source: tuple[str | None, str | None]
     if not keys:
         source = default
     elif len(keys) == 1:
-        key = keys[0]
-        if key in routing:
-            source = routing[key]
-        else:
-            warn(
-                f"issue task-type label "
-                f"{TASK_TYPE_LABEL_PREFIX + key!r} has no [routing] entry; "
-                f"using the global default (model, effort)."
-            )
-            source = default
+        source = routing.get(keys[0], default)
     else:
         resolved = [routing.get(key, default) for key in keys]
         if all(pair == resolved[0] for pair in resolved[1:]):
