@@ -103,6 +103,106 @@ assert_equal \
   "$(jq -r '.pin_outranks_priority' "$conformance_dir/issue-ordering.json")" \
   "issue-ordering: the fixture declares that a Pin outranks Priority"
 
+# Wrapper contract §2.1 — the read the order is computed over. The schedule is a
+# family decision rather than this port's: two members walking different limits
+# read different backlogs, and a backlog is exactly what §3.2 orders.
+assert_equal \
+  "$(jq -r '.read_schedule | "\(.first_limit) \(.max_limit)"' \
+    "$conformance_dir/issue-ordering.json")" \
+  "$GIT_LOOPY_LIST_PAGE_LIMIT $GIT_LOOPY_LIST_MAX_LIMIT" \
+  "issue-ordering: the port walks the read schedule the fixture declares"
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  # `//` is jq's *alternative* operator and treats `false` as empty as well as
+  # null, so every nullable field here is read with an explicit null test. A
+  # `head_read` of `false` is the whole point of the truncated case.
+  backlog="$(jq -r '.backlog | if . == null then "null" else tostring end' \
+    <<<"$case_json")"
+  head_at_index="$(
+    jq -r '.head_at_index | if . == null then "null" else tostring end' \
+      <<<"$case_json"
+  )"
+
+  # The adapter simulates the *source* — a backlog of `backlog` issues answers an
+  # ask of `limit` with `min(backlog, limit)` rows, and a null backlog is one no
+  # limit can exhaust — while `git_loopy_next_read_step` makes every decision
+  # about what that page means. Simulating the source rather than `gh` is what
+  # keeps the case offline and identical in three languages.
+  asks=()
+  limit="$GIT_LOOPY_LIST_PAGE_LIMIT"
+  while true; do
+    asks+=("$limit")
+    if [[ "$backlog" == "null" ]] || ((backlog > limit)); then
+      rows="$limit"
+    else
+      rows="$backlog"
+    fi
+    step="$(git_loopy_next_read_step "$limit" "$rows")"
+    next_limit="$(jq -r '.next_limit // empty' <<<"$step")"
+    [[ -z "$next_limit" ]] && break
+    # Every page before the last was ambiguous and established nothing.
+    # Asserted rather than assumed: a seam that answered `complete` while still
+    # handing back a doubled limit would reach the same terminal step.
+    assert_equal "continue" "$(jq -r '.outcome' <<<"$step")" \
+      "issue-ordering read step outcome at limit $limit: $case_id"
+    assert_equal "false" "$(jq -r '.authoritative' <<<"$step")" \
+      "issue-ordering read step authority at limit $limit: $case_id"
+    limit="$next_limit"
+  done
+
+  assert_equal \
+    "$(jq -c '.expected.asks' <<<"$case_json")" \
+    "$(printf '%s\n' "${asks[@]}" | jq -sc 'map(tonumber)')" \
+    "issue-ordering read asks: $case_id"
+  assert_equal \
+    "$(jq -r '.expected.rows_read' <<<"$case_json")" \
+    "$rows" \
+    "issue-ordering read rows: $case_id"
+  assert_equal \
+    "$(jq -r '.expected.outcome' <<<"$case_json")" \
+    "$(jq -r '.outcome' <<<"$step")" \
+    "issue-ordering read outcome: $case_id"
+  assert_equal \
+    "$(jq -r '.expected.authoritative' <<<"$case_json")" \
+    "$(jq -r '.authoritative' <<<"$step")" \
+    "issue-ordering read authority: $case_id"
+
+  if [[ "$head_at_index" == "null" ]]; then
+    head_read="null"
+  elif ((head_at_index < rows)); then
+    head_read="true"
+  else
+    head_read="false"
+  fi
+  assert_equal \
+    "$(jq -r '.expected.head_read | if . == null then "null" else tostring end' \
+      <<<"$case_json")" \
+    "$head_read" \
+    "issue-ordering read head: $case_id"
+done < <(jq -c '.read_cases[]' "$conformance_dir/issue-ordering.json")
+
+while IFS= read -r outcome; do
+  jq -e --arg outcome "$outcome" \
+    'any(.read_cases[]; .expected.outcome == $outcome)
+      or ($outcome == "continue"
+          and any(.read_cases[]; (.expected.asks | length) > 1))' \
+    "$conformance_dir/issue-ordering.json" >/dev/null ||
+    fail "no issue-ordering read case reaches outcome $outcome"
+done < <(jq -r '.read_schedule.outcomes[]' "$conformance_dir/issue-ordering.json")
+
+# The adversarial case §3.2 needs from §2.1: the head of the order sits beyond
+# the first page, so a member that stopped there would order a backlog missing
+# the issue it was about to select.
+jq -e '.read_schedule.first_limit as $first
+  | any(.read_cases[];
+        .head_at_index != null
+        and .head_at_index >= $first
+        and .expected.head_read == true
+        and (.expected.asks | length) > 1)' \
+  "$conformance_dir/issue-ordering.json" >/dev/null ||
+  fail "no issue-ordering read case pins a page boundary falling mid-order"
+
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   reason="$(jq -r '.reason' <<<"$case_json")"

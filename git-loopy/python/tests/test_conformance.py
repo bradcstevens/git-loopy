@@ -38,6 +38,12 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
+from git_loopy.gh import (
+    LIST_MAX_LIMIT,
+    LIST_PAGE_LIMIT,
+    ReadOutcome,
+    next_read_step,
+)
 from git_loopy.issue_order import (
     LABEL_PRIORITY,
     MAX_ACCEPTED_YEAR,
@@ -218,6 +224,148 @@ def test_the_pin_is_exercised_by_an_ordering_case() -> None:
 def test_ordering_cases_are_named_uniquely() -> None:
     """Case ids are the parametrize ids every port reports failures by."""
     ids = [case["id"] for case in _ISSUE_ORDERING["cases"]]
+
+    assert len(ids) == len(set(ids))
+
+
+# --------------------------------------------------------------------------- #
+# Fetch completeness (§2.1) — the read the order is computed over              #
+# --------------------------------------------------------------------------- #
+
+
+def _walk_read(case: Mapping[str, Any]) -> tuple[dict[str, Any], list[ReadStep]]:
+    """Drive ``next_read_step`` over a fixture backlog and report the walk.
+
+    Translation only, per the Conformance README. The adapter simulates the
+    *source* — a backlog of ``backlog`` issues answers an ask of ``limit`` with
+    ``min(backlog, limit)`` rows, and a ``null`` backlog is one no limit can
+    exhaust — and the production seam makes every decision about what that page
+    means. Simulating the source rather than ``gh`` is what keeps the case
+    offline and identical in three languages.
+
+    Returns the terminal observation the fixture compares against *and* every
+    step the walk took, because a fixture that only checked the last one would
+    accept a seam that reported the wrong outcome on every page before it.
+    """
+    backlog = case["backlog"]
+    asks: list[int] = []
+    steps: list[ReadStep] = []
+    limit = LIST_PAGE_LIMIT
+    while True:
+        asks.append(limit)
+        rows = limit if backlog is None else min(backlog, limit)
+        step = next_read_step(limit=limit, rows=rows)
+        steps.append(step)
+        if step.next_limit is None:
+            break
+        limit = step.next_limit
+    head_at_index = case["head_at_index"]
+    observed = {
+        "asks": asks,
+        "rows_read": rows,
+        "outcome": step.outcome.value,
+        "authoritative": step.authoritative,
+        "head_read": None if head_at_index is None else head_at_index < rows,
+    }
+    return observed, steps
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ISSUE_ORDERING["read_cases"],
+    ids=lambda case: case["id"],
+)
+def test_issue_ordering_read_case(case: dict[str, Any]) -> None:
+    """The candidate read reaches the whole backlog, or says that it did not.
+
+    §2.1 is §3.2's input, which is why this lives in the ordering fixture rather
+    than in one of its own: a page boundary falling mid-order decides *which
+    issues were ordered at all*, and a member whose read stopped a page early
+    would pass every ordering case above while selecting a different head from
+    the same repository.
+    """
+    observed, steps = _walk_read(case)
+
+    assert observed == case["expected"]
+    # Every page before the last was ambiguous, and none of them established
+    # anything. Asserted rather than assumed: a seam that answered `complete`
+    # while still handing back a doubled limit would reach the same terminal
+    # step and be indistinguishable from a correct one.
+    for step in steps[:-1]:
+        assert step.outcome is ReadOutcome.CONTINUE
+        assert step.authoritative is False
+        assert step.next_limit is not None
+
+
+def test_issue_ordering_fixture_pins_the_read_schedule() -> None:
+    """The doubling schedule is a family decision, not each member's own.
+
+    ``100`` and ``1600`` were three private constants agreeing by convention.
+    Two members walking different limits read different backlogs, and a backlog
+    is exactly what §3.2 orders — so a divergent ceiling is a divergent head of
+    the order, reached without either member sorting anything differently.
+    """
+    schedule = _ISSUE_ORDERING["read_schedule"]
+
+    assert schedule["first_limit"] == LIST_PAGE_LIMIT
+    assert schedule["max_limit"] == LIST_MAX_LIMIT
+    assert set(schedule["outcomes"]) == {outcome.value for outcome in ReadOutcome}
+
+
+def test_every_read_outcome_is_covered_by_a_read_case() -> None:
+    """A declared outcome no case reaches is an outcome nothing pins.
+
+    ``continue`` is reached mid-walk rather than at its end, so it is covered by
+    a case whose ``asks`` runs to more than one entry rather than by a terminal
+    ``outcome``.
+    """
+    cases = _ISSUE_ORDERING["read_cases"]
+    terminal = {case["expected"]["outcome"] for case in cases}
+
+    assert terminal == {ReadOutcome.COMPLETE.value, ReadOutcome.INCOMPLETE.value}
+    assert any(len(case["expected"]["asks"]) > 1 for case in cases)
+
+
+def test_a_read_case_pins_a_page_boundary_falling_mid_order() -> None:
+    """The adversarial case the PRD names: the head sits beyond the first page.
+
+    Under the newest-first order this replaced, a fixed page limit hid the
+    *oldest* candidates and nothing was about to select those. Under §3.2 the
+    head of the order is the oldest issue, so the first page is precisely where
+    it is *not* — completeness became a correctness requirement rather than a
+    nicety, and this is the case that says so.
+    """
+    first_limit = _ISSUE_ORDERING["read_schedule"]["first_limit"]
+
+    assert any(
+        case["head_at_index"] is not None
+        and case["head_at_index"] >= first_limit
+        and case["expected"]["head_read"] is True
+        and len(case["expected"]["asks"]) > 1
+        for case in _ISSUE_ORDERING["read_cases"]
+    )
+
+
+def test_a_truncated_read_is_pinned_as_unauthoritative_for_the_head() -> None:
+    """An incomplete read establishes neither emptiness nor the head (§2.1).
+
+    The other half of the same fact: the walk ends, the issues it did read are
+    still usable, and the one thing it may not do is claim the head.
+    """
+    truncated = [
+        case
+        for case in _ISSUE_ORDERING["read_cases"]
+        if case["expected"]["outcome"] == ReadOutcome.INCOMPLETE.value
+    ]
+
+    assert truncated
+    assert all(case["expected"]["authoritative"] is False for case in truncated)
+    assert any(case["expected"]["head_read"] is False for case in truncated)
+
+
+def test_read_cases_are_named_uniquely() -> None:
+    """Case ids are the parametrize ids every port reports failures by."""
+    ids = [case["id"] for case in _ISSUE_ORDERING["read_cases"]]
 
     assert len(ids) == len(set(ids))
 
@@ -463,16 +611,17 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
-    ``contract_version`` moved to 1.14 with the **Pin** (#396): the schema's
-    ``reason_values`` did not change — ``pin`` has been declared there since
-    1.13 — but the contract that says *when* a member emits it did, so the
-    fixture tracks it. ``event_schema_version`` deliberately did not: no record
-    gained, lost or re-typed a field, and a consumer pinned to 1.1 reads a
-    1.14 stream unchanged.
+    ``contract_version`` moved to 1.15 with the shared **read schedule**
+    (§2.1): the Event schema gained nothing at all — the schedule decides which
+    candidates were *read*, which is upstream of every record about them.
+    ``event_schema_version`` deliberately did not move: no record gained, lost
+    or re-typed a field, and a consumer pinned to 1.1 reads a 1.15 stream
+    unchanged. The same was true of 1.14's **Pin**, whose ``pin`` reason had
+    been declared in ``reason_values`` since 1.13.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.14"
+    assert _EVENT_SCHEMA["contract_version"] == "1.15"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:

@@ -141,6 +141,109 @@ foreach ($Defect in @($IssueOrdering["timestamp_defects"])) {
     }
 }
 
+# Wrapper contract §2.1 - the read the order is computed over. The schedule is a
+# family decision rather than this port's: two members walking different limits
+# read different backlogs, and a backlog is exactly what §3.2 orders.
+$ReadSchedule = Get-GitLoopyReadSchedule
+Assert-Equal `
+    $IssueOrdering["read_schedule"]["first_limit"] `
+    $ReadSchedule["first_limit"] `
+    "issue-ordering: the port asks the first limit the fixture declares"
+Assert-Equal `
+    $IssueOrdering["read_schedule"]["max_limit"] `
+    $ReadSchedule["max_limit"] `
+    "issue-ordering: the port stops at the ceiling the fixture declares"
+
+foreach ($Case in $IssueOrdering["read_cases"]) {
+    $CaseId = $Case["id"]
+    $Backlog = $Case["backlog"]
+    $Expected = $Case["expected"]
+
+    # The adapter simulates the *source* - a backlog of `backlog` issues answers
+    # an ask of `limit` with `min(backlog, limit)` rows, and a null backlog is
+    # one no limit can exhaust - while `Get-GitLoopyNextReadStep` makes every
+    # decision about what that page means. Simulating the source rather than
+    # `gh` is what keeps the case offline and identical in three languages.
+    $Asks = @()
+    $Limit = $ReadSchedule["first_limit"]
+    while ($true) {
+        $Asks += $Limit
+        $Rows = if ($null -eq $Backlog -or $Backlog -gt $Limit) {
+            $Limit
+        }
+        else {
+            $Backlog
+        }
+        $Step = Get-GitLoopyNextReadStep -Limit $Limit -Rows $Rows
+        if ($null -eq $Step["next_limit"]) { break }
+        # Every page before the last was ambiguous and established nothing.
+        # Asserted rather than assumed: a seam that answered `complete` while
+        # still handing back a doubled limit would reach the same terminal step.
+        Assert-Equal `
+            "continue" `
+            $Step["outcome"] `
+            "issue-ordering read step outcome at limit ${Limit}: $CaseId"
+        Assert-Equal `
+            $false `
+            $Step["authoritative"] `
+            "issue-ordering read step authority at limit ${Limit}: $CaseId"
+        $Limit = $Step["next_limit"]
+    }
+
+    Assert-Equal `
+        (@($Expected["asks"]) -join ",") `
+        ($Asks -join ",") `
+        "issue-ordering read asks: $CaseId"
+    Assert-Equal $Expected["rows_read"] $Rows "issue-ordering read rows: $CaseId"
+    Assert-Equal `
+        $Expected["outcome"] `
+        $Step["outcome"] `
+        "issue-ordering read outcome: $CaseId"
+    Assert-Equal `
+        $Expected["authoritative"] `
+        $Step["authoritative"] `
+        "issue-ordering read authority: $CaseId"
+
+    $HeadAtIndex = $Case["head_at_index"]
+    $HeadRead = if ($null -eq $HeadAtIndex) { $null } else { $HeadAtIndex -lt $Rows }
+    Assert-Equal `
+        $Expected["head_read"] `
+        $HeadRead `
+        "issue-ordering read head: $CaseId"
+}
+
+foreach ($Outcome in @($IssueOrdering["read_schedule"]["outcomes"])) {
+    # `continue` is reached mid-walk rather than at its end, so it is covered by
+    # a case that asked more than once rather than by a terminal outcome.
+    $Covered = if ($Outcome -ceq "continue") {
+        @($IssueOrdering["read_cases"] | Where-Object {
+                @($_["expected"]["asks"]).Count -gt 1
+            }).Count
+    }
+    else {
+        @($IssueOrdering["read_cases"] | Where-Object {
+                $_["expected"]["outcome"] -ceq $Outcome
+            }).Count
+    }
+    if ($Covered -eq 0) {
+        throw "FAIL: no issue-ordering read case reaches outcome $Outcome"
+    }
+}
+
+# The adversarial case §3.2 needs from §2.1: the head of the order sits beyond
+# the first page, so a member that stopped there would order a backlog missing
+# the issue it was about to select.
+$FirstLimit = $IssueOrdering["read_schedule"]["first_limit"]
+$MidOrder = @($IssueOrdering["read_cases"] | Where-Object {
+        $null -ne $_["head_at_index"] `
+            -and $_["head_at_index"] -ge $FirstLimit `
+            -and $_["expected"]["head_read"] -eq $true `
+            -and @($_["expected"]["asks"]).Count -gt 1
+    }).Count
+if ($MidOrder -eq 0) {
+    throw "FAIL: no issue-ordering read case pins a page boundary falling mid-order"
+}
+
 # The reason this port reads its JSON through System.Text.Json: `ConvertFrom-Json`
 # dates values §3.2 calls malformed, and a member that inherited its reader's
 # tolerances would order a Pool the rest of the family orders differently.

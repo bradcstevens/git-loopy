@@ -772,9 +772,14 @@ function Get-GitLoopyMissingSections {
 # The label that carries **Priority**. A human assertion, read at selection and
 # never inferred. Provisioning it is #395's job; ordering needs only its name.
 $Script:GitLoopyPriorityLabel = "priority"
-# Wrapper contract §2 - the doubling-limit bounds the candidate fetch walks, and
-# the `--json` field set every shallow issue read asks for. Named once so this
-# port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
+# Wrapper contract §2.1 - the read schedule the whole family walks, and the
+# `--json` field set every shallow issue read asks for. Named once so this port
+# cannot drift from the Python reference's `LIST_PAGE_LIMIT` /
+# `LIST_MAX_LIMIT` / `_SHALLOW_ISSUE_FIELDS`, and pinned by
+# `issue-ordering.json`'s `read_schedule` so it cannot drift silently: under
+# §3.2's oldest-first order a page limit stops hiding the *oldest* candidates
+# and starts hiding the *newest*, so two members walking different limits read
+# different backlogs - and a backlog is exactly what §3.2 orders.
 $Script:GitLoopyListPageLimit = 100
 $Script:GitLoopyListMaxLimit = 1600
 # Wrapper contract §3.2 — this invocation's **Pin** (`--issue N`, #396), or
@@ -878,6 +883,20 @@ function Get-GitLoopyAcceptedYearRange {
     return @{
         min = $Script:GitLoopyMinAcceptedYear
         max = $Script:GitLoopyMaxAcceptedYear
+    }
+}
+
+# Wrapper contract §2.1 - the read schedule this port walks, reported the same
+# way the accepted year range is: the Conformance adapter reads the port's own
+# values rather than the fixture's, so a member that changed either constant
+# fails the fixture instead of quietly reading a different backlog.
+function Get-GitLoopyReadSchedule {
+    [CmdletBinding()]
+    param()
+
+    return @{
+        first_limit = $Script:GitLoopyListPageLimit
+        max_limit = $Script:GitLoopyListMaxLimit
     }
 }
 
@@ -1744,6 +1763,41 @@ function ConvertFrom-GitLoopyExternalJsonText {
     }
 }
 
+# Wrapper contract §2.1 - what one shallow page, asked for at `-Limit` and
+# answering with `-Rows` rows, forces on the reader walking a backlog.
+#
+# The pure half of `Get-GitLoopyIssueListToCompletion`'s loop, split out so the
+# Conformance adapter drives the *decision* without a fake `gh` - the same seam
+# split §3.2's comparison already has, and for the same reason: an adapter that
+# reproduced the walk would agree with itself while the Orchestrator read a
+# different backlog.
+#
+# `authoritative` is reported rather than derived by the caller because §2.1's
+# "establishes neither that the Pool is empty nor which issue is the head of the
+# order" is the seam's claim to make.
+function Get-GitLoopyNextReadStep {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Limit,
+
+        [Parameter(Mandatory)]
+        [int]$Rows
+    )
+
+    if ($Rows -lt $Limit) {
+        return @{ outcome = "complete"; authoritative = $true; next_limit = $null }
+    }
+    if ($Limit -ge $Script:GitLoopyListMaxLimit) {
+        return @{ outcome = "incomplete"; authoritative = $false; next_limit = $null }
+    }
+    return @{
+        outcome = "continue"
+        authoritative = $false
+        next_limit = $Limit * 2
+    }
+}
+
 # Wrapper contract §2 — the candidate fetch reaches the end of the backlog.
 #
 # `gh issue list` pages internally up to whatever `--limit` asks for, so a page
@@ -1791,13 +1845,17 @@ function Get-GitLoopyIssueListToCompletion {
                 message = "git-loopy: gh issue list did not return a JSON array."
             }
         }
-        if ($Candidates.Count -lt $Limit) {
-            return @{ ok = $true; candidates = $Candidates; complete = $true }
+        # `Get-GitLoopyNextReadStep` is the Conformance seam; this loop is only
+        # the I/O around it, so the schedule cannot drift from the fixture.
+        $Step = Get-GitLoopyNextReadStep -Limit $Limit -Rows $Candidates.Count
+        if ($null -eq $Step.next_limit) {
+            return @{
+                ok = $true
+                candidates = $Candidates
+                complete = $Step.authoritative
+            }
         }
-        if ($Limit -ge $Script:GitLoopyListMaxLimit) {
-            return @{ ok = $true; candidates = $Candidates; complete = $false }
-        }
-        $Limit = $Limit * 2
+        $Limit = $Step.next_limit
     }
 }
 
@@ -4150,6 +4208,8 @@ Export-ModuleMember -Function @(
     "ConvertFrom-GitLoopyJsonText",
     "ConvertFrom-GitLoopyExternalJsonText",
     "Get-GitLoopyIssueListToCompletion",
+    "Get-GitLoopyNextReadStep",
+    "Get-GitLoopyReadSchedule",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",

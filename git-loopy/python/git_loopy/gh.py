@@ -75,6 +75,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -117,12 +118,103 @@ _STDERR_TAIL_LIMIT: Final[int] = 400
 #: JSON array into one, so this bounds each request, not the result.
 _LABEL_PAGE_SIZE: Final[int] = 100
 
-# Shallow issue-list pagination bounds (#219 §2.8, Wrapper contract §2). The
-# first read asks for ``_LIST_PAGE_LIMIT``; each ambiguous full page doubles the
-# ask until a short page proves completeness or ``_LIST_MAX_LIMIT`` is reached,
-# at which point the read is reported incomplete rather than silently truncated.
-_LIST_PAGE_LIMIT: Final[int] = 100
-_LIST_MAX_LIMIT: Final[int] = 1600
+# Shallow issue-list pagination bounds (#219 §2.8, Wrapper contract §2.1). The
+# first read asks for :data:`LIST_PAGE_LIMIT`; each ambiguous full page doubles
+# the ask until a short page proves completeness or :data:`LIST_MAX_LIMIT` is
+# reached, at which point the read is reported incomplete rather than silently
+# truncated.
+#
+# Public, and pinned by ``conformance/issue-ordering.json``, because the schedule
+# is a *family* decision rather than this port's: two members walking different
+# limits read different backlogs, and a backlog is what §3.2 orders. Three
+# private copies of ``100`` and ``1600`` agreed by convention alone, which is the
+# same drift ``_SHALLOW_ISSUE_FIELDS`` was named once to prevent.
+
+#: The limit the first shallow issue read asks for.
+LIST_PAGE_LIMIT: Final[int] = 100
+
+#: The widest limit the walk will ask for. A page still full here ends the walk
+#: **incomplete** — the backlog was not proven exhausted.
+LIST_MAX_LIMIT: Final[int] = 1600
+
+
+class ReadOutcome(Enum):
+    """What one shallow page proved about the read it belongs to.
+
+    A *signal*, not a rendered message, for the same reason
+    :class:`~git_loopy.issue_order.TimestampDefect` is one: three Orchestrators
+    have to agree on which outcome a page reached, and they cannot agree on a
+    sentence.
+    """
+
+    #: The page came back shorter than the limit asked for, so the source had
+    #: nothing more to give. The read is provably exhaustive.
+    COMPLETE = "complete"
+
+    #: The page came back exactly at the limit, which proves nothing either way.
+    #: The reader must ask again at :attr:`ReadStep.next_limit`.
+    CONTINUE = "continue"
+
+    #: The page came back full at the ceiling. The walk ends, but the backlog was
+    #: not proven exhausted.
+    INCOMPLETE = "incomplete"
+
+
+@dataclass(frozen=True)
+class ReadStep:
+    """The decision one shallow page forces on the reader walking a backlog.
+
+    Attributes:
+        outcome: Which of the three :class:`ReadOutcome` states this page
+            reached.
+        next_limit: The limit to ask for next, and ``None`` on either terminal
+            outcome — a walk that has ended has no next ask.
+    """
+
+    outcome: ReadOutcome
+    next_limit: int | None = None
+
+    @property
+    def authoritative(self) -> bool:
+        """Whether this read may establish emptiness or the head of the order.
+
+        Wrapper contract §2.1: a read still full at its ceiling "establishes
+        neither that the **Pool** is empty nor which issue is the head of the
+        order". A walk that has not finished has established nothing either, so
+        only :attr:`ReadOutcome.COMPLETE` answers ``True``.
+        """
+        return self.outcome is ReadOutcome.COMPLETE
+
+
+def next_read_step(limit: int, rows: int) -> ReadStep:
+    """What a page of ``rows``, asked for at ``limit``, forces the reader to do.
+
+    The pure half of :meth:`SubprocessGitHubClient.issue_list`'s walk, split out
+    so ``conformance/issue-ordering.json`` can drive the *decision* in three
+    languages without three fake ``gh`` binaries. The walk around it is I/O and
+    stays where the I/O is; what every member has to agree on is this.
+
+    Why it is a contract obligation rather than an implementation detail: under
+    §3.2's oldest-first order a page limit stops hiding the *oldest* candidates
+    and starts hiding the *newest*, so a **Priority** issue filed today falls
+    outside the first page exactly when it matters most. A member that doubled
+    from a different floor, or stopped at a different ceiling, would therefore
+    order a different backlog and could select a different head from the same
+    repository.
+
+    Args:
+        limit: The ``--limit`` this page was asked for at.
+        rows: How many issues came back.
+
+    Returns:
+        The :class:`ReadStep` this page reached.
+    """
+    if rows < limit:
+        return ReadStep(outcome=ReadOutcome.COMPLETE)
+    if limit >= LIST_MAX_LIMIT:
+        return ReadStep(outcome=ReadOutcome.INCOMPLETE)
+    return ReadStep(outcome=ReadOutcome.CONTINUE, next_limit=limit * 2)
+
 
 #: The ``--json`` field set every shallow issue read asks for, named once so the
 #: **Pool** collection and the **Rolling dispatch** refresh cannot drift apart
@@ -1430,7 +1522,7 @@ class SubprocessGitHubClient:
         Raises:
             GhError: On any subprocess or parse failure.
         """
-        limit = _LIST_PAGE_LIMIT
+        limit = LIST_PAGE_LIMIT
         while True:
             cmd = [
                 "issue",
@@ -1453,11 +1545,10 @@ class SubprocessGitHubClient:
                     f"{type(parsed).__name__}",
                 )
             issues = tuple(_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed)
-            if len(issues) < limit:
-                return IssueListPage(issues=issues, complete=True)
-            if limit >= _LIST_MAX_LIMIT:
-                return IssueListPage(issues=issues, complete=False)
-            limit *= 2
+            step = next_read_step(limit=limit, rows=len(issues))
+            if step.next_limit is None:
+                return IssueListPage(issues=issues, complete=step.authoritative)
+            limit = step.next_limit
 
     def issue_view(self, number: int) -> Issue:
         """Fetch one issue including its comments.

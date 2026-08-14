@@ -690,6 +690,86 @@ def test_issue_list_at_ceiling_is_incomplete(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# next_read_step — the fetch-completeness seam (Wrapper contract §2.1)         #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_short_page_proves_the_read_complete() -> None:
+    """Fewer rows than the limit asked for means the source had nothing more."""
+    step = gh.next_read_step(limit=100, rows=42)
+
+    assert step.outcome is gh.ReadOutcome.COMPLETE
+    assert step.next_limit is None
+    assert step.authoritative is True
+
+
+def test_a_full_page_below_the_ceiling_doubles_the_ask() -> None:
+    """A page exactly at the limit proves nothing, so the reader asks again wider."""
+    step = gh.next_read_step(limit=100, rows=100)
+
+    assert step.outcome is gh.ReadOutcome.CONTINUE
+    assert step.next_limit == 200
+
+
+def test_a_full_page_at_the_ceiling_is_incomplete_and_not_authoritative() -> None:
+    """The ceiling terminates the walk without proving the backlog was exhausted.
+
+    §2.1: such a read "establishes neither that the Pool is empty nor which issue
+    is the head of the order", which is what :attr:`ReadStep.authoritative` says.
+    """
+    step = gh.next_read_step(limit=gh.LIST_MAX_LIMIT, rows=gh.LIST_MAX_LIMIT)
+
+    assert step.outcome is gh.ReadOutcome.INCOMPLETE
+    assert step.next_limit is None
+    assert step.authoritative is False
+
+
+def test_an_unfinished_read_is_not_yet_authoritative() -> None:
+    """A walk still in progress has established nothing either — it has not ended."""
+    assert gh.next_read_step(limit=100, rows=100).authoritative is False
+
+
+def test_the_walk_doubles_from_the_first_limit_to_the_ceiling() -> None:
+    """Driving the seam over a backlog no page can exhaust walks 100..1600.
+
+    Pins the schedule as a *sequence* rather than as two constants: a port that
+    doubled from a different floor, or stopped at a different ceiling, reads a
+    different backlog and can therefore select a different head of the order.
+    """
+    asks: list[int] = []
+    limit = gh.LIST_PAGE_LIMIT
+    while True:
+        asks.append(limit)
+        step = gh.next_read_step(limit=limit, rows=limit)
+        if step.next_limit is None:
+            break
+        limit = step.next_limit
+
+    assert asks == [100, 200, 400, 800, 1600]
+    assert step.outcome is gh.ReadOutcome.INCOMPLETE
+
+
+def test_a_backlog_ending_exactly_on_a_page_boundary_still_completes() -> None:
+    """The off-by-one: a backlog of exactly one page needs a second, wider ask.
+
+    The first read returns 100 of 100 and is indistinguishable from a truncated
+    one, so completeness costs a round-trip the source cannot avoid.
+    """
+    backlog = gh.LIST_PAGE_LIMIT
+    asks: list[int] = []
+    limit = gh.LIST_PAGE_LIMIT
+    while True:
+        asks.append(limit)
+        step = gh.next_read_step(limit=limit, rows=min(backlog, limit))
+        if step.next_limit is None:
+            break
+        limit = step.next_limit
+
+    assert asks == [100, 200]
+    assert step.outcome is gh.ReadOutcome.COMPLETE
+
+
+# --------------------------------------------------------------------------- #
 # issue_comment (breadcrumb: comment without closing, #63)                     #
 # --------------------------------------------------------------------------- #
 

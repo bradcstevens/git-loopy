@@ -1,10 +1,113 @@
 {
   "schema_version": 1,
-  "contract_version": "1.14",
+  "contract_version": "1.15",
   "priority_label": "priority",
   "pin_outranks_priority": true,
   "accepted_year_range": {"min": 1970, "max": 9999},
   "timestamp_defects": ["absent", "malformed"],
+  "read_schedule": {
+    "first_limit": 100,
+    "max_limit": 1600,
+    "outcomes": ["complete", "continue", "incomplete"]
+  },
+  "read_cases": [
+    {
+      "id": "an-empty-backlog-is-proven-empty-on-the-first-ask",
+      "backlog": 0,
+      "head_at_index": null,
+      "expected": {
+        "asks": [100],
+        "rows_read": 0,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": null
+      }
+    },
+    {
+      "id": "a-short-first-page-completes-without-a-second-ask",
+      "backlog": 42,
+      "head_at_index": 41,
+      "expected": {
+        "asks": [100],
+        "rows_read": 42,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-backlog-ending-exactly-on-the-first-page-boundary-costs-a-second-ask",
+      "backlog": 100,
+      "head_at_index": 99,
+      "expected": {
+        "asks": [100, 200],
+        "rows_read": 100,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-page-boundary-falling-mid-order-is-walked-past-to-reach-the-head",
+      "backlog": 250,
+      "head_at_index": 249,
+      "expected": {
+        "asks": [100, 200, 400],
+        "rows_read": 250,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-backlog-ending-on-a-doubled-page-boundary-costs-another-ask",
+      "backlog": 200,
+      "head_at_index": 199,
+      "expected": {
+        "asks": [100, 200, 400],
+        "rows_read": 200,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-backlog-one-short-of-the-ceiling-still-completes",
+      "backlog": 1599,
+      "head_at_index": 1598,
+      "expected": {
+        "asks": [100, 200, 400, 800, 1600],
+        "rows_read": 1599,
+        "outcome": "complete",
+        "authoritative": true,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-backlog-filling-the-ceiling-is-not-authoritative",
+      "backlog": 1600,
+      "head_at_index": 1599,
+      "expected": {
+        "asks": [100, 200, 400, 800, 1600],
+        "rows_read": 1600,
+        "outcome": "incomplete",
+        "authoritative": false,
+        "head_read": true
+      }
+    },
+    {
+      "id": "a-truncated-read-may-not-establish-the-head-of-the-order",
+      "backlog": null,
+      "head_at_index": 2000,
+      "expected": {
+        "asks": [100, 200, 400, 800, 1600],
+        "rows_read": 1600,
+        "outcome": "incomplete",
+        "authoritative": false,
+        "head_read": false
+      }
+    }
+  ],
   "cases": [
     {
       "id": "an-empty-pool-orders-to-nothing-and-has-no-head",

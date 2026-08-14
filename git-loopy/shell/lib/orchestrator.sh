@@ -1476,21 +1476,54 @@ _git_loopy_normalize_issue() {
   }'
 }
 
-# Wrapper contract §2 — the candidate fetch reaches the end of the backlog.
+# Wrapper contract §2.1 — the read schedule the whole family walks. The first
+# ask is `GIT_LOOPY_LIST_PAGE_LIMIT`; each ambiguous full page doubles it until a
+# short page proves completeness or `GIT_LOOPY_LIST_MAX_LIMIT` is reached, at
+# which point the read is reported incomplete rather than silently truncated.
 #
-# `gh issue list` pages internally up to whatever `--limit` asks for, so
-# completeness is provable by the returned length: a page *shorter* than the
-# requested limit means the server had nothing more to give. A page exactly at
-# the limit is ambiguous, so the reader asks again with a doubled limit until
-# either the page comes back short or the ceiling is reached — at which point
-# the read is reported incomplete rather than silently truncated.
-#
-# The ceiling matters more than it used to. Under §3.2's oldest-first order a
-# page limit stops hiding the *oldest* issues and starts hiding the *newest*, so
-# a **Priority** issue filed today would fall outside the oldest hundred and be
-# invisible exactly when it matters most.
+# Shared rather than this port's own, and pinned by `issue-ordering.json`'s
+# `read_schedule`: under §3.2's oldest-first order a page limit stops hiding the
+# *oldest* candidates and starts hiding the *newest*, so a **Priority** issue
+# filed today would fall outside the first hundred exactly when it matters most.
+# Two members walking different limits read different backlogs, and a backlog is
+# what §3.2 orders — so a divergent ceiling is a divergent head of the order,
+# reached without either member sorting anything differently.
 GIT_LOOPY_LIST_PAGE_LIMIT=100
 GIT_LOOPY_LIST_MAX_LIMIT=1600
+
+# What one shallow page, asked for at `$1` and answering with `$2` rows, forces
+# on the reader walking a backlog. The pure half of
+# `_git_loopy_gh_issue_list_to_completion`'s loop, split out so the Conformance
+# adapter drives the *decision* without a fake `gh` — the same seam split §3.2's
+# comparison already has, and for the same reason: an adapter that reproduced
+# the walk would agree with itself while the Orchestrator read a different
+# backlog.
+#
+# Emits JSON, like `git_loopy_order_issues`, so the adapter reads named fields
+# rather than positional ones. `authoritative` is reported rather than derived
+# because §2.1's "establishes neither that the Pool is empty nor which issue is
+# the head of the order" is the seam's claim to make, not its caller's.
+git_loopy_next_read_step() {
+  local limit="$1" rows="$2"
+  local outcome next_limit authoritative
+
+  if ((rows < limit)); then
+    outcome="complete"
+    next_limit="null"
+  elif ((limit >= GIT_LOOPY_LIST_MAX_LIMIT)); then
+    outcome="incomplete"
+    next_limit="null"
+  else
+    outcome="continue"
+    next_limit="$((limit * 2))"
+  fi
+
+  authoritative="false"
+  [[ "$outcome" == "complete" ]] && authoritative="true"
+
+  printf '{"outcome":"%s","authoritative":%s,"next_limit":%s}\n' \
+    "$outcome" "$authoritative" "$next_limit"
+}
 
 # The `--json` field set every shallow issue read asks for, named once so this
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
@@ -1507,7 +1540,7 @@ GIT_LOOPY_READY_LABEL="ready-for-agent"
 # read, 1 when `gh` failed, 2 when it returned something that is not an array.
 _git_loopy_gh_issue_list_to_completion() {
   local limit="$GIT_LOOPY_LIST_PAGE_LIMIT"
-  local page count
+  local page count step next_limit
   GIT_LOOPY_ISSUE_LIST_JSON='[]'
   GIT_LOOPY_POOL_COMPLETE=1
   while true; do
@@ -1521,14 +1554,15 @@ _git_loopy_gh_issue_list_to_completion() {
     jq -e 'type == "array"' <<<"$page" >/dev/null 2>&1 || return 2
     count="$(jq -r 'length' <<<"$page")" || return 2
     GIT_LOOPY_ISSUE_LIST_JSON="$page"
-    if ((count < limit)); then
+    # `git_loopy_next_read_step` is the Conformance seam; this loop is only the
+    # I/O around it, so the schedule cannot drift from the fixture that pins it.
+    step="$(git_loopy_next_read_step "$limit" "$count")"
+    next_limit="$(jq -r '.next_limit // empty' <<<"$step")"
+    if [[ -z "$next_limit" ]]; then
+      jq -e '.authoritative' <<<"$step" >/dev/null || GIT_LOOPY_POOL_COMPLETE=0
       return 0
     fi
-    if ((limit >= GIT_LOOPY_LIST_MAX_LIMIT)); then
-      GIT_LOOPY_POOL_COMPLETE=0
-      return 0
-    fi
-    limit=$((limit * 2))
+    limit="$next_limit"
   done
 }
 

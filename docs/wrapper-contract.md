@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.14 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.15 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -62,10 +62,29 @@ its fields.
 `gh issue list` pages internally up to whatever `--limit` asks for, so a page *shorter* than the
 requested limit proves the source had nothing more to give and a page exactly at the limit proves
 nothing. An Orchestrator MUST therefore re-ask with a **doubled** limit until a page comes back
-short or a declared ceiling is reached. A fixed limit was survivable while the Pool was ordered
+short or the ceiling is reached. A fixed limit was survivable while the Pool was ordered
 newest-first: it hid the *oldest* candidates, which nothing was about to select. Under §3.2 it
 hides the *newest* — so an issue filed today, including a **Priority** one, would fall outside the
 window exactly when it matters most.
+
+#### The read schedule (contract 1.15, MUST)
+
+The schedule is **shared**, not each member's own: the first ask MUST be `100` and the ceiling
+MUST be `1600`, so the walk asks `100, 200, 400, 800, 1600` and stops. `issue-ordering.json`'s
+`read_schedule` declares both, and its `read_cases` pin the walk each backlog produces.
+
+This is a §3.2 obligation wearing a §2 hat. Two members that agree on every ordering rule and
+disagree on the ceiling read *different backlogs* from the same repository, and a backlog is
+exactly what §3.2 orders — so the divergent answer arrives as a different **Active issue** without
+either member sorting anything differently, and nothing in the Event stream says why. The three
+numbers were private constants agreeing by convention alone, which is the drift the shared
+`created_at` field set was named once to prevent.
+
+The decision one page forces — `complete` when it came back short, `continue` at a doubled limit
+when it was full below the ceiling, `incomplete` when it was full *at* the ceiling — MUST be a
+seam the Conformance adapter can call directly, for the same reason §3.2's comparison is one: an
+adapter that reproduced the walk would agree with itself while the Orchestrator read a different
+backlog.
 
 A read still full at its ceiling is **not authoritative**: it establishes neither that the Pool is
 empty nor which issue is the head of the order. An Orchestrator MUST report such a read to the
