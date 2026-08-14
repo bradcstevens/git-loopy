@@ -598,9 +598,15 @@ Three properties are worth knowing:
   three tasks would produce an artifact indistinguishable from one measured
   against fifty.
 - **Every count says what it counts.** A **mined candidate** is a closed issue
-  that passes the replay rules; an **admitted task** is one a human accepted into
-  the Proving set. These are different numbers and the reports never print one
-  where the other belongs.
+  that passes the replay rules — a closing commit, a well-formed body, at least
+  one changed test path. An **admitted task** is one that has since been
+  *replayed with its real historical fix* and shown to fail before it and pass
+  after, which is the property that makes a replay mean anything and the only
+  thing that filters out a base commit that was red for unrelated reasons. These
+  are different numbers, the second is never larger than the first, and the
+  reports never print one where the other belongs. Admission runs tests, so it
+  costs wall clock and no AI Credits, and neither `--status` nor `--dry-run` can
+  reach it.
 - **Costs are in AI Credits, never dollars.** A credit is the unit the platform
   bills in and the unit the run log already records; converting to currency would
   invent a rate that changes without notice.

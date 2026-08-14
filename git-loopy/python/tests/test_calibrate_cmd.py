@@ -711,6 +711,14 @@ def test_the_module_imports_nothing_that_could_spend_label_or_classify() -> None
         "git_loopy.labels",
         "git_loopy.task_type_session",
         "git_loopy.task_type_writer",
+        # Admission (#380) and the Trial runner (#369) are the two surfaces that
+        # check out a commit and run tests. Admission spends no **AI Credit**,
+        # but it spends hours — so a report that promises to touch no worktree
+        # must be unable to reach it, and the counts it prints must keep saying
+        # `mined` precisely because nothing here can turn them into admitted
+        # ones.
+        "git_loopy.trial",
+        "git_loopy.proving_admission",
     }
     assert not (seen & forbidden), f"calibratecmd reaches for {seen & forbidden}"
 
