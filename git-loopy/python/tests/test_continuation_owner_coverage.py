@@ -54,13 +54,13 @@ OWNER_SKILLS: frozenset[str] = frozenset(
     skill for owners in TRANSITION_OWNERS.values() for skill in owners
 )
 
-#: `/next` is a Consumer: it binds three `reconcile` requests and writes nothing,
+#: `/continuation` is a Consumer: it binds three `reconcile` requests and writes nothing,
 #: so it does carry a git-loopy contract and is held to naming only reads. It is
 #: named rather than lumped in with the pointer-only helpers because its boundary
 #: is the one most tempting to cross. `/handoff` carries context and owns no
 #: transition, so it carries no contract at all; that claim is
 #: `test_nested_participants_stay_pointer_only`'s.
-READ_ONLY_CONSUMERS: tuple[str, ...] = ("next",)
+READ_ONLY_CONSUMERS: tuple[str, ...] = ("continuation",)
 
 #: The locked areas that are *behaviours* rather than owners. Each names the suite
 #: and the test that pins it, so deleting the test fails this gate instead of
@@ -212,7 +212,7 @@ def _runnable_operations(skill: str) -> set[str]:
     """The Continuation operations a Skill actually tells a session to run.
 
     Anchored at line start, because a command in a fenced block is an instruction
-    and the same words inside a sentence are prose. `/next` names every writing
+    and the same words inside a sentence are prose. `/continuation` names every writing
     operation on purpose -- under the boundary that forbids them -- and reading
     that as a write would punish the Skill for being explicit.
     """
@@ -228,7 +228,7 @@ def _runnable_operations(skill: str) -> set[str]:
 def _completion_templates(skill: str) -> list[str]:
     """The templates that publish a Producer revision.
 
-    A Skill may document a *request* without owning a transition -- `/next` binds
+    A Skill may document a *request* without owning a transition -- `/continuation` binds
     three `reconcile` requests and writes nothing. The `completion` envelope is
     what makes a request a publication.
     """
@@ -436,7 +436,7 @@ def test_no_owner_reconstructs_what_reconciliation_derives(skill: str) -> None:
 
 @pytest.mark.parametrize("skill", READ_ONLY_CONSUMERS)
 def test_a_read_only_consumer_publishes_nothing(skill: str) -> None:
-    """`/next` presents the projection; presenting it is not publishing it.
+    """`/continuation` presents the projection; presenting it is not publishing it.
 
     A Consumer publishing would be a second answer to a question the contract
     already answers, and the two answers are free to disagree.

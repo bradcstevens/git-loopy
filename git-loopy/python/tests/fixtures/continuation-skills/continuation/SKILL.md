@@ -1,6 +1,6 @@
 ---
-name: next
-description: Route workflow continuation from live project state. Use when a workflow skill concludes or the user asks what to do next.
+name: continuation
+description: Present git-loopy's published Continuation guidance, reconciled from durable records. Use when the user asks what a run recorded as next, or a session resumes a workstream another run published.
 ---
 
 # Route the Workflow
@@ -47,7 +47,7 @@ completion, can never project a **Retirement receipt**, and can never see a
 **Continuation conflict** between competing **Producer revisions**.
 
 Never add an `automation` key. That block is Dispatch authorization, not a human
-refresh, and `/next` authorizes nothing.
+refresh, and `/continuation` authorizes nothing.
 
 This step is complete when the request names a repository and a non-empty,
 explicitly sourced trusted-producer allowlist.
@@ -109,17 +109,37 @@ Show the rendered output. Keep its structure and its wording:
   guessed Ready or Blocked.
 - **Outcomes** — explicit terminal **Workstream outcomes**.
 
-Copy the Instruction verbatim, on one physical line, in its own code fence so it
-can be pasted straight into a terminal. Every **Target** and **Basis** is a
-durable link; never paste the artifact's content in its place.
+Every **Target** and **Basis** is a durable link; never paste the artifact's
+content in its place.
 
 Do not re-rank, re-word, merge, split, or filter the Actions. The order is the
 contract's **Continuation view** order.
 
+### Render the Instruction as a copy-paste block
+
+The **Instruction** is the one line the user acts on, so it earns a block they
+can select in a single sweep: the value verbatim, on one physical line, alone
+inside its own fence, with every label, count, and caveat outside it.
+
+`instruction.mode` decides how that line reads:
+
+- **`skill`** — a canonical Skill and its prompt, which the contract guarantees
+  begins with `/` (`/implement "..."`). Fence it as `text`; it is pasted back to
+  an agent to start the next step.
+- **`command`** — a shell command. Fence it as `bash`; it is pasted into a
+  terminal.
+- **`manual`** — work a human performs. Present it as prose, because there is
+  nothing to paste.
+
+The **Producer** authored that value: present the Instruction you were handed,
+and compose no invocation of your own.
+
 To expand a withheld remainder, run the same request again without `--terminal`
 and read `result.actions`. That is still read-only.
 
-This step is complete when the projection has been presented as returned.
+This step is complete when the projection has been presented as returned, and a
+Primary Action's Instruction stands in a fence a reader can copy in one
+selection.
 
 ## 5. Carry a refresh delta, and only from this session
 
@@ -207,7 +227,7 @@ is a reason to publish, not a reason to guess.
 
 ## 8. Stay read-only
 
-`/next` never publishes, mutates GitHub, repairs the index, ranks independently,
+`/continuation` never publishes, mutates GitHub, repairs the index, ranks independently,
 authorizes, or executes.
 
 | Never | Because |

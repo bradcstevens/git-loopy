@@ -1,6 +1,6 @@
-"""`/next` is a read-only Consumer of the native Reconciliation (#258).
+"""`/continuation` is a read-only Consumer of the native Reconciliation (#258).
 
-`/next` owns no **Workflow transition**, so it is not a **Producer**: it inspects
+`/continuation` owns no **Workflow transition**, so it is not a **Producer**: it inspects
 a **Continuation view** and reports it. Everything that view is made of --
 normalization, trust, **Action identity**, ordering, **Readiness**, and the
 Waiting/guidance/Complete status -- is derived by `git-loopy continuation
@@ -8,7 +8,7 @@ reconcile`, and the Skill's job is to bind one request, run one command, and
 present the answer without re-deriving any of it.
 
 A Skill is a prompt, so the only honest way to pin what it asks for is to make
-its documented request *executable*: `next/SKILL.md` carries its reconcile
+its documented request *executable*: `continuation/SKILL.md` carries its reconcile
 requests as fenced JSON behind `<!-- continuation-request: NAME -->` markers, and
 these tests extract those exact bytes, bind their `<placeholder>` values, and
 drive the real command. A template that drifts from the contract fails here.
@@ -17,7 +17,7 @@ Durable state is *built* through the production record writer
 (`continuation._record_body`) rather than through `publish`, because these
 scenarios need several concurrent lineages and a successor's `observation` must
 be narrowed to its own lineage -- a hand-computed canonical-JSON digest that
-proves nothing about `/next`. Every *assertion* still runs through the public
+proves nothing about `/continuation`. Every *assertion* still runs through the public
 `git-loopy continuation reconcile` boundary, which is the seam under test.
 
 The scenarios are the locked #212 prototype scenarios, which the PRD (#237) names
@@ -58,23 +58,23 @@ REPOSITORY = "octo/example"
 PRODUCER = "planner"
 INDEX_LABEL = "git-loopy-continuation"
 
-# `/next` is the only Consumer here, so its helpers default to it; the extraction
+# `/continuation` is the only Consumer here, so its helpers default to it; the extraction
 # itself is shared, because four copies of the marker regexp is four chances for
 # the thing that reads the contract to disagree with the thing that reads it.
 SKILLS_DIR = CONTRACT_SKILLS_DIR
 _fill = fill
 
 
-def _skill_text(skill: str = "next") -> str:
+def _skill_text(skill: str = "continuation") -> str:
     return skill_text(skill)
 
 
-def _templates(skill: str = "next") -> dict[str, str]:
+def _templates(skill: str = "continuation") -> dict[str, str]:
     """Return every named request template documented by one Skill."""
     return templates(skill)
 
 
-def _template(name: str, skill: str = "next") -> dict[str, Any]:
+def _template(name: str, skill: str = "continuation") -> dict[str, Any]:
     return template(skill, name)
 
 
@@ -274,7 +274,7 @@ def _run(
     *,
     terminal: bool = False,
 ) -> tuple[int, str, str]:
-    """Drive the exact command `/next` documents, and return its raw framing."""
+    """Drive the exact command `/continuation` documents, and return its raw framing."""
     monkeypatch.setattr(continuation, "_make_github_client", lambda: github)
     monkeypatch.setattr(
         sys,
@@ -290,7 +290,7 @@ def _run(
 
 
 def _refresh_request(**overrides: Any) -> dict[str, Any]:
-    """The baseline request `/next` documents, bound to the test repository."""
+    """The baseline request `/continuation` documents, bound to the test repository."""
     request = _fill(
         _template("refresh"),
         {"repository": REPOSITORY, "trusted-producer": PRODUCER},
@@ -305,7 +305,7 @@ def _refresh_request(**overrides: Any) -> dict[str, Any]:
 # The prototype answered a projection question with in-memory dataclasses. Here
 # the same stories are told in the Continuation contract's own vocabulary --
 # Workstreams, Anchors, Action kinds, Prerequisites, and Retirement receipts --
-# so that what `/next` shows is derived by `reconcile` from durable facts rather
+# so that what `/continuation` shows is derived by `reconcile` from durable facts rather
 # than asserted by the test.
 # ---------------------------------------------------------------------------
 
@@ -729,7 +729,7 @@ def test_next_refreshes_through_the_native_reconciliation_command(
 ) -> None:
     """The documented request is one the real `reconcile` accepts, as written.
 
-    This is the whole point of the ticket: `/next` stops reconstructing guidance
+    This is the whole point of the ticket: `/continuation` stops reconstructing guidance
     and starts asking for it. The template is executed rather than described, so
     a request the contract would reject can never sit in the prompt unnoticed.
     """
@@ -754,7 +754,7 @@ def _blocked_project() -> _RecordingGitHub:
 
 
 def _delta_request(previous: list[dict[str, Any]]) -> dict[str, Any]:
-    """The request `/next` documents for a bounded refresh delta."""
+    """The request `/continuation` documents for a bounded refresh delta."""
     template = _template("refresh-delta")
     entry = template["previous_actions"][0]
     request = _fill(
@@ -867,7 +867,7 @@ def test_next_replaces_stale_guidance_and_shows_its_transient_receipt(
     """A refresh replaces the projection; the receipt is the only trace left.
 
     The prototype's `stale` frames move the branch head, so the old review
-    occurrence leaves guidance and a new one enters it. `/next` shows the
+    occurrence leaves guidance and a new one enters it. `/continuation` shows the
     Retirement receipt for this refresh and the delta that goes with it, and
     independent verified guidance (ticket #221) stays usable throughout --
     replacement is scoped to the lineage that changed.
@@ -919,7 +919,7 @@ def test_next_replaces_stale_guidance_and_shows_its_transient_receipt(
 
 
 def _handoff_request(action_identity: str, *, reference: str | None) -> dict[str, Any]:
-    """The request `/next` documents for an exact-resume Handoff pointer.
+    """The request `/continuation` documents for an exact-resume Handoff pointer.
 
     The unavailable-context variant is *derived* from the documented one, so the
     Skill's rule -- drop `reference` and set `context_available` false -- is the
@@ -1022,7 +1022,7 @@ def test_next_quarantines_only_the_conflicting_scope(
 
     The prototype's `conflict` frames pin three things: the forked scope leaves
     actionable ordering, unrelated verified guidance stays usable, and a repeat
-    refresh still sees the fork -- no timestamp wins. `/next` reports the
+    refresh still sees the fork -- no timestamp wins. `/continuation` reports the
     diagnostic and nothing else; resolving it is a Producer's job.
     """
     github, heads = _conflict_project()
@@ -1079,7 +1079,7 @@ def test_next_reports_the_human_boundary_without_authorizing_anything(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`/next` shows the classification the Transition owner supplied. Nothing more.
+    """`/continuation` shows the classification the Transition owner supplied. Nothing more.
 
     The prototype's `hitl` frame leaves one Ready Action that requires human
     judgment. The Skill reports its **HITL-required** classification and its exact
@@ -1225,7 +1225,7 @@ def test_next_says_waiting_for_an_empty_nonterminal_projection(
 
     The prototype's `complete` scenario opens on exactly this trap: the last
     Action retired, but one Workstream is still open with no terminal outcome.
-    `/next` renders Waiting, and the outcome that *is* durable is still shown --
+    `/continuation` renders Waiting, and the outcome that *is* durable is still shown --
     Waiting is a statement about the frontier, not a refusal to report evidence.
     """
     github = _complete_project()
@@ -1291,7 +1291,7 @@ def test_next_reports_complete_only_from_terminal_outcomes_over_closed_coverage(
     assert github.writes == []
 
 
-# Every prototype scenario `/next` must answer, and the test that drives it end
+# Every prototype scenario `/continuation` must answer, and the test that drives it end
 # to end through the Skill-to-native-command boundary. A locked scenario nobody
 # drives is the gap the gate below exists to catch.
 PROTOTYPE_SCENARIO_COVERAGE = {
@@ -1458,7 +1458,7 @@ def test_next_reports_repair_and_unverified_facts_without_acting_on_either(
 
     Two things end up there that a reconstructing Skill would have been tempted
     to fix: a carrier missing its discovery label, and a durable fact that would
-    not stabilize. `/next` repairs neither. The unstable read makes no Ready or
+    not stabilize. `/continuation` repairs neither. The unstable read makes no Ready or
     Blocked claim at all -- its Action leaves the frontier rather than being
     guessed at -- while independent verified guidance stays usable.
     """
