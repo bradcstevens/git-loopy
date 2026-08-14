@@ -52,6 +52,7 @@ from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy import rollup as rollup_module
 from git_loopy.skill_exposure import SkillExposure
 from git_loopy.skill_policy import (
     MissingEnabledSkills,
@@ -1374,6 +1375,23 @@ def test_dashboard_fixture_covers_every_family_semantic_dimension() -> None:
             assert source in binding_sources, source
     # The reducer's own retroactive set is the contract's, not a private copy.
     assert set(vocabulary["retroactive"]) == set(RETROACTIVE_BINDING_SOURCES)
+    # ...and so is the Iteration-end reducer's. The two are separate
+    # declarations on purpose — `interactive.state` is import-constrained to
+    # stdlib plus `git_loopy.usage` (ADR-0001), so it may not reach into
+    # `rollup` for a frozenset — which makes this the only place they can be
+    # compared. Before #394 the reducer's copy was an inline literal that
+    # nothing pinned at all.
+    assert set(vocabulary["retroactive"]) == set(
+        rollup_module.RETROACTIVE_BINDING_SOURCES
+    )
+    # Stated as the retroactive set and never as its complement: the complement
+    # is open, so a binding source added later must be prospective by default.
+    # `serial_pickup` is the one that proved it — the PowerShell port asked
+    # "is it a working_marker?" and back-dated every serial Pickup to the
+    # Iteration start, charging each contribution for Pool collection.
+    assert "serial_pickup" not in RETROACTIVE_BINDING_SOURCES
+    for prospective in ("serial", "marker", "lane"):
+        assert set(vocabulary[prospective]) & set(RETROACTIVE_BINDING_SOURCES) == set()
 
     outcomes = {
         event["outcome"] for event in events if event["type"] == "wrapper.iteration.end"
@@ -1580,7 +1598,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.11"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.12"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION

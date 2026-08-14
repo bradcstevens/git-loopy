@@ -9,7 +9,29 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 from git_loopy.denomination import CostDenomination
 from git_loopy.usage import BillingSample, UsageTally
 
-__all__ = ["IterationRollupAccumulator"]
+__all__ = ["RETROACTIVE_BINDING_SOURCES", "IterationRollupAccumulator"]
+
+#: Binding sources that name work an Orchestrator recognized *after* the fact.
+#: The Iteration was already running when the evidence appeared, so the issue's
+#: Active stint opens at the Iteration start rather than at the binding, and the
+#: pre-binding output is attributed to the issue that produced it.
+#:
+#: It lives here, in the reducer the Orchestrator's own Iteration-end payload
+#: comes out of. :data:`git_loopy.interactive.state.RETROACTIVE_BINDING_SOURCES`
+#: is the same set and is deliberately a second declaration rather than an
+#: import: that module is import-constrained to stdlib plus
+#: :mod:`git_loopy.usage` (ADR-0001). Both are pinned against
+#: ``conformance/dashboard-insights.json``, which is the one declaration, in the
+#: same way each family member pins its own copy of a shared vocabulary.
+#:
+#: It is stated as the closed *retroactive* set rather than as its prospective
+#: complement because the complement is open: a binding source added later is
+#: prospective by default, which is what a **Pickup** and a **Working marker**
+#: both are. Naming the prospective ones instead is how `serial_pickup` was
+#: silently mis-attributed in the PowerShell port until #394, and Wrapper
+#: contract §12 now requires the membership test to be this way round in every
+#: member.
+RETROACTIVE_BINDING_SOURCES = frozenset({"closure", "commit", "single_member_pool"})
 
 _ITERATION_START = "wrapper.iteration.start"
 _ISSUE_ACTIVATED = "wrapper.issue.activated"
@@ -92,7 +114,7 @@ class IterationRollupAccumulator:
             binding_source = event.get("binding_source")
             activated_monotonic = (
                 current.started_monotonic
-                if binding_source in {"closure", "commit", "single_member_pool"}
+                if binding_source in RETROACTIVE_BINDING_SOURCES
                 else now
             )
             first_started_at, first_started_monotonic = self._first_started.setdefault(

@@ -2021,6 +2021,38 @@ jq -se '
   fi
 ) || fail "the shell serial Pickup does not hand the agent the head of the order"
 
+# A **Pickup** is *prospective*: it names the issue as the work on it begins, so
+# Active time starts at the binding. Only the three after-the-fact fallbacks are
+# recognized late enough to owe the pre-binding work back to the issue. The set
+# is asserted as a *set* rather than as "not `working_marker`", because the
+# other phrasing makes every binding source added later retroactive by silent
+# default — which is exactly how `serial_pickup` was mis-attributed in the
+# PowerShell port until this slice.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  git_loopy_monotonic_seconds() { printf '40\n'; }
+
+  for source_name in serial_pickup working_marker lane_pickup; do
+    _GIT_LOOPY_ACTIVE_REF=""
+    _GIT_LOOPY_ITERATION_STARTED_MONOTONIC=30
+    _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=0
+    _git_loopy_record_active_binding 394 "$source_name" "2026-05-16T00:00:40.000Z"
+    assert_equal 40 "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC" \
+      "$source_name attributes Active time from the binding, not the Iteration start"
+  done
+
+  for source_name in closure commit single_member_pool; do
+    _GIT_LOOPY_ACTIVE_REF=""
+    _GIT_LOOPY_ITERATION_STARTED_MONOTONIC=30
+    _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=0
+    _git_loopy_record_active_binding 394 "$source_name" "2026-05-16T00:00:40.000Z"
+    assert_equal 30 "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC" \
+      "$source_name keeps the pre-binding work visible on the issue"
+  done
+) || fail "the shell Active-time attribution does not follow the shared retroactive set"
+
 # The shared TUI helper (PRD #173). Every case below drives the real entrypoint
 # against a fake `git-loopy-tui` that records what it was asked to do, so
 # discovery, the compatibility probe, transport, mid-Run failure, and teardown
