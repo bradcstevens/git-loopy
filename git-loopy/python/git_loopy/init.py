@@ -814,8 +814,9 @@ def _bootstrap_tracker_labels(
     """Ensure the tracker carries the label vocabulary a Run reads, and report it.
 
     A repository whose tracker has no ``ready-for-agent`` yields an empty **Pool**
-    forever, and one with no ``parallel-safe`` can never engage **Parallel mode** —
-    and nothing in a Run says so. Setup is the one place that can fix it.
+    forever, one with no ``parallel-safe`` can never engage **Parallel mode**, and
+    one with no ``priority`` ranks every eligible issue the same — and nothing in
+    a Run says so. Setup is the one place that can fix it.
 
     ``label_client`` is injected rather than constructed here, following this
     module's rule that the wizard never builds a live backend for itself; the CLI

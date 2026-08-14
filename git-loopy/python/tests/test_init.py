@@ -1541,6 +1541,7 @@ def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> Non
         "ready-for-human",
         "wontfix",
         "parallel-safe",
+        "priority",
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",

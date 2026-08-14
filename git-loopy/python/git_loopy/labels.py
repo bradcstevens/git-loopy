@@ -1,11 +1,11 @@
 """``git_loopy.labels`` — the tracker label vocabulary a Run needs (issue #305).
 
-The loop reads *labels*. A **Pool** is discovered by ``ready-for-agent``, and
+The loop reads *labels*. A **Pool** is discovered by ``ready-for-agent``,
 **Parallel mode** can only engage on issues a human has additionally asserted are
-``parallel-safe``. Neither is ever inferred — but nothing in the tool created
-them either, so a fresh clone had none of the vocabulary and Parallel mode could
-never engage until a human found the label name in the docs and typed it in by
-hand.
+``parallel-safe``, and **Priority** is asserted by ``priority``. None is ever
+inferred — but nothing in the tool created them either, so a fresh clone had none
+of the vocabulary and Parallel mode could never engage until a human found the
+label name in the docs and typed it in by hand.
 
 ``git-loopy init`` closes that gap by *ensuring* the vocabulary exists.
 
@@ -23,6 +23,14 @@ Design:
   ``ready-for-agent``, and the runner reads it directly from
   :data:`git_loopy.sources.LABEL_PARALLEL_SAFE`. So it is appended from that
   constant rather than looked up in the role table.
+* **``priority`` is not one of the five roles either, for the same reason.** It
+  is the second human assertion the runner reads and never infers, and it is
+  what makes §3.2's **Priority** rank reachable — the rank shipped with #391 and
+  no repository carried the label, so every issue ranked the same. Its name
+  comes from :data:`git_loopy.issue_order.LABEL_PRIORITY`, the module that
+  *ranks* on it, so the label ``init`` creates and the label selection reads
+  cannot drift into two strings. Like ``parallel-safe`` it reorders and nothing
+  else: eligibility is unchanged by it.
 * **The Task-type taxonomy is closed.** Its seven labels come from
   :data:`~git_loopy.config.TASK_TYPE_KEYS`, so the labels an unattended
   classifier may apply always exist in the tracker and cannot drift from the
@@ -46,6 +54,7 @@ from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
+from git_loopy.issue_order import LABEL_PRIORITY
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 __all__ = [
@@ -54,6 +63,7 @@ __all__ = [
     "LabelBootstrapClient",
     "TRIAGE_ROLES",
     "MAPPING_DOC_RELPATH",
+    "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
     "read_tracker_vocabulary",
 ]
@@ -63,17 +73,28 @@ __all__ = [
 MAPPING_DOC_RELPATH: str = "docs/agents/triage-labels.md"
 
 
+#: The longest description GitHub will accept on a label. Measured, not assumed:
+#: creating one with a 159-character description returns HTTP 422 ``description
+#: is too long (maximum is 100 characters)``, and since :func:`bootstrap_labels`
+#: stops at the first failed create, one overlong entry silently costs every
+#: label after it too.
+MAX_DESCRIPTION_LENGTH: int = 100
+
+
 @dataclass(frozen=True)
 class LabelSpec:
     """One label ``init`` ensures exists in the repository's tracker.
 
     Attributes:
         role: The canonical triage role this label plays, or ``"parallel-safe"``
-            for the eligibility assertion, which is not one of the five roles.
+            / ``"priority"`` for the two human assertions, which are not triage
+            roles and are not renameable.
         name: The label string as it appears in *this* tracker — the right-hand
             column of the documented mapping.
         color: Six-hex-digit colour used only when the label has to be created.
-        description: Prose used only when the label has to be created.
+        description: Prose used only when the label has to be created. At most
+            :data:`MAX_DESCRIPTION_LENGTH` characters — the tracker rejects
+            more, and the rejection costs every label queued behind it.
     """
 
     role: str
@@ -128,9 +149,22 @@ PARALLEL_SAFE_ROLE: LabelSpec = LabelSpec(
     name=LABEL_PARALLEL_SAFE,
     color="5319e7",
     description=(
-        "Human assertion, applied alongside ready-for-agent, that this issue is "
-        "independent enough to be worked concurrently in its own Lane. "
+        "Human assertion alongside ready-for-agent: safe in its own Lane. "
         "git-loopy never infers it."
+    ),
+)
+
+#: **Priority**, the axis an issue is worked ahead of older ones on. Not a triage
+#: role and not renameable: :mod:`git_loopy.issue_order` reads the literal string
+#: at selection, in three Orchestrators, so the name comes from that module
+#: rather than from a second literal here (ADR-0032, #395).
+PRIORITY_ROLE: LabelSpec = LabelSpec(
+    role="priority",
+    name=LABEL_PRIORITY,
+    color="b60205",
+    description=(
+        "Human assertion: worked ahead of older issues. "
+        "git-loopy never infers it. Eligibility unchanged."
     ),
 )
 
@@ -157,8 +191,8 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
 
     The five triage roles are read from the repository's documented mapping so
     the vocabulary ``init`` writes is the vocabulary the skills actually apply.
-    ``parallel-safe`` is appended from the runner's own constant, followed by
-    the seven closed task-type labels.
+    ``parallel-safe`` and ``priority`` are appended from the runner's own
+    constants, followed by the seven closed task-type labels.
 
     Args:
         repo_root: Repository root to look for the documented mapping under, or
@@ -176,7 +210,7 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         )
         for spec in TRIAGE_ROLES
     )
-    return (*roles, PARALLEL_SAFE_ROLE, *TASK_TYPE_LABELS)
+    return (*roles, PARALLEL_SAFE_ROLE, PRIORITY_ROLE, *TASK_TYPE_LABELS)
 
 
 #: One ``| `role` | `label` | meaning |`` row of the documented mapping table.

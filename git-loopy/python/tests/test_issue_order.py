@@ -157,6 +157,24 @@ def test_only_the_priority_label_is_read_off_the_labels() -> None:
     assert priority_rank(("ready-for-agent", LABEL_PRIORITY)) == 0
 
 
+def test_priority_can_only_be_read_never_inferred() -> None:
+    """The seam cannot see issue content, so it cannot guess **Priority** (#395).
+
+    Asked structurally rather than as a behaviour, because "never inferred" is a
+    property of what the decision is *able* to look at. :class:`OrderableIssue`
+    carries a number, a timestamp and label names — no body, no title — so a
+    future heuristic that read "URGENT" out of a title would have to widen the
+    record first, and would fail here rather than quietly starting to rank on
+    prose. This is the same guarantee ``parallel-safe`` has, and it is what lets
+    ``git-loopy init``'s new ``priority`` label be documented as a human
+    assertion.
+    """
+    fields = set(OrderableIssue.__dataclass_fields__)
+
+    assert fields == {"number", "created_at", "labels"}
+    assert priority_rank(("URGENT: the site is down",)) == 1
+
+
 def test_a_priority_label_is_matched_exactly() -> None:
     """``priority`` is the label; ``priority:high`` is a different one.
 

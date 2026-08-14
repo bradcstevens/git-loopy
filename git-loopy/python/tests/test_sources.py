@@ -1673,6 +1673,56 @@ class TestShallowMembershipSelectionOrder:
 
         assert [c.ref for c in impl.shallow_membership().candidates] == [31, 7]
 
+    def test_urgent_sounding_content_does_not_rank_without_the_label(self) -> None:
+        """**Priority** is read off the labels, never inferred (#395, §3.2).
+
+        Asked at the *source* seam rather than at the pure comparison, because
+        this is where the whole issue record is in hand: ``in_selection_order``
+        sees the title, body and comments and maps three fields out of them, so
+        a heuristic could be added here without the ordering seam ever noticing.
+        Issue 31 is newer and shouts; it still sorts behind the older 7.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    31,
+                    title="URGENT: production is down, top priority",
+                    body=(
+                        "## What to build\nP0, critical, priority\n\n"
+                        "## Acceptance criteria\n- now"
+                    ),
+                    created_at="2026-05-01T00:00:00Z",
+                ),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [7, 31]
+
+    def test_a_priority_issue_that_is_not_afk_ready_never_enters_the_pool(self) -> None:
+        """The head of the order is the head of the *eligible* order (#395).
+
+        Ordering runs over what the discriminator already admitted, so a
+        ``priority`` issue with a thought-shaped body is absent rather than
+        first. Pinned at this seam because it is the one where the two rules
+        meet: an implementation that ordered before filtering would put this
+        issue at the front and only then discover it was never a candidate.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    body="just a thought",
+                    labels=["ready-for-agent", "priority"],
+                ),
+                _make_issue(31, created_at="2026-05-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [31]
+
     def test_an_undated_candidate_is_reported_with_its_defect(self) -> None:
         gh = FakeGitHubClient(
             issues=[
@@ -1892,6 +1942,42 @@ class TestPickup:
         pickup = impl.pickup(31)
         assert pickup.outcome == sources_module.PICKUP_UNAVAILABLE
         assert pickup.item is None
+
+    def test_priority_does_not_excuse_a_missing_parallel_safe(self) -> None:
+        """**Priority** reorders; it does not admit (#395, contract §3.2).
+
+        Guarding the *non*-interaction, now that ``git-loopy init`` provisions
+        ``priority`` and an operator can actually apply it. The hazard is
+        specific: **Priority** wins every ordering comparison, so an issue
+        carrying it arrives at pickup first — and a Lane admitting it without
+        the human's concurrency assertion is exactly the unsafe concurrent work
+        ``parallel-safe`` exists to prevent, reached by the label most likely to
+        be applied in a hurry.
+        """
+        impl = self._source(
+            issues=[_make_issue(31, labels=["ready-for-agent", "priority"])]
+        )
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
+
+    def test_priority_does_not_excuse_a_missing_ready_for_agent(self) -> None:
+        """Priority on an untriaged issue is still an untriaged issue."""
+        impl = self._source(
+            issues=[_make_issue(31, labels=["parallel-safe", "priority"])]
+        )
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
+
+    def test_priority_does_not_excuse_a_body_that_is_not_afk_ready(self) -> None:
+        """The discriminator keeps its exact meaning; urgency is not a substitute."""
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31,
+                    body="URGENT: fix the thing",
+                    labels=["ready-for-agent", "parallel-safe", "priority"],
+                )
+            ]
+        )
+        assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
 
 
 class TestRollingSourceSplit:

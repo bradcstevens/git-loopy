@@ -27,11 +27,35 @@ not a triage role it is not in the table above and is not renameable — the run
 that exact string. See `CONTEXT.md` and
 `docs/adr/0008-across-issue-parallelism-via-git-worktrees.md`.
 
+## Priority label
+
+`priority` is the second human assertion, and it works the same way: not one of the five
+canonical triage roles, not in the table above, and **not renameable** — three
+Orchestrators read that exact string at selection, one of them a Bash script. The runner
+reads it and **never infers it** from issue content; unlike a `task-type:` label it is
+never machine-set.
+
+What it does is **reorder**, and only reorder. An issue carrying `priority` is selected
+ahead of older ones; two `priority` issues order oldest-first against each other, so it is
+a jump to the front of the queue rather than an escape from it. What it does **not** do is
+change eligibility, in any respect:
+
+- a `priority` issue still needs `ready-for-agent` to enter the **Pool** at all;
+- it still has to pass the AFK-ready body discriminator (`## What to build` plus
+  `## Acceptance criteria`);
+- it still needs `parallel-safe` to take a **Lane** — urgency is not a concurrency
+  assertion, and the two labels are decided by a human for different reasons;
+- and it never lets an issue past a **Lease**.
+
+It is also orthogonal to **Task type**, which selects a **Routed pair** and never affects
+order. See `CONTEXT.md`, `docs/wrapper-contract.md` §3.2 and
+`docs/adr/0032-the-runner-picks-the-oldest-eligible-issue.md`.
+
 ## Creating the labels
 
 `git-loopy init`, run inside the repository, creates whichever triage,
-`parallel-safe`, and Task-type labels are absent and leaves the ones that already
-exist untouched. Re-running it creates nothing.
+`parallel-safe`, `priority`, and Task-type labels are absent and leaves the ones
+that already exist untouched. Re-running it creates nothing.
 
 ## Task-type labels
 
@@ -40,9 +64,9 @@ Task type is a closed routing taxonomy. The only valid labels are
 `task-type:test`, `task-type:docs`, `task-type:chore`, and
 `task-type:bugfix`. Do not create other `task-type:` labels.
 
-Unlike `parallel-safe`, a `task-type:` label **may be machine-set**: the
-**Task-type classifier** reads an unlabelled issue's own content and proposes its
-key (ADR-0029), because zero closed issues carried one and routing could not
+Unlike `parallel-safe` and `priority`, a `task-type:` label **may be machine-set**:
+the **Task-type classifier** reads an unlabelled issue's own content and proposes
+its key (ADR-0029), because zero closed issues carried one and routing could not
 otherwise apply to anything. Three consequences follow, and none of them is an
 oversight:
 
@@ -55,6 +79,7 @@ oversight:
   plus `gh label create --force` would make an invented key permanent, so a
   proposal outside the seven is refused rather than warned about.
 
-The two labels differ in blast radius, which is why only one of them opened: a
-wrong `parallel-safe` guess lets unsafe work run concurrently, while a wrong
-`task-type:` guess picks a suboptimal model.
+The labels differ in blast radius, which is why only one of the three opened: a
+wrong `parallel-safe` guess lets unsafe work run concurrently and a wrong
+`priority` guess reorders somebody's backlog, while a wrong `task-type:` guess
+picks a suboptimal model.

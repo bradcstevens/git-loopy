@@ -144,8 +144,9 @@ The wizard:
 
 Run inside a repository, `init` also **ensures the label vocabulary the loop
 reads exists in that repository's tracker**. Without it a fresh clone has no
-`ready-for-agent`, so every **Pool** is empty, and no `parallel-safe`, so
-**Parallel mode** can never engage — and nothing in a Run says why.
+`ready-for-agent`, so every **Pool** is empty, no `parallel-safe`, so
+**Parallel mode** can never engage, and no `priority`, so every eligible issue
+ranks the same — and nothing in a Run says why.
 
 | Label | Role |
 | ----- | ---- |
@@ -155,12 +156,14 @@ reads exists in that repository's tracker**. Without it a fresh clone has no
 | `ready-for-human` | Requires human implementation. |
 | `wontfix` | Will not be actioned. |
 | `parallel-safe` | Human assertion, applied *alongside* `ready-for-agent`, that the issue may be worked concurrently in its own **Lane**. Never inferred. |
+| `priority` | Human assertion that the issue is worked **ahead of older ones**. Never inferred. It reorders and nothing else — a `priority` issue still needs `ready-for-agent`, still has to be AFK-ready, and still needs `parallel-safe` to take a Lane. |
 
 - The five triage roles are read from this repository's own
   [`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md) mapping,
   so a tracker that renamed a role gets *its* label strings rather than the
   canonical defaults. With no such file the canonical defaults are used.
-  `parallel-safe` is not one of the five roles and always uses its own name.
+  `parallel-safe` and `priority` are not triage roles and always use their own
+  names — three Orchestrators read those exact strings.
 - **Only absent labels are created.** A label that already exists keeps its
   colour and description exactly as they are, and a re-run creates nothing.
 - `init` reports which labels it created and which already existed.

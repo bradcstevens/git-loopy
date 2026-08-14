@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from git_loopy import labels as labels_module
+from git_loopy.issue_order import LABEL_PRIORITY
 from git_loopy.skill_source import (
     ACQUIRE_COMMAND,
     DEFAULT_CHECKOUT,
@@ -59,6 +60,7 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -93,6 +95,7 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "ready-for-human",
         "closed:wontfix",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -108,6 +111,7 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "ready-for-human",
         "wontfix",
         "parallel-safe",
+        "priority",
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -116,6 +120,88 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "task-type:chore",
         "task-type:bugfix",
     ]
+
+
+def test_every_description_fits_what_the_tracker_will_accept(tmp_path: Path) -> None:
+    """GitHub rejects a label description over 100 characters, with HTTP 422.
+
+    Measured, not assumed: creating a label with ``parallel-safe``'s
+    159-character description returns ``description is too long (maximum is 100
+    characters)``. That made the whole bootstrap fail on every fresh repository
+    — :func:`bootstrap_labels` returns on the *first* failed create, so the
+    labels after the offending one were never attempted either. The failure is
+    invisible in the suite because the fake client accepts any string, so the
+    bound is asserted here rather than discovered by an operator whose ``init``
+    reported an unreachable tracker over a tracker that was fine.
+    """
+    for spec in labels_module.read_tracker_vocabulary(tmp_path):
+        assert len(spec.description) <= labels_module.MAX_DESCRIPTION_LENGTH, spec.name
+
+
+def test_the_priority_label_is_ensured_alongside_parallel_safe(tmp_path: Path) -> None:
+    """**Priority** is provisioned, so the rank §3.2 already applies is reachable.
+
+    The ordering seam has ranked a ``priority``-labelled issue ahead of every
+    other since #391, but no repository carried the label — the vocabulary was
+    the five roles plus ``parallel-safe`` plus the task types, so the rank could
+    never fire on real work. It sits *next to* ``parallel-safe`` because the two
+    are the same kind of thing: a human assertion the runner reads and never
+    infers, applied alongside ``ready-for-agent``.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    names = [spec.name for spec in vocabulary]
+    assert names[names.index(LABEL_PARALLEL_SAFE) + 1] == LABEL_PRIORITY
+
+
+def test_the_priority_label_is_named_by_the_ordering_seam(tmp_path: Path) -> None:
+    """The label created and the label ranked are one string, from one place.
+
+    A second literal here would be a mirror of
+    :data:`git_loopy.issue_order.LABEL_PRIORITY`, and mirrors drift (ADR-0019).
+    Drift is silent in the worst possible way: ``init`` would provision a label
+    an operator applies in good faith while selection ranks a different string,
+    so **Priority** would appear to be honoured and do nothing.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    priority = next(spec for spec in vocabulary if spec.role == "priority")
+
+    assert priority.name == LABEL_PRIORITY
+
+
+def test_priority_description_names_it_a_human_assertion(tmp_path: Path) -> None:
+    """Its own prose has to carry both halves of what **Priority** is.
+
+    An operator reads the description in the tracker's label list, not in an
+    ADR. Both halves matter: that git-loopy never infers it (so applying it is
+    a decision, not a hint), and that it reorders without changing eligibility
+    (so nobody reaches for it expecting to bypass the discriminator).
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    priority = next(spec for spec in vocabulary if spec.name == LABEL_PRIORITY)
+
+    description = priority.description.lower()
+    assert "human assertion" in description
+    assert "never infers" in description
+    assert "eligibility" in description
+
+
+def test_the_priority_label_is_not_renameable_by_the_documented_mapping(
+    tmp_path: Path,
+) -> None:
+    """``priority`` is not one of the five triage roles, so the mapping cannot move it.
+
+    The mapping's right-hand column renames a *triage role*, and the runner
+    resolves a role through it. **Priority** is read as a literal string at
+    selection — by three Orchestrators, one of which is a Bash script — so a
+    tracker that renamed it would provision a label nothing ranks.
+    """
+    _write_mapping(tmp_path, "| `priority` | `p1` | Urgent |\n")
+
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    assert [spec.name for spec in vocabulary].count(LABEL_PRIORITY) == 1
+    assert "p1" not in [spec.name for spec in vocabulary]
 
 
 def test_parallel_safe_description_names_it_a_human_assertion(tmp_path: Path) -> None:
@@ -149,6 +235,7 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -196,6 +283,7 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "needs-info",
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -209,6 +297,7 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "needs-info",
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -445,6 +534,7 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "ready-for-human",
         "wontfix",
         LABEL_PARALLEL_SAFE,
+        LABEL_PRIORITY,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
