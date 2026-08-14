@@ -77,3 +77,40 @@ fn the_binary_target_is_the_only_transport_owner() {
         "the binary is where the Event trace enters"
     );
 }
+
+/// Mouse reporting is acquired and released with everything else, or not at all.
+///
+/// ADR-0024 has alternate screen, raw mode and mouse tracking move as one unit.
+/// A terminal left reporting mouse prints escape sequences at the operator's
+/// shell prompt for every twitch of the pointer, which is the same inherited
+/// breakage as a terminal left in raw mode — so this asserts the *pairing*
+/// rather than the presence: every place that gives the alternate screen back
+/// gives mouse reporting back too.
+#[test]
+fn mouse_reporting_is_taken_and_given_back_on_every_path_the_screen_is() {
+    let main = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+        .expect("the binary target exists");
+    let code: Vec<&str> = main
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with("//"))
+        .collect();
+
+    let mentions = |needle: &str| code.iter().filter(|line| line.contains(needle)).count();
+    assert_eq!(
+        mentions("execute(EnableMouseCapture)"),
+        mentions("execute(EnterAlternateScreen)"),
+        "mouse reporting is acquired exactly where the alternate screen is"
+    );
+    assert_eq!(
+        mentions("execute(DisableMouseCapture)"),
+        mentions("execute(LeaveAlternateScreen)"),
+        "every restoration path — the surface's, the guard's, and the panic \
+         hook's — hands mouse reporting back with the screen"
+    );
+    assert!(
+        mentions("execute(DisableMouseCapture)") >= 2,
+        "the `Drop` guard is not reached by a panic in a reader thread, so the \
+         panic hook restores independently"
+    );
+}

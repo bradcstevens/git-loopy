@@ -64,11 +64,19 @@ still leaves the **Queue** its three-row floor (ADR-0021).
 | Gesture | From Expanded | From Collapsed |
 | --- | --- | --- |
 | Drag the header | `requested` tracks the pointer; crossing below three rows → **Collapsed** | → Expanded; `requested` tracks the pointer, floored at three — a pull that asks for less than three leaves the stub *and* `requested` untouched, as `shift+↓` does |
-| `shift+↑` | `requested += 1`, capped at `ceiling` | → Expanded at **three** |
-| `shift+↓` | `requested -= 1`; below three → **Collapsed** | no-op |
+| `shift+↑` | `requested = effective + 1`, capped at `ceiling` | → Expanded at **three** |
+| `shift+↓` | `requested = effective - 1`; below three → **Collapsed** | no-op |
 | Click the header, or `a` | → **Collapsed**; `requested` preserved | → Expanded at `requested` |
 | Wheel | never resizes | never resizes |
 | Terminal resize | `effective` re-clamped; `requested` untouched | stays Collapsed |
+
+A key press counts from `effective` rather than from `requested`, so **one press is always
+one visible row**. Counting from `requested` reads better in a table and is wrong on the
+terminal it matters on: a band asking for thirty rows on a terminal that allows ten would
+swallow twenty presses of `shift+↓` before anything moved, and a band restored from
+**Collapsed** at a remembered two rows would answer `shift+↑` by staying at three. The cap
+is likewise written into `requested` and not only into `effective`, so leaning on the key
+stores up no pent-up height that springs out the moment the terminal grows.
 
 `shift+↑` out of Collapsed lands on the floor rather than restoring the remembered height,
 because it is a sizing gesture and sizing gestures state intent. Nothing is lost: `a` and
@@ -84,6 +92,12 @@ restore gesture would have nothing left to restore.
 A drag that ends where it began is indistinguishable from a click, so the click needs a
 meaning, and a one-row drag target needs a forgiving one. Toggling keeps all three
 controls driving the one state machine.
+
+A press and a release with **no motion reported in between** is that click, wherever the
+release lands. This is the middle rung of the ladder below rather than a looser reading of
+"ends where it began": a terminal that reports clicks but not motion cannot say the pointer
+travelled, so the only gesture it can express is the click, and refusing it because the
+button came up two rows down would leave that terminal with no mouse at all.
 
 The click is bound to the **band** header, never to a **Activity window** header.
 ADR-0021 reserves the latter — *"one click on a window header, which drills into that
@@ -163,3 +177,39 @@ port implements from it rather than from the Python source.
 - `Pilot` injects `MouseMove` into Textual's pipeline and so cannot prove a real terminal
   reports drag motion. That risk is carried by the degradation ladder rather than by a
   test.
+
+## Amendment — the gesture Conformance dimension, decided (#384)
+
+This ADR left one question open: *"Encode the gestures as Conformance fixtures now —
+rejected for this slice […] It becomes worth its cost once both renderers are live."* The
+Rust `git-loopy-tui` renderer is now live on this state machine (#384), so the question is
+answerable, and the answer is **not yet — and the blocker is not the fixture**.
+
+A gesture fixture would pin `(starting state, ceiling, gesture sequence) → (requested,
+collapsed, effective)`. Two of those inputs are shared across the family and one is not.
+`ceiling` is defined *relationally* above — "the largest height that still leaves the
+**Queue** its three-row floor" — so it resolves to a different number in each renderer for
+the same terminal, because each has its own bands around the Activity band: a Textual
+Footer and a one-line band header here, a four-row bordered Run header and a bordered band
+there. A fixture therefore has to **inject** the ceiling rather than let each member derive
+one, or it is pinning two members' separate layout arithmetic instead of one shared rule.
+
+The Rust member already takes the ceiling as a parameter on every gesture
+(`ActivityBand::grow(Some(ceiling))`), so an adapter would drive the shipped path. The
+Python member derives it inside the widget from a live Textual layout
+(`_ActivityBand._ceiling`), so an adapter could only inject one by subclassing — which pins
+a **test double**. A fixture whose second port is a double is the failure
+`conformance/README.md` names elsewhere: an adapter that reproduced the walk would agree
+with itself.
+
+So the prerequisite is a change to the *Python* renderer rather than to the fixture set:
+lift the two numbers and the five transitions out of `_ActivityBand` into a
+ceiling-injectable seam the widget delegates to, exactly as the Rust member's
+`ActivityBand` already is. Once both members answer the same call the fixture is small and
+worth its cost. Until then the table above remains the contract, and both renderers' suites
+quote it rather than each other.
+
+Note what this does *not* leave unpinned. The state machine is covered on both sides —
+`python/tests/test_interactive_activity.py` and `tui/tests/activity_band.rs` — and the Rust
+suite's cases are written from the table in this document, not from the Python source, so
+the two are pinned to one *specification* even while they are not pinned to one *fixture*.

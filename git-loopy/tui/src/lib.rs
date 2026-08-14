@@ -11,6 +11,7 @@
 //! helper and the future in-process Rust Orchestrator embed the same core
 //! rather than forking its behaviour (ADR-0013).
 
+mod band;
 mod event;
 mod input;
 mod navigation;
@@ -20,10 +21,16 @@ mod state;
 mod timestamp;
 mod view;
 
+pub use band::{
+    ActivityBand, ACTIVITY_BAND_COLLAPSED_HEIGHT, ACTIVITY_BAND_HEIGHT, ACTIVITY_BAND_MIN_HEIGHT,
+    QUEUE_MIN_HEIGHT,
+};
 pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
-pub use input::{Admission, Input, InputQueue};
+pub use input::{Admission, Input, InputQueue, Pointer, PointerAction};
 pub use navigation::{Flow, Key, Screen};
-pub use render::{draw_dashboard, draw_drill_in, draw_frame};
+pub use render::{
+    activity_ceiling, dashboard_bands, draw_dashboard, draw_drill_in, draw_frame, DashboardBands,
+};
 pub use session::{
     drive_dashboard, DashboardFrame, DashboardSession, DashboardSurface, Diagnostics,
 };

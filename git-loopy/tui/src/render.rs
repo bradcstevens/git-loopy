@@ -21,6 +21,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
+use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
 use crate::navigation::Screen;
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
@@ -179,36 +180,126 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     let view = &dashboard.view;
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
-    let (activity_rows, summary_rows) = tail_heights(area.height, 10, 9);
-    let [header, queue, activity, summary] = Layout::vertical([
-        Constraint::Length(HEADER_ROWS),
-        Constraint::Min(3),
-        Constraint::Length(activity_rows),
-        Constraint::Length(summary_rows),
-    ])
-    .areas(area);
+    let Some(bands) = dashboard_bands(area, &dashboard.activity_band) else {
+        draw_minimum_size(frame, area);
+        return;
+    };
     draw_header(
         frame,
-        header,
+        bands.header,
         &view.dashboard.header,
         &dashboard.diagnostics,
         &glyphs,
     );
     draw_queue(
         frame,
-        queue,
+        bands.queue,
         &view.dashboard.queue.rows,
         cost_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
-    draw_activity(frame, activity, &view.dashboard.activity, &glyphs);
+    draw_activity(frame, bands.activity, &view.dashboard.activity, &glyphs);
     draw_summary(
         frame,
-        summary,
+        bands.summary,
         &view.dashboard.summary.rows,
         cost_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
+}
+
+/// Where the four Dashboard bands sit on a terminal of this size.
+///
+/// Deliberately a value the renderer *returns* rather than geometry it keeps to
+/// itself, because a pointer gesture has to be answered in the same coordinates
+/// the frame was drawn in. ADR-0031 makes the Activity band's header row its
+/// **drag handle**, so a second, privately-derived layout would put the handle
+/// somewhere other than where the operator can see it.
+///
+/// `None` on a terminal too small to lay bands out at all — the state
+/// [`draw_frame`] draws instead — which is also the honest answer to "what did
+/// the pointer land on": nothing, because none of it is on screen.
+pub fn dashboard_bands(area: Rect, band: &ActivityBand) -> Option<DashboardBands> {
+    if area.width < MINIMUM_COLUMNS || area.height < MINIMUM_ROWS {
+        return None;
+    }
+    let activity_rows = band.on_screen_height(Some(activity_ceiling(area)));
+    let [header, queue, activity, summary] = Layout::vertical([
+        Constraint::Length(HEADER_ROWS),
+        Constraint::Min(QUEUE_MIN_HEIGHT),
+        Constraint::Length(activity_rows),
+        Constraint::Length(summary_height(area.height)),
+    ])
+    .areas(area);
+    Some(DashboardBands {
+        header,
+        queue,
+        activity,
+        summary,
+    })
+}
+
+/// The four Dashboard bands, in the locked `Header -> Queue -> Activity ->
+/// Summary` order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardBands {
+    /// The Run's fixed-height header.
+    pub header: Rect,
+    /// The Queue, which takes whatever the other three leave.
+    pub queue: Rect,
+    /// The Activity band, at the height the operator asked for.
+    pub activity: Rect,
+    /// The Summary.
+    pub summary: Rect,
+}
+
+impl DashboardBands {
+    /// The Activity band's header row, which is also its drag handle
+    /// (ADR-0021, ADR-0031).
+    ///
+    /// One row, whether the band is Expanded or Collapsed: **Collapsed keeps
+    /// its handle**, which is what makes a drag undoable by a drag.
+    pub fn activity_handle(&self) -> Rect {
+        Rect {
+            height: 1,
+            ..self.activity
+        }
+    }
+
+    /// Whether a pointer at these terminal coordinates landed on that handle.
+    ///
+    /// The whole of hit-testing, and deliberately the library's rather than the
+    /// binary's: the coordinates a terminal reports mean nothing without the
+    /// layout they were drawn in, and that layout is [`dashboard_bands`].
+    pub fn hits_activity_handle(&self, column: u16, row: u16) -> bool {
+        let handle = self.activity_handle();
+        column >= handle.x
+            && column < handle.x.saturating_add(handle.width)
+            && row >= handle.y
+            && row < handle.y.saturating_add(handle.height)
+    }
+}
+
+/// The largest Activity band this terminal can carry.
+///
+/// ADR-0031's `ceiling`: the largest height that still leaves the **Queue** its
+/// three-row floor (ADR-0021), once the fixed header and the Summary have taken
+/// theirs. Never below the band's own floor — a terminal too short for both
+/// floors squeezes the Queue rather than dropping the band into a state no
+/// gesture asked for.
+pub fn activity_ceiling(area: Rect) -> u16 {
+    area.height
+        .saturating_sub(HEADER_ROWS + QUEUE_MIN_HEIGHT + summary_height(area.height))
+        .max(ACTIVITY_BAND_MIN_HEIGHT)
+}
+
+/// The Summary band's height, which is still derived rather than chosen.
+///
+/// ADR-0031 made only the **Activity** band operator-sized; the Summary keeps
+/// the third-of-the-body share it has always taken, so the band the operator
+/// did not ask about does not move under them.
+fn summary_height(height: u16) -> u16 {
+    tail_heights(height, 10, 9).1
 }
 
 /// How tall the two bands below a scrolling one may be.

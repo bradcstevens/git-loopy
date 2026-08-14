@@ -19,13 +19,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use git_loopy_tui::{
     draw_frame, drive_dashboard, project_run_view, Admission, DashboardFrame, DashboardSession,
-    DashboardState, DashboardSurface, Event, Input, InputQueue, IssueRef, Key, RunInputs,
-    TerminalCapabilities, Timestamp, ViewContext, Zone,
+    DashboardState, DashboardSurface, Event, Input, InputQueue, IssueRef, Key, Pointer,
+    PointerAction, RunInputs, TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers,
+    self, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEventKind,
+    KeyModifiers, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -53,6 +54,16 @@ options:
       --schema-version          print the compatibility probe as JSON and exit
       --version                 print the version and exit
   -h, --help                    print this help and exit
+
+controls (--render):
+  up/down, k/j              move through the Queue
+  home/end, g/G             jump to its head or tail
+  enter, right, l           open the selected issue's Log
+  esc, backspace, left, h   go back
+  drag the Activity header  size the Activity band
+  click it, or a            collapse the band to its header, or restore it
+  shift+up, shift+down      size it a row at a time, with no mouse at all
+  q, ctrl-c                 hand the terminal back and stop
 ";
 
 /// Malformed usage, matching the family's locked CLI framing.
@@ -355,10 +366,12 @@ fn read_the_trace(pending: Arc<Pending>) {
     });
 }
 
-/// The dedicated keyboard reader.
+/// The dedicated terminal reader.
 ///
 /// Reads the *controlling terminal*, never standard input: standard input is
-/// the Orchestrator's pipe, and the two must never contend for a byte.
+/// the Orchestrator's pipe, and the two must never contend for a byte. It reads
+/// the pointer as well as the keyboard, because both arrive on the one stream a
+/// terminal in mouse-reporting mode multiplexes them onto.
 fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         while !stopping.load(Ordering::Relaxed) {
@@ -373,7 +386,14 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
                         pending.offer(Input::Key(intent));
                     }
                 }
-                Ok(TerminalEvent::Resize(..)) => pending.offer(Input::Resized),
+                Ok(TerminalEvent::Mouse(mouse)) => {
+                    if let Some(pointer) = gesture(mouse) {
+                        pending.offer(Input::Pointer(pointer));
+                    }
+                }
+                Ok(TerminalEvent::Resize(columns, rows)) => {
+                    pending.offer(Input::Resized(columns, rows))
+                }
                 Ok(_) => {}
                 Err(_) => return,
             }
@@ -381,18 +401,57 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
     });
 }
 
-/// The navigation intent one key press expresses.
+/// The pointer gesture one terminal mouse report expresses.
+///
+/// Every button drags, deliberately: ADR-0031 says nothing about which, and the
+/// Python renderer accepts any, so narrowing it here would open exactly the
+/// drift between the two renderers this port exists to close. A bare move with
+/// no button held is not a gesture — the handle has not been taken — and every
+/// wheel direction becomes the one inert [`PointerAction::Wheel`], so "the
+/// wheel never resizes" is answered by the state machine rather than by this
+/// mapping quietly declining to forward it.
+fn gesture(mouse: MouseEvent) -> Option<Pointer> {
+    let action = match mouse.kind {
+        MouseEventKind::Down(_) => PointerAction::Press,
+        MouseEventKind::Drag(_) => PointerAction::Drag,
+        MouseEventKind::Up(_) => PointerAction::Release,
+        MouseEventKind::ScrollUp
+        | MouseEventKind::ScrollDown
+        | MouseEventKind::ScrollLeft
+        | MouseEventKind::ScrollRight => PointerAction::Wheel,
+        MouseEventKind::Moved => return None,
+    };
+    Some(Pointer {
+        action,
+        column: mouse.column,
+        row: mouse.row,
+    })
+}
+
+/// The operator intent one key press expresses.
 ///
 /// Both the arrow keys and their `hjkl` equivalents, because an operator who
 /// lives in one is fluent in neither by accident. In raw mode `Ctrl-C` arrives
 /// here as a key rather than a signal, which is precisely what lets the helper
 /// hand the terminal back on its own one exit path.
+///
+/// `shift+↑` / `shift+↓` and `a` are the bottom rung of ADR-0031's
+/// **drag → click → keys** ladder: the terminal that reports no mouse at all
+/// still sizes the Activity band. Shift is matched on the two arrows only, so
+/// `G` — which arrives shifted — keeps meaning the tail of the Queue.
 fn intent(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
     if modifiers.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char('c') | KeyCode::Char('d') => Some(Key::Quit),
             _ => None,
         };
+    }
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        match code {
+            KeyCode::Up => return Some(Key::GrowActivity),
+            KeyCode::Down => return Some(Key::ShrinkActivity),
+            _ => {}
+        }
     }
     match code {
         KeyCode::Up | KeyCode::Char('k') => Some(Key::Up),
@@ -401,6 +460,7 @@ fn intent(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
         KeyCode::End | KeyCode::Char('G') => Some(Key::Last),
         KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => Some(Key::Open),
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => Some(Key::Back),
+        KeyCode::Char('a') => Some(Key::ToggleActivity),
         KeyCode::Char('q') => Some(Key::Quit),
         _ => None,
     }
@@ -431,6 +491,12 @@ fn install_restoration_hook() {
 }
 
 /// Undo every terminal change this helper makes, best effort, in order.
+///
+/// Mouse reporting is undone here as well as in [`CrosstermSurface::restore`],
+/// because acquisition is indivisible (ADR-0024): a terminal left reporting
+/// mouse prints escape sequences at the operator's shell prompt for every
+/// twitch of the pointer, which is the same class of inherited breakage as a
+/// terminal left in raw mode.
 fn restore_the_terminal() {
     if let Ok(mut device) = OpenOptions::new()
         .read(true)
@@ -438,6 +504,7 @@ fn restore_the_terminal() {
         .open(CONTROLLING_TERMINAL)
     {
         let _ = device.execute(Show);
+        let _ = device.execute(DisableMouseCapture);
         let _ = device.execute(LeaveAlternateScreen);
     }
     let _ = disable_raw_mode();
@@ -506,8 +573,16 @@ impl CrosstermSurface {
         Ok(surface)
     }
 
+    /// Take the terminal: alternate screen, mouse reporting, hidden cursor.
+    ///
+    /// One unit with the raw mode taken in [`open`](Self::open), because
+    /// ADR-0024 has acquisition and release move together — a caller that could
+    /// acquire mouse reporting separately could also fail to give it back
+    /// separately, and every failure path here already goes through
+    /// [`restore`](DashboardSurface::restore).
     fn enter(&mut self) -> io::Result<()> {
         self.device.execute(EnterAlternateScreen)?;
+        self.device.execute(EnableMouseCapture)?;
         self.device.execute(Hide)?;
         self.terminal.clear()?;
         Ok(())
@@ -526,11 +601,13 @@ impl DashboardSurface for CrosstermSurface {
         }
         self.restored = true;
         // Best effort, in order, and never short-circuited: a failure to leave
-        // the alternate screen must not also leave the cursor hidden.
+        // the alternate screen must not also leave the cursor hidden, or the
+        // terminal reporting every movement of the pointer.
         let cursor = self.device.execute(Show).map(|_| ());
+        let mouse = self.device.execute(DisableMouseCapture).map(|_| ());
         let screen = self.device.execute(LeaveAlternateScreen).map(|_| ());
         let raw = disable_raw_mode();
-        cursor.and(screen).and(raw)
+        cursor.and(mouse).and(screen).and(raw)
     }
 }
 

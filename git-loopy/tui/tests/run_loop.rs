@@ -311,7 +311,7 @@ fn a_resize_redraws_at_the_terminals_new_size() {
     drive_dashboard(
         &mut surface,
         &mut session,
-        vec![run_start(), Input::Resized],
+        vec![run_start(), Input::Resized(120, 30)],
     )
     .expect("the loop drives to the end of its input");
 

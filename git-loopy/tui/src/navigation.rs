@@ -3,8 +3,9 @@
 //! Deliberately free of any keyboard: the family's locked renderer toolkit is a
 //! presentation choice ADR-0013 leaves to the renderer, and the shared
 //! Conformance fixture lists `keybindings` among its presentation exclusions.
-//! So this module names *intents* — move, open, go back, quit — and the caller
-//! that owns a real terminal maps its key codes onto them.
+//! So this module names *intents* — move, open, go back, size the Activity
+//! band, quit — and the caller that owns a real terminal maps its key codes
+//! onto them.
 
 use crate::event::IssueRef;
 
@@ -17,7 +18,7 @@ pub enum Screen {
     DrillIn,
 }
 
-/// One navigation intent, however the caller's terminal spelled it.
+/// One operator intent, however the caller's terminal spelled it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     /// Move the cursor towards the head of the Queue.
@@ -32,6 +33,12 @@ pub enum Key {
     Open,
     /// Leave the detail for the Dashboard.
     Back,
+    /// Collapse the Activity band to its stub, or restore it (ADR-0031).
+    ToggleActivity,
+    /// Ask for one more row of Activity band.
+    GrowActivity,
+    /// Ask for one fewer row of Activity band.
+    ShrinkActivity,
     /// Hand the terminal back and stop.
     Quit,
 }
@@ -72,6 +79,11 @@ impl Cursor {
     }
 
     /// Apply one intent against the Queue as it is currently projected.
+    ///
+    /// The three Activity-band sizing intents never reach here: they move no
+    /// cursor and open no screen, so the session applies them to the band
+    /// before the cursor is consulted. They are matched explicitly rather than
+    /// swept up by a wildcard, so a tenth intent cannot become a silent no-op.
     pub(crate) fn apply(&mut self, key: Key, queue: &[IssueRef]) -> Flow {
         match key {
             Key::Quit => return Flow::Quit,
@@ -81,6 +93,7 @@ impl Cursor {
             Key::Last => self.jump(queue.last()),
             Key::Up => self.step(queue, -1),
             Key::Down => self.step(queue, 1),
+            Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity => {}
         }
         Flow::Continue
     }

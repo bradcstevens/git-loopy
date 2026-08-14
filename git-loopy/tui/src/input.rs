@@ -25,14 +25,54 @@ pub enum Input {
     Trace(String),
     /// One navigation intent the operator expressed.
     Key(Key),
-    /// The terminal changed size.
-    Resized,
+    /// One thing the operator's pointer did.
+    Pointer(Pointer),
+    /// The terminal changed size, to these columns and rows.
+    ///
+    /// The new size travels with the input because the Activity band's drag
+    /// handle is hit-tested against the layout, and a layout computed from a
+    /// stale terminal size would put the handle somewhere the operator cannot
+    /// see it (ADR-0031).
+    Resized(u16, u16),
     /// Time passed and nothing else did.
     Tick(Timestamp),
     /// The Event trace reached its end.
     EndOfTrace,
     /// The Event trace could not be read any further, for this reason.
     Failed(String),
+}
+
+/// One thing the operator's pointer did, in terminal cells.
+///
+/// Coordinates are the terminal's own, top-left origin, exactly as a terminal
+/// reports them. What they *mean* is the library's to decide, because only the
+/// library knows where it drew the bands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pointer {
+    /// What the pointer did.
+    pub action: PointerAction,
+    /// The terminal column it did it in.
+    pub column: u16,
+    /// The terminal row it did it in.
+    pub row: u16,
+}
+
+/// The pointer gestures the Dashboard distinguishes.
+///
+/// [`Wheel`](PointerAction::Wheel) is here precisely so that "the wheel never
+/// resizes" (ADR-0031) is a pinned behaviour of the shipped path rather than an
+/// event the caller happens not to forward: resize-by-wheel is the accidental
+/// gesture class ADR-0021's Context section is an argument against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerAction {
+    /// A button went down.
+    Press,
+    /// The pointer moved with a button held.
+    Drag,
+    /// The button came back up.
+    Release,
+    /// The wheel turned, either way.
+    Wheel,
 }
 
 /// What became of an offered input.
@@ -54,6 +94,11 @@ pub enum Admission {
 /// can go. Anything that appends — a Log line, a Pool, an Iteration rollup, a
 /// keystroke — cannot, and neither can a line that failed to decode, because
 /// nothing about it has been shown to be safe to drop.
+///
+/// A [`Pointer`] is not a delta either, and the reason is ordering rather than
+/// appending: a coalesced input takes the *newest* position in the buffer, so a
+/// pointer move overtaking the release that ended its drag would re-apply the
+/// drag after the gesture was over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Delta {
     Resize,
@@ -64,15 +109,30 @@ enum Delta {
 impl Delta {
     fn of(input: &Input) -> Option<Self> {
         match input {
-            Input::Resized => Some(Delta::Resize),
+            Input::Resized(..) => Some(Delta::Resize),
             Input::Tick(_) => Some(Delta::Clock),
             Input::Trace(line) => match Event::from_jsonl_line(line) {
                 Some(event) if event.kind == "usage.context_window" => Some(Delta::ContextWindow),
                 _ => None,
             },
-            Input::Key(_) | Input::EndOfTrace | Input::Failed(_) => None,
+            Input::Key(_) | Input::Pointer(_) | Input::EndOfTrace | Input::Failed(_) => None,
         }
     }
+}
+
+/// Whether this input's meaning depends on the terminal's current geometry.
+///
+/// A pointer gesture is hit-tested against the laid-out bands, and an Activity
+/// sizing key is capped by the ceiling those bands leave, so both mean
+/// something different on a terminal of a different size. Nothing else in the
+/// buffer does: an Event is reduced identically at every size, and the drawn
+/// frame measures the surface it is handed.
+fn depends_on_geometry(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::Pointer(_)
+            | Input::Key(Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity)
+    )
 }
 
 /// A bounded buffer of pending presentation input.
@@ -98,6 +158,14 @@ impl InputQueue {
     /// *newest* position rather than the one it replaced: it is the newer fact,
     /// and applying it where the older sat could let an Event between the two
     /// reset the very value it carries.
+    ///
+    /// A **resize is the exception**, and only when something geometry-dependent
+    /// is queued behind it. Displacing it would move the terminal's newest size
+    /// past a pointer gesture that has not been answered yet, and that gesture
+    /// would then be hit-tested against a layout the operator was never looking
+    /// at — a click on the handle silently landing somewhere else. The two
+    /// resizes are kept in order instead; the buffer is a little fuller and the
+    /// gesture means what it meant when it was made.
     pub fn push(&mut self, input: Input) -> Admission {
         if let Some(class) = Delta::of(&input) {
             if let Some(position) = self
@@ -105,10 +173,14 @@ impl InputQueue {
                 .iter()
                 .position(|queued| Delta::of(queued) == Some(class))
             {
-                self.items.remove(position);
-                self.items.push_back(input);
-                self.coalesced += 1;
-                return Admission::Coalesced;
+                let overtakes_a_gesture = class == Delta::Resize
+                    && self.items.iter().skip(position).any(depends_on_geometry);
+                if !overtakes_a_gesture {
+                    self.items.remove(position);
+                    self.items.push_back(input);
+                    self.coalesced += 1;
+                    return Admission::Coalesced;
+                }
             }
         }
         if self.items.len() >= self.capacity {

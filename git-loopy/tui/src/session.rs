@@ -10,9 +10,13 @@
 //! That seam is what makes end-of-input, the final frame, and terminal
 //! restoration observable without a TTY, a child process, or a signal.
 
+use ratatui::layout::Rect;
+
+use crate::band::ActivityBand;
 use crate::event::{Event, IssueRef};
-use crate::input::Input;
+use crate::input::{Input, Pointer, PointerAction};
 use crate::navigation::{Cursor, Flow, Key, Screen};
+use crate::render::{activity_ceiling, dashboard_bands, DashboardBands};
 use crate::state::{DashboardState, RunInputs};
 use crate::timestamp::{Timestamp, Zone};
 use crate::view::{project_run_view, RunView, TerminalCapabilities, ViewContext};
@@ -31,6 +35,8 @@ pub struct DashboardFrame {
     pub screen: Screen,
     /// The issue under the cursor.
     pub selected: IssueRef,
+    /// How tall the operator has asked the Activity band to be (ADR-0031).
+    pub activity_band: ActivityBand,
     /// What the terminal drawing this frame can render.
     pub capabilities: TerminalCapabilities,
     /// What the helper could not make sense of.
@@ -93,6 +99,18 @@ pub struct DashboardSession {
     zone: Zone,
     cursor: Cursor,
     capabilities: TerminalCapabilities,
+    /// The operator's Activity band: intent, and whether it is showing.
+    band: ActivityBand,
+    /// The terminal the frames are being drawn on, as last reported.
+    ///
+    /// Held because a pointer gesture is only meaningful against the layout the
+    /// frame was drawn in, and that layout depends on the terminal's size. The
+    /// *drawn* clamp needs none of this — the renderer measures the frame it is
+    /// handed — so a stale size can misplace a drag handle and can never
+    /// misdraw a band.
+    terminal: Rect,
+    /// The drag in progress, if the operator is holding the handle.
+    grab: Option<Grab>,
     /// The instant the projection is pinned to, when the caller pins one.
     pinned_instant: Option<Timestamp>,
     /// The monotonic reading of that pinned instant, when the caller pins one.
@@ -104,6 +122,23 @@ pub struct DashboardSession {
     diagnostics: Diagnostics,
 }
 
+/// One drag of the Activity band's handle, in progress.
+///
+/// Measured from where the pointer was grabbed rather than from the previous
+/// move, so a pointer that runs past the band's ceiling and comes back lands
+/// where it started instead of drifting.
+#[derive(Clone, Copy, Debug)]
+struct Grab {
+    /// The screen row the handle was grabbed on.
+    row: u16,
+    /// The band's on-screen height at that moment.
+    height: u16,
+    /// Whether the pointer has left the row it was grabbed on. A press and
+    /// release that never does is a **click** — a *toggle* gesture — and not a
+    /// drag that happened to size the band to where it already was.
+    moved: bool,
+}
+
 impl DashboardSession {
     /// Start a session for one Run.
     pub fn new(inputs: RunInputs, zone: Zone, drill_in: IssueRef) -> Self {
@@ -112,6 +147,9 @@ impl DashboardSession {
             zone,
             cursor: Cursor::new(drill_in),
             capabilities: TerminalCapabilities::default(),
+            band: ActivityBand::default(),
+            terminal: Rect::default(),
+            grab: None,
             pinned_instant: None,
             pinned_monotonic: None,
             last_instant: None,
@@ -123,6 +161,9 @@ impl DashboardSession {
     /// Declare what the terminal can render.
     pub fn with_capabilities(mut self, capabilities: TerminalCapabilities) -> Self {
         self.capabilities = capabilities;
+        if let (Some(columns), Some(rows)) = (capabilities.columns, capabilities.rows) {
+            self.terminal = Rect::new(0, 0, columns, rows);
+        }
         self
     }
 
@@ -205,17 +246,75 @@ impl DashboardSession {
             view: self.view(),
             screen: self.cursor.screen,
             selected: self.cursor.selected().clone(),
+            activity_band: self.band,
             capabilities: self.capabilities,
             diagnostics: self.diagnostics.clone(),
         }
     }
 
-    /// Apply one navigation intent, reporting whether the loop should go on.
+    /// How tall the operator has asked the Activity band to be.
+    pub fn activity_band(&self) -> ActivityBand {
+        self.band
+    }
+
+    /// The terminal changed size.
+    ///
+    /// The *drawn* band needs nothing from this — ADR-0031's re-clamp is
+    /// non-destructive and happens against the frame the renderer is handed —
+    /// but hit-testing does, because the drag handle moves with the layout. Any
+    /// drag in progress ends here: its grab row was measured against a screen
+    /// that no longer exists.
+    pub fn resize(&mut self, columns: u16, rows: u16) {
+        self.terminal = Rect::new(0, 0, columns, rows);
+        self.capabilities.columns = Some(columns);
+        self.capabilities.rows = Some(rows);
+        self.grab = None;
+    }
+
+    /// Where the four bands sit, or `None` when none of them are on screen.
+    ///
+    /// The Activity band exists only on the Dashboard and only on a terminal
+    /// big enough to lay bands out in, so both are answered here rather than by
+    /// each gesture in turn — a gesture that guessed differently from the
+    /// renderer would size a band the operator cannot see.
+    fn bands(&self) -> Option<DashboardBands> {
+        if self.cursor.screen != Screen::Dashboard {
+            return None;
+        }
+        dashboard_bands(self.terminal, &self.band)
+    }
+
+    /// The band's ceiling on the current terminal, or `None` when there is no
+    /// band on screen to have one.
+    fn ceiling(&self) -> Option<u16> {
+        self.bands().map(|_| activity_ceiling(self.terminal))
+    }
+
+    /// Apply one operator intent, reporting whether the loop should go on.
     ///
     /// The Queue the cursor moves through is the *projected* one, so the
     /// operator walks the rows they can actually see, in the order they see
     /// them, rather than the reducer's first-seen order underneath.
+    ///
+    /// The three Activity-band intents are answered before the cursor is
+    /// consulted, and only while the band is on screen: a sizing gesture from
+    /// the drill-in would state a request against a ceiling that is not the one
+    /// the operator will come back to.
     pub fn handle_key(&mut self, key: Key) -> Flow {
+        match key {
+            Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity => {
+                let Some(ceiling) = self.ceiling() else {
+                    return Flow::Continue;
+                };
+                match key {
+                    Key::ToggleActivity => self.band.toggle(),
+                    Key::GrowActivity => self.band.grow(Some(ceiling)),
+                    _ => self.band.shrink(Some(ceiling)),
+                }
+                return Flow::Continue;
+            }
+            _ => {}
+        }
         let queue: Vec<IssueRef> = self
             .view()
             .dashboard
@@ -224,7 +323,70 @@ impl DashboardSession {
             .into_iter()
             .map(|row| row.issue)
             .collect();
-        self.cursor.apply(key, &queue)
+        let screen = self.cursor.screen;
+        let flow = self.cursor.apply(key, &queue);
+        if self.cursor.screen != screen {
+            // A handle taken off screen ends its drag. `Open` needs no mouse,
+            // so it can arrive with the button still held; without this the
+            // capture would outlive the gesture and the next release would
+            // toggle a band the operator had stopped touching.
+            self.grab = None;
+        }
+        flow
+    }
+
+    /// Apply one pointer gesture, reporting whether the loop should go on.
+    ///
+    /// The **drag → click → keys** ladder's first two rungs (ADR-0031). A press
+    /// on the Activity band's header row takes the handle; a move sizes the
+    /// band; a release lets go, and a release that never moved is a *click*,
+    /// which toggles **Collapsed**. The wheel is deliberately inert.
+    ///
+    /// Every event between the press and the release belongs to the handle,
+    /// whatever it is over: that is what keeps a drag wandering down across the
+    /// Queue from moving the cursor instead of the band.
+    pub fn handle_pointer(&mut self, pointer: Pointer) -> Flow {
+        let (Some(bands), Some(ceiling)) = (self.bands(), self.ceiling()) else {
+            // Nothing to grab, and nothing a held grab could still mean.
+            self.grab = None;
+            return Flow::Continue;
+        };
+        match pointer.action {
+            // Never resizes, at either end of a drag or outside one.
+            PointerAction::Wheel => {}
+            PointerAction::Press => {
+                self.grab = bands
+                    .hits_activity_handle(pointer.column, pointer.row)
+                    .then_some(Grab {
+                        row: pointer.row,
+                        height: self.band.on_screen_height(Some(ceiling)),
+                        moved: false,
+                    });
+            }
+            PointerAction::Drag => {
+                if let Some(grab) = self.grab {
+                    // The handle is the band's top edge and the bottom edge does
+                    // not move, so the height is the rows between them.
+                    let rows = i32::from(grab.row) - i32::from(pointer.row);
+                    if rows != 0 || grab.moved {
+                        self.grab = Some(Grab {
+                            moved: true,
+                            ..grab
+                        });
+                        self.band
+                            .drag_to(i32::from(grab.height) + rows, Some(ceiling));
+                    }
+                }
+            }
+            PointerAction::Release => {
+                if let Some(grab) = self.grab.take() {
+                    if !grab.moved {
+                        self.band.toggle();
+                    }
+                }
+            }
+        }
+        Flow::Continue
     }
 }
 
@@ -257,10 +419,16 @@ where
                         break;
                     }
                 }
+                Input::Pointer(pointer) => {
+                    if session.handle_pointer(pointer) == Flow::Quit {
+                        break;
+                    }
+                }
                 Input::Tick(instant) => session.tick(instant),
                 // The frame is redrawn below at whatever size the surface now
-                // reports; nothing about the Run changed.
-                Input::Resized => {}
+                // reports; nothing about the Run changed, but where the bands
+                // are did, and a pointer gesture is answered against that.
+                Input::Resized(columns, rows) => session.resize(columns, rows),
                 Input::EndOfTrace => break,
                 // The helper owns its own exit code and nothing else: the Run
                 // belongs to the Orchestrator, which is still holding it.

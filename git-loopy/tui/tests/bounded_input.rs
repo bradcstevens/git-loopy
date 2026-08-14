@@ -139,8 +139,8 @@ fn a_keystroke_is_structural_because_an_operator_pressed_it() {
 #[test]
 fn a_resize_and_a_tick_carry_only_their_newest_value() {
     let mut queue = InputQueue::with_capacity(8);
-    queue.push(Input::Resized);
-    assert_eq!(queue.push(Input::Resized), Admission::Coalesced);
+    queue.push(Input::Resized(160, 40));
+    assert_eq!(queue.push(Input::Resized(120, 30)), Admission::Coalesced);
     queue.push(Input::Tick(instant("2026-05-16T00:00:01.000Z")));
     assert_eq!(
         queue.push(Input::Tick(instant("2026-05-16T00:00:02.000Z"))),
@@ -149,7 +149,10 @@ fn a_resize_and_a_tick_carry_only_their_newest_value() {
 
     let drained = drain(&mut queue);
     assert_eq!(drained.len(), 2, "one resize and one tick remain");
-    assert!(matches!(drained[0], Input::Resized));
+    assert!(
+        matches!(drained[0], Input::Resized(120, 30)),
+        "the surviving resize is the terminal's newest size, not its first"
+    );
     assert!(
         matches!(drained[1], Input::Tick(at) if at == instant("2026-05-16T00:00:02.000Z")),
         "the clock advances to now, not to the tick that was already stale"
@@ -161,7 +164,7 @@ fn a_tick_and_a_resize_are_separate_classes() {
     let mut queue = InputQueue::with_capacity(8);
     queue.push(Input::Tick(instant("2026-05-16T00:00:01.000Z")));
     assert_eq!(
-        queue.push(Input::Resized),
+        queue.push(Input::Resized(160, 40)),
         Admission::Admitted,
         "a resize cannot stand in for a clock tick"
     );

@@ -91,6 +91,7 @@ fn render_lines(
         view: view.clone(),
         screen: Screen::Dashboard,
         selected: IssueRef::number(0),
+        activity_band: Default::default(),
         capabilities,
         diagnostics: Default::default(),
     };
