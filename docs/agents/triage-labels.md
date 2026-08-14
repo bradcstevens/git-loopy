@@ -71,13 +71,22 @@ otherwise apply to anything. Three consequences follow, and none of them is an
 oversight:
 
 - **Provenance is gone.** A human-set and a classifier-set label are the same
-  string on the same issue, and nothing afterwards distinguishes them.
+  string on the same issue, and nothing afterwards distinguishes them. What the
+  classifier applied is named in the run's diagnostics — stderr and the run log
+  — and that is the only audit trail there is.
 - **A label already present is never replaced.** Whoever put it there — including
   a human who put a wrong or legacy key there — is not overruled by inference.
-  Correcting a task type means editing the label.
+  Correcting a task type means editing the label. The check is re-asked of the
+  tracker immediately before the write, so a label you apply *while* a run is
+  classifying the issue still wins.
 - **The taxonomy stays closed for exactly this reason.** An unattended writer
   plus `gh label create --force` would make an invented key permanent, so a
   proposal outside the seven is refused rather than warned about.
+
+The write is not gated on a human, because a ratification step would reintroduce
+the recurring cost ADR-0029 exists to remove. It is idempotent, so re-running
+changes nothing, and it is non-fatal: a tracker that refuses the write costs the
+label and not the work.
 
 The labels differ in blast radius, which is why only one of the three opened: a
 wrong `parallel-safe` guess lets unsafe work run concurrently and a wrong
