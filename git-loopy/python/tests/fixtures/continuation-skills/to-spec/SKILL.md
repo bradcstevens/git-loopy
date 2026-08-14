@@ -74,7 +74,7 @@ Any further notes about the feature.
 
 </spec-template>
 
-4. Publish the transition (see below), then run the `/next` skill.
+4. Publish the transition (see below), then run the `/continuation` skill.
 
 ## Publish the specification transition
 

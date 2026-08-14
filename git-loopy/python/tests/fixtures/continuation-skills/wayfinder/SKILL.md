@@ -842,4 +842,4 @@ way for a spec nobody asked for.
 `superseded` with `destination_satisfied` `false`, because a redrawn destination is a fresh
 effort, not this one arriving.
 
-At the conclusion of a `/wayfinder` session, run the `/next` skill.
+At the conclusion of a `/wayfinder` session, run the `/continuation` skill.

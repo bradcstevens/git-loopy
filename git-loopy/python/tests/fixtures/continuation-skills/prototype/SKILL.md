@@ -216,4 +216,4 @@ Take the whole `result.observation` object verbatim as the request's `observatio
 `revision_id` of every `result.observation.heads` entry whose `carrier` is this ticket as its
 `parents`. Retire nothing: a no-guidance record publishes no Action, so there is no receipt to owe.
 
-At the conclusion of a `/prototype` session, run the `/next` skill.
+At the conclusion of a `/prototype` session, run the `/continuation` skill.

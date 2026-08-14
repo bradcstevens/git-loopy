@@ -447,4 +447,4 @@ transition-evidence comment are already durable, so an exit-`1` result carrying 
 the message, and stop — do not retry blindly, and never hand-write the record the command
 refused to write.
 
-At the conclusion of a `/code-review` session, run the `/next` skill.
+At the conclusion of a `/code-review` session, run the `/continuation` skill.

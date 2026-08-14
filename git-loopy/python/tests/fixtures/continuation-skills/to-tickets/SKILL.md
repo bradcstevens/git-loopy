@@ -427,4 +427,4 @@ links, and their dependencies are already durable, so an exit-`1` result carryin
 plainly, name the tickets whose records are missing, and stop — do not retry blindly, invent a
 record, or report the session as complete.
 
-At the conclusion of a `/to-tickets` session, run the `/next` skill.
+At the conclusion of a `/to-tickets` session, run the `/continuation` skill.
