@@ -69,6 +69,8 @@ if TYPE_CHECKING:
 __all__ = [
     "CalibrateCommandError",
     "CalibrationSurvey",
+    "gather",
+    "render_plan",
     "run_calibrate_status",
     "run_calibrate_dry_run",
     "survey",
@@ -188,7 +190,7 @@ def run_calibrate_status(
 ) -> int:
     """Report what a **Calibration** would have to work with, and spend nothing."""
     try:
-        gathered = _gather(repo_root, err, github, git, fetch_staircase)
+        gathered = gather(repo_root, err, github, git, fetch_staircase)
     except CalibrateCommandError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
@@ -406,7 +408,7 @@ def run_calibrate_dry_run(
 ) -> int:
     """Report what a **Calibration** would do, and spend nothing doing it."""
     try:
-        gathered = _gather(repo_root, err, github, git, fetch_staircase)
+        gathered = gather(repo_root, err, github, git, fetch_staircase)
     except CalibrateCommandError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
@@ -416,6 +418,25 @@ def run_calibrate_dry_run(
         "and no AI Credit is consumed."
     )
     out("")
+    render_plan(found, budget=budget, env=env, out=out)
+    return 0
+
+
+def render_plan(
+    found: CalibrationSurvey,
+    *,
+    budget: SearchBudget,
+    env: Mapping[str, str],
+    out: Callable[[str], None],
+) -> None:
+    """The plan: the staircase, both ceilings, the concurrency and the corpus.
+
+    Public and shared, because ``--dry-run`` and the spending path (#372) must
+    print the *same* plan. A dry run that promised work the spend would not do is
+    the one failure a dry run can have, and two renderers is how it happens: they
+    would drift a line at a time and nobody would see it, because the two outputs
+    are never read side by side.
+    """
     _report_staircase(found, out)
     out("")
     _report_ceilings(found, budget, out)
@@ -423,7 +444,6 @@ def run_calibrate_dry_run(
     _report_concurrency(env, out)
     out("")
     _report_plan(found, out)
-    return 0
 
 
 def _report_staircase(found: CalibrationSurvey, out: Callable[[str], None]) -> None:
@@ -537,7 +557,7 @@ def _render_duration(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _gather(
+def gather(
     repo_root: Path | None,
     err: Callable[[str], None],
     github: "GitHubClient | None",
@@ -545,6 +565,10 @@ def _gather(
     fetch_staircase: Callable[[Callable[[str], None]], PriceStaircase] | None,
 ) -> tuple[Path, CalibrationSurvey]:
     """Resolve the seams and read the survey, or refuse with a reason.
+
+    Public because the spending path (#372) reads the *same* survey through the
+    same seams: two collections could disagree about the corpus between the plan
+    an operator confirmed and the search they paid for.
 
     ``calibrate`` is repository-scoped in a way ``config`` and ``skills`` are
     not: the **Proving set** *is* this repository's closed history and the

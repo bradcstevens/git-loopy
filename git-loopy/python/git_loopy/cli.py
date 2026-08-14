@@ -88,6 +88,7 @@ from git_loopy import settings
 from git_loopy.config import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
     MODEL_REASONING_EFFORTS,
+    TASK_TYPE_KEYS,
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
@@ -261,6 +262,8 @@ def build_parser() -> argparse.ArgumentParser:
             "supports per Task type.\n"
             "  calibrate --dry-run            What a Calibration would cost, "
             "before it spends.\n"
+            "  calibrate [<task-type>]        Measure it. Spends AI Credits, "
+            "and asks first.\n"
             "                                 See `git-loopy calibrate -h`.\n"
             "\n"
             "Environment variables:\n"
@@ -799,18 +802,52 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     calibrate = sub.add_parser(
         "calibrate",
-        help="Inspect what a Calibration could measure, and what it would cost.",
+        help="Measure the Routed pair per Task type, or inspect what that would cost.",
         description=(
-            "Report everything about a Calibration that can be known before it "
-            "spends. Neither mode runs a Trial, spawns a session, creates a "
-            "worktree or consumes an AI Credit."
+            "Measure the cheapest pair that clears the gate, per Task type, and "
+            "write the winner into the committed measured-routing artifact. The "
+            "two reporting modes below spend nothing: neither runs a Trial, "
+            "spawns a session, creates a worktree or consumes an AI Credit. A "
+            "bare `git-loopy calibrate` does all three, prints its plan first, "
+            "and asks before the first Trial."
         ),
     )
-    # A mode is required and the two are exclusive. There is no default because
-    # both available defaults are wrong: falling back to a report is a guess
-    # about which question was asked, and falling back to the spending path is a
-    # guess that costs AI Credits. A Calibration is always an explicit act.
-    mode = calibrate.add_mutually_exclusive_group(required=True)
+    calibrate.add_argument(
+        "task_type",
+        nargs="?",
+        metavar="<task-type>",
+        help=(
+            "Calibrate exactly this Task type, so re-measuring one does not pay "
+            f"for all {len(TASK_TYPE_KEYS)} ({', '.join(TASK_TYPE_KEYS)}). "
+            "Omit it to calibrate every eligible Task type."
+        ),
+    )
+    calibrate.add_argument(
+        "--yes",
+        dest="assume_yes",
+        action="store_true",
+        help=(
+            "Confirm the plan without being asked. Required to spend on a "
+            "non-interactive terminal, where there is nobody to ask."
+        ),
+    )
+    calibrate.add_argument(
+        "--parallel",
+        type=_parse_parallel,
+        default=None,
+        metavar="N",
+        help=(
+            "The Lane cap a Calibration's result would take effect at. Routing "
+            "is a Parallel-mode feature, so calibrate refuses to spend when this "
+            "resolves to 1 (flag > GIT_LOOPY_MAX_PARALLEL > 1)."
+        ),
+    )
+    # The two reporting modes stay exclusive of each other. Neither is required
+    # any more: a bare `calibrate` is the spending path (#372), which is safe to
+    # default to only because it prints its plan and asks before the first
+    # Trial. A Calibration is still always an explicit act — nothing but this
+    # subcommand starts one.
+    mode = calibrate.add_mutually_exclusive_group(required=False)
     mode.add_argument(
         "--status",
         action="store_true",
@@ -964,26 +1001,57 @@ def _run_skills(args: argparse.Namespace) -> int:
 
 
 def _run_calibrate(args: argparse.Namespace) -> int:
-    """Dispatch one non-spending ``git-loopy calibrate`` mode (#367).
+    """Dispatch one ``git-loopy calibrate`` mode — two that report, one that spends.
 
-    The handler module (:mod:`git_loopy.calibratecmd`) is imported lazily so the
-    subcommand parser stays SDK-free, exactly as ``config`` and ``skills`` do.
+    The handler modules (:mod:`git_loopy.calibratecmd` for #367's reporting modes,
+    :mod:`git_loopy.calibration_run` for #372's spending path) are imported
+    lazily so the subcommand parser stays SDK-free, exactly as ``config`` and
+    ``skills`` do. **This function is the only caller of the spending path in the
+    distribution**, which is what makes *"a Calibration is always an explicit
+    act"* a fact about the call graph rather than a convention.
 
-    Unlike those two, a missing repository is an **error** rather than a fallback
-    to the global scope: the **Proving set** *is* this repository's closed
-    history and the **Measured routing** artifact is a tracked file in it, so
-    off-repo there is nothing to report. The refusal itself is the handler's, so
-    both modes phrase it once.
+    A missing repository is an **error** rather than a fallback to the global
+    scope: the **Proving set** *is* this repository's closed history and the
+    **Measured routing** artifact is a tracked file in it, so off-repo there is
+    nothing to report and nothing to measure. The refusal itself is the
+    handlers', so every mode phrases it once.
     """
-    from git_loopy import calibratecmd
-
     try:
         repo_root: Path | None = resolve_repo_root()
     except RuntimeError:
         repo_root = None
-    if args.dry_run:
-        return calibratecmd.run_calibrate_dry_run(repo_root=repo_root, env=os.environ)
-    return calibratecmd.run_calibrate_status(repo_root=repo_root, env=os.environ)
+    if args.status or args.dry_run:
+        from git_loopy import calibratecmd
+
+        if args.task_type is not None:
+            print(
+                "git-loopy: error: --status and --dry-run report on every Task "
+                "type; drop the <task-type> argument, or drop the flag to "
+                "calibrate that one.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.dry_run:
+            return calibratecmd.run_calibrate_dry_run(
+                repo_root=repo_root, env=os.environ
+            )
+        return calibratecmd.run_calibrate_status(repo_root=repo_root, env=os.environ)
+
+    from git_loopy import calibration_run
+
+    return calibration_run.run_calibrate(
+        repo_root=repo_root,
+        env=os.environ,
+        task_type=args.task_type,
+        parallel=args.parallel,
+        assume_yes=args.assume_yes,
+        # An interactive terminal is asked; a pipe is refused unless --yes said
+        # so in advance. Resolved here rather than inside the handler so the
+        # decision is testable without a pty.
+        confirm=(
+            calibration_run.interactive_confirm if sys.stdin.isatty() else None
+        ),
+    )
 
 
 def _run_continuation(args: argparse.Namespace) -> int:

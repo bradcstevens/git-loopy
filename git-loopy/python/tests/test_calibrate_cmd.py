@@ -749,17 +749,24 @@ def test_calibrate_is_a_reserved_subcommand_beside_config_and_skills() -> None:
     assert "calibrate" in cli._SUBCOMMANDS
 
 
-def test_calibrate_requires_a_mode_because_the_spending_path_is_not_this_ticket() -> None:
-    """A bare ``calibrate`` must not silently become the mode that spends.
+def test_a_bare_calibrate_is_the_spending_path_and_neither_report() -> None:
+    """#372 reversed this: a bare ``calibrate`` *is* the mode that spends.
 
-    ``--status`` and ``--dry-run`` are the two non-spending modes; the spending
-    path is its own surface. Defaulting to either would be a guess, and
-    defaulting to the third would be a guess that costs **AI Credits**.
+    Until the spending path existed a bare invocation was a usage error, because
+    both available defaults were guesses — one about which question was asked,
+    one that cost **AI Credits**. Now there is a third option that is neither:
+    the spending path prints its plan and asks before the first **Trial**, so
+    defaulting to it costs nothing an operator did not agree to. The two reports
+    stay behind their flags, and this asserts neither is picked up by accident.
     """
     from git_loopy import cli
 
-    with pytest.raises(SystemExit):
-        cli.build_subcommand_parser().parse_args(["calibrate"])
+    args = cli.build_subcommand_parser().parse_args(["calibrate"])
+
+    assert args.status is False
+    assert args.dry_run is False
+    assert args.task_type is None
+    assert args.assume_yes is False
 
 
 def test_the_two_modes_are_mutually_exclusive() -> None:

@@ -516,16 +516,16 @@ run.
 
 ---
 
-## Inspecting a Calibration (`git-loopy calibrate`)
+## Calibration (`git-loopy calibrate`)
 
 A **Calibration** measures which model + reasoning-effort pair a **Task type**
 should route to, by replaying **Proving tasks** — issues this repository has
 already closed — against a price staircase. It spends **AI Credits** to do it.
 
-`calibrate` has two modes that spend nothing, and they are the whole of this
-subcommand today. Neither one runs a **Trial**, spawns a session, creates a
-worktree, writes a `task-type:` label, invokes the **Task-type classifier**, or
-consumes a credit. The spending path is deliberately a separate command.
+`calibrate` has three modes: two that report and spend nothing, and one that
+measures. Neither report runs a **Trial**, spawns a session, creates a worktree,
+writes a `task-type:` label, invokes the **Task-type classifier**, or consumes a
+credit.
 
 ```bash
 # What does this repository's corpus support, and what is routing today?
@@ -533,14 +533,18 @@ git-loopy calibrate --status
 
 # What would a Calibration measure, and what would it cost?
 git-loopy calibrate --dry-run
+
+# Measure every eligible Task type. Prints the plan, then asks.
+git-loopy calibrate --parallel 4
+
+# Re-measure one Task type without paying for all seven.
+git-loopy calibrate docs --parallel 4
 ```
 
-Both modes are **repository-scoped** and refuse outside a git repository — the
+Every mode is **repository-scoped** and refuses outside a git repository — the
 **Proving set** *is* this repository's closed history and the **Measured
 routing** artifact is a tracked file in it, so off-repo there is nothing to
-report. A mode is required: there is no default because both candidates are
-wrong, one guessing which question you asked and the other guessing that you
-meant to spend.
+report and nothing to measure.
 
 - **`--status`** answers *what does my corpus support?* Per Task type it prints
   the current **Routed pair** and the tier that produced it — read through the
@@ -563,6 +567,60 @@ the live roster, so it moves when the roster does — and a **Proving set**
 stratified by one pin but compared against work labelled by another is comparing
 across a taxonomy that shifted underneath it, so a pin change recommends a
 Proving set refresh.
+
+### Measuring (`git-loopy calibrate [<task-type>]`)
+
+A bare `git-loopy calibrate` measures every **eligible** Task type; naming one
+measures exactly that one, so re-measuring `docs` does not pay for all seven. A
+Task type is eligible when it has the five admitted Proving tasks a promotion
+needs; every ineligible one is **skipped with its shortfall printed**, and the
+eligible ones still run.
+
+**A Calibration is always an explicit act.** Nothing else in git-loopy starts
+one — not the first Run, not preflight, not a roster change — and a test pins
+that as a fact about the call graph rather than a convention. A vendor shipping a
+model on a Tuesday must not turn your unattended overnight Run into a benchmark
+suite. Routing improves when you ask for it.
+
+Before anything is spent it prints the plan — the Task types, the candidate
+staircase, the Proving tasks, both ceilings and the maximum **Trial** count —
+through the *same* renderer `--dry-run` uses, and then asks:
+
+- On an **interactive terminal** you are asked to confirm. Declining runs no
+  Trial, creates no worktree and spends nothing.
+- On a **non-interactive terminal** it refuses unless you passed `--yes`. You
+  typed the command; a script that inherited it did not, and the two are
+  indistinguishable from inside the process.
+
+**It refuses to spend in serial mode.** Routing is a Parallel-mode feature, so
+at `parallel = 1` the whole precedence chain — measured tier included — is inert
+and nothing a Calibration measured would take effect. Resolve it with
+`--parallel N` or `GIT_LOOPY_MAX_PARALLEL=N`.
+
+Progress is printed as rungs are walked and Trials complete — plain lines with
+no cursor control, so `git-loopy calibrate --yes | tee calibration.log` is a
+readable log rather than a file full of escape sequences. Costs are **AI
+Credits** throughout; no USD figure appears anywhere, and a Trial the harness did
+not bill reports `unknown AI Credits` rather than zero.
+
+`GIT_LOOPY_TRIAL_CONCURRENCY=N` runs N Trials at once, each in its own worktree.
+A rung's first Trial is a probe run alone, so a rung that fails costs what it
+costs serially.
+
+**What it writes**, once, at the end, into `git-loopy/routing.measured.toml`:
+
+| Outcome | What lands in the artifact |
+| --- | --- |
+| A rung went five of five | `measured`: the winning pair, every rung walked, the Proving tasks measured, and the provenance stamp |
+| An **AI-Credit** or wall-clock ceiling stopped the walk | `incomplete`: the rung reached out of the number available, and **no pair** — the incumbent keeps routing. The summary names which ceiling stopped it |
+| Every rung was walked and none was unanimous | `incomplete`, same shape — a finding, so the next operator does not buy the identical walk |
+| You interrupted it | Whatever was measured is kept, recorded as unfinished, no winner published, and `calibrate` exits `130` |
+| The Task type was skipped, or the harness reported no credits | **Nothing** — the incumbent record is left exactly as it was |
+
+The artifact is a **tracked file**, so the result arrives as a diff you can read,
+question and `git revert`. That is the whole reason it is committed rather than
+cached. No worktree, branch or temporary state survives completion, failure or
+interruption.
 
 ### A Run tells you when re-calibrating could change an answer
 
