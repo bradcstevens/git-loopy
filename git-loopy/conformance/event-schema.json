@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.15",
+  "contract_version": "1.16",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -103,6 +103,13 @@
     }
   },
   "payload_contracts": {
+    "calibration.trial.start": {
+      "required": ["calibration_id", "trial_id", "model", "effort", "issue", "base_commit", "oracle_commit", "slot"]
+    },
+    "calibration.trial.end": {
+      "required": ["calibration_id", "trial_id", "passed", "credits", "wall_clock_seconds", "failure"],
+      "required_when_present": ["gate_loops", "oracle_loops"]
+    },
     "wrapper.run.start": {
       "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"]
     },
@@ -377,6 +384,36 @@
     "lane_id": "The reusable Lane the contribution started in. It never changes, even after that Lane is refilled, so replay never needs a mutable Lane-to-issue lookup.",
     "legacy": "Historical Wave traces carry lane_issue and no contribution identity. They remain readable and MUST NOT be reinterpreted as contributions."
   },
+  "calibration_identity": {
+    "keys": ["calibration_id", "trial_id"],
+    "run_id": null,
+    "iter": null,
+    "type_prefix": "calibration.",
+    "lifecycle_types": ["calibration.trial.start", "calibration.trial.end"],
+    "stamped_types": [
+      "agent.output",
+      "assistant.message",
+      "assistant.reasoning",
+      "session.created",
+      "session.deleted",
+      "session.idle",
+      "tool.call",
+      "tool.permission_requested",
+      "tool.result",
+      "usage.context_window",
+      "usage.tokens"
+    ],
+    "forbidden_types": [
+      "wrapper.iteration.start",
+      "wrapper.iteration.end",
+      "wrapper.strike",
+      "wrapper.run.start",
+      "wrapper.run.end"
+    ],
+    "run_id_rule": "A Calibration record MUST carry run_id null. A Trial is not an Iteration and a Calibration is not a Run: its Consumption is not a Run's Cost and its failures never reach the Strike counter.",
+    "trial_id": "Distinct for every Trial a Calibration runs, including two Trials of the same Proving task at different rungs, which the task pin alone could not separate.",
+    "scope": "Python-only, like the measured tier it serves (contract 14.1). The shell and PowerShell Orchestrators declare these literals and never emit them."
+  },
   "value_semantics": {
     "unknown": null,
     "observed_none": {
@@ -388,6 +425,8 @@
     "duration_unit": "seconds"
   },
   "event_types": {
+    "CALIBRATION_TRIAL_START": "calibration.trial.start",
+    "CALIBRATION_TRIAL_END": "calibration.trial.end",
     "AGENT_OUTPUT": "agent.output",
     "WRAPPER_RUN_START": "wrapper.run.start",
     "WRAPPER_RUN_END": "wrapper.run.end",

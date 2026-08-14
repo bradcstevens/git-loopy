@@ -20,14 +20,16 @@ states in as many words:
   per-issue call whose credits never reach the Summary is the failure ADR-0026
   forbids when it requires an unknown cost to render as unavailable, never as
   zero.
-* **It is not an Iteration.** The session carries ``iter_num=None`` — the
-  run-scope value :func:`git_loopy.events.make_event` already uses for
-  ``wrapper.run.start`` — so it allocates no Iteration number, produces no Run
-  summary row, and never reaches the **Strike** machine. Strikes are shared and
-  consecutive and reaching the limit ends the **Run**, so a classifier that could
-  strike out might end an unattended overnight Run without doing any work. The
-  mechanism is *where the session sits*, not a flag it passes, which is the same
-  carve-out ADR-0027 wrote for a **Trial** (#371).
+* **It is not an Iteration.** The session is opened through
+  :func:`git_loopy.session_scope.not_an_iteration`, which withholds the Iteration
+  number — so it allocates none, produces no Run summary row, and never reaches
+  the **Strike** machine. Strikes are shared and consecutive and reaching the
+  limit ends the **Run**, so a classifier that could strike out might end an
+  unattended overnight Run without doing any work. The mechanism is *where the
+  session sits*, not a flag it passes, and it is the **same** mechanism a
+  **Trial** uses rather than a second copy of it (#371, ADR-0029). It takes only
+  half of the Trial's separation: a classifier call keeps its ``run_id``, because
+  it *is* a Run's spend even though it is not one of its Iterations.
 
 Everything here is bulletproof in the same sense ``_run_lane_session`` is: a
 timeout, a raised session or a harness that answers nothing yields ``None`` and
@@ -40,6 +42,7 @@ import asyncio
 from typing import Any, Callable, Mapping
 
 from git_loopy.events import ASSISTANT_MESSAGE
+from git_loopy.session_scope import RunScope, not_an_iteration
 from git_loopy.sources import AfkReadyItem
 from git_loopy.task_type_classifier import ClassifierPair, classifier_prompt
 
@@ -142,15 +145,18 @@ class SessionTaskTypeProposer:
                 config=self._config,
                 event_log=self._event_log,
                 sinks=self._sinks,
-                run_id=self._run_id,
                 # Run-scoped, never an Iteration: no number to allocate, no
-                # Strike to tick, no Run summary row to occupy.
-                iter_num=None,
+                # Strike to tick, no Run summary row to occupy. The carve-out is
+                # shared with a **Trial** rather than copied (#371, ADR-0029),
+                # because two copies could drift and the drift would re-arm the
+                # hazard in whichever one was not updated.
+                **not_an_iteration(
+                    RunScope(self._run_id), event_observer=collector
+                ),
                 model=pair.model,
                 reasoning_effort=pair.effort,
                 working_directory=self._working_directory,
                 skill_exposure=self._skill_exposure,
-                event_observer=collector,
             ) as session:
                 try:
                     await session.send_and_wait(

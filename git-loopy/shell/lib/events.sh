@@ -57,6 +57,11 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_PIPELINE_QUIESCENT]="wrapper.pipeline.quiescent"
   [WRAPPER_ROLLING_REFILL_TURN]="wrapper.rolling.refill_turn"
   [WRAPPER_PARALLEL_SERIAL_FALLBACK]="wrapper.parallel.serial_fallback"
+  # Calibration records (contract 1.16). Declared so this table stays the
+  # whole event vocabulary; never emitted here, because Calibration and the
+  # measured tier it serves are Python-only (contract 14.1).
+  [CALIBRATION_TRIAL_START]="calibration.trial.start"
+  [CALIBRATION_TRIAL_END]="calibration.trial.end"
   [AGENT_OUTPUT]="agent.output"
   [SESSION_CREATED]="session.created"
   [SESSION_IDLE]="session.idle"

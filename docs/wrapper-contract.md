@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.15 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.16 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -751,6 +751,35 @@ producing these records is capability-dependent and the rolling-dispatch Orchest
 enabling the producers; the Event-schema fixture revision advances with the first Orchestrator that
 emits them, since that revision is what a distribution's capability manifest advertises.
 [`docs/parallel-mode.md`](parallel-mode.md) is the operator-facing companion to this section.
+
+### Calibration records (contract 1.16, Python-only)
+
+A **Calibration** buys **Trials**, and a Trial contains an agent session that anywhere else in
+git-loopy would be an **Iteration**. It deliberately is not one
+([ADR-0027](adr/0027-routing-is-calibrated-by-measurement.md)). Iterations are attributed to a
+**Run** and tick the **Strike** counter, and that counter is shared and consecutive — reaching
+the limit ends the Run. A Trial belongs to a Calibration; an Iteration belongs to a Run.
+
+These additive type literals are reserved within compatibility schema 1: `calibration.trial.start`
+and `calibration.trial.end`. Like the **measured tier** they serve they are **Python-only**
+(§14.1); the shell and PowerShell Orchestrators declare the literals so the vocabulary stays whole
+and never emit them.
+
+- **No Run, and the record says so.** Every Calibration record — the lifecycle pair *and* the
+  ordinary records a Trial's session writes (`assistant.*`, `tool.*`, `usage.tokens`,
+  `usage.context_window`, `agent.output`) — MUST carry `run_id: null`, a null `iter`, and the
+  identity pair `calibration_id` / `trial_id`. `run_id: null` is what keeps a Trial's
+  **Consumption** out of a Run's Cost totals and stops a consumer rendering a phantom Run.
+- **`trial_id` is per Trial, not per Proving task.** A Calibration legitimately runs the same
+  **Proving task** at several rungs, which the task pin alone could not separate.
+- **Scope separation.** A Calibration MUST NOT emit `wrapper.run.start`, `wrapper.run.end`,
+  `wrapper.iteration.start`, `wrapper.iteration.end` or `wrapper.strike`. It produces no Run
+  summary row, no **Queue** entry and no Iteration number, and it never ends or aborts a Run.
+- **An interrupted Trial leaves a `start` with no `end`.** It produced no measurement, and a
+  synthesised result would put a Trial the search never scored into the record.
+- **Consumers tolerate a Calibration-only stream.** A **Dashboard** or replay reader MUST handle
+  a stream carrying no Run lifecycle records at all, and MUST NOT adopt a Calibration record's
+  identity as a Run's.
 
 ### Renderer-neutral Dashboard seam
 

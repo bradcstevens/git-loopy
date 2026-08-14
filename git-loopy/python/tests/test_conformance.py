@@ -602,11 +602,17 @@ def test_a_pinned_stream_binds_every_lane_before_its_contribution() -> None:
                 assert event["issue"] in bound, (case["id"], event["issue"])
 
 
+#: Exported strings that are deliberately not event types. The redaction
+#: placeholder is a scrubber output, and the **Calibration** prefix (#371) names
+#: the *family* a consumer filters by rather than any record something emits.
+_NOT_EVENT_TYPES = frozenset({"REDACTED_SECRET", "CALIBRATION_EVENT_PREFIX"})
+
+
 def test_event_type_fixture_pins_every_exported_literal() -> None:
     actual = {
         name: value
         for name in events_module.__all__
-        if name != "REDACTED_SECRET"
+        if name not in _NOT_EVENT_TYPES
         and isinstance(value := getattr(events_module, name), str)
     }
     assert actual == _EVENT_SCHEMA["event_types"]
@@ -615,17 +621,47 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
-    ``contract_version`` moved to 1.15 with the shared **read schedule**
-    (§2.1): the Event schema gained nothing at all — the schedule decides which
-    candidates were *read*, which is upstream of every record about them.
-    ``event_schema_version`` deliberately did not move: no record gained, lost
-    or re-typed a field, and a consumer pinned to 1.1 reads a 1.15 stream
-    unchanged. The same was true of 1.14's **Pin**, whose ``pin`` reason had
-    been declared in ``reason_values`` since 1.13.
+    ``contract_version`` moved to 1.16 with the **Calibration records** (§12,
+    #371): a new family of additive type literals, reserved within compatibility
+    schema 1 exactly as the rolling-dispatch family was. ``event_schema_version``
+    deliberately did not move, for the same reason it did not at 1.15: no
+    *existing* record gained, lost or re-typed a field, so a consumer pinned to
+    1.1 reads a 1.16 stream unchanged — an unmodelled ``calibration.*`` type is
+    the additive extension every reader already tolerates.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.15"
+    assert _EVENT_SCHEMA["contract_version"] == "1.16"
+
+
+def test_event_fixture_pins_the_calibration_record_contract() -> None:
+    """A **Calibration** is not a **Run**, pinned as data every port reads.
+
+    The rule that matters is ``run_id: null``. A Trial's records written under a
+    Run's identity are folded into that Run's Cost by any consumer summing the
+    stream, and give a **Dashboard** a phantom Run to render — so the fixture
+    states the null rather than leaving it to each port's reading of §12.
+    """
+    identity = _EVENT_SCHEMA["calibration_identity"]
+
+    assert identity["keys"] == list(events_module.CALIBRATION_IDENTITY_KEYS)
+    assert identity["type_prefix"] == events_module.CALIBRATION_EVENT_PREFIX
+    assert identity["run_id"] is None
+    assert identity["iter"] is None
+    assert set(identity["lifecycle_types"]) == set(
+        events_module.CALIBRATION_SCOPED_EVENT_TYPES
+    )
+    assert {
+        "wrapper.iteration.start",
+        "wrapper.iteration.end",
+        "wrapper.strike",
+    }.issubset(identity["forbidden_types"])
+
+    contracts = _EVENT_SCHEMA["payload_contracts"]
+    for literal in identity["lifecycle_types"]:
+        required = contracts[literal]["required"]
+        assert set(events_module.CALIBRATION_IDENTITY_KEYS).issubset(required), literal
+    assert "credits" in contracts[events_module.CALIBRATION_TRIAL_END]["required"]
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -640,12 +676,17 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         == events_module.PYTHON_INSIGHT_CAPABILITIES
     )
 
+    scoped_elsewhere = (
+        set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"])
+        | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
+        # Calibration lifecycle records are no **Run**'s Insight (#371): they
+        # carry no ``run_id``, and nothing a Calibration buys is delivered work.
+        | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
+    )
     insight_contracts = {
         name: contract
         for name, contract in _EVENT_SCHEMA["payload_contracts"].items()
-        if name not in _EVENT_SCHEMA["contribution_identity"]["lifecycle_types"]
-        and name
-        not in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+        if name not in scoped_elsewhere
     }
     assert insight_contracts == {
         "wrapper.run.start": {

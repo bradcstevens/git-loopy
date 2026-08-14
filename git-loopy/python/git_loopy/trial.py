@@ -72,7 +72,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from git_loopy import git as git_module
-from git_loopy.events import USAGE_TOKENS
+from git_loopy.emit import EventEmitter
+from git_loopy.events import (
+    CALIBRATION_TRIAL_END,
+    CALIBRATION_TRIAL_START,
+    USAGE_TOKENS,
+)
 from git_loopy.gate import (
     FeedbackLoop,
     GateError,
@@ -82,6 +87,7 @@ from git_loopy.gate import (
 )
 from git_loopy.git import GitClient, GitError
 from git_loopy.proving_set import ProvingCandidate
+from git_loopy.session_scope import CalibrationScope, not_an_iteration
 from git_loopy.trial_concurrency import TrialRequest, TrialResult
 from git_loopy.usage import BillingSample, UsageTally
 from git_loopy.worktree import WorktreeSetup
@@ -95,6 +101,7 @@ __all__ = [
     "make_oracle_gate_runner",
     "read_agents_md",
     "render_oracle_table",
+    "trial_id_for",
     "restore_paths",
     "run_oracle",
     "trial_branch_name",
@@ -298,6 +305,17 @@ def trial_branch_name(calibration_id: str, sequence: int) -> str:
     left behind must never be a name the next Trial tries to create.
     """
     return f"git-loopy/calibration/{calibration_id}/trial-{sequence}"
+
+
+def trial_id_for(sequence: int) -> str:
+    """The identity one **Trial**'s records carry, beside its ``calibration_id``.
+
+    Drawn from the same sequence as the working branch, so the record and the
+    branch a reader finds in a diagnostic name the same Trial. Distinct for every
+    Trial a Calibration runs — including two Trials of the same **Proving task**
+    at different rungs, which a pin alone could not separate.
+    """
+    return f"trial-{sequence}"
 
 
 # --------------------------------------------------------------------------- #
@@ -510,7 +528,44 @@ class ReplayTrialRunner:
         :func:`~git_loopy.trial_concurrency._isolated` reports. A
         :class:`BaseException` — an operator's Ctrl-C — *does* pass through, so
         the search can stop; the worktree is torn down on the way past.
+
+        Bracketed by the Trial's own two records. An interrupted Trial leaves its
+        ``calibration.trial.start`` with no ``.end``, which is the truthful shape:
+        it produced no result, and a synthesised red one would be a measurement
+        the search never made.
         """
+        sequence = next(_TRIAL_SEQUENCE)
+        trial_id = trial_id_for(sequence)
+        emitter = self._emitter(trial_id)
+        self._record(
+            emitter,
+            CALIBRATION_TRIAL_START,
+            model=request.candidate.model,
+            effort=request.candidate.effort,
+            multiplier=request.candidate.multiplier,
+            issue=request.task.issue,
+            base_commit=request.task.base_commit,
+            oracle_commit=request.task.oracle_commit,
+            slot=request.slot,
+        )
+        result = self._replay(request, sequence=sequence, trial_id=trial_id)
+        self._record(
+            emitter,
+            CALIBRATION_TRIAL_END,
+            passed=result.passed,
+            credits=(
+                float(result.credits) if result.credits is not None else None
+            ),
+            wall_clock_seconds=result.wall_clock_seconds,
+            failure=result.failure,
+            gate_loops=list(result.gate_loops),
+            oracle_loops=list(result.oracle_loops),
+        )
+        return result
+
+    def _replay(
+        self, request: TrialRequest, *, sequence: int, trial_id: str
+    ) -> ReplayTrialResult:
         started = self._clock()
         meter = _CreditMeter()
         candidate = self._candidates.get(
@@ -534,14 +589,16 @@ class ReplayTrialRunner:
             # is sitting at it can only be a Trial of ours.
             self._report(f"reclaiming a leaked Trial worktree at {path}")
             self._teardown(path, None)
-        branch = trial_branch_name(self._calibration_id, next(_TRIAL_SEQUENCE))
+        branch = trial_branch_name(self._calibration_id, sequence)
         try:
             self._git.add_worktree(path, branch=branch, base=candidate.base_commit)
         except GitError as exc:
             return self._red(started, meter, f"the worktree could not be created: {exc}")
 
         try:
-            return self._measure(request, candidate, path, started, meter)
+            return self._measure(
+                request, candidate, path, started, meter, trial_id
+            )
         except Exception as exc:  # noqa: BLE001 — a Trial's fault is its own result
             return self._red(
                 started, meter, f"the Trial raised {type(exc).__name__}: {exc}"
@@ -560,6 +617,7 @@ class ReplayTrialRunner:
         path: Path,
         started: float,
         meter: _CreditMeter,
+        trial_id: str,
     ) -> ReplayTrialResult:
         setup = self._setup.run(path)
         if not setup.passed:
@@ -596,7 +654,7 @@ class ReplayTrialRunner:
                 oracle_loops=oracle_names,
             )
 
-        self._work(candidate, path, request, meter)
+        self._work(candidate, path, request, meter, trial_id)
 
         after = self._run_oracle(path, loops)
         if not after.passed:
@@ -649,6 +707,7 @@ class ReplayTrialRunner:
         path: Path,
         request: TrialRequest,
         meter: _CreditMeter,
+        trial_id: str,
     ) -> None:
         """Run the agent session on the candidate pair, in the Trial's worktree."""
         _await(
@@ -657,6 +716,7 @@ class ReplayTrialRunner:
                 path=path,
                 pair=request.candidate,
                 meter=meter,
+                trial_id=trial_id,
             )
         )
 
@@ -667,6 +727,7 @@ class ReplayTrialRunner:
         path: Path,
         pair: Any,
         meter: _CreditMeter,
+        trial_id: str,
     ) -> None:
         factory = self._session_factory
         if factory is None:
@@ -680,16 +741,22 @@ class ReplayTrialRunner:
             config=self._config,
             event_log=self._event_log,
             sinks=self._sinks,
-            run_id=self._calibration_id,
-            # Not an Iteration: no number to allocate, no Run summary row to
-            # occupy, and structurally out of reach of the Strike machine, which
-            # is ticked by the orchestrator this path never enters (#371).
-            iter_num=None,
+            # Neither an Iteration nor a Run. No Iteration number to allocate, no
+            # Run summary row to occupy, and structurally out of reach of the
+            # Strike machine, which is ticked by the orchestrator this path never
+            # enters. The scope also withholds the ``run_id``, so every record
+            # this session writes — its ``usage.tokens`` above all — names the
+            # Calibration and is unattributable to any Run (#371).
+            **not_an_iteration(
+                CalibrationScope(
+                    calibration_id=self._calibration_id, trial_id=trial_id
+                ),
+                event_observer=meter,
+            ),
             model=pair.model,
             reasoning_effort=pair.effort,
             working_directory=str(path),
             skill_exposure=self._skill_exposure,
-            event_observer=meter,
         ) as session:
             await session.send_and_wait(
                 trial_prompt(candidate), timeout=self._send_timeout_seconds
@@ -718,6 +785,34 @@ class ReplayTrialRunner:
             self._report(f"the Trial branch {branch} could not be deleted: {exc}")
 
     # -- helpers ----------------------------------------------------------- #
+
+    def _emitter(self, trial_id: str) -> EventEmitter:
+        """One Trial's record seam, stamped with the identity a Run's ``run_id`` isn't.
+
+        Constructed per Trial rather than held on the runner, because a production
+        runner is called from several threads at once and the ``trial_id`` is the
+        one thing that separates them.
+        """
+        return EventEmitter(
+            run_id=None,
+            identity={
+                "calibration_id": self._calibration_id,
+                "trial_id": trial_id,
+            },
+            event_log=self._event_log,
+            sinks=self._sinks,
+        )
+
+    def _record(self, emitter: EventEmitter, event_type: str, **payload: Any) -> None:
+        """Emit one Calibration record, and never lose a Trial over one.
+
+        A measurement that was actually bought must survive a sink that cannot
+        render it — the same reason the emitter guards its own writer and fan-out.
+        """
+        try:
+            emitter.emit(event_type, iter_num=None, **payload)
+        except Exception as exc:  # noqa: BLE001 — a record is not a measurement
+            self._report(f"a Calibration record could not be emitted: {exc}")
 
     def _worktree_path(self, slot: int) -> Path:
         """The slot's worktree, in a sibling directory outside the repo (ADR-0008).

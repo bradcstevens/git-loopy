@@ -57,7 +57,7 @@ import json
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 
 from copilot.generated.session_events import SessionEvent, SessionEventType
 
@@ -111,6 +111,13 @@ __all__ = [
     "CONTRIBUTION_IDENTITY_KEYS",
     "CONTRIBUTION_SCOPED_EVENT_TYPES",
     "CONTRIBUTION_TERMINAL_REASONS",
+    # Calibration event-type constants
+    "CALIBRATION_TRIAL_START",
+    "CALIBRATION_TRIAL_END",
+    # Calibration identity
+    "CALIBRATION_EVENT_PREFIX",
+    "CALIBRATION_IDENTITY_KEYS",
+    "CALIBRATION_SCOPED_EVENT_TYPES",
     # SDK-mapped event-type constants
     "SESSION_CREATED",
     "SESSION_IDLE",
@@ -127,6 +134,7 @@ __all__ = [
     # Functions
     "make_event",
     "make_contribution_event",
+    "make_calibration_event",
     "to_jsonl_line",
     "scrub",
     "map_sdk_event",
@@ -337,6 +345,34 @@ CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "serial_fallback",
 )
 
+# Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a
+# **Trial** is not an **Iteration**, so its records get a type prefix of their own
+# rather than a third meaning for ``wrapper.``. Replay tooling filters on ``type``
+# first, and a Calibration that shared the wrapper prefix would need every consumer
+# to learn a second rule to keep calibration spend out of the record of delivered
+# work.
+CALIBRATION_EVENT_PREFIX = "calibration."
+CALIBRATION_TRIAL_START = "calibration.trial.start"
+CALIBRATION_TRIAL_END = "calibration.trial.end"
+
+# The identity a Calibration record carries in place of a ``run_id``. There is no
+# ``run_id`` to fall back on — that is the point — so an unstamped Calibration
+# record is unattributable in a way a Run's record never is.
+CALIBRATION_IDENTITY_KEYS: tuple[str, ...] = ("calibration_id", "trial_id")
+
+# The Calibration lifecycle types. Every one MUST carry
+# :data:`CALIBRATION_IDENTITY_KEYS`, a null ``run_id`` and a null ``iter``.
+# Deliberately short: the whole-Calibration lifecycle (a search starting, a rung
+# walked, a winner published) has no producer until the ``calibrate`` subcommand
+# (#372), and a declared type nothing emits is the gap the ``wrapper.contribution.*``
+# family already demonstrates.
+CALIBRATION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        CALIBRATION_TRIAL_START,
+        CALIBRATION_TRIAL_END,
+    }
+)
+
 # SDK-mapped events. :func:`map_sdk_event` translates SDK :class:`SessionEvent`
 # instances to payload dicts using these type literals.
 SESSION_CREATED = "session.created"
@@ -452,7 +488,7 @@ _RE_GH_COMMENT = re.compile(
 
 def make_event(
     type: str,
-    run_id: str,
+    run_id: str | None,
     iter: int | None,
     *,
     ts: datetime | None = None,
@@ -462,13 +498,16 @@ def make_event(
 
     Args:
         type: The event-type literal. Use one of the module-level
-            constants (``WRAPPER_*`` or the SDK-mapped names) so misspellings
-            fail at import time, not at log-replay time.
+            constants (``WRAPPER_*``, ``CALIBRATION_*`` or the SDK-mapped names)
+            so misspellings fail at import time, not at log-replay time.
         run_id: 26-character ULID identifying the ``git-loopy`` invocation.
-            Constructed by the persist factory in issue #7.
+            Constructed by the persist factory in issue #7. ``None`` only for a
+            **Calibration** record, which belongs to no **Run** (#371) and must
+            carry :data:`CALIBRATION_IDENTITY_KEYS` instead.
         iter: Iteration number (1-based) for iteration-scope events; ``None``
             for run-scope events such as :data:`WRAPPER_RUN_START` /
-            :data:`WRAPPER_RUN_END`.
+            :data:`WRAPPER_RUN_END`, for a **Lane contribution**, and for every
+            Calibration record.
         ts: Wall-clock timestamp; defaults to :func:`datetime.now` in UTC.
             Tests inject explicit values; SDK-derived events should pass
             ``sdk_event.timestamp`` so the JSONL timestamp matches the SDK's
@@ -487,10 +526,13 @@ def make_event(
         ValueError: If ``type`` is a rolling-dispatch contribution lifecycle
             type (:data:`CONTRIBUTION_SCOPED_EVENT_TYPES`) that is missing an
             identity key or carries a serial Iteration number. Prefer
-            :func:`make_contribution_event`, which supplies both.
+            :func:`make_contribution_event`, which supplies both. Or if the
+            record is Calibration-scoped and would be attributed to a Run —
+            see :func:`_require_calibration_scope`.
     """
     if type in CONTRIBUTION_SCOPED_EVENT_TYPES:
         _require_contribution_identity(type, iter, payload)
+    _require_calibration_scope(type, run_id, iter, payload)
     if ts is None:
         ts = datetime.now(timezone.utc)
     return {
@@ -500,6 +542,55 @@ def make_event(
         "type": type,
         **payload,
     }
+
+
+def _require_calibration_scope(
+    type: str, run_id: str | None, iter: int | None, payload: Mapping[str, Any]
+) -> None:
+    """Refuse a record that is a **Calibration**'s and a **Run**'s at once.
+
+    A Calibration is not a Run: nothing it spends is delivered work, and nothing
+    it does may end one. The rule is enforced here rather than left to the call
+    sites because the pre-#371 ``ReplayTrialRunner`` did exactly the thing it
+    forbids — it handed its ``calibration_id`` to the session as a ``run_id``,
+    which put a phantom Run in the replay log for the **Dashboard** to render and
+    a Trial's ``usage.tokens`` in reach of any accumulator folding the stream into
+    a Run's cost.
+
+    It applies to *every* type and not only the Calibration lifecycle ones, because
+    the records that leak accounting are the ordinary ones a Trial's session writes.
+    """
+    calibrating = type in CALIBRATION_SCOPED_EVENT_TYPES or any(
+        payload.get(key) is not None for key in CALIBRATION_IDENTITY_KEYS
+    )
+    if not calibrating:
+        if run_id is None:
+            raise ValueError(
+                f"{type} carries no run_id and no Calibration identity, so nothing "
+                "could attribute it; pass a run_id or use make_calibration_event"
+            )
+        return
+    if run_id is not None:
+        raise ValueError(
+            f"{type} is a Calibration record and belongs to no Run: run_id must "
+            f"be None, got {run_id!r}"
+        )
+    missing = [
+        key
+        for key in CALIBRATION_IDENTITY_KEYS
+        if not payload.get(key)
+    ]
+    if missing:
+        raise ValueError(
+            f"{type} is calibration-scoped and requires "
+            f"{', '.join(CALIBRATION_IDENTITY_KEYS)}; missing: "
+            f"{', '.join(missing)}"
+        )
+    if iter is not None:
+        raise ValueError(
+            f"{type} is a Trial, not a serial Iteration: "
+            f"iter must be None, got {iter!r}"
+        )
 
 
 def _require_contribution_identity(
@@ -578,6 +669,48 @@ def make_contribution_event(
     }
     _require_contribution_identity(type, None, identity)
     return make_event(type, run_id, None, ts=ts, **identity, **payload)
+
+
+def make_calibration_event(
+    type: str,
+    *,
+    calibration_id: str,
+    trial_id: str,
+    ts: datetime | None = None,
+    **payload: Any,
+) -> dict[str, Any]:
+    """Construct an event scoped to one **Trial** of one **Calibration** (#371).
+
+    The Calibration counterpart to :func:`make_contribution_event`, and the only
+    way a Calibration record acquires its identity. It stamps the pair, forces
+    ``run_id`` to ``None`` — a Calibration is not a **Run** — and forces ``iter``
+    to ``None``: a Trial is not an **Iteration**, so an Iteration number here
+    would belong to nothing.
+
+    Like its contribution sibling it accepts any event type, because a Trial's
+    ordinary records — SDK output, ``usage.tokens`` — need the same attribution
+    the lifecycle types do. Those are the records that leak accounting: a Trial's
+    Consumption written under a ``run_id`` is folded into the Run's cost by any
+    accumulator watching the stream.
+
+    Args:
+        type: The event-type literal.
+        calibration_id: Identifies the Calibration that bought this Trial.
+        trial_id: Identifies the Trial within it. Distinct for every Trial a
+            Calibration runs, including two Trials of the same **Proving task**
+            at different rungs, so a replay can separate them.
+        ts: Wall-clock timestamp; defaults to :func:`datetime.now` in UTC.
+        **payload: Arbitrary payload fields.
+
+    Returns:
+        A new dict carrying the envelope keys, the Calibration identity, and
+        ``payload``.
+
+    Raises:
+        ValueError: If either identity value is absent or empty.
+    """
+    identity = {"calibration_id": calibration_id, "trial_id": trial_id}
+    return make_event(type, None, None, ts=ts, **identity, **payload)
 
 
 def to_jsonl_line(event: dict[str, Any]) -> str:

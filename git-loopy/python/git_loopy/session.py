@@ -341,7 +341,8 @@ def build_permission_handler(
     skill_policy: EffectiveSkillPolicy | None = None,
     skill_catalog: SkillCatalog | None = None,
     record_event: Callable[[dict[str, Any]], None],
-    run_id: str,
+    run_id: str | None,
+    identity: Mapping[str, Any] | None = None,
     iter_provider: Callable[[], int | None],
 ) -> PermissionHandlerFn:
     """Return a sync permission handler with the configured deny policy.
@@ -366,7 +367,12 @@ def build_permission_handler(
             (see :func:`_safe_record`) so a bad writer cannot demote
             an approve to ``user-not-available``.
         run_id: 26-char ULID for the run; flows into every envelope's
-            ``run_id`` field.
+            ``run_id`` field. ``None`` for a **Calibration**'s session, whose
+            records belong to no Run (#371) and are attributed by ``identity``
+            instead.
+        identity: Extra keys stamped onto every envelope this handler records —
+            a **Trial**'s ``calibration_id`` / ``trial_id``. Empty for a Run's
+            own sessions, which their ``run_id`` already attributes.
         iter_provider: Callable returning the current iteration number.
             A callable (not a snapshot int) so a single handler can
             survive multiple iterations if the loop ever recycles them
@@ -378,6 +384,7 @@ def build_permission_handler(
     """
     if (skill_policy is None) != (skill_catalog is None):
         raise ValueError("skill_policy and skill_catalog must be supplied together")
+    identity = dict(identity or {})
 
     def handler(
         req: PermissionRequest, _invocation: dict[str, str]
@@ -394,6 +401,7 @@ def build_permission_handler(
                 type=events.WRAPPER_ASK_USER_ATTEMPTED,
                 run_id=run_id,
                 iter=iter_num,
+                **identity,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 arguments=scrubbed_args,
@@ -407,6 +415,7 @@ def build_permission_handler(
                 type=events.TOOL_PERMISSION_DENIED,
                 run_id=run_id,
                 iter=iter_num,
+                **identity,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 arguments=scrubbed_args,
@@ -429,6 +438,7 @@ def build_permission_handler(
                     type=events.TOOL_PERMISSION_DENIED,
                     run_id=run_id,
                     iter=iter_num,
+                    **identity,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments={},
@@ -441,6 +451,7 @@ def build_permission_handler(
                     type=events.TOOL_PERMISSION_DENIED,
                     run_id=run_id,
                     iter=iter_num,
+                    **identity,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=scrubbed_args,
@@ -454,6 +465,7 @@ def build_permission_handler(
                     type=events.TOOL_PERMISSION_DENIED,
                     run_id=run_id,
                     iter=iter_num,
+                    **identity,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=scrubbed_args,
@@ -467,6 +479,7 @@ def build_permission_handler(
                     type=events.TOOL_PERMISSION_DENIED,
                     run_id=run_id,
                     iter=iter_num,
+                    **identity,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=scrubbed_args,
@@ -485,6 +498,7 @@ def build_permission_handler(
                     type=events.TOOL_PERMISSION_DENIED,
                     run_id=run_id,
                     iter=iter_num,
+                    **identity,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=scrubbed_args,
@@ -499,6 +513,7 @@ def build_permission_handler(
             type=events.TOOL_PERMISSION_REQUESTED,
             run_id=run_id,
             iter=iter_num,
+            **identity,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             arguments=scrubbed_args,
@@ -555,8 +570,17 @@ class IterationSession:
             events and streaming reasoning/message deltas are dispatched
             through it; for the non-interactive path the sole registered
             sink is the line-printer :class:`Renderer`.
-        run_id: 26-char ULID for the run.
-        iter_num: 1-based iteration index.
+        run_id: 26-char ULID for the run. ``None`` only for a **Trial**'s
+            session, which belongs to a **Calibration** and to no **Run** (#371);
+            :func:`git_loopy.session_scope.not_an_iteration` supplies it.
+        iter_num: 1-based iteration index. ``None`` for the two sessions that are
+            deliberately not **Iterations** — a Trial and a **Task-type
+            classifier** call — so neither allocates an Iteration number, occupies
+            a Run summary row, or hands the **Strike** machine something to count.
+        event_identity: Extra keys stamped onto every record this session writes,
+            supplied by its :class:`~git_loopy.session_scope.SessionScope`. A
+            Trial's ``calibration_id`` / ``trial_id``; empty for a Run's own
+            sessions, which their ``run_id`` already attributes.
         model: Optional model override; forwarded to the SDK. A bare base
             model id (model id and reasoning effort are separate axes;
             :mod:`git_loopy.cli` strips any ``-<effort>`` suffix before
@@ -602,8 +626,9 @@ class IterationSession:
         config: SessionConfig,
         event_log: EventLogWriter,
         sinks: SinkFanout,
-        run_id: str,
-        iter_num: int,
+        run_id: str | None,
+        iter_num: int | None,
+        event_identity: Mapping[str, Any] | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
         working_directory: str | None = None,
@@ -618,6 +643,7 @@ class IterationSession:
         self._sinks = sinks
         self._run_id = run_id
         self._iter_num = iter_num
+        self._event_identity = dict(event_identity or {})
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._working_directory = working_directory
@@ -631,6 +657,7 @@ class IterationSession:
         # from a recording error (see the module design notes).
         self._emitter = EventEmitter(
             run_id=self._run_id,
+            identity=self._event_identity,
             event_log=self._event_log,
             sinks=self._sinks,
             diag=None,
@@ -676,6 +703,7 @@ class IterationSession:
             ),
             record_event=self._record,
             run_id=self._run_id,
+            identity=self._event_identity,
             iter_provider=lambda: self._iter_num,
         )
         skill_directories = (
@@ -809,6 +837,7 @@ class IterationSession:
                 run_id=self._run_id,
                 iter=self._iter_num,
                 ts=sdk_event.timestamp,
+                **self._event_identity,
                 question=question,
                 request_id=request_id,
             )
@@ -830,6 +859,7 @@ class IterationSession:
             run_id=self._run_id,
             iter=self._iter_num,
             ts=sdk_event.timestamp,
+            **self._event_identity,
             **{k: v for k, v in payload.items() if k != "type"},
         )
         self._record(envelope)

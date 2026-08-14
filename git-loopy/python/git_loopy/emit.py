@@ -102,18 +102,27 @@ class EventEmitter:
     exposing ``render(dict)`` (the :class:`~git_loopy.sinks.SinkFanout`), and
     ``diag`` an optional logger selecting warn-and-continue (the loop) vs.
     silence in the SDK callback (a session).
+
+    ``run_id`` is ``None`` and ``identity`` non-empty for exactly one owner: a
+    **Trial**'s session, whose records belong to a **Calibration** and to no
+    **Run** (#371). The identity is stamped by the emitter rather than by each
+    call site so *every* record the owner writes carries it —
+    :func:`git_loopy.events.make_event` refuses an unattributed envelope, which
+    is what makes forgetting it impossible rather than merely discouraged.
     """
 
     def __init__(
         self,
         *,
-        run_id: str,
+        run_id: str | None,
         event_log: _EventLog,
         sinks: _Sinks,
+        identity: Mapping[str, Any] | None = None,
         diag: _DiagLogger | None = None,
         observer: _EventObserver | None = None,
     ) -> None:
         self._run_id = run_id
+        self._identity = dict(identity or {})
         self._event_log = event_log
         self._sinks = sinks
         self._diag = diag
@@ -137,6 +146,7 @@ class EventEmitter:
             event_type,
             run_id=self._run_id,
             iter=iter_num,
+            **self._identity,
             **payload,
         )
         self.dispatch(envelope)

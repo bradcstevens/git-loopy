@@ -37,6 +37,8 @@ from git_loopy.gate import AgentsMdGateRunner, FeedbackLoop, parse_feedback_loop
 from git_loopy.git import SubprocessGitClient
 from git_loopy.measured_routing import ProvingTask
 from git_loopy.proving_set import ProvingCandidate
+from git_loopy.denomination import BilledCreditsDenomination
+from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.staircase import Candidate
 from git_loopy import trial as trial_module
 from git_loopy.trial import (
@@ -491,6 +493,19 @@ class _NullEventLog:
         return None
 
 
+class _RecordingEventLog:
+    """The replay log, kept in memory: every record a Trial's session writes."""
+
+    def __init__(self) -> None:
+        self.written: list[dict[str, Any]] = []
+
+    def write(self, envelope: Mapping[str, Any]) -> None:
+        self.written.append(dict(envelope))
+
+    def types(self) -> list[str]:
+        return [str(event.get("type")) for event in self.written]
+
+
 class _NullSinks:
     def dispatch(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -532,6 +547,7 @@ def _runner(
     setup: Any = None,
     candidates: Sequence[ProvingCandidate] | None = None,
     clock: Callable[[], float] | None = None,
+    event_log: Any = None,
 ) -> ReplayTrialRunner:
     candidate = _candidate(history, oracle_paths=oracle_paths)
     return ReplayTrialRunner(
@@ -539,7 +555,7 @@ def _runner(
         candidates=candidates if candidates is not None else (candidate,),
         client=client,
         config=_StubConfig(),
-        event_log=_NullEventLog(),
+        event_log=event_log if event_log is not None else _NullEventLog(),
         sinks=_NullSinks(),
         calibration_id="cal01",
         worktree_parent=tmp_path / "trials",
@@ -1166,3 +1182,121 @@ def test_a_session_that_raised_inside_a_running_event_loop_is_still_reported(
     assert result.passed is False
     assert result.failure is not None and "RefuseSession" in result.failure
     assert list((tmp_path / "trials").glob("*")) == []
+
+
+# --------------------------------------------------------------------------- #
+# A Trial is not an Iteration, and a Calibration is not a Run (#371)           #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_trial_records_its_own_start_and_end(tmp_path: Path) -> None:
+    """The Calibration's half of the record, under its own type prefix.
+
+    A **Trial** used to emit nothing of its own, so a long search read as a hang
+    in the replay log as surely as on a terminal. The pair brackets the spend: the
+    rung under test and the **Proving task** going in, the score coming out.
+    """
+    history = _history(tmp_path)
+    log = _RecordingEventLog()
+    runner = _runner(
+        history,
+        tmp_path,
+        client=_FakeCopilotClient(on_send=_fixes_the_answer),
+        event_log=log,
+    )
+
+    result = runner.run(_request(history, slot=2))
+
+    assert result.passed is True
+    lifecycle = [
+        event
+        for event in log.written
+        if str(event["type"]).startswith("calibration.")
+    ]
+    assert [event["type"] for event in lifecycle] == [
+        "calibration.trial.start",
+        "calibration.trial.end",
+    ]
+    start, end = lifecycle
+    assert start["model"] == "candidate-model"
+    assert start["effort"] == "high"
+    assert start["issue"] == 7
+    assert start["base_commit"] == history.base_commit
+    assert start["slot"] == 2
+    assert end["passed"] is True
+    assert end["failure"] is None
+    assert end["oracle_loops"] == list(result.oracle_loops)
+
+
+def test_an_interrupted_trial_leaves_a_start_with_no_end(tmp_path: Path) -> None:
+    """An interruption produced no measurement, so it records no result.
+
+    Synthesising a red ``calibration.trial.end`` would put a Trial the search
+    never scored into the record; the dangling ``start`` is the truthful shape of
+    a Calibration an operator stopped mid-Trial.
+    """
+    history = _history(tmp_path)
+    log = _RecordingEventLog()
+    runner = _runner(
+        history,
+        tmp_path,
+        client=_FakeCopilotClient(raises=KeyboardInterrupt()),
+        event_log=log,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run(_request(history))
+
+    assert log.types().count("calibration.trial.start") == 1
+    assert "calibration.trial.end" not in log.types()
+
+
+def test_no_record_a_trial_writes_belongs_to_a_run(tmp_path: Path) -> None:
+    """The acceptance criterion, over the *whole* stream rather than two records.
+
+    ``usage.tokens`` is the one that decides it. A Trial's **Consumption** written
+    under a ``run_id`` is folded into a Run's cost by any accumulator watching the
+    stream, and its Iteration numbers and Run identity would give the **Dashboard**
+    a phantom Run to render.
+    """
+    history = _history(tmp_path)
+    log = _RecordingEventLog()
+    client = _FakeCopilotClient(on_send=_fixes_the_answer, usage_events=(0.5,))
+    _runner(history, tmp_path, client=client, event_log=log).run(_request(history))
+
+    assert "usage.tokens" in log.types()
+    for event in log.written:
+        assert event["run_id"] is None, event
+        assert event["iter"] is None, event
+        assert event["calibration_id"] == "cal01", event
+        assert event["trial_id"] == "trial-1" or event["trial_id"].startswith("trial-")
+
+
+def test_a_trial_produces_no_iteration_no_queue_entry_and_no_run_summary_row(
+    tmp_path: Path,
+) -> None:
+    """The three Run-shaped artefacts a Trial must not create, asserted directly.
+
+    A Run summary row is opened by ``wrapper.iteration.start`` and a **Queue**
+    entry by the Pickup records, so a stream carrying none of them can produce
+    neither. :class:`IterationRollupAccumulator` is fed the Trial's whole stream
+    to prove it: it accumulates nothing, so there is no row to finish.
+    """
+    history = _history(tmp_path)
+    log = _RecordingEventLog()
+    client = _FakeCopilotClient(on_send=_fixes_the_answer, usage_events=(0.5,))
+    _runner(history, tmp_path, client=client, event_log=log).run(_request(history))
+
+    assert not {
+        "wrapper.iteration.start",
+        "wrapper.iteration.end",
+        "wrapper.issue.activated",
+        "wrapper.pickup.bound",
+        "wrapper.strike",
+    }.intersection(log.types())
+
+    rollup = IterationRollupAccumulator(denomination=BilledCreditsDenomination())
+    for event in log.written:
+        rollup.observe(event)
+    with pytest.raises(ValueError, match="no active Iteration"):
+        rollup.finish(iter_num=1, strikes=0)
