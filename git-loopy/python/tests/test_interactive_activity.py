@@ -759,6 +759,110 @@ async def test_a_drag_that_wanders_over_the_queue_leaves_the_queue_alone() -> No
         assert app.screen.get_selected_text() is None
 
 
+async def test_a_log_opened_mid_drag_ends_the_drag_and_frees_the_mouse() -> None:
+    """A handle taken off screen is not holding a drag any more.
+
+    ``enter`` opens a Level-2 **Log**, which hides the whole Dashboard — handle
+    included — and it needs no mouse, so it can arrive with the button still
+    held. A capture kept by a widget the operator can no longer see outlives the
+    gesture: the release lands on nothing, and the next press after Esc is
+    delivered to the handle instead of to what was clicked. One Queue row click
+    would then drill into that issue's Log *and* collapse the band on the way
+    past.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#log", _LogView).display is True
+        assert app.mouse_captured is None
+
+        # The release the Dashboard never saw, then back to it.
+        await pilot.mouse_up(offset=(10, grab))
+        await pilot.press("escape")
+        await pilot.pause()
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+
+        row = queue.region.y + queue.header_height
+        await pilot.click(offset=(2, row))
+        await pilot.pause()
+
+        assert app.query_one("#log", _LogView).display is True
+        assert band.collapsed is False
+
+
+async def test_dragging_the_stub_further_down_keeps_the_remembered_height() -> None:
+    """A drag that asks a **Collapsed** band to be shorter still is a no-op on
+    ``requested``, exactly as ``shift+down`` from the stub is (ADR-0031).
+
+    All three controls drive one state machine, so the mouse must not be able to
+    destroy what the keys preserve. There is nothing shorter than the stub to
+    ask for, and an operator who nudges a one-row target downwards has stated no
+    height — so the height they *did* state is still there for the click to
+    restore.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        await pilot.click("#activity-header")
+        await pilot.pause()
+        assert band.collapsed is True
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+        stub = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, stub + 2))
+        await pilot.mouse_up(offset=(10, stub + 2))
+        await pilot.pause()
+
+        assert band.collapsed is True
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+        # And the click still has the operator's height to come back to.
+        await pilot.click("#activity-header")
+        await pilot.pause()
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+
+
+async def test_the_drag_gives_the_mouse_back_when_it_ends() -> None:
+    """Capture lasts *for the duration of* the drag and no longer.
+
+    The capture that protects the Queue during a drag would swallow every
+    later mouse event if it outlived it — the Queue's row click, which is the
+    **Log**'s own mouse path (ADR-0031), would go to the band's handle instead
+    and drill-in would be gone for the rest of the Run. So the release is
+    asserted twice over: the app holds no capture, and the very next click on a
+    Queue row still opens that issue's Log.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        assert app.mouse_captured is app.query_one("#activity-header", Static)
+        await pilot.hover(offset=(10, grab - 2))
+        await pilot.mouse_up(offset=(10, grab - 2))
+        await pilot.pause()
+
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 2
+        assert app.mouse_captured is None
+
+        row = queue.region.y + queue.header_height
+        await pilot.click(offset=(2, row))
+        await pilot.pause()
+
+        assert app.query_one("#log", _LogView).display is True
+
+
 async def _wheel(pilot, widget: Widget, event_cls, turns: int = 3) -> None:
     """Turn the wheel over ``widget``.
 
@@ -786,13 +890,15 @@ async def test_the_wheel_never_resizes_the_expanded_band() -> None:
         header = app.query_one("#activity-header", Static)
         body = app.query_one("#activity-body", Static)
 
+        # Each direction is checked on its own: a wheel that grew the band one
+        # way and shrank it the other would net out to zero across a pair.
         for target in (header, body):
             for event_cls in (events.MouseScrollUp, events.MouseScrollDown):
                 await _wheel(pilot, target, event_cls)
 
-        assert band.collapsed is False
-        assert band.requested == _ACTIVITY_BAND_HEIGHT
-        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+                assert band.collapsed is False
+                assert band.requested == _ACTIVITY_BAND_HEIGHT
+                assert band.size.height == _ACTIVITY_BAND_HEIGHT
 
 
 async def test_the_wheel_never_reopens_the_collapsed_stub() -> None:
@@ -810,9 +916,9 @@ async def test_the_wheel_never_reopens_the_collapsed_stub() -> None:
         for event_cls in (events.MouseScrollUp, events.MouseScrollDown):
             await _wheel(pilot, header, event_cls)
 
-        assert band.collapsed is True
-        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
-        assert band.requested == _ACTIVITY_BAND_HEIGHT
+            assert band.collapsed is True
+            assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+            assert band.requested == _ACTIVITY_BAND_HEIGHT
 
 
 # ---------------------------------------------------------------------------

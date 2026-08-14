@@ -121,6 +121,22 @@ def test_the_glossary_records_the_mouse_path_into_and_out_of_collapsed() -> None
     assert "click" in entry
 
 
+def test_the_adr_records_that_a_downward_drag_on_the_stub_writes_nothing() -> None:
+    """ADR-0031 is *"the normative spec for the second renderer"* (#384), which
+    implements from the table rather than from this source.
+
+    So a rule the Python renderer relies on has to live in the ADR or the Rust
+    port will not inherit it: a drag that asks an already-**Collapsed** band to
+    be shorter still preserves ``requested``, exactly as ``shift+↓`` there is a
+    no-op. Left unstated, the second renderer would let the mouse destroy the
+    height the keys preserve and still claim parity.
+    """
+    adr = " ".join(_doc(ADR_0031).split())
+
+    assert "no-op" in adr
+    assert "no height below the stub to state" in adr
+
+
 def test_the_collapsed_activity_band_decision_is_accepted() -> None:
     """The ADR is not a proposal once the code implements it."""
     status = [

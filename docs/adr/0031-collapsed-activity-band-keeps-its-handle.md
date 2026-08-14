@@ -63,7 +63,7 @@ still leaves the **Queue** its three-row floor (ADR-0021).
 
 | Gesture | From Expanded | From Collapsed |
 | --- | --- | --- |
-| Drag the header | `requested` tracks the pointer; crossing below three rows → **Collapsed** | → Expanded; `requested` tracks the pointer, floored at three |
+| Drag the header | `requested` tracks the pointer; crossing below three rows → **Collapsed** | → Expanded; `requested` tracks the pointer, floored at three — a pull that asks for less than three leaves the stub *and* `requested` untouched, as `shift+↓` does |
 | `shift+↑` | `requested += 1`, capped at `ceiling` | → Expanded at **three** |
 | `shift+↓` | `requested -= 1`; below three → **Collapsed** | no-op |
 | Click the header, or `a` | → **Collapsed**; `requested` preserved | → Expanded at `requested` |
@@ -73,6 +73,11 @@ still leaves the **Queue** its three-row floor (ADR-0021).
 `shift+↑` out of Collapsed lands on the floor rather than restoring the remembered height,
 because it is a sizing gesture and sizing gestures state intent. Nothing is lost: `a` and
 the click are the restore gesture, and both are already bound.
+
+A drag *downward* on the stub writes nothing, for the same reason `shift+↓` there is a
+no-op: there is no height below the stub to state. A one-row target is an easy thing to
+nudge, and the mouse must not be able to destroy the height the keys preserve — the
+restore gesture would have nothing left to restore.
 
 ### A click on the band header toggles collapse
 

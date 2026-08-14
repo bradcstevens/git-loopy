@@ -315,6 +315,22 @@ class _ActivityBandHandle(Static):
         if not moved and band is not None:
             band.toggle_collapsed()
 
+    def on_hide(self) -> None:
+        """A handle taken off screen ends the drag it was holding.
+
+        ``enter`` opens a Level-2 **Log**, which hides the whole Dashboard —
+        this handle included — and it needs no mouse, so it can arrive with the
+        button still held. The capture has to go with the handle: a capture kept
+        by a widget the operator can no longer see outlives the gesture, and the
+        first press after Esc would be delivered here and read as a click on a
+        handle nobody touched.
+        """
+        if self._grab_row is None:
+            return
+        self._grab_row = None
+        self._moved = False
+        self.release_mouse()
+
 
 class _ActivityBand(Vertical):
     """Level 1: the always-on **Activity** band — the live current tail below the
@@ -535,18 +551,24 @@ class _ActivityBand(Vertical):
         where a key press can only ever state one row less; saturating keeps
         "the operator's stated intent" a number the band could plausibly be
         asked for, and lands both sizing gestures in one state.
+
+        Asking an *already* **Collapsed** band to be shorter still writes
+        nothing, exactly as ``shift+down`` from the stub is a no-op: there is no
+        height below the stub to state, and the mouse must not be able to
+        destroy the remembered height the keys preserve — a one-row target is an
+        easy thing to nudge, and the click has to have something to restore.
         """
         ceiling = self._ceiling()
         if ceiling is not None:
             height = min(height, max(ceiling, _ACTIVITY_BAND_MIN_HEIGHT))
         if height < _ACTIVITY_BAND_MIN_HEIGHT:
-            self._collapsed = True
-            self._requested = _ACTIVITY_BAND_MIN_HEIGHT - 1
+            if not self._collapsed:
+                self._collapsed = True
+                self._requested = _ACTIVITY_BAND_MIN_HEIGHT - 1
         else:
             self._collapsed = False
             self._requested = height
         self._apply_height()
-
 
     def note_container_height(self, height: int | None = None) -> None:
         """Re-derive the ceiling from the Dashboard's laid-out height.
@@ -569,7 +591,6 @@ class _ActivityBand(Vertical):
             return
         self._container_height = height
         self._apply_height()
-
 
 
 class _LogScroll(VerticalScroll):
