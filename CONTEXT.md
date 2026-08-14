@@ -1380,7 +1380,11 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   beside it), **Trial** and **Measured routing**. **Demotion** is the fifth and is still owed —
   [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settles it and the **Measured
   routing** artifact already carries the `demoted` and `provisional` states it would write, but
-  nothing demotes yet, so the glossary does not claim it. One further consequence outlives
-  these entries: the **Proving set**'s refresh policy is stated — re-base when the pinned
-  **Task-type classifier** pair moves, or on an interval, whichever comes first — and nothing
-  refreshes it yet, so a set left alone silently measures the project you used to be.
+  nothing demotes yet, so the glossary does not claim it. That `provisional` state is the one
+  part of the mechanism that *has* shipped, and it enters **Language** on its own as
+  **Provisional**: it is **reachable** — such a record loads, routes, round-trips and is reported
+  apart from a measured one — where Demotion is still only a decision, and the two together are
+  where the glossary draws the line between a shipped state and its missing writer. One further
+  consequence outlives these entries: the **Proving set**'s refresh policy is stated — re-base
+  when the pinned **Task-type classifier** pair moves, or on an interval, whichever comes first —
+  and nothing refreshes it yet, so a set left alone silently measures the project you used to be.
