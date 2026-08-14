@@ -1767,7 +1767,7 @@
         "run_id": "01HXR0000000000000000000CC",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.7.0",
+        "release_version": "0.8.0",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": false,
@@ -1785,7 +1785,7 @@
           "contribution_events": false
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false}, \"release_version\": \"0.7.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false}, \"release_version\": \"0.8.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-resolved-rate-card",
@@ -1795,7 +1795,7 @@
         "run_id": "01HXR0000000000000000000DD",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.7.0",
+        "release_version": "0.8.0",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": true,
@@ -1837,7 +1837,7 @@
           }
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"0.7.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"0.8.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-absent-rate-card",
@@ -1847,7 +1847,7 @@
         "run_id": "01HXR0000000000000000000EE",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.7.0",
+        "release_version": "0.8.0",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": true,
@@ -1867,7 +1867,7 @@
         },
         "rate_card": null
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": null, \"release_version\": \"0.7.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": null, \"release_version\": \"0.8.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "authoritative-issue-activation",
