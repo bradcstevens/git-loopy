@@ -96,3 +96,110 @@ fn an_unknown_event_type_and_unknown_fields_do_not_change_the_projection() {
         "an additive trace must reduce to the same semantic view"
     );
 }
+
+/// A **Calibration**'s records name no **Run** (#371, wrapper contract 1.16).
+///
+/// A **Trial** is not an **Iteration** and a Calibration is not a Run: nothing it
+/// buys is delivered work. So its records carry `run_id: null` and a
+/// `calibration_id` / `trial_id` pair instead, and the Dashboard must render a
+/// stream of them as *no Run at all* rather than as a phantom one — no header
+/// identity, no Queue row, no Summary row, no Iteration number.
+fn calibration_stream() -> Vec<Value> {
+    vec![
+        json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": null,
+            "iter": null,
+            "type": "calibration.trial.start",
+            "calibration_id": "cal01",
+            "trial_id": "trial-1",
+            "model": "gpt-5.4-mini",
+            "effort": "low",
+            "issue": 118,
+            "base_commit": "aaaaaaaaaaaa",
+            "oracle_commit": "bbbbbbbbbbbb",
+            "slot": 0
+        }),
+        json!({
+            "ts": "2026-05-16T00:00:02.000Z",
+            "run_id": null,
+            "iter": null,
+            "type": "usage.tokens",
+            "calibration_id": "cal01",
+            "trial_id": "trial-1",
+            "input_tokens": 900,
+            "output_tokens": 300,
+            "credits": 4.0
+        }),
+        json!({
+            "ts": "2026-05-16T00:00:03.000Z",
+            "run_id": null,
+            "iter": null,
+            "type": "calibration.trial.end",
+            "calibration_id": "cal01",
+            "trial_id": "trial-1",
+            "passed": false,
+            "credits": 4.0,
+            "wall_clock_seconds": 2.0,
+            "failure": "the AGENTS.md gate went red on Python suite",
+            "gate_loops": ["Python suite"],
+            "oracle_loops": ["Python suite"]
+        }),
+    ]
+}
+
+#[test]
+fn a_calibration_stream_reduces_without_a_run_to_render() {
+    let case = baseline_case();
+    let view = reduce(&calibration_stream(), &case);
+    let header = &view["dashboard"]["header"];
+
+    assert!(
+        header["run_id"].is_null(),
+        "a Calibration record must not be adopted as a Run's identity: {header}"
+    );
+    assert_eq!(header["active_issue"], Value::Null);
+    assert_eq!(
+        view["dashboard"]["queue"]["rows"]
+            .as_array()
+            .expect("queue rows is a list")
+            .len(),
+        0,
+        "a Trial is not an Iteration, so it earns no Queue entry"
+    );
+    assert_eq!(
+        view["dashboard"]["summary"]["rows"]
+            .as_array()
+            .expect("summary rows is a list")
+            .len(),
+        0,
+        "a Trial produces no Run summary row"
+    );
+}
+
+#[test]
+fn calibration_records_do_not_disturb_a_runs_projection() {
+    let case = baseline_case();
+    let events = case["events"].as_array().expect("events is a list").clone();
+    let expected = case["snapshots"]
+        .as_array()
+        .expect("snapshots is a list")
+        .last()
+        .expect("a case has a final snapshot")["expected"]
+        .clone();
+
+    // The same trace with a whole Trial interleaved through it — the case a
+    // Run and a Calibration sharing one replay log produces. Calibration spend
+    // must stay out of the record of delivered work, so the Run's Cost, Queue
+    // and Summary are unchanged by it.
+    let mut mixed = events.clone();
+    for (offset, record) in calibration_stream().into_iter().enumerate() {
+        mixed.insert(2 + offset, record);
+    }
+
+    assert_eq!(
+        reduce(&mixed, &case),
+        expected,
+        "a Calibration's records must not reach a Run's totals"
+    );
+}
