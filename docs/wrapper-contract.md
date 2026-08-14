@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.8 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.9 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -610,6 +610,8 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 - **Task-type taxonomy** — the closed set of permitted `task-type:` keys, and the refusal an
   unknown key meets: never a warn-and-default, and the refusal names the value and the permitted
   keys (§14).
+- **Measured routing precedence** — the measured tier beside both Config scopes and an explicit
+  override, and which measured statuses supply a **Routed pair** (§14.1).
 - **Event schema** — exact type literals and envelope-first, sorted-payload JSON serialization
   (§12).
 - **Dashboard Insights** — normalized Event prefixes and expected renderer-neutral Dashboard and
@@ -670,6 +672,73 @@ resolved `(model, effort)` and whether it warns), and
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
 constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
+
+### 14.1 The measured tier
+
+The family precedence spine (§11) gains one rung between the operator's Config and the built-in
+default, so a routing table git-loopy authored can supply a **Routed pair** — but **only where the
+operator is silent**:
+
+CLI flag > env var > project Config > global Config > **measured** > built-in default
+
+- **A hand-written entry always wins.** A `[routing]` key in either Config scope beats the measured
+  entry for the same **Task type**, with no override flag and no special case, because that is the
+  chain that already shipped. Measured entries fill the Task types Config leaves alone, beside the
+  ones it does not.
+- **An explicit override suppresses it with the rest of routing.** `--model` /
+  `--reasoning-effort` (flag or env) already suppresses routing run-wide; the measured tier is
+  routing, so it is suppressed too. An operator who names a pair gets that pair, and a
+  **Calibration** cannot quietly reintroduce a different one.
+- **Deleting the artifact is how an operator opts out.** Routing falls straight back to Config and
+  the built-in defaults, with nothing else to undo.
+
+The tier reads **one artifact**, `git-loopy/routing.measured.toml`, in the project scope dir beside
+`config.toml` and in the same TOML dialect. It is:
+
+- **Committed**, so a change arrives as a diff a human can read, question and revert (ADR-0028).
+- **Current state only.** Git is the ledger: `git log -p` is every past Calibration in order,
+  `git blame` names which one set a Task type's model, `git revert` undoes a bad one.
+- **Machine-written and never hand-edited.** There is deliberately no measured Config scope for
+  `config set` to write to, and no free-text key anywhere in the file for something to write an
+  opinion into.
+
+Each Task type's record carries one of four states, and only two of them supply a Routed pair:
+
+| Status | Supplies a pair | What it says |
+| --- | --- | --- |
+| `measured` | yes | A completed Calibration with a winning pair. The only state that is *evidence*. |
+| `incomplete` | no | A search that hit a ceiling or was interrupted. Carries where it stopped and **no pair at all** — a stopped search publishes no winner. |
+| `demoted` | no | A pair removed after it stopped making progress on real work. The pair is cleared; which pair failed, and after how many, is kept. |
+| `provisional` | yes | A pair **in force that was never measured** (ADR-0030) — what **Demotion** installs when it steps up the price staircase into a rung nobody trialled. Carries no evidence, and MUST NOT be reported as measured. |
+
+An Orchestrator MUST NOT treat an unrecognised status as either of the two that route: a row it
+cannot classify supplies nothing and falls through to the built-in default.
+
+**The measured tier is Python-only today**, on the same terms as routing itself: the shell and
+PowerShell Orchestrators implement no per-issue routing, and therefore no measured tier. They
+declare it unsupported here rather than by implication — a port that reads no artifact is
+conforming, not behind — and MUST NOT be held to reading, writing or reporting one. Cross-language
+measured routing is deferred, not discharged; this paragraph is the deferral, and it moves when a
+port reaches Config parity (§11, phase 3).
+
+The tier is pinned by two more language-neutral fixtures:
+[`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json)'s
+`precedence_cases` (measured + both Config scopes + an explicit override → resolved pair and the
+**tier** that supplied it, including a `provisional` entry that routes while reporting itself
+unmeasured), and
+[`calibration-search.json`](../git-loopy/conformance/calibration-search.json) (the cheapest-first
+price staircase a **Calibration** walks, and where each ceiling stops it).
+
+### 14.2 A `task-type:` label's origin is unobservable
+
+Routing reads a label and never infers a Task type from content **at routing time** — §14's first
+rule is unchanged. What changed is who may have written the label: the **Task-type classifier**
+(ADR-0029) infers a Task type from an unlabelled issue's own content, once, before routing, and
+writes it back to the tracker.
+
+An Orchestrator MUST NOT depend on a label's origin. A human-set and a classifier-written
+`task-type:` label are the same string on the same issue, the tracker records no difference, and
+routing MUST resolve both identically.
 
 ## 15. Native Continuation boundary (Continuation rollout, MUST)
 

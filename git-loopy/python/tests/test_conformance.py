@@ -39,6 +39,7 @@ from git_loopy.config import (
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.measured_routing import ProvingTask
+from git_loopy import measured_routing as measured_routing_module
 from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
@@ -267,7 +268,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.8"
+    assert _EVENT_SCHEMA["contract_version"] == "1.9"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -2784,15 +2785,20 @@ _CONTRACT_VERSION_LINE = re.compile(
 )
 
 
-def _written_contract_version() -> str:
-    """The Wrapper contract version the written contract declares."""
+def _written_contract_text() -> str:
+    """The written Wrapper contract, or a skip on an installed-wheel run."""
     for parent in Path(__file__).resolve().parents:
         contract = parent / "docs" / "wrapper-contract.md"
         if contract.is_file():
-            match = _CONTRACT_VERSION_LINE.search(contract.read_text(encoding="utf-8"))
-            assert match is not None, "the contract declares no Contract version"
-            return match["version"]
+            return contract.read_text(encoding="utf-8")
     pytest.skip("written contract not found (installed-wheel run)")
+
+
+def _written_contract_version() -> str:
+    """The Wrapper contract version the written contract declares."""
+    match = _CONTRACT_VERSION_LINE.search(_written_contract_text())
+    assert match is not None, "the contract declares no Contract version"
+    return match["version"]
 
 
 def _declared_fixture_contract_versions() -> dict[str, str]:
@@ -2854,6 +2860,114 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     sides of that comparison are data.
     """
     assert continuation_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
+
+
+def test_the_contract_records_the_measured_tier_in_the_precedence_chain() -> None:
+    """A new precedence tier is a contract change, not a Python implementation detail.
+
+    The chain ADR-0006 shipped gained one rung (#361, ADR-0028), and a port that
+    reads only the written contract would otherwise implement the chain the
+    contract still states — five tiers where the reference member has six. Pinning
+    the ordered tier names means the rung cannot be described in prose that
+    happens to omit it.
+    """
+    contract = _written_contract_text()
+    chain = [
+        "CLI flag",
+        "env var",
+        "project Config",
+        "global Config",
+        "**measured**",
+        "built-in default",
+    ]
+    assert " > ".join(chain) in contract, (
+        "the contract does not state the measured routing precedence chain"
+    )
+
+
+def test_the_contract_names_the_measured_artifact_the_code_actually_writes() -> None:
+    """The port implements against the contract, not against a Python module.
+
+    §14 is the only place a future Orchestrator can learn *which file* supplies
+    the tier, so the filename is a contract term. Deriving it from
+    :mod:`git_loopy.measured_routing` rather than restating it is what stops a
+    rename from leaving the contract naming a file nothing writes.
+    """
+    contract = _written_contract_text()
+
+    assert measured_routing_module.MEASURED_ROUTING_FILENAME in contract
+    assert "committed" in contract
+    assert "never hand-edited" in contract
+
+
+def test_the_contract_classifies_every_measured_status() -> None:
+    """A row a reader cannot classify is a row with no rule (ADR-0029, ADR-0030).
+
+    The artifact carries four states, and two of them supply a **Routed pair**.
+    An Orchestrator that meets ``provisional`` without a contract rule for it has
+    to guess whether the row routes — so every status the loader can parse must
+    be nameable from the contract alone.
+    """
+    contract = _written_contract_text()
+
+    for status in measured_routing_module.MeasuredStatus:
+        assert f"`{status.value}`" in contract, (
+            f"the contract does not describe the {status.value} status"
+        )
+
+
+def test_the_contract_scopes_the_measured_tier_to_the_python_member() -> None:
+    """An unimplemented requirement is declared, never left to implication.
+
+    The ports implement no routing at all, so a contract that stated the measured
+    tier unqualified would hold them to a tier nobody meant to impose. The
+    Orchestrators the Event-schema fixture declares beside ``python`` are the set
+    that must be named as not implementing it.
+    """
+    contract = _written_contract_text()
+    ports = set(_EVENT_SCHEMA["insight_capabilities"]["orchestrators"]) - {"python"}
+    assert ports, "the fixture declares no native port to scope against"
+
+    section = contract.split("## 14. Per-issue model routing", 1)[1].split("\n## ", 1)[
+        0
+    ]
+    assert "Python-only" in section
+    for port in sorted(ports):
+        assert port in section.lower(), f"§14 does not name the {port} Orchestrator"
+
+
+def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None:
+    """ADR-0029 made a ``task-type:`` label machine-writable.
+
+    Routing still reads a label and never infers from content at routing time,
+    but an Orchestrator that branched on *who wrote* the label would be depending
+    on a fact the tracker does not carry: a human-set and a classifier-written
+    label are the same string on the same issue.
+    """
+    section = _written_contract_text().split("## 14. Per-issue model routing", 1)[
+        1
+    ].split("\n## ", 1)[0]
+
+    assert "origin" in section
+    assert "Task-type classifier" in section
+
+
+def test_the_measured_tier_fixtures_pin_the_contract_that_records_them() -> None:
+    """The decision and its fixtures move as one change (§18).
+
+    ``routing-resolution.json`` gained the measured-tier precedence cases and
+    ``calibration-search.json`` is the search fixture; until the contract
+    described the tier, both pinned behaviour no written contract stated. Now
+    that it does, they declare the version whose text explains them.
+    """
+    written = _written_contract_version()
+    declared = _declared_fixture_contract_versions()
+
+    for fixture in ("routing-resolution.json", "calibration-search.json"):
+        assert declared[fixture] == written, (
+            f"{fixture} pins the measured tier but declares contract "
+            f"{declared[fixture]}, not {written}"
+        )
 
 
 _TASK_TYPE_TAXONOMY = _ROUTING_RESOLUTION["task_type_taxonomy"]

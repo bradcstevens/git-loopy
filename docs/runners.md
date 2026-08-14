@@ -89,7 +89,10 @@ delivered in later phases, sequenced value-first
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the
-  shell and PowerShell ports honour CLI flag > env var > built-in default).
+  shell and PowerShell ports honour CLI flag > env var > built-in default). The
+  **measured** routing tier and its committed artifact ride with this phase:
+  Wrapper contract §14.1 declares the tier Python-only today, so a port that
+  reads no `routing.measured.toml` is conforming rather than behind.
 - **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
   Orchestrators (the Python member offers it today via its `otel` extra).
 - **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Rolling dispatch** /
