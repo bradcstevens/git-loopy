@@ -632,21 +632,25 @@ The **Dashboard** band that holds one **Activity window** per live **Agent**, al
 present below the **Queue** (between it and the **Summary**). A glance at what every
 Agent is doing right now, so a run reads as active instead of appearing stuck while
 issues sit **queued**; it complements, and does not replace, the per-issue **Log** that
-enter opens for the full, scrollable history. The operator sizes it from the keyboard,
-a row per press, and it holds two numbers rather than one: the height that was *asked
-for* and the largest that currently *fits*. Only a gesture writes the former, so a
-terminal that shrinks and grows again returns the band to the operator's height; and it
-never grows past what leaves the **Queue** its own three-row floor. Sized below its own
-three-row floor it is **Collapsed**. A band of the **Dashboard**, not a separate screen.
+enter opens for the full, scrollable history. The operator sizes it by dragging its
+header row, or from the keyboard a row per press, and it holds two numbers rather than
+one: the height that was *asked for* and the largest that currently *fits*. Only a
+gesture writes the former, so a terminal that shrinks and grows again returns the band
+to the operator's height; and it never grows past what leaves the **Queue** its own
+three-row floor. Sized below its own three-row floor it is **Collapsed**. A band of the
+**Dashboard**, not a separate screen.
 _Avoid_: stream, feed.
 
 **Collapsed**:
 The **Activity** band rendering its one-line header and nothing else. A state of the
 band, not its absence: it keeps that row in the **Dashboard** layout, so an operator can
 always see an Activity band is there and the gesture that collapsed it has a handle to
-undo it with. `a` collapses and restores, preserving the height the operator asked for;
-`shift+down` past the band's three-row floor collapses, and `shift+up` reopens at that
-floor rather than the remembered height, because sizing gestures state fresh intent. It
+undo it with. `a` and a bare click on the header collapse and restore, preserving the
+height the operator asked for; a drag of the header past the band's three-row floor
+collapses, as `shift+down` does, and dragging back out of the stub reopens the band —
+where `shift+up` reopens it at that floor rather than the remembered height, because
+sizing gestures state fresh intent. The controls degrade in the order **drag → click →
+keys**, so a terminal that reports less than motion still has one. It
 survives a terminal resize and a drill-in to a **Log**, and is in-session only — no
 **Config** or **Run** state records it.
 _Avoid_: hidden, closed, minimised, off.
