@@ -82,6 +82,7 @@ class FakeGitClient:
         sha_prefix: str = "face",
         merge_conflicts: Sequence[int] | None = None,
         tracked_paths: Iterable[Path | str] = (),
+        changed_paths: Mapping[str, Sequence[str]] | None = None,
         _branch_registry: dict[str, FakeGitClient] | None = None,
         _abort_spy: list[Path] | None = None,
     ) -> None:
@@ -107,6 +108,11 @@ class FakeGitClient:
             if (relative := self._relative_path(path)) is not None
         )
         self.branch = branch
+        # The paths each commit changed, keyed by SHA (#362). Only the **Proving
+        # set**'s reads look at this; a commit nobody scripted changed nothing.
+        self._changed_paths: dict[str, tuple[str, ...]] = {
+            sha: tuple(paths) for sha, paths in (changed_paths or {}).items()
+        }
         # Injected failures (None = the happy path).
         self.commit_error = commit_error
         self.push_error = push_error
@@ -248,6 +254,35 @@ class FakeGitClient:
 
     def range_count(self, pre: str, head: str) -> int:
         return len(self.commits_between(pre, head))
+
+    def commits_reachable(self, ref: str) -> list[Commit]:
+        """Model ``git log <ref>`` over this fake's single linear log.
+
+        ``ref`` is accepted and ignored for the same reason
+        :meth:`commits_between` slices positionally: this fake models one linear
+        log, which *is* its default branch. A test that needs a commit the
+        default branch cannot reach builds a real repository instead — which is
+        what the **Proving set** suite does.
+        """
+        return list(reversed(self._log))
+
+    def changed_paths(self, sha: str) -> list[str]:
+        """Return the paths scripted for ``sha``; unscripted commits changed nothing."""
+        return list(self._changed_paths.get(sha, ()))
+
+    def parent_sha(self, sha: str) -> str | None:
+        """The log entry before ``sha``, or ``None`` at the root or off the log.
+
+        An unknown ``sha`` is ``None`` rather than a raise, mirroring the
+        adapter: "no checkable-out parent" covers every way the answer is no.
+        """
+        try:
+            index = self._index(sha)
+        except GitError:
+            return None
+        if index == 0:
+            return None
+        return self._log[index - 1].sha
 
     def add_worktree(self, path: Path, *, branch: str, base: str) -> FakeGitClient:
         """Model ``git worktree add -b <branch> <path> <base>``.

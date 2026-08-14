@@ -652,6 +652,9 @@ class GitHubClient(Protocol):
         truncated read may not establish that the **Pool** is empty (#219 §2.13)
         nor that its first element is the head of the order (§3.2) — a caller
         that cannot tell the two apart would act on either.
+
+        An empty ``label`` is **no** label filter, which is how the **Proving
+        set** (#362) reads every closed issue including the unlabelled ones.
         """
         ...
 
@@ -1409,7 +1412,11 @@ class SubprocessGitHubClient:
         decides which candidates are worth enriching via :meth:`issue_view`.
 
         Args:
-            label: A single label name (matches ``gh``'s single ``--label`` flag).
+            label: A single label name (matches ``gh``'s single ``--label``
+                flag). ``""`` means **no** label filter and omits the flag
+                entirely — the read the **Proving set** (#362) needs, because
+                the closed issues carrying no ``task-type:`` label are the ones
+                it has to report as excluded rather than never see.
             state: ``"open"``, ``"closed"``, or ``"all"`` — passed verbatim to
                 ``gh issue list --state``. Defaults to ``"open"`` for the
                 AFK-ready issue collector.
@@ -1429,8 +1436,7 @@ class SubprocessGitHubClient:
                 "list",
                 "--state",
                 state,
-                "--label",
-                label,
+                *(("--label", label) if label else ()),
                 "--limit",
                 str(limit),
                 "--json",
