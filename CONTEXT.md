@@ -908,11 +908,15 @@ _Avoid_: benchmark case, sample, fixture.
 One candidate pair working one **Proving task** in its own worktree at that task's base commit.
 It is scored **fail-to-pass** on the task's oracle — the base commit's own feedback loops,
 narrowed to the fix's test paths — with the whole AGENTS.md gate beside it as a **pass-to-pass**
-regression guard, so a pair cannot satisfy its own tests while breaking a neighbouring suite. A
-Trial records exactly three things: whether it cleared, its **AI Credits** and its wall clock,
-and there is deliberately no fourth field for a judge or a weighted composite to occupy. It is
-**not** an **Iteration**: it belongs to a **Calibration** rather than a **Run**, ticks no
-**Strike**, earns no **Queue** entry, and leaves neither worktree nor branch behind (ADR-0027).
+regression guard, so a pair cannot satisfy its own tests while breaking a neighbouring suite. It
+is then scored **lexicographically** on exactly three keys — cleared the gate, then **AI
+Credits**, then wall clock — with deliberately no fourth *scoring key* for a judge or a weighted
+composite to occupy, since those weights would come from the judgment the measurement replaced.
+It *records* more than it is scored on: why a red Trial went red, and which gate and oracle
+loops ran — detail nothing branches on, and what makes *the gate that ran was the one declared
+at the base commit* checkable rather than promised. It is **not** an **Iteration**: it belongs
+to a **Calibration** rather than a **Run**, ticks no **Strike**, earns no **Queue** entry, and
+leaves neither worktree nor branch behind (ADR-0027).
 _Avoid_: run, experiment, sample.
 
 **Provisional**:

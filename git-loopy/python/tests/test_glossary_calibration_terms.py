@@ -19,6 +19,7 @@ claim must.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 
@@ -28,6 +29,7 @@ ADR_0027 = "docs/adr/0027-routing-is-calibrated-by-measurement.md"
 ADR_0028 = "docs/adr/0028-measured-routing-is-a-committed-tier.md"
 ADR_0030 = "docs/adr/0030-demotion-is-measured-per-pair.md"
 MEASURED_ROUTING = "git-loopy/python/git_loopy/measured_routing.py"
+CALIBRATION_SEARCH = "git-loopy/python/git_loopy/calibration_search.py"
 
 
 def _repo_root() -> Path | None:
@@ -224,16 +226,72 @@ def test_the_trial_entry_names_its_oracle_and_its_regression_guard() -> None:
     assert "worktree" in entry
 
 
-def test_the_trial_entry_records_the_three_things_it_measures() -> None:
-    """Cleared, **AI Credits**, wall clock — and deliberately no fourth.
+def test_the_trial_entry_records_the_three_keys_it_is_scored_on() -> None:
+    """Cleared, **AI Credits**, wall clock — and deliberately no fourth *scoring key*.
 
     A fourth key is where a weighted composite lives, and the weights would be
     chosen by the same judgment the measurement replaced (ADR-0027).
+
+    The entry used to state this as a *record shape* — *"records exactly three
+    things ... no fourth field"* — which is a wider claim than ADR-0027 makes and
+    one the shipped record contradicts three times over
+    (:func:`test_the_shipped_trial_record_carries_more_than_it_is_scored_on`).
+    ADR-0027 decides how a Trial is **scored**: *"scored lexicographically:
+    cleared the gate → fewest AI Credits → shortest end-to-end wall clock.
+    Nothing else."* So the entry names the rule the way the decision and
+    ``trial.py`` both already name it.
     """
     entry = _entry("Trial")
 
     assert "**AI Credits**" in entry
     assert "wall clock" in entry
+    assert "lexicograph" in entry, "the entry does not state ADR-0027's ordering"
+    assert "scoring key" in entry, "the entry must forbid a fourth *scoring key*"
+    assert "no fourth field" not in entry, "a fourth field is shipped, and allowed"
+    assert "exactly three things" not in entry
+
+
+def test_the_shipped_trial_record_carries_more_than_it_is_scored_on() -> None:
+    """Why the entry says *scoring key* and not *field*.
+
+    ``TrialResult`` already carries ``failure`` — *"Nothing branches on it: it is
+    detail, not a fourth scoring key"* — and ``ReplayTrialResult`` adds
+    ``gate_loops`` and ``oracle_loops``, which are what make *"the gate that runs
+    is the one declared at the base commit"* checkable rather than promised.
+
+    An entry forbidding a fourth *field* forbids all three. That is the failure
+    mode this ticket exists to close, pointing the other way: not a glossary
+    lagging the code, but a glossary whose stated rule would have an implementer
+    delete shipped provenance — or read the shipped record as a violation of an
+    accepted decision.
+    """
+    from git_loopy.trial import ReplayTrialResult
+    from git_loopy.trial_concurrency import TrialResult
+
+    scored = {"passed", "credits", "wall_clock_seconds"}
+    result_fields = {field.name for field in dataclasses.fields(TrialResult)}
+    replay_fields = {field.name for field in dataclasses.fields(ReplayTrialResult)}
+
+    assert scored < result_fields, "the scored keys are still the record's core"
+    assert "failure" in result_fields, "the fourth field the entry must not forbid"
+    assert {"gate_loops", "oracle_loops"} <= replay_fields
+
+
+def test_the_search_core_overview_forbids_a_scoring_key_not_a_field() -> None:
+    """The same sentence, in the module an implementer of #372 reads.
+
+    ``calibration_search`` is the search's own overview and carried the identical
+    over-wide claim, while ``trial.py`` — the module that actually defines the
+    record — already spelled it correctly as *"no fourth scoring key can
+    appear"*. Correcting only the glossary would leave the two halves of the
+    codebase disagreeing about what the decision forbids, which is the
+    two-vocabulary failure #373 exists to close.
+    """
+    prose = _prose(CALIBRATION_SEARCH)
+
+    assert "no fourth field" not in prose
+    assert "no fourth scoring key" in prose
+    assert "scored lexicographically" in _prose(ADR_0027)
 
 
 def test_the_glossary_names_measured_routing_as_a_committed_tier() -> None:

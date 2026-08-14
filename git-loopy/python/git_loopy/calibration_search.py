@@ -12,11 +12,17 @@ Design notes:
   :class:`TrialRunner` seam, modelled directly on
   :class:`~git_loopy.gate.GateRunner`. That is what makes every rule below
   pinnable without spending an **AI Credit**.
-* **The gate is the oracle and cost is the discriminator.** A **Trial** carries
-  exactly the three keys ADR-0027 scores it on — cleared the gate, credits, wall
-  clock — and there is no fourth field for a judge, an acceptance-criteria score
-  or a weighted composite to occupy. The weights would be chosen by the same
-  judgment the measurement replaces.
+* **The gate is the oracle and cost is the discriminator.** A **Trial** is scored
+  on exactly the three keys ADR-0027 orders it by — cleared the gate, credits,
+  wall clock — and there is no fourth scoring key for a judge, an
+  acceptance-criteria score or a weighted composite to occupy. The weights would
+  be chosen by the same judgment the measurement replaces. What a Trial
+  *records* is wider than what it is scored on, and deliberately so:
+  :class:`~git_loopy.trial_concurrency.TrialResult` carries the failure detail
+  and :class:`~git_loopy.trial.ReplayTrialResult` the loops that ran. Nothing
+  branches on either, which is the whole distinction — a fourth *field* is
+  provenance a reader can check the conclusion against, where a fourth *scoring
+  key* would change which pair wins.
 * **A stopped search looks stopped.** :class:`SearchResult` refuses a winner on
   every stop but :attr:`~SearchStop.WINNER`, enforced at construction rather than
   promised — so the incumbent is kept by there being nothing to publish, not by a
