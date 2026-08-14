@@ -2471,17 +2471,19 @@ _git_loopy_frontier_emit_stopped() {
       + (
           if ($stop.next | type) == "object" then
             {
-              next: {
-                identity: ($stop.next.identity // ""),
-                summary: ($stop.next.summary // ""),
-                readiness: ($stop.next.readiness // "")
-              }
-              + (
-                  if ($stop.next.condition | type) == "object"
-                  then {condition: ($stop.next.condition.kind // "")}
-                  else {}
-                  end
-                )
+              next: (
+                {
+                  identity: ($stop.next.identity // ""),
+                  summary: ($stop.next.summary // ""),
+                  readiness: ($stop.next.readiness // "")
+                }
+                + (
+                    if ($stop.next.condition | type) == "object"
+                    then {condition: ($stop.next.condition.kind // "")}
+                    else {}
+                    end
+                  )
+              )
             }
           else {}
           end
