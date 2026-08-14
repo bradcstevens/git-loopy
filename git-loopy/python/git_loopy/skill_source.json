@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "bradcstevens/git-loopy-skills",
   "url": "https://github.com/bradcstevens/git-loopy-skills.git",
-  "revision": "9f2222f7520eefec43427c8370808c0a743a8bed",
+  "revision": "f16cc17382e24ae5570f7d37bf50355881cc1aa8",
   "skills_directory": "skills",
   "license": {
     "spdx_id": "MIT",

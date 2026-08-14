@@ -15,12 +15,14 @@ exists to prevent.
 **Where these prompts live, and why they are a fixture.** They used to be read out
 of this checkout's root ``.copilot/skills/``, which #340 removed: under ADR-0025
 git-loopy reads Skills from the catalog it installs from the pin and from nowhere
-else, so a tracked tree here was a catalog no Run consults. What is left behind is
-narrower and honest about itself -- the prompts that carry *git-loopy's own*
-Continuation contract, which the pinned revision does not yet carry (#341). It is
-a test fixture, not a Skill source: nothing installs it, no Run resolves against
-it, and Copilot CLI does not discover it. When #341 publishes these upstream, the
-fixture's replacement is a guard over the acquired revision.
+else, so a tracked tree here was a catalog no Run consults. What is left is a
+**mirror** of the contract-carrying prompts at the pinned revision (#341): a Run
+reads the installed catalog, and these suites read a copy of it that needs no
+network. It is a test fixture, not a Skill source -- nothing installs it, no Run
+resolves against it, and Copilot CLI does not discover it -- and it is authored
+nowhere. ``test_continuation_owner_coverage`` holds every file in it byte-identical
+to the acquired pinned revision, so the requests these suites execute are the ones
+an adopter's session is told to publish.
 """
 
 from __future__ import annotations
@@ -29,6 +31,13 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+
+from git_loopy.skill_source import (
+    DEFAULT_CHECKOUT,
+    is_previous_acquisition,
+    read_skill_source_pin,
+    validate_skill_source,
+)
 
 #: The prompts carrying git-loopy's Continuation contract. Membership *is* a
 #: claim: a Skill is here exactly when it documents a request against the native
@@ -39,6 +48,37 @@ TEMPLATE_RE = re.compile(
     r"<!-- continuation-request: (?P<name>[a-z-]+) -->\s*```json\n(?P<body>.*?)```",
     re.DOTALL,
 )
+
+
+def repo_root() -> Path | None:
+    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+            return parent
+    return None
+
+
+def acquired_skills_root() -> Path | None:
+    """The pinned revision's Skill root on disk, or ``None`` when unacquired.
+
+    Reads a checkout, never the network: acquisition reaches upstream, so a guard
+    that acquired for itself could only be red for a reason no change here caused.
+    A caller with no checkout has nothing to compare against and skips.
+
+    A checkout that *is* present is validated offline before it is handed back --
+    right revision, right layout, clean tree. Skipping is the honest answer to "no
+    copy of the pin here"; a stale copy is a different answer entirely, and a
+    mirror guard that compared against the revision *before* the bump would pass
+    while proving the opposite of what it claims.
+    """
+    root = repo_root()
+    if root is None:  # pragma: no cover - installed wheel, no source checkout
+        return None
+    checkout = root / DEFAULT_CHECKOUT
+    if not is_previous_acquisition(checkout):
+        return None
+    pin = read_skill_source_pin()
+    return validate_skill_source(pin, checkout).root / pin.skills_directory
 
 
 def skill_text(skill: str, *, skills_dir: Path = CONTRACT_SKILLS_DIR) -> str:

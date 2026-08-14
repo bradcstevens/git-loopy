@@ -12,9 +12,9 @@ the first-time setup path is
 
 ---
 
-## Six words that are not synonyms
+## Seven words that are not synonyms
 
-Most Skill-policy confusion is one of these six being read as another. They are
+Most Skill-policy confusion is one of these seven being read as another. They are
 defined in [`CONTEXT.md`](../CONTEXT.md); what follows is what each one means
 when you are holding a terminal.
 
@@ -64,6 +64,20 @@ because Required Skills come from the installed catalog.
 before its first work session — it is never silently restored. A custom prompt
 with no `required-skills` metadata inherits the packaged list and warns until it
 declares its own (an explicitly empty list is a valid declaration).
+
+**Contract-carrying Skill** — one of the twelve whose instructions invoke a
+`git-loopy` subcommand, so part of what it tells a session to do is a git-loopy
+contract rather than general engineering guidance: `code-review`,
+`grill-with-docs`, `implement`, `next`, `prototype`, `push`, `research`,
+`resolving-merge-conflicts`, `to-spec`, `to-tickets`, `triage` and `wayfinder`.
+Eleven publish a record of the transition they just made; `next` only reads those
+records back. They are ordinary members of the **installed catalog** and get no
+special treatment from the policy — leave a publisher out and a Run simply never
+records what it did, leave `next` out and nothing reads the records. What is
+special is where they are **authored**: upstream in the external Skill catalog,
+never in a consuming repository, so a local edit is a change no install can hand
+to a session
+([ADR-0034](adr/0034-contract-carrying-skills-are-authored-upstream.md)).
 
 ### Consulted Skills are a different fact entirely
 

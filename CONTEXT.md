@@ -445,6 +445,17 @@ or ignoring the Skill. Legacy custom instructions without that metadata inherit 
 packaged instructions' Required Skills until they declare their own set.
 _Avoid_: default skill, recommended skill.
 
+**Contract-carrying Skill**:
+A Skill whose instructions invoke a `git-loopy` subcommand, so what it tells a session
+to do is part of a git-loopy contract rather than general engineering guidance. Twelve
+carry the **Workflow continuation** contract today: eleven Transition owners that
+publish a record through the native command, and the one Consumer that reconciles
+those records and writes nothing. Each is authored in the external Skill catalog and
+reaches git-loopy as publish, pin, mirror, in that order: a copy edited here is a
+change no **Installed catalog** can hand to a session
+([ADR-0034](docs/adr/0034-contract-carrying-skills-are-authored-upstream.md)).
+_Avoid_: git-loopy skill, bundled skill, packaged skill.
+
 **Iteration**:
 One serial cycle of the loop — collect the pool, let the agent work exactly one task,
 then do commit accounting and a progress check. The serial unit by which elapsed time
@@ -1115,6 +1126,9 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   issue-execution action; it is not a synonym for **AFK-safe** or **AFK-eligible**.
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
   expand that policy.
+- A **Contract-carrying Skill** reaches a **Run** only through the **Installed catalog**,
+  so it is authored in the external Skill catalog and mirrored into this repository,
+  never the other way round.
 - A **Run** resolves one **Effective Skill policy** before work begins. Every
   **Required Skill** must belong to it, and every serial **Iteration** and parallel
   **Lane** shares it.
