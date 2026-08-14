@@ -213,6 +213,37 @@ fail-before / pass-after. That admission pass is also the only thing that filter
 commits, and it turns "87% ship test changes" from a hopeful proxy into a verified property of
 every task in the set.
 
+### The oracle is the base commit's own feedback loops, narrowed to the fix's test paths
+
+*(Added by amendment, shipped by #369.)* The clause above says *what* to score on and left
+*how to run it* open, and "run the fix's own tests" has no language-agnostic answer: the
+oracle is a set of **paths**, and turning paths into a command is per-ecosystem knowledge
+this project has exactly one honest source of — the base commit's own `## Feedback loops`
+table.
+
+So the oracle is the **subset of that table that already covers the oracle's test paths**:
+for each path, the runnable loops naming the *deepest* directory containing it, unioned
+across paths. On this repository's real table a Python-only fix selects `Python suite`
+alone, and a fix spanning two members selects both members' rows. Deepest-first is what
+makes it narrower than the gate rather than accidentally equal to it — a table declaring a
+whole-repo loop beside per-member ones yields the per-member ones.
+
+Three things follow, and each is the reason for the choice rather than a cost of it:
+
+- **No second command runner.** `AgentsMdGateRunner` is already parameterised by the
+  filename it reads, so the oracle is that same class pointed at a generated
+  single-purpose table written into the Trial's own worktree. The oracle therefore
+  inherits the gate's fail-fast execution, its per-loop wall-clock bound
+  ([ADR-0009](0009-runner-driven-integration-and-auto-resolution.md), #374) and its failure detail,
+  with nothing to keep in step. The generated table is removed before the agent session
+  starts: an agent that could read the list of loops it is judged by could edit it.
+- **A task this repository cannot score is not a task the pair failed.** When no loop
+  covers an oracle path the Trial goes red *naming that*, rather than reporting a model
+  too weak to solve something nothing was ever going to run.
+- **It inherits the frozen-table consequence rather than escaping it.** The oracle is read
+  from the worktree like the gate is, so it too is the months-old commit's. Refreshing the
+  Proving set remains the only thing that propagates a stronger table, exactly as above.
+
 ### Calibration only affects Parallel mode
 
 *(Added by amendment.)* `resolve_iteration_model` is called from exactly one place —

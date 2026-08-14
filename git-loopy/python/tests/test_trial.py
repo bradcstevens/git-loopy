@@ -13,6 +13,7 @@ real gate runner, and the scripted Copilot fake for the session.
 from __future__ import annotations
 
 import ast
+import asyncio
 import dataclasses
 import shutil
 import subprocess
@@ -1090,4 +1091,78 @@ def test_a_session_that_raised_after_being_billed_still_reports_its_credits(
 
     assert result.passed is False
     assert result.credits == Decimal("0.5")
+    assert list((tmp_path / "trials").glob("*")) == []
+
+
+def test_a_slot_whose_teardown_failed_is_reclaimed_by_the_next_trial(
+    tmp_path: Path,
+) -> None:
+    """One failed teardown must not kill a slot for the rest of a Calibration.
+
+    ``add_worktree`` refuses a path that already exists, so a leaked worktree
+    would make every remaining Trial in that slot red — hours of an unattended
+    search reporting *incomplete* over one stale directory. The path is
+    namespaced by the Calibration and the slot, so anything sitting at it can
+    only be a Trial of ours, which is what makes reclaiming it safe rather than
+    destructive.
+    """
+    history = _history(tmp_path)
+    client = _FakeCopilotClient(on_send=_fixes_the_answer)
+    runner = _runner(history, tmp_path, client=client)
+    leaked = (
+        tmp_path
+        / "trials"
+        / f"{history.repo.name}-calibration-cal01-slot-0"
+    )
+    _git(history.repo, "worktree", "add", "-q", "-b", "leaked", str(leaked), "main")
+
+    result = runner.run(_request(history, slot=0))
+
+    assert result.passed is True
+    assert list((tmp_path / "trials").glob("*")) == []
+
+
+def test_a_trial_runs_from_inside_a_running_event_loop(tmp_path: Path) -> None:
+    """``TrialRunner.run`` is synchronous by contract, and its caller may not be.
+
+    Under ``ThreadedTrialDispatcher`` a Trial lands on a worker thread with no
+    loop of its own, so ``asyncio.run`` is right. ``InlineTrialDispatcher``
+    reached from async code — which is how ``calibrate`` will drive a serial
+    search — leaves ``run`` on a thread that already has one, where ``asyncio.run``
+    raises. A Trial that could not run at all there would make the serial
+    dispatcher, the one every fixture drives, the broken case.
+    """
+    history = _history(tmp_path)
+    client = _FakeCopilotClient(on_send=_fixes_the_answer)
+    runner = _runner(history, tmp_path, client=client)
+
+    async def _drive() -> Any:
+        return runner.run(_request(history))
+
+    result = asyncio.run(_drive())
+
+    assert result.passed is True
+    assert list((tmp_path / "trials").glob("*")) == []
+
+
+def test_a_session_that_raised_inside_a_running_event_loop_is_still_reported(
+    tmp_path: Path,
+) -> None:
+    """The exception has to come back across the thread boundary, not vanish.
+
+    A session failure swallowed by the driving thread would read as a pair that
+    silently declined to work — a red Trial with no reason, which is the one
+    thing a Trial result must never be.
+    """
+    history = _history(tmp_path)
+    client = _FakeCopilotClient(raises=_RefuseSession("no session for you"))
+    runner = _runner(history, tmp_path, client=client)
+
+    async def _drive() -> Any:
+        return runner.run(_request(history))
+
+    result = asyncio.run(_drive())
+
+    assert result.passed is False
+    assert result.failure is not None and "RefuseSession" in result.failure
     assert list((tmp_path / "trials").glob("*")) == []

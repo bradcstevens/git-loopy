@@ -93,7 +93,10 @@ __all__ = [
     "apply_oracle",
     "covering_loops",
     "make_oracle_gate_runner",
+    "read_agents_md",
     "render_oracle_table",
+    "restore_paths",
+    "run_oracle",
     "trial_branch_name",
     "trial_prompt",
 ]
@@ -193,6 +196,32 @@ def make_oracle_gate_runner(*, timeout_seconds: float) -> GateRunner:
     )
 
 
+def run_oracle(
+    oracle: GateRunner, worktree: Path, loops: Sequence[FeedbackLoop]
+) -> GateResult:
+    """Run ``loops`` in ``worktree`` from a generated table, and leave nothing behind.
+
+    The fail-to-pass instrument itself, shared by the two callers that must not
+    measure differently: a **Trial** (which runs it either side of an agent's
+    work) and admission (which runs it either side of the *historical* fix,
+    :mod:`git_loopy.proving_admission`). A second spelling of "write the table,
+    run it, remove it" could drift, and a drift here would mean a task was
+    admitted by one instrument and scored by another.
+
+    Raises:
+        GateError: If the runner could not run the table at all. Deliberately
+            *not* swallowed into a red result: a Trial turns that into its own
+            red outcome, while admission turns it into an ``unrunnable``
+            exclusion, and only the caller knows which.
+    """
+    table = worktree / ORACLE_TABLE_FILENAME
+    table.write_text(render_oracle_table(loops), encoding="utf-8")
+    try:
+        return oracle.run(worktree)
+    finally:
+        table.unlink(missing_ok=True)
+
+
 def apply_oracle(worktree: Path, *, commit: str, paths: Sequence[str]) -> None:
     """Bring the fixing commit's test-path changes into ``worktree``, and nothing else.
 
@@ -202,11 +231,6 @@ def apply_oracle(worktree: Path, *, commit: str, paths: Sequence[str]) -> None:
     behind, and a stale test that can never pass makes the oracle unable to go
     green for any pair — which reads as every model being too weak.
 
-    Goes through :mod:`git_loopy.git`'s own invoker rather than a new
-    :class:`~git_loopy.git.GitClient` method: #369 composes the git client *as it
-    is*, and a public ``checkout_paths`` would be a change to a seam this work
-    may not modify. Recorded as a follow-up for whoever next owns ``git.py``.
-
     Args:
         worktree: The Trial's worktree, already at the **Proving task**'s base
             commit.
@@ -214,6 +238,26 @@ def apply_oracle(worktree: Path, *, commit: str, paths: Sequence[str]) -> None:
         paths: Those test paths, and nothing else. The fix itself is deliberately
             absent — a replay that carried it would score a pair on reading a
             diff (ADR-0027).
+
+    Raises:
+        GitError: If git refuses the checkout or the removal.
+    """
+    restore_paths(worktree, commit=commit, paths=paths)
+
+
+def restore_paths(worktree: Path, *, commit: str, paths: Sequence[str]) -> None:
+    """Make ``paths`` in ``worktree`` read as they do at ``commit``.
+
+    The mechanism under :func:`apply_oracle`, named separately because admission
+    applies the *whole* historical fix through it (:mod:`git_loopy.proving_admission`)
+    and "apply the oracle" is not what that is. Both directions are honoured: a
+    path present at ``commit`` is checked out, and a path absent from it is
+    removed, so a rename arrives as the delete-plus-add it actually was.
+
+    Goes through :mod:`git_loopy.git`'s own invoker rather than a new
+    :class:`~git_loopy.git.GitClient` method: #369 composes the git client *as it
+    is*, and a public ``checkout_paths`` would be a change to a seam this work
+    may not modify. Recorded as a follow-up for whoever next owns ``git.py``.
 
     Raises:
         GitError: If git refuses the checkout or the removal.
@@ -482,6 +526,14 @@ class ReplayTrialRunner:
             )
 
         path = self._worktree_path(request.slot)
+        if path.exists():
+            # A teardown that failed once must not kill the slot for the rest of
+            # the Calibration: ``add_worktree`` refuses an existing path, so
+            # every later Trial here would go red over one stale directory. The
+            # path is namespaced by the Calibration *and* the slot, so whatever
+            # is sitting at it can only be a Trial of ours.
+            self._report(f"reclaiming a leaked Trial worktree at {path}")
+            self._teardown(path, None)
         branch = trial_branch_name(self._calibration_id, next(_TRIAL_SEQUENCE))
         try:
             self._git.add_worktree(path, branch=branch, base=candidate.base_commit)
@@ -519,7 +571,7 @@ class ReplayTrialRunner:
             )
 
         loops = covering_loops(
-            parse_feedback_loops(_read_agents_md(path)), candidate.oracle_paths
+            parse_feedback_loops(read_agents_md(path)), candidate.oracle_paths
         )
         if not loops:
             return self._red(
@@ -576,18 +628,20 @@ class ReplayTrialRunner:
         )
 
     def _run_oracle(self, path: Path, loops: Sequence[FeedbackLoop]) -> GateResult:
-        """Run the covering loops from a generated table, and leave nothing behind."""
-        table = path / ORACLE_TABLE_FILENAME
-        table.write_text(render_oracle_table(loops), encoding="utf-8")
+        """Run the covering loops, turning an unrunnable table into a red result.
+
+        A Trial's whole contract is that its own fault comes back as a result
+        rather than a raise, so a :class:`~git_loopy.gate.GateError` becomes red
+        here. Admission makes the opposite choice on the same helper: a table it
+        cannot run means the *task* is unrunnable, not that a pair failed.
+        """
         try:
-            return self._oracle.run(path)
+            return run_oracle(self._oracle, path, loops)
         except GateError as exc:
             return GateResult.red(
                 (),
                 _loop_failure("oracle", str(exc)),
             )
-        finally:
-            table.unlink(missing_ok=True)
 
     def _work(
         self,
@@ -643,7 +697,7 @@ class ReplayTrialRunner:
 
     # -- teardown ---------------------------------------------------------- #
 
-    def _teardown(self, path: Path, branch: str) -> None:
+    def _teardown(self, path: Path, branch: str | None) -> None:
         """Remove the worktree *and* its branch — a Trial leaves no breadcrumb.
 
         ADR-0008 keeps a failed **Lane**'s branch deliberately, as evidence for a
@@ -656,6 +710,8 @@ class ReplayTrialRunner:
             self._git.remove_worktree(path, force=True)
         except Exception as exc:  # noqa: BLE001
             self._report(f"the Trial worktree at {path} could not be removed: {exc}")
+        if branch is None:
+            return
         try:
             self._git.delete_branch(branch)
         except Exception as exc:  # noqa: BLE001
@@ -701,7 +757,13 @@ class ReplayTrialRunner:
             pass
 
 
-def _read_agents_md(worktree: Path) -> str:
+def read_agents_md(worktree: Path) -> str:
+    """The worktree's ``AGENTS.md``, or the empty string if it has none.
+
+    Read from the worktree rather than from the operator's checkout, which is
+    what makes *"the gate that runs is the one the base commit declared"* true
+    of both instruments and of admission.
+    """
     try:
         return (worktree / "AGENTS.md").read_text(encoding="utf-8", errors="replace")
     except OSError:
