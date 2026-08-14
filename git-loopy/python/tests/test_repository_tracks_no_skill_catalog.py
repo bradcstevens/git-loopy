@@ -71,10 +71,10 @@ def test_the_repository_tracks_no_root_skill_catalog(repo_root: Path) -> None:
     )
 
 
-#: The one place a tracked ``SKILL.md`` may still live: the prompts carrying
-#: git-loopy's *own* Continuation contract, which the pinned revision does not
-#: carry yet (#341). It is a test fixture -- nothing installs it, no Run resolves
-#: against it, and Copilot CLI does not discover it.
+#: The one place a tracked ``SKILL.md`` may still live: the byte-for-byte mirror of
+#: the contract-carrying prompts at the pinned revision (#341, ADR-0034). It is a
+#: test fixture -- nothing installs it, no Run resolves against it, and Copilot CLI
+#: does not discover it.
 _CONTRACT_FIXTURE = "git-loopy/python/tests/fixtures/continuation-skills/"
 
 
