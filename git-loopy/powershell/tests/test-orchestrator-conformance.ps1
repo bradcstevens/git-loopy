@@ -68,6 +68,95 @@ foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
     }
 }
 
+# Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
+# Driven through `Get-GitLoopyIssueOrder` itself: an adapter that reproduced the
+# comparison would stay green while the Orchestrator ordered a Pool differently,
+# which is the drift the shared fixture exists to catch.
+$IssueOrdering = ConvertFrom-GitLoopyJsonText -Text (
+    Get-Content -LiteralPath (Join-Path $ConformanceDir "issue-ordering.json") -Raw
+)
+
+Assert-Equal `
+    $IssueOrdering["priority_label"] `
+    (Get-GitLoopyPriorityLabel) `
+    "issue-ordering: the port reads the Priority label the fixture names"
+
+$AcceptedYears = Get-GitLoopyAcceptedYearRange
+Assert-Equal `
+    $IssueOrdering["accepted_year_range"]["min"] `
+    $AcceptedYears["min"] `
+    "issue-ordering: the port accepts the oldest year the fixture declares"
+Assert-Equal `
+    $IssueOrdering["accepted_year_range"]["max"] `
+    $AcceptedYears["max"] `
+    "issue-ordering: the port accepts the newest year the fixture declares"
+
+foreach ($Case in $IssueOrdering["cases"]) {
+    $CaseId = $Case["id"]
+    $Result = Get-GitLoopyIssueOrder -Candidates @($Case["issues"])
+    $Expected = $Case["expected"]
+
+    Assert-Equal `
+        (@($Expected["order"]) -join ",") `
+        (@($Result["order"]) -join ",") `
+        "issue-ordering order: $CaseId"
+
+    $ActualHead = if (@($Result["order"]).Count -gt 0) {
+        @($Result["order"])[0]
+    }
+    else {
+        $null
+    }
+    Assert-Equal $Expected["selected"] $ActualHead "issue-ordering head: $CaseId"
+
+    $ExpectedUndated = @($Expected["undated"] | ForEach-Object {
+            "$($_["issue"]):$($_["defect"])"
+        }) -join ","
+    $ActualUndated = @($Result["undated"] | ForEach-Object {
+            "$($_["issue"]):$($_["defect"])"
+        }) -join ","
+    Assert-Equal $ExpectedUndated $ActualUndated "issue-ordering undated: $CaseId"
+}
+
+foreach ($Defect in @($IssueOrdering["timestamp_defects"])) {
+    $Covered = @($IssueOrdering["cases"] | Where-Object {
+            @($_["expected"]["undated"] | Where-Object {
+                    $_["defect"] -ceq $Defect
+                }).Count -gt 0
+        }).Count
+    if ($Covered -eq 0) {
+        throw "FAIL: no issue-ordering case covers timestamp defect $Defect"
+    }
+}
+
+# The reason this port reads its JSON through System.Text.Json: `ConvertFrom-Json`
+# dates values §3.2 calls malformed, and a member that inherited its reader's
+# tolerances would order a Pool the rest of the family orders differently.
+foreach ($Widened in @(
+        "2026-01-01T00:00:00",
+        "2026-01-01T00:00:00+0100",
+        "2026-01-01T24:00:00Z",
+        "2026-01-01T00:00:00+24:00")) {
+    $Json = "{""created_at"": ""$Widened""}"
+    Assert-True `
+        (($Json | ConvertFrom-Json -AsHashtable)["created_at"] -isnot [string]) `
+        "issue-ordering: ConvertFrom-Json dates $Widened, which is why it is not used"
+    Assert-True `
+        ((ConvertFrom-GitLoopyJsonText -Text $Json)["created_at"] -is [string]) `
+        "issue-ordering: the date-safe read keeps $Widened a string"
+    Assert-Equal `
+        "malformed" `
+        (Get-GitLoopyTimestampDefect -CreatedAt $Widened) `
+        "issue-ordering: $Widened is malformed, as it is for every other member"
+}
+
+# A caller that read its JSON the coercing way must not quietly get a different
+# order; the pre-dated value is refused rather than rescued.
+Assert-Equal `
+    "malformed" `
+    (Get-GitLoopyTimestampDefect -CreatedAt ([datetime]"2026-01-01T00:00:00Z")) `
+    "issue-ordering: an already-dated created_at is refused, not rescued"
+
 $ExitCodes = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "exit-codes.json") `
     -Raw |

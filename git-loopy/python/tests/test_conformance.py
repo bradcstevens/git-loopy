@@ -38,6 +38,14 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
+from git_loopy.issue_order import (
+    LABEL_PRIORITY,
+    MAX_ACCEPTED_YEAR,
+    MIN_ACCEPTED_YEAR,
+    OrderableIssue,
+    TimestampDefect,
+    order_issues,
+)
 from git_loopy.measured_routing import ProvingTask
 from git_loopy import measured_routing as measured_routing_module
 from git_loopy.staircase import Candidate
@@ -89,6 +97,95 @@ _DISCRIMINATOR = _load_fixture("discriminator.json")
 )
 def test_discriminator_fixture(case: dict[str, Any]) -> None:
     assert is_afk_ready(case["body"]) is case["eligible"]
+
+
+_ISSUE_ORDERING = _load_fixture("issue-ordering.json")
+ISSUE_ORDERING_FIXTURE = CONFORMANCE_DIR / "issue-ordering.json"
+
+
+def _orderable(candidate: Mapping[str, Any]) -> OrderableIssue:
+    """One fixture record as the seam's own input type.
+
+    Translation only, per the Conformance README: the adapter may shape fixture
+    records into native values but must call the production seam rather than
+    reproduce it.
+    """
+    return OrderableIssue(
+        number=candidate["number"],
+        created_at=candidate["created_at"],
+        labels=tuple(candidate["labels"]),
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ISSUE_ORDERING["cases"],
+    ids=lambda case: case["id"],
+)
+def test_issue_ordering_fixture(case: dict[str, Any]) -> None:
+    """The total order over eligible issues, pinned language-neutrally (§3.2).
+
+    Selection order is a contract term rather than each member's own sort: three
+    Orchestrators that agree on eligibility and disagree on *which* eligible
+    issue comes first would pick different work from identical input, and
+    nothing in the Event stream would say why.
+    """
+    result = order_issues(_orderable(candidate) for candidate in case["issues"])
+
+    assert [issue.number for issue in result.order] == case["expected"]["order"]
+    assert (
+        result.head.number if result.head is not None else None
+    ) == case["expected"]["selected"]
+    assert [
+        {"issue": undated.number, "defect": undated.defect.value}
+        for undated in result.undated
+    ] == case["expected"]["undated"]
+
+
+def test_issue_ordering_fixture_pins_the_priority_label() -> None:
+    """**Priority** is carried on a label, so its *name* is a contract term.
+
+    A port reading a different string would order a Pool nobody labelled.
+    """
+    assert _ISSUE_ORDERING["priority_label"] == LABEL_PRIORITY
+
+
+def test_issue_ordering_fixture_pins_the_accepted_year_range() -> None:
+    """The narrow grammar is declared, not discovered from a rejection.
+
+    A port that accepted years outside it would date an issue the reference
+    member reports as undated — and undated issues sort last, so the two would
+    disagree about the head of the order.
+    """
+    assert _ISSUE_ORDERING["accepted_year_range"] == {
+        "min": MIN_ACCEPTED_YEAR,
+        "max": MAX_ACCEPTED_YEAR,
+    }
+
+
+def test_every_timestamp_defect_is_covered_by_an_ordering_case() -> None:
+    """A declared vocabulary no case exercises is a vocabulary nothing pins.
+
+    Same shape as the discriminator's exclusion reasons: the two defects send an
+    operator to different places, so both have to be reachable from the fixture.
+    """
+    declared = set(_ISSUE_ORDERING["timestamp_defects"])
+
+    assert declared == {defect.value for defect in TimestampDefect}
+
+    covered = {
+        undated["defect"]
+        for case in _ISSUE_ORDERING["cases"]
+        for undated in case["expected"]["undated"]
+    }
+    assert covered == declared
+
+
+def test_ordering_cases_are_named_uniquely() -> None:
+    """Case ids are the parametrize ids every port reports failures by."""
+    ids = [case["id"] for case in _ISSUE_ORDERING["cases"]]
+
+    assert len(ids) == len(set(ids))
 
 
 _CLOSE_REFERENCES = _load_fixture("close-references.json")
@@ -268,7 +365,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.9"
+    assert _EVENT_SCHEMA["contract_version"] == "1.10"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -2860,6 +2957,80 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     sides of that comparison are data.
     """
     assert continuation_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
+
+
+def _selection_order_section() -> str:
+    """The written §3.2, so a coincidence elsewhere in the contract cannot pass."""
+    contract = _written_contract_text()
+    return contract.split("### 3.2 Selection order", 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_contract_records_that_selection_order_is_part_of_it() -> None:
+    """Selection order is a contract term, not each member's own sort (#391).
+
+    Three Orchestrators that agree on eligibility and disagree on which eligible
+    issue comes first pick different work from identical input. Before ADR-0032
+    the order was ``gh``'s undeclared default, which is precisely a decision no
+    contract stated — so the section existing at all is the thing to pin.
+    """
+    section = _selection_order_section()
+
+    assert "MUST" in section
+    assert "total" in section
+    assert f"`{LABEL_PRIORITY}`" in section
+    assert "created_at" in section
+
+
+def test_the_contract_names_the_ordering_fixture_that_pins_it() -> None:
+    """§3.2 is the only place a future port learns which fixture pins the order.
+
+    Derived from the fixture actually on disk rather than restated, so renaming
+    the file fails here instead of leaving the contract naming nothing.
+    """
+    assert ISSUE_ORDERING_FIXTURE.is_file()
+    assert ISSUE_ORDERING_FIXTURE.name in _selection_order_section()
+
+
+def test_the_contract_classifies_every_timestamp_defect() -> None:
+    """A defect a reader cannot classify is a defect with no rule.
+
+    The vocabulary is closed and each member reports one of it, so a port that
+    met a third value would have to invent a rule. Iterating the enum means a
+    new defect cannot be added without the contract describing it.
+    """
+    section = _selection_order_section()
+
+    for defect in TimestampDefect:
+        assert f"`{defect.value}`" in section, (
+            f"§3.2 does not describe the {defect.value} timestamp defect"
+        )
+
+
+def test_the_contract_states_that_ordering_never_changes_eligibility() -> None:
+    """**Priority** reorders work; it does not change what is eligible (ADR-0032).
+
+    Left implied, the first port to implement §3.2 could reasonably read a
+    Priority label as a reason to admit an issue the discriminator rejected —
+    which would make a label a way past the AFK-ready bar.
+    """
+    section = _selection_order_section()
+
+    assert "without changing eligibility" in section
+    assert "ready-for-agent" in section
+    assert "parallel-safe" in section
+
+
+def test_the_contract_forbids_ordering_by_task_type() -> None:
+    """A **Task type** selects a **Routed pair** and nothing else (`CONTEXT.md`).
+
+    ADR-0032 rejected ``(task_type_rank, created_at)`` twice over — it relocates
+    starvation to the bottom tier, and the glossary already forbids it. Stating
+    the rejection is what stops a port from re-deriving the rejected design.
+    """
+    section = _selection_order_section()
+
+    assert "Task type" in section
+    assert "MUST NOT affect the order" in section
 
 
 def test_the_contract_records_the_measured_tier_in_the_precedence_chain() -> None:

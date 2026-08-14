@@ -51,6 +51,46 @@ while IFS= read -r case_json; do
     "discriminator exclusion reason: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/discriminator.json")
 
+# Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
+# The adapter drives the fixture through `git_loopy_order_issues` itself; a
+# reimplementation here would pass while the Orchestrator ordered a Pool
+# differently, which is the drift the shared fixture exists to catch.
+assert_equal \
+  "$(jq -r '.priority_label' "$conformance_dir/issue-ordering.json")" \
+  "$GIT_LOOPY_PRIORITY_LABEL" \
+  "issue-ordering: the port reads the Priority label the fixture names"
+assert_equal \
+  "$(jq -r '.accepted_year_range | "\(.min) \(.max)"' \
+    "$conformance_dir/issue-ordering.json")" \
+  "$GIT_LOOPY_MIN_ACCEPTED_YEAR $GIT_LOOPY_MAX_ACCEPTED_YEAR" \
+  "issue-ordering: the port accepts the year range the fixture declares"
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  issues_json="$(jq -c '.issues' <<<"$case_json")"
+  result_json="$(git_loopy_order_issues "$issues_json")"
+
+  assert_equal \
+    "$(jq -c '.expected.order' <<<"$case_json")" \
+    "$(jq -c '.order' <<<"$result_json")" \
+    "issue-ordering order: $case_id"
+  assert_equal \
+    "$(jq -c '.expected.selected' <<<"$case_json")" \
+    "$(jq -c '.order[0] // null' <<<"$result_json")" \
+    "issue-ordering head: $case_id"
+  assert_equal \
+    "$(jq -c '.expected.undated' <<<"$case_json")" \
+    "$(jq -c '.undated' <<<"$result_json")" \
+    "issue-ordering undated: $case_id"
+done < <(jq -c '.cases[]' "$conformance_dir/issue-ordering.json")
+
+while IFS= read -r defect; do
+  jq -e --arg defect "$defect" \
+    'any(.cases[].expected.undated[]?; .defect == $defect)' \
+    "$conformance_dir/issue-ordering.json" >/dev/null ||
+    fail "no issue-ordering case covers timestamp defect $defect"
+done < <(jq -r '.timestamp_defects[]' "$conformance_dir/issue-ordering.json")
+
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   reason="$(jq -r '.reason' <<<"$case_json")"

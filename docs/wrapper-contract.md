@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.9 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.10 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -96,6 +96,61 @@ condition (§10).
 
 Reporting an exclusion MUST NOT change Pool membership, and MUST NOT cost an extra source
 round-trip: the cheap list read already carries the body the decision is made on.
+
+### 3.2 Selection order (contract 1.10, MUST)
+
+The eligible Pool has **one total order**, and it is part of this contract rather than each
+member's own sort. All three Orchestrators previously called `gh issue list` with no sort
+qualifier and inherited GitHub's unstated `sort=created&direction=desc`; the resulting
+newest-first order was a CLI default nobody decided, and an issue could be passed over
+indefinitely with no mechanism to notice (ADR-0032). Two members agreeing on eligibility while
+disagreeing on *which* eligible issue comes first would pick different work from identical
+input, and nothing in the Event stream would say why.
+
+An Orchestrator MUST order eligible issues ascending by, in order of significance:
+
+1. **Priority rank** — an issue carrying the `priority` label ranks ahead of one that does not.
+   **Priority** is a *human assertion*, read like `parallel-safe` and never inferred from issue
+   content, and it reorders work **without changing eligibility**: a Priority issue still needs
+   `ready-for-agent`, still MUST pass the §3 discriminator, and still needs `parallel-safe` to
+   enter a **Lane**.
+2. **Creation timestamp** — the issue's `created_at` as the source reports it, ascending, so the
+   oldest eligible issue is the head of the order. It MUST be read from the source and MUST NOT
+   be computed locally or mutated.
+3. **Issue number** — ascending. This is what makes the order **total**: no two distinct issues
+   may compare equal, so the head of the order is one issue rather than a set.
+
+The comparison MUST be a pure function of the fetched issue fields, exposed as a production
+decision seam the Conformance adapter calls directly, and MUST NOT depend on the order the
+source listed the issues in. Ordering the same input twice MUST yield the same sequence.
+
+A **Task type** MUST NOT affect the order. It selects a **Routed pair** (§14) and nothing else.
+
+A usable `created_at` is `YYYY-MM-DDThh:mm:ss`, optionally followed by a fractional second of
+one to nine digits, followed by `Z`/`z` or a `±hh:mm` offset, naming a calendar-valid date in
+the years **1970-9999**. Offsets MUST be normalized to an instant before comparison — comparing
+the text would order `2026-03-01T01:00:00+01:00` after `2026-03-01T00:45:00Z`, when it is
+fifteen minutes earlier. The grammar is deliberately narrow: every widening is a value the
+members can disagree about, and an order they disagree on is worse than a value one of them
+refuses by name.
+
+An issue whose `created_at` is absent or does not satisfy that grammar MUST sort **last within
+its own priority rank** — not last overall, because a broken field is not a retracted human
+assertion — and MUST be reported with one **timestamp defect** from this closed vocabulary:
+
+| Defect | Meaning |
+| --- | --- |
+| `absent` | The source carried no value (a null or empty field) |
+| `malformed` | A value arrived that is not a timestamp in the accepted grammar |
+
+The Run MUST NOT fail over an undated issue. Selection is unattended — `ready-for-agent` means
+*ready for autonomous execution* — so an unusable ordering field is warned about and worked
+around, never blocked on.
+
+`issue-ordering.json` pins the order, the head it selects, and the defect every undated issue
+carries. Eligibility is deliberately **absent** from that fixture: it is `discriminator.json`'s
+decision and the `ready-for-agent` label's, and restating it beside the order would give one
+rule two homes that could disagree.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -600,6 +655,9 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md) (`git-loopy/conformance/`):
 
 - **Discriminator** — bodies that do / don't carry both required headings (§3).
+- **Selection order** — the total order over eligible issues: `priority` rank, `created_at`
+  ascending, issue number as the tie-break that makes it total, plus the timestamp defects an
+  undated issue is reported with (§3.2).
 - **Close-keyword regex** — a corpus of matching and non-matching commit messages, the pool
   whitelist, issues-only, and first-encounter dedup (§5).
 - **Progress / Strike accounting** — scenarios mapping (agent commits, closures, checkpoints,

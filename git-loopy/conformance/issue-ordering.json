@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.10",
+  "priority_label": "priority",
+  "accepted_year_range": {"min": 1970, "max": 9999},
+  "timestamp_defects": ["absent", "malformed"],
+  "cases": [
+    {
+      "id": "an-empty-pool-orders-to-nothing-and-has-no-head",
+      "issues": [],
+      "expected": {"order": [], "selected": null, "undated": []}
+    },
+    {
+      "id": "a-single-member-pool-is-its-own-head",
+      "issues": [
+        {"number": 7, "created_at": "2026-01-02T03:04:05Z", "labels": []}
+      ],
+      "expected": {"order": [7], "selected": 7, "undated": []}
+    },
+    {
+      "id": "issues-order-oldest-first-by-created-at",
+      "issues": [
+        {"number": 30, "created_at": "2026-08-13T19:52:03Z", "labels": []},
+        {"number": 10, "created_at": "2026-01-04T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-05-09T12:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20, 30], "selected": 10, "undated": []}
+    },
+    {
+      "id": "a-pool-with-no-priority-issue-is-ordered-by-age-alone",
+      "issues": [
+        {"number": 11, "created_at": "2025-02-01T00:00:00Z", "labels": ["ready-for-agent"]},
+        {"number": 12, "created_at": "2024-02-01T00:00:00Z", "labels": ["ready-for-agent", "parallel-safe"]},
+        {"number": 13, "created_at": "2026-02-01T00:00:00Z", "labels": ["ready-for-agent"]}
+      ],
+      "expected": {"order": [12, 11, 13], "selected": 12, "undated": []}
+    },
+    {
+      "id": "a-priority-issue-sorts-ahead-of-every-older-issue",
+      "issues": [
+        {"number": 10, "created_at": "2020-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-08-13T00:00:00Z", "labels": ["priority"]},
+        {"number": 30, "created_at": "2021-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [20, 10, 30], "selected": 20, "undated": []}
+    },
+    {
+      "id": "two-priority-issues-order-oldest-first-against-each-other",
+      "issues": [
+        {"number": 10, "created_at": "2026-08-01T00:00:00Z", "labels": ["priority"]},
+        {"number": 20, "created_at": "2026-01-01T00:00:00Z", "labels": ["priority"]}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "an-all-priority-pool-is-ordered-by-age-alone",
+      "issues": [
+        {"number": 41, "created_at": "2026-03-03T00:00:00Z", "labels": ["priority", "ready-for-agent"]},
+        {"number": 42, "created_at": "2026-01-01T00:00:00Z", "labels": ["priority"]},
+        {"number": 43, "created_at": "2026-02-02T00:00:00Z", "labels": ["priority", "parallel-safe"]}
+      ],
+      "expected": {"order": [42, 43, 41], "selected": 42, "undated": []}
+    },
+    {
+      "id": "only-the-priority-label-is-read-off-the-labels",
+      "issues": [
+        {"number": 10, "created_at": "2026-06-01T00:00:00Z", "labels": ["task-type:bugfix", "ready-for-agent", "parallel-safe"]},
+        {"number": 20, "created_at": "2026-07-01T00:00:00Z", "labels": ["task-type:docs", "ready-for-agent"]}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
+    },
+    {
+      "id": "a-priority-label-is-matched-exactly-and-a-prefixed-neighbour-does-not-rank",
+      "issues": [
+        {"number": 10, "created_at": "2026-06-01T00:00:00Z", "labels": ["priority:high"]},
+        {"number": 20, "created_at": "2026-07-01T00:00:00Z", "labels": ["Priority"]},
+        {"number": 30, "created_at": "2026-08-01T00:00:00Z", "labels": ["priority"]}
+      ],
+      "expected": {"order": [30, 10, 20], "selected": 30, "undated": []}
+    },
+    {
+      "id": "issues-sharing-a-created-at-order-by-ascending-number",
+      "issues": [
+        {"number": 30, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 10, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20, 30], "selected": 10, "undated": []}
+    },
+    {
+      "id": "input-order-does-not-affect-the-result",
+      "issues": [
+        {"number": 40, "created_at": "2025-01-01T00:00:00Z", "labels": ["priority"]},
+        {"number": 30, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 10, "created_at": "2026-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [40, 10, 20, 30], "selected": 40, "undated": []}
+    },
+    {
+      "id": "the-oldest-issue-may-be-the-highest-numbered-one",
+      "issues": [
+        {"number": 400, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 300, "created_at": "2025-01-01T00:00:00Z", "labels": []},
+        {"number": 200, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 100, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [400, 300, 200, 100], "selected": 400, "undated": []}
+    },
+    {
+      "id": "timezone-offsets-compare-as-instants",
+      "issues": [
+        {"number": 10, "created_at": "2026-03-01T00:45:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-03-01T01:00:00+01:00", "labels": []}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "a-negative-offset-compares-as-an-instant",
+      "issues": [
+        {"number": 10, "created_at": "2026-03-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-02-28T20:00:00-05:00", "labels": []}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
+    },
+    {
+      "id": "an-offset-crossing-a-day-boundary-compares-as-an-instant",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-02T02:00:00+03:00", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T23:30:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
+    },
+    {
+      "id": "a-lower-case-zone-designator-is-usable",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-01T00:00:01z", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "fractional-seconds-are-honoured",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-01T00:00:00.500Z", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T00:00:00.250Z", "labels": []},
+        {"number": 30, "created_at": "2026-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [30, 20, 10], "selected": 30, "undated": []}
+    },
+    {
+      "id": "a-leap-day-is-usable",
+      "issues": [
+        {"number": 10, "created_at": "2024-03-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2024-02-29T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "the-accepted-year-range-endpoints-are-usable",
+      "issues": [
+        {"number": 10, "created_at": "9999-12-31T23:59:59Z", "labels": []},
+        {"number": 20, "created_at": "1970-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "an-absent-created-at-sorts-last-and-is-reported",
+      "issues": [
+        {"number": 10, "created_at": null, "labels": []},
+        {"number": 20, "created_at": "2026-08-13T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "absent"}]
+      }
+    },
+    {
+      "id": "an-empty-created-at-is-absent-rather-than-malformed",
+      "issues": [
+        {"number": 10, "created_at": "", "labels": []},
+        {"number": 20, "created_at": "2026-08-13T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "absent"}]
+      }
+    },
+    {
+      "id": "an-unparseable-created-at-sorts-last-and-is-reported",
+      "issues": [
+        {"number": 10, "created_at": "yesterday", "labels": []},
+        {"number": 20, "created_at": "2026-08-13T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "an-undated-issue-sorts-last-within-its-own-priority-rank",
+      "issues": [
+        {"number": 10, "created_at": "2020-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": null, "labels": ["priority"]},
+        {"number": 30, "created_at": "2019-01-01T00:00:00Z", "labels": ["priority"]}
+      ],
+      "expected": {
+        "order": [30, 20, 10],
+        "selected": 30,
+        "undated": [{"issue": 20, "defect": "absent"}]
+      }
+    },
+    {
+      "id": "two-undated-issues-order-by-ascending-number",
+      "issues": [
+        {"number": 30, "created_at": null, "labels": []},
+        {"number": 10, "created_at": "", "labels": []},
+        {"number": 20, "created_at": "nonsense", "labels": []}
+      ],
+      "expected": {
+        "order": [10, 20, 30],
+        "selected": 10,
+        "undated": [
+          {"issue": 10, "defect": "absent"},
+          {"issue": 20, "defect": "malformed"},
+          {"issue": 30, "defect": "absent"}
+        ]
+      }
+    },
+    {
+      "id": "a-pool-of-only-undated-issues-still-has-a-head",
+      "issues": [
+        {"number": 30, "created_at": "not-a-timestamp", "labels": []},
+        {"number": 10, "created_at": null, "labels": []}
+      ],
+      "expected": {
+        "order": [10, 30],
+        "selected": 10,
+        "undated": [
+          {"issue": 10, "defect": "absent"},
+          {"issue": 30, "defect": "malformed"}
+        ]
+      }
+    },
+    {
+      "id": "a-timestamp-with-no-zone-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-01T00:00:00", "labels": []},
+        {"number": 20, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "a-basic-format-offset-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-01T00:00:00+0100", "labels": []},
+        {"number": 20, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "a-space-separated-timestamp-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "2026-01-01 00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "a-calendar-impossible-day-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "2026-02-30T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "1900-02-29T00:00:00Z", "labels": []},
+        {"number": 30, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [30, 10, 20],
+        "selected": 30,
+        "undated": [
+          {"issue": 10, "defect": "malformed"},
+          {"issue": 20, "defect": "malformed"}
+        ]
+      }
+    },
+    {
+      "id": "an-out-of-range-component-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "2026-13-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2026-01-01T24:00:00Z", "labels": []},
+        {"number": 30, "created_at": "2026-01-01T00:60:00Z", "labels": []},
+        {"number": 40, "created_at": "2026-01-01T00:00:60Z", "labels": []},
+        {"number": 50, "created_at": "2026-01-01T00:00:00+24:00", "labels": []},
+        {"number": 60, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [60, 10, 20, 30, 40, 50],
+        "selected": 60,
+        "undated": [
+          {"issue": 10, "defect": "malformed"},
+          {"issue": 20, "defect": "malformed"},
+          {"issue": 30, "defect": "malformed"},
+          {"issue": 40, "defect": "malformed"},
+          {"issue": 50, "defect": "malformed"}
+        ]
+      }
+    },
+    {
+      "id": "a-year-below-the-accepted-range-is-malformed",
+      "issues": [
+        {"number": 10, "created_at": "1969-12-31T23:59:59Z", "labels": []},
+        {"number": 20, "created_at": "2026-06-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {
+        "order": [20, 10],
+        "selected": 20,
+        "undated": [{"issue": 10, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "a-full-pool-mixes-every-rank-and-defect-at-once",
+      "issues": [
+        {"number": 101, "created_at": "2026-04-01T00:00:00Z", "labels": ["ready-for-agent"]},
+        {"number": 102, "created_at": null, "labels": ["ready-for-agent"]},
+        {"number": 103, "created_at": "2026-04-01T00:00:00Z", "labels": ["priority", "ready-for-agent"]},
+        {"number": 104, "created_at": "2026-03-31T23:00:00-01:00", "labels": ["ready-for-agent"]},
+        {"number": 105, "created_at": "bogus", "labels": ["priority"]},
+        {"number": 106, "created_at": "2020-01-01T00:00:00Z", "labels": ["priority", "parallel-safe"]}
+      ],
+      "expected": {
+        "order": [106, 103, 105, 101, 104, 102],
+        "selected": 106,
+        "undated": [
+          {"issue": 105, "defect": "malformed"},
+          {"issue": 102, "defect": "absent"}
+        ]
+      }
+    }
+  ]
+}

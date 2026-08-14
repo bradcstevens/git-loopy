@@ -601,13 +601,339 @@ function Get-GitLoopyAfkReadyExclusion {
     return "missing_acceptance_criteria"
 }
 
+# Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
+#
+# Before this the order was `gh issue list`'s undeclared
+# `sort=created&direction=desc`, so an issue filed in January waited behind one
+# filed today, indefinitely. `conformance/issue-ordering.json` pins this port
+# against the Python reference and the shell Orchestrator.
+#
+# The civil-date arithmetic is spelled out rather than delegated to
+# [datetime]::Parse: a date library brings its own tolerances — culture-sensitive
+# formats, two-digit years, implicit local time for a zone-less value — and a
+# member that inherited them would date a timestamp the contract calls malformed,
+# then sort it somewhere the other members do not.
+
+# The label that carries **Priority**. A human assertion, read at selection and
+# never inferred. Provisioning it is #395's job; ordering needs only its name.
+$Script:GitLoopyPriorityLabel = "priority"
+
+# The accepted `created_at` year range. The floor keeps every division below on a
+# non-negative operand, which is what lets three languages agree.
+$Script:GitLoopyMinAcceptedYear = 1970
+$Script:GitLoopyMaxAcceptedYear = 9999
+
+$Script:GitLoopyTimestampPattern = [regex]::new(
+    '^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?' +
+    '(?:[Zz]|([+-])(\d{2}):(\d{2}))$')
+
+# `ConvertFrom-Json` coerces anything ISO-8601-shaped into a [datetime], and it
+# is *more* liberal than §3.2's grammar: it accepts a zone-less
+# `2026-01-01T00:00:00`, a basic-format `+0100`, an hour of `24`, and an offset
+# of `+24:00` — every one of which Python and the shell Orchestrator report as
+# `malformed`. A port that let its JSON reader date those values would order a
+# Pool differently from the rest of the family while every one of its own tests
+# passed, so the reader is not allowed between the source and the ordering seam.
+#
+# This reads the same text through System.Text.Json, which returns strings as
+# strings. Objects become ordered hashtables and arrays become object arrays, so
+# the result indexes exactly like `ConvertFrom-Json -AsHashtable`'s does.
+function ConvertFrom-GitLoopyJsonElement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Text.Json.JsonElement]$Element
+    )
+
+    switch ($Element.ValueKind) {
+        ([System.Text.Json.JsonValueKind]::Object) {
+            $Result = [ordered]@{}
+            foreach ($Property in $Element.EnumerateObject()) {
+                $Result[$Property.Name] =
+                    ConvertFrom-GitLoopyJsonElement -Element $Property.Value
+            }
+            return $Result
+        }
+        ([System.Text.Json.JsonValueKind]::Array) {
+            $Items = [System.Collections.Generic.List[object]]::new()
+            foreach ($Item in $Element.EnumerateArray()) {
+                $Items.Add((ConvertFrom-GitLoopyJsonElement -Element $Item))
+            }
+            return , $Items.ToArray()
+        }
+        ([System.Text.Json.JsonValueKind]::String) { return $Element.GetString() }
+        ([System.Text.Json.JsonValueKind]::True) { return $true }
+        ([System.Text.Json.JsonValueKind]::False) { return $false }
+        ([System.Text.Json.JsonValueKind]::Null) { return $null }
+        default {
+            [long]$Integer = 0
+            if ($Element.TryGetInt64([ref]$Integer)) {
+                return $Integer
+            }
+            return $Element.GetDouble()
+        }
+    }
+}
+
+function ConvertFrom-GitLoopyJsonText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $Document = [System.Text.Json.JsonDocument]::Parse($Text)
+    try {
+        return ConvertFrom-GitLoopyJsonElement -Element $Document.RootElement
+    }
+    finally {
+        $Document.Dispose()
+    }
+}
+
+function Get-GitLoopyPriorityLabel {
+    [CmdletBinding()]
+    param()
+
+    return $Script:GitLoopyPriorityLabel
+}
+
+function Get-GitLoopyAcceptedYearRange {
+    [CmdletBinding()]
+    param()
+
+    return @{
+        min = $Script:GitLoopyMinAcceptedYear
+        max = $Script:GitLoopyMaxAcceptedYear
+    }
+}
+
+function Test-GitLoopyLeapYear {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Year
+    )
+
+    return ($Year % 4 -eq 0) -and (($Year % 100 -ne 0) -or ($Year % 400 -eq 0))
+}
+
+function Get-GitLoopyDaysInMonth {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Year,
+        [Parameter(Mandatory)]
+        [int]$Month
+    )
+
+    if ($Month -eq 2 -and (Test-GitLoopyLeapYear -Year $Year)) {
+        return 29
+    }
+    return @(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[$Month - 1]
+}
+
+# Days from 1970-01-01 to this civil date (Howard Hinnant's `days_from_civil`).
+function Get-GitLoopyDaysFromCivil {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Year,
+        [Parameter(Mandatory)]
+        [int]$Month,
+        [Parameter(Mandatory)]
+        [int]$Day
+    )
+
+    $Shifted = if ($Month -le 2) { $Year - 1 } else { $Year }
+    $Era = [long][math]::Floor($Shifted / 400)
+    $YearOfEra = $Shifted - $Era * 400
+    $MonthShift = if ($Month -gt 2) { -3 } else { 9 }
+    $DayOfYear = [long][math]::Floor((153 * ($Month + $MonthShift) + 2) / 5) +
+        $Day - 1
+    $DayOfEra = $YearOfEra * 365 +
+        [long][math]::Floor($YearOfEra / 4) -
+        [long][math]::Floor($YearOfEra / 100) +
+        $DayOfYear
+    return $Era * 146097 + $DayOfEra - 719468
+}
+
+# Returns `@{ seconds = <UTC seconds>; nanoseconds = <n> }` for a usable
+# timestamp, or `$null` when the value is outside the contract's grammar.
+# Offsets are normalized here rather than compared as text:
+# `2026-03-01T01:00:00+01:00` is fifteen minutes *before* `2026-03-01T00:45:00Z`,
+# and string order says the opposite.
+function Get-GitLoopyIssueInstant {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$CreatedAt
+    )
+
+    if ($null -eq $CreatedAt -or $CreatedAt -isnot [string]) {
+        return $null
+    }
+    if ([string]::IsNullOrEmpty($CreatedAt)) {
+        return $null
+    }
+    $Match = $Script:GitLoopyTimestampPattern.Match($CreatedAt)
+    if (-not $Match.Success) {
+        return $null
+    }
+
+    [int]$Year = $Match.Groups[1].Value
+    [int]$Month = $Match.Groups[2].Value
+    [int]$Day = $Match.Groups[3].Value
+    [int]$Hour = $Match.Groups[4].Value
+    [int]$Minute = $Match.Groups[5].Value
+    [int]$Second = $Match.Groups[6].Value
+
+    if ($Year -lt $Script:GitLoopyMinAcceptedYear -or
+        $Year -gt $Script:GitLoopyMaxAcceptedYear) {
+        return $null
+    }
+    if ($Month -lt 1 -or $Month -gt 12) {
+        return $null
+    }
+    if ($Day -lt 1 -or
+        $Day -gt (Get-GitLoopyDaysInMonth -Year $Year -Month $Month)) {
+        return $null
+    }
+    if ($Hour -gt 23 -or $Minute -gt 59 -or $Second -gt 59) {
+        return $null
+    }
+
+    [long]$OffsetSeconds = 0
+    if ($Match.Groups[8].Success) {
+        [int]$OffsetHour = $Match.Groups[9].Value
+        [int]$OffsetMinute = $Match.Groups[10].Value
+        if ($OffsetHour -gt 23 -or $OffsetMinute -gt 59) {
+            return $null
+        }
+        $OffsetSeconds = $OffsetHour * 3600 + $OffsetMinute * 60
+        if ($Match.Groups[8].Value -ceq "-") {
+            $OffsetSeconds = -$OffsetSeconds
+        }
+    }
+
+    [long]$Nanoseconds = 0
+    if ($Match.Groups[7].Success) {
+        $Nanoseconds = [long]($Match.Groups[7].Value.PadRight(9, "0"))
+    }
+
+    $Days = Get-GitLoopyDaysFromCivil -Year $Year -Month $Month -Day $Day
+    return @{
+        seconds     = $Days * 86400 + $Hour * 3600 + $Minute * 60 + $Second -
+            $OffsetSeconds
+        nanoseconds = $Nanoseconds
+    }
+}
+
+# `0` when these labels carry **Priority**, `1` otherwise. Matching is exact:
+# `priority:high` is a different label and a vocabulary nobody decided.
+function Get-GitLoopyPriorityRank {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object[]]$Labels
+    )
+
+    foreach ($Label in @($Labels)) {
+        if ([string]$Label -ceq $Script:GitLoopyPriorityLabel) {
+            return 0
+        }
+    }
+    return 1
+}
+
+# One timestamp defect from the closed §3.2 vocabulary, or `$null` when the
+# value is usable. `Get-GitLoopyIssueInstant` stays the oracle, so the order and
+# the reported defect are decided by the same parse.
+#
+# A value that is neither `$null` nor a [string] means the caller read its JSON
+# through something that dated it — see `ConvertFrom-GitLoopyJsonText`. That is
+# reported as `malformed` rather than rescued, because rescuing it would date
+# values Python and the shell Orchestrator refuse.
+function Get-GitLoopyTimestampDefect {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$CreatedAt
+    )
+
+    if ($null -eq $CreatedAt -or ($CreatedAt -is [string] -and
+            [string]::IsNullOrEmpty($CreatedAt))) {
+        return "absent"
+    }
+    if ($null -eq (Get-GitLoopyIssueInstant -CreatedAt $CreatedAt)) {
+        return "malformed"
+    }
+    return $null
+}
+
+# Orders `{number, created_at, labels}` candidates and returns
+# `@{ order = @(<numbers>); undated = @(@{issue = N; defect = "..."}) }`.
+#
+# The sort key is a fixed-width digit string so any string comparison reproduces
+# the tuple it stands for: rank, then whether the issue is dated at all, then the
+# instant, then the issue number. The dated bit sits *between* the rank and the
+# instant, which is exactly what "sorts last within its own priority rank"
+# means. The number makes the order total, so no two distinct issues tie.
+function Get-GitLoopyIssueOrder {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Candidates
+    )
+
+    $Keyed = [System.Collections.Generic.List[object]]::new()
+    foreach ($Candidate in @($Candidates)) {
+        [long]$Number = [long]$Candidate["number"]
+        $CreatedAt = $Candidate["created_at"]
+        $Rank = Get-GitLoopyPriorityRank -Labels @($Candidate["labels"])
+
+        $Dated = 1
+        [long]$Seconds = 0
+        [long]$Nanoseconds = 0
+        $Instant = Get-GitLoopyIssueInstant -CreatedAt $CreatedAt
+        if ($null -ne $Instant) {
+            $Dated = 0
+            $Seconds = $Instant["seconds"]
+            $Nanoseconds = $Instant["nanoseconds"]
+        }
+
+        $Key = "{0}{1}{2:D14}{3:D9}{4:D10}" -f `
+            $Rank, $Dated, $Seconds, $Nanoseconds, $Number
+        $Keyed.Add([pscustomobject]@{
+                Key    = $Key
+                Number = $Number
+                Defect = Get-GitLoopyTimestampDefect -CreatedAt $CreatedAt
+            })
+    }
+
+    $Order = [System.Collections.Generic.List[object]]::new()
+    $Undated = [System.Collections.Generic.List[object]]::new()
+    foreach ($Entry in @($Keyed | Sort-Object -Property Key -CaseSensitive)) {
+        $Order.Add($Entry.Number)
+        if ($null -ne $Entry.Defect) {
+            $Undated.Add(@{issue = $Entry.Number; defect = $Entry.Defect })
+        }
+    }
+
+    return @{
+        order   = $Order.ToArray()
+        undated = $Undated.ToArray()
+    }
+}
+
 function Get-GitLoopyExitCode {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [string]$Reason
     )
-
     switch -CaseSensitive ($Reason) {
         "empty_pool" { return 0 }
         "iteration_cap" { return 0 }
@@ -3272,6 +3598,13 @@ Export-ModuleMember -Function @(
     "Assert-GitLoopyParallelSupported",
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyAfkReadyExclusion",
+    "ConvertFrom-GitLoopyJsonText",
+    "Get-GitLoopyPriorityLabel",
+    "Get-GitLoopyAcceptedYearRange",
+    "Get-GitLoopyPriorityRank",
+    "Get-GitLoopyIssueInstant",
+    "Get-GitLoopyTimestampDefect",
+    "Get-GitLoopyIssueOrder",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",

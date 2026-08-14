@@ -784,6 +784,199 @@ git_loopy_afk_ready_exclusion() {
   fi
 }
 
+# Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
+#
+# The order was previously `gh issue list`'s undeclared `sort=created&
+# direction=desc`, so an issue filed in January waited behind one filed today,
+# indefinitely. These functions are this port's half of the shared decision:
+# `(priority rank, created_at, issue number)` ascending, pinned against Python
+# and PowerShell by `conformance/issue-ordering.json`.
+#
+# The civil-date arithmetic below is spelled out rather than delegated to
+# `date(1)`: `date -d` is GNU-only and `date -j` is BSD-only, so a port reaching
+# for either would order Pools differently on Linux and macOS — and would inherit
+# that implementation's tolerances instead of the contract's grammar.
+
+# The label that carries **Priority**. A human assertion, read at selection and
+# never inferred. Provisioning it is #395's job; ordering only needs its name.
+GIT_LOOPY_PRIORITY_LABEL="priority"
+# The accepted `created_at` year range (§3.2). The floor is what keeps every
+# division in `_git_loopy_days_from_civil` on a non-negative operand, so Bash's
+# truncating `/` cannot diverge from Python's flooring `//`.
+GIT_LOOPY_MIN_ACCEPTED_YEAR=1970
+GIT_LOOPY_MAX_ACCEPTED_YEAR=9999
+
+_git_loopy_is_leap_year() {
+  local year="$1"
+  ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)))
+}
+
+_git_loopy_days_in_month() {
+  local year="$1" month="$2"
+  local -a lengths=(31 28 31 30 31 30 31 31 30 31 30 31)
+  if ((month == 2)) && _git_loopy_is_leap_year "$year"; then
+    printf '29\n'
+    return 0
+  fi
+  printf '%d\n' "${lengths[month - 1]}"
+}
+
+# Days from 1970-01-01 to this civil date (Howard Hinnant's `days_from_civil`).
+_git_loopy_days_from_civil() {
+  local year="$1" month="$2" day="$3"
+  local shifted era year_of_era day_of_year day_of_era
+  shifted=$((month <= 2 ? year - 1 : year))
+  era=$((shifted / 400))
+  year_of_era=$((shifted - era * 400))
+  day_of_year=$(((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1))
+  day_of_era=$((year_of_era * 365 + year_of_era / 4 - year_of_era / 100 +
+    day_of_year))
+  printf '%d\n' $((era * 146097 + day_of_era - 719468))
+}
+
+# Prints `<UTC seconds> <nanoseconds>` for a usable timestamp; returns 1 when the
+# value is outside the contract's grammar. Offsets are normalized here rather
+# than compared as text: `2026-03-01T01:00:00+01:00` is fifteen minutes *before*
+# `2026-03-01T00:45:00Z`, and string order says the opposite.
+_git_loopy_issue_instant() {
+  local created_at="$1"
+  local pattern='^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,9}))?([Zz]|([+-])([0-9]{2}):([0-9]{2}))$'
+  [[ "$created_at" =~ $pattern ]] || return 1
+
+  local year month day hour minute second fraction sign
+  year=$((10#${BASH_REMATCH[1]}))
+  month=$((10#${BASH_REMATCH[2]}))
+  day=$((10#${BASH_REMATCH[3]}))
+  hour=$((10#${BASH_REMATCH[4]}))
+  minute=$((10#${BASH_REMATCH[5]}))
+  second=$((10#${BASH_REMATCH[6]}))
+  fraction="${BASH_REMATCH[8]}"
+  sign="${BASH_REMATCH[10]}"
+
+  ((year >= GIT_LOOPY_MIN_ACCEPTED_YEAR &&
+    year <= GIT_LOOPY_MAX_ACCEPTED_YEAR)) || return 1
+  ((month >= 1 && month <= 12)) || return 1
+  local month_length
+  month_length="$(_git_loopy_days_in_month "$year" "$month")"
+  ((day >= 1 && day <= month_length)) || return 1
+  ((hour <= 23 && minute <= 59 && second <= 59)) || return 1
+
+  local offset_seconds=0
+  if [[ -n "$sign" ]]; then
+    local offset_hour offset_minute
+    offset_hour=$((10#${BASH_REMATCH[11]}))
+    offset_minute=$((10#${BASH_REMATCH[12]}))
+    ((offset_hour <= 23 && offset_minute <= 59)) || return 1
+    offset_seconds=$((offset_hour * 3600 + offset_minute * 60))
+    if [[ "$sign" == "-" ]]; then
+      offset_seconds=$((-offset_seconds))
+    fi
+  fi
+
+  local nanoseconds=0
+  if [[ -n "$fraction" ]]; then
+    local padded="${fraction}000000000"
+    nanoseconds=$((10#${padded:0:9}))
+  fi
+
+  local days
+  days="$(_git_loopy_days_from_civil "$year" "$month" "$day")"
+  printf '%d %d\n' \
+    $((days * 86400 + hour * 3600 + minute * 60 + second - offset_seconds)) \
+    "$nanoseconds"
+}
+
+# Prints `0` when these labels carry **Priority**, `1` otherwise. Matching is
+# exact: `priority:high` is a different label and a vocabulary nobody decided.
+git_loopy_priority_rank() {
+  local labels_json="$1"
+  if jq -e --arg label "$GIT_LOOPY_PRIORITY_LABEL" \
+    'any(.[]?; . == $label)' <<<"$labels_json" >/dev/null 2>&1; then
+    printf '0\n'
+  else
+    printf '1\n'
+  fi
+}
+
+# Prints one timestamp defect from the closed §3.2 vocabulary, or nothing when
+# the value is usable. `_git_loopy_issue_instant` stays the oracle so the order
+# and the reported defect are decided by the same parse.
+git_loopy_timestamp_defect() {
+  local created_at="$1"
+  if [[ -z "$created_at" ]]; then
+    printf 'absent\n'
+    return 0
+  fi
+  if _git_loopy_issue_instant "$created_at" >/dev/null; then
+    return 0
+  fi
+  printf 'malformed\n'
+}
+
+# Orders a JSON array of `{number, created_at, labels}` candidates and prints
+# `{"order": [...], "undated": [{"issue": N, "defect": "..."}]}`.
+#
+# The sort key is a fixed-width string so `LC_ALL=C sort` compares it as the
+# tuple it stands for: rank, then whether the issue is dated at all, then the
+# instant, then the issue number. The dated bit sits *between* the rank and the
+# instant, which is exactly what "sorts last within its own priority rank"
+# means. The number makes the order total, so no two distinct issues tie.
+git_loopy_order_issues() {
+  local issues_json="$1"
+  local -a keyed=()
+  local candidate
+
+  while IFS= read -r candidate; do
+    local number created_at labels_json rank dated seconds nanoseconds
+    local defect instant
+    number="$(jq -r '.number' <<<"$candidate")"
+    created_at="$(jq -r '.created_at // ""' <<<"$candidate")"
+    labels_json="$(jq -c '.labels // []' <<<"$candidate")"
+    rank="$(git_loopy_priority_rank "$labels_json")"
+    dated=1
+    seconds=0
+    nanoseconds=0
+    if [[ -n "$created_at" ]] && instant="$(
+      _git_loopy_issue_instant "$created_at"
+    )"; then
+      dated=0
+      seconds="${instant%% *}"
+      nanoseconds="${instant##* }"
+    fi
+    defect="$(git_loopy_timestamp_defect "$created_at")"
+    keyed+=("$(printf '%d%d%014d%09d%010d\t%s\t%s' \
+      "$rank" "$dated" "$seconds" "$nanoseconds" "$number" \
+      "$number" "$defect")")
+  done < <(jq -c '.[]?' <<<"$issues_json")
+
+  local -a ordered=() undated=()
+  if ((${#keyed[@]} > 0)); then
+    local _key number defect
+    while IFS=$'\t' read -r _key number defect; do
+      ordered+=("$number")
+      if [[ -n "$defect" ]]; then
+        undated+=("$number"$'\t'"$defect")
+      fi
+    done < <(printf '%s\n' "${keyed[@]}" | LC_ALL=C sort)
+  fi
+
+  local order_json='[]' undated_json='[]'
+  if ((${#ordered[@]} > 0)); then
+    order_json="$(printf '%s\n' "${ordered[@]}" | jq -cs 'map(tonumber)')" ||
+      return 1
+  fi
+  if ((${#undated[@]} > 0)); then
+    undated_json="$(printf '%s\n' "${undated[@]}" |
+      jq -cRs 'split("\n")
+        | map(select(length > 0))
+        | map(split("\t"))
+        | map({issue: (.[0] | tonumber), defect: .[1]})')" || return 1
+  fi
+
+  jq -cn --argjson order "$order_json" --argjson undated "$undated_json" \
+    '{order: $order, undated: $undated}'
+}
+
 git_loopy_exit_code_for() {
   case "$1" in
     empty_pool | iteration_cap)
