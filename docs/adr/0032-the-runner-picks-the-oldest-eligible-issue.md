@@ -2,6 +2,8 @@
 
 **Status:** proposed
 
+Implemented by [#389](https://github.com/bradcstevens/git-loopy/issues/389).
+
 Issues were worked newest-first, and nobody decided that. All three Orchestrators call
 `gh issue list` with no sort qualifier — `gh.py:1367-1375`, `orchestrator.sh:1120-1128`,
 `GitLoopy.Orchestrator.psm1:1253-1258` — and GitHub's unstated default is

@@ -2,6 +2,9 @@
 
 **Status:** proposed
 
+Implemented by [#390](https://github.com/bradcstevens/git-loopy/issues/390), which is blocked by
+[#389](https://github.com/bradcstevens/git-loopy/issues/389).
+
 [ADR-0010](0010-local-sandbox-per-iteration.md) already recorded the gap as a non-goal:
 *"it does not solve concurrent-run worktree collisions (issues are worked sequentially within
 a run; **two simultaneous runs still collide**)."* Nothing in the repository coordinates two
