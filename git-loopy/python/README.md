@@ -482,6 +482,17 @@ Two properties are worth knowing before you set it:
   `model`; it falls back to the **cheapest pair on the live roster**.
 - **The taxonomy is closed.** A proposal outside the seven `task-type:` keys is
   refused, not warned about, and the issue keeps routing to the run-wide default.
+- **What it infers is written back to your tracker.** The proposed key is applied
+  to the issue as a `task-type:` label, unattended and with no review step — that
+  is what makes the corpus inspectable, correctable and reusable instead of
+  re-inferred on every run (ADR-0029). An issue that already carries a
+  `task-type:` label is never relabelled — the check is re-asked of the tracker
+  immediately before the write, so a label you apply while a run is classifying
+  the issue still wins — the write is idempotent, and a write the tracker refuses
+  is non-fatal: the run continues on the inferred type and the label is simply
+  absent. Every label the classifier applies — and every one it could not — is
+  named in the run's diagnostics, on stderr and in the run log, which is the only
+  audit trail there is once the label is on the issue.
 
 Classification spends **AI Credits** like any other session, and that spend is
 folded into the run's cost. It never ticks a **Strike** and is never counted as

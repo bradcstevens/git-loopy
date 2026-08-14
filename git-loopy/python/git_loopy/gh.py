@@ -97,6 +97,7 @@ __all__ = [
     "GitHubClient",
     "SubprocessGitHubClient",
     "SubprocessLabelClient",
+    "SubprocessTaskTypeLabelClient",
     "ContinuationComment",
     "ContinuationCarrier",
     "ContinuationArtifact",
@@ -1682,3 +1683,76 @@ class SubprocessLabelClient:
                 spec.description,
             ]
         )
+
+
+class SubprocessTaskTypeLabelClient:
+    """Stateless adapter for the one write the **Task-type classifier** makes.
+
+    Its own class rather than a method on :class:`SubprocessGitHubClient` for the
+    reason :class:`git_loopy.labels.LabelBootstrapClient` already gives: the loop
+    *reads* issues, and widening the seam every Pool-collecting fake is asserted
+    against would make an irreversible tracker write a requirement of reading
+    one. Satisfies :class:`git_loopy.task_type_writer.TaskTypeLabelClient`
+    structurally, which is why nothing here imports that module.
+    """
+
+    def read_issue_labels(self, number: int) -> list[str]:
+        """Return the labels issue ``number`` carries right now.
+
+        The writer decides from a **Pool** snapshot taken before the classifying
+        session ran, so this is what keeps "never relabelled" answerable against
+        a human who labelled the issue while the classifier was thinking.
+
+        Raises:
+            GhError: If the read or its payload fails.
+                :func:`git_loopy.task_type_writer.write_task_type_label` falls
+                back to the snapshot rather than losing the write over it.
+        """
+        cmd = ["issue", "view", str(number), "--json", "labels"]
+        parsed = _parse_json(_run(cmd), [_GH_BIN, *cmd])
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("labels"), list):
+            raise GhError([_GH_BIN, *cmd], 0, "gh issue label JSON is malformed")
+        names: list[str] = []
+        for entry in parsed["labels"]:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+                raise GhError(
+                    [_GH_BIN, *cmd], 0, f"gh issue label entry malformed: {entry!r}"
+                )
+            names.append(entry["name"])
+        return names
+
+    def apply_issue_label(self, number: int, spec: LabelSpec) -> None:
+        """Ensure ``spec`` exists, then attach it to issue ``number``.
+
+        The ordering is forced: ``gh issue edit --add-label`` refuses a label the
+        repository does not carry, and the seven ``task-type:`` labels only exist
+        where ``git-loopy init`` has run since #375. It is only *safe* because the
+        taxonomy is closed — under an open one this line is what would mint a
+        model's invented key as a permanent tracker label (ADR-0029).
+
+        The create is not ``--force``d and its failure is not propagated. Almost
+        every failure here is "the label already exists", which is the ordinary
+        case and not news; a create that failed for any other reason takes the
+        attach down with it a line later, and *that* error is the one worth
+        raising because it names what the operator actually cannot do.
+
+        Raises:
+            GhError: If attaching fails. :func:`git_loopy.task_type_writer.write_task_type_label`
+                catches it — no label is worth an **Iteration** — but the mechanic
+                still reports honestly.
+        """
+        try:
+            _run(
+                [
+                    "label",
+                    "create",
+                    spec.name,
+                    "--color",
+                    spec.color,
+                    "--description",
+                    spec.description,
+                ]
+            )
+        except GhError:
+            pass
+        _run(["issue", "edit", str(number), "--add-label", spec.name])
