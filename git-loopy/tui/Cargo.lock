@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "git-loopy-tui"
-version = "0.2.0-dev.0"
+version = "0.7.0"
 dependencies = [
  "ratatui",
  "serde",

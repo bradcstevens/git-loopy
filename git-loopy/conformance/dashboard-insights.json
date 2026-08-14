@@ -345,7 +345,7 @@
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -722,7 +722,7 @@
           "run_id": "01HXR0000000000000000000EE",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1251,7 +1251,7 @@
           "run_id": "01HXR0000000000000000000FF",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1729,7 +1729,7 @@
           "run_id": "01HXR0000000000000000000LN",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -2862,7 +2862,7 @@
           "run_id": "01HXR0000000000000000000WC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -3277,7 +3277,7 @@
           "run_id": "01HXR0000000000000000000RC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.2.0-dev.0",
+          "release_version": "0.7.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
