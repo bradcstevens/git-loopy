@@ -220,3 +220,55 @@ class TestPurity:
         pickup: SerialPickup = pick_serial([_item(7), _item(12)])
 
         assert [item.ref for item in pickup.considered] == [7, 12]
+
+
+class TestReasonVocabulary:
+    """The selection reason is a closed vocabulary, declared once (#397)."""
+
+    def test_the_vocabulary_is_the_three_reasons_a_pickup_can_give(self) -> None:
+        from git_loopy.serial_pickup import PICKUP_REASONS
+
+        assert PICKUP_REASONS == ("order", "priority", "pin")
+
+    def test_every_reason_a_walk_can_produce_is_in_the_vocabulary(self) -> None:
+        """A reason the Event schema does not know is a reason nothing renders."""
+        from git_loopy.serial_pickup import PICKUP_REASONS
+
+        for pool in ([_item(7)], [_item(7, labels=("priority",))]):
+            assert pick_serial(pool).reason in PICKUP_REASONS
+
+    def test_pin_has_no_producer_yet(self) -> None:
+        """#396 is the only thing that may ever emit it; nothing here does."""
+        from git_loopy.serial_pickup import PICKUP_REASON_PIN
+
+        assert PICKUP_REASON_PIN == "pin"
+        assert pick_serial([_item(7, labels=("pin", "priority"))]).reason != "pin"
+
+
+class TestReasonIsOneDecision:
+    """A Lane and a serial Iteration must answer "why this issue?" the same way.
+
+    ADR-0032 gave every unit of work a Pickup, so the reason it reports is a
+    property of the issue's labels rather than of the mode that took it. Two
+    implementations would let a Parallel Run and a serial Run disagree about
+    whether a **Priority** label did anything.
+    """
+
+    def test_the_labels_alone_decide_the_reason(self) -> None:
+        from git_loopy.serial_pickup import reason_for_labels
+
+        assert reason_for_labels(()) == "order"
+        assert reason_for_labels(("ready-for-agent",)) == "order"
+        assert reason_for_labels(("priority",)) == "priority"
+
+    def test_a_prefixed_neighbour_is_not_the_priority_label(self) -> None:
+        """``priority:high`` is a vocabulary nobody decided (issue_order.py)."""
+        from git_loopy.serial_pickup import reason_for_labels
+
+        assert reason_for_labels(("priority:high",)) == "order"
+
+    def test_the_walk_reports_what_the_labels_decide(self) -> None:
+        from git_loopy.serial_pickup import reason_for_labels
+
+        item = _item(7, labels=("priority",))
+        assert pick_serial([item]).reason == reason_for_labels(item.labels)

@@ -342,3 +342,175 @@ fn one_issue_the_harness_could_not_price_leaves_every_other_row_reported() {
          for that row still reaches the operator"
     );
 }
+
+// --------------------------------------------------------------------------
+// Pickup and skip records (#397)
+// --------------------------------------------------------------------------
+
+fn log_texts(projected: &Value) -> Vec<String> {
+    projected["drill_in"]["log"]["lines"]
+        .as_array()
+        .expect("the drill-in Log is a list")
+        .iter()
+        .map(|line| line["text"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+#[test]
+fn a_pickup_binding_reaches_the_issue_it_bound() {
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.bound",
+            "issue": 7,
+            "reason": "order",
+            "position": 1,
+            "considered": 4
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        ["Pickup: bound #7 (order, position 1 of 4)"]
+    );
+}
+
+#[test]
+fn a_priority_binding_says_the_label_is_why() {
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.bound",
+            "issue": 31,
+            "reason": "priority",
+            "position": 1,
+            "considered": 9
+        })],
+        IssueRef::number(31),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        ["Pickup: bound #31 (priority, position 1 of 9)"]
+    );
+}
+
+#[test]
+fn a_passed_over_issue_carries_the_reason_it_was_passed_over() {
+    // The whole point of #397: being skipped used to leave no trace at all, so
+    // an issue could be passed over indefinitely and the only evidence was
+    // that it was still in the backlog.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.skipped",
+            "issue": 7,
+            "reason": "routing refused: unsupported task-type label",
+            "position": 1,
+            "considered": 2
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        ["Pickup: skipped #7 at position 1 of 2 \
+             (routing refused: unsupported task-type label)"]
+    );
+}
+
+#[test]
+fn a_skip_lands_on_the_issue_it_passed_over_not_on_the_active_one() {
+    // The record is attributable or it is worthless: a skip folded into
+    // whichever issue happened to be Active would say a Run passed over the
+    // issue it was working.
+    let events = vec![
+        serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z", "run_id": "r1", "iter": 1,
+            "type": "wrapper.pickup.skipped", "issue": 7,
+            "reason": "routing refused", "position": 1, "considered": 2
+        }),
+        serde_json::json!({
+            "ts": "2026-05-16T00:00:02.000Z", "run_id": "r1", "iter": 1,
+            "type": "wrapper.pickup.bound", "issue": 31,
+            "reason": "order", "position": 2, "considered": 2
+        }),
+        serde_json::json!({
+            "ts": "2026-05-16T00:00:03.000Z", "run_id": "r1", "iter": 1,
+            "type": "wrapper.issue.activated", "issue": 31,
+            "activated_at": "2026-05-16T00:00:03.000Z",
+            "binding_source": "serial_pickup"
+        }),
+    ];
+
+    let skipped = reduce(&events, IssueRef::number(7));
+    assert_eq!(
+        log_texts(&skipped),
+        ["Pickup: skipped #7 at position 1 of 2 (routing refused)"]
+    );
+
+    let bound = reduce(&events, IssueRef::number(31));
+    assert_eq!(
+        log_texts(&bound),
+        ["Pickup: bound #31 (order, position 2 of 2)"]
+    );
+}
+
+#[test]
+fn a_passed_over_issue_earns_a_queue_row_of_its_own() {
+    // Visible in the Queue, not only in a Log: an issue the runner never took
+    // is still an issue the Run considered, and an operator watching the
+    // Dashboard has to be able to see it sitting there.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z", "run_id": "r1", "iter": 1,
+            "type": "wrapper.pickup.skipped", "issue": 7,
+            "reason": "routing refused", "position": 1, "considered": 1
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(queue_row(&projected, 7)["status"], "queued");
+}
+
+#[test]
+fn a_pickup_record_naming_no_issue_is_unusable_telemetry_not_a_crash() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.pickup.bound", "reason": "order"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.pickup.skipped", "position": 1
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert!(log_texts(&projected).is_empty());
+}
+
+#[test]
+fn a_pickup_record_missing_its_order_still_names_the_issue() {
+    // A port that emits the binding without the order is degraded telemetry,
+    // and degraded is not the same as absent: the issue and the reason are
+    // still worth showing.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z", "run_id": "r1", "iter": 1,
+            "type": "wrapper.pickup.bound", "issue": 7, "reason": "order"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(log_texts(&projected), ["Pickup: bound #7 (order)"]);
+}

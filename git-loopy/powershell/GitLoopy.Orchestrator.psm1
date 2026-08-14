@@ -2683,10 +2683,77 @@ function Select-GitLoopySerialPickup {
         return @($Head)
     }
     $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+    Write-GitLoopyPickupBound `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Ref $Ref `
+        -Head $Head `
+        -Considered $Items.Count
     [Console]::Error.WriteLine(
         "git-loopy: serial Pickup bound $Label (position 1 of $($Items.Count))"
     )
     return @($Head)
+}
+
+# One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
+# where it sat in the order. Emitted after the binding is published, because a
+# Pickup record for a binding no `wrapper.issue.activated` announced would
+# describe a decision the rest of the stream does not contain.
+function Write-GitLoopyPickupBound {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Head,
+        [Parameter(Mandatory)]
+        [int]$Considered
+    )
+
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_PICKUP_BOUND"] `
+        -Iteration $Iteration `
+        -Payload (Get-GitLoopyPickupRecord `
+            -Ref $Ref `
+            -Head $Head `
+            -Considered $Considered)
+}
+
+# The payload half of a **Pickup** record, separated from its emission so the
+# decision is assertable without a Run context to write an Event into.
+function Get-GitLoopyPickupRecord {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Head,
+        [Parameter(Mandatory)]
+        [int]$Considered
+    )
+
+    $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
+    # `priority` is a human assertion read off the issue, never inferred; every
+    # other head is the head because the order put it there.
+    $Labels = @(
+        foreach ($Label in @($Head["labels"])) {
+            if ($Label -is [Collections.IDictionary]) { [string]$Label["name"] }
+            elseif ($null -ne $Label) { [string]$Label }
+        }
+    )
+    $Reason = if ($Labels -ccontains "priority") { "priority" } else { "order" }
+    return [ordered]@{
+        issue = $Issue
+        reason = $Reason
+        position = 1
+        considered = $Considered
+    }
 }
 
 function Set-GitLoopyActiveBinding {
@@ -3882,6 +3949,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueOrder",
     "Get-GitLoopyOrderedCandidates",
     "Select-GitLoopySerialPickup",
+    "Write-GitLoopyPickupBound",
+    "Get-GitLoopyPickupRecord",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",

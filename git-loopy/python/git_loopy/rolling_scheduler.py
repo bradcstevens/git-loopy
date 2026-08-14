@@ -215,10 +215,19 @@ class Reservation:
         item: The authoritatively validated, enriched item — the product of the
             :meth:`~git_loopy.sources.RollingIssueSource.pickup` that #219
             §2.10 requires immediately before reservation.
+        position: The item's 1-based place in the **Pool** order it was taken
+            from, and ``considered`` the length of that order (#397). Carried
+            on the reservation because a **Lane Pickup** record is written
+            later — after routing resolves and the worktree exists — by which
+            time the order is gone. Both default to a one-candidate order, the
+            only order a hand-built reservation can honestly claim.
+        considered: See :attr:`position`.
     """
 
     lane_id: str
     item: AfkReadyItem
+    position: int = 1
+    considered: int = 1
 
 
 @dataclass
@@ -536,11 +545,18 @@ class RollingScheduler:
         self.pool.service(refillable=self.refillable)
         reservations: list[Reservation] = []
         while self.refillable > 0:
-            item = self.pool.take()
+            take = self.pool.take()
+            item = take.item
             if item is None:
                 break
+            assert take.position is not None
             lane_id = self._free_lane()
-            reservation = Reservation(lane_id=lane_id, item=item)
+            reservation = Reservation(
+                lane_id=lane_id,
+                item=item,
+                position=take.position,
+                considered=take.considered,
+            )
             self._lanes_held[lane_id] = reservation
             self._in_setup.add(item.ref)
             reservations.append(reservation)

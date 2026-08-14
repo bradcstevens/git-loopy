@@ -4415,3 +4415,125 @@ def test_parallel_dashboard_fault_never_masks_a_stuck_run(
     assert run_end["outcome"] == "stuck"
     assert exit_code == loop_module.exit_code_for("stuck")
     assert exit_code != EXIT_DASHBOARD_FAULT
+
+
+# --------------------------------------------------------------------------- #
+# Lane Pickup records (#397)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_lane_pickup_records_what_it_bound_and_where(tmp_path, monkeypatch) -> None:
+    """#397: every unit of work has a Pickup, so every Pickup leaves a record.
+
+    ADR-0032 made **Pickup** universal — a serial **Iteration** and a **Lane**
+    alike — and a record only one of them writes would make a Parallel Run's
+    selection exactly as unauditable as serial's was before that ADR.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=2,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    events = _logged_events(tmp_path)
+    bound = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert {e["issue"] for e in bound} == {42, 43}
+    for event in bound:
+        assert event["reason"] == "order"
+        assert event["position"] >= 1
+        assert event["considered"] >= event["position"]
+        # A Pickup precedes the contribution it creates, so it can name none.
+        assert "contribution_id" not in event
+        assert event["iter"] is None
+
+    # Every Lane's binding is in the stream before the session it bound for.
+    types = [e["type"] for e in events]
+    assert types.index("wrapper.pickup.bound") < types.index(
+        "wrapper.issue.activated"
+    )
+
+
+def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(
+    tmp_path, monkeypatch
+) -> None:
+    """A released reservation used to evaporate "with no trace" (#219 section 3.3).
+
+    That was defensible while the candidate simply stayed eligible for another
+    Lane. It is not defensible as the *only* record, because a candidate whose
+    label never parses is refused by every Lane forever — the exact
+    indefinitely-passed-over shape ADR-0032 exists to make visible.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=[
+                    "ready-for-agent",
+                    "parallel-safe",
+                    "task-type:not-a-real-key",
+                ],
+            ),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    skipped = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.skipped"
+    ]
+    assert [e["issue"] for e in skipped] == [42]
+    assert "not-a-real-key" in skipped[0]["reason"]
+    assert skipped[0]["position"] == 1
+    assert skipped[0]["considered"] == 1
+    assert skipped[0]["iter"] is None

@@ -20,6 +20,13 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_ITERATION_END]="wrapper.iteration.end"
   [WRAPPER_AFK_READY_COLLECTED]="wrapper.afk_ready.collected"
   [WRAPPER_POOL_EXCLUDED]="wrapper.pool.excluded"
+  # The two halves of one **Pickup** walk (#397). This port admits every
+  # candidate -- it has no refusal to make, because the only admission the
+  # Wrapper contract names is §14's Routed pair and this port implements none --
+  # so it binds and never skips. The skip literal is carried for vocabulary
+  # parity and produced the day this port gains something to refuse.
+  [WRAPPER_PICKUP_BOUND]="wrapper.pickup.bound"
+  [WRAPPER_PICKUP_SKIPPED]="wrapper.pickup.skipped"
   [WRAPPER_CHECKPOINT_RECORDED]="wrapper.checkpoint.recorded"
   [WRAPPER_COMMIT_RECORDED]="wrapper.commit.recorded"
   [WRAPPER_PUSH_RECORDED]="wrapper.push.recorded"

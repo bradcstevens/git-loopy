@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, InsightCapabilities, IssueRef,
-    IterationEnd, IterationIssue, IterationSummary,
+    IterationEnd, IterationIssue, IterationSummary, Pickup,
 };
 use crate::timestamp::Timestamp;
 
@@ -354,6 +354,12 @@ impl DashboardState {
                     };
                     self.activate(&activated.issue, since, activated.activated_at.or(now));
                 }
+            }
+            EventPayload::PickupBound(pickup) => {
+                self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_bound_text(pickup), now)
+            }
+            EventPayload::PickupSkipped(pickup) => {
+                self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
             }
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
@@ -803,6 +809,59 @@ fn commit_log_text(commit: &CommitRecorded) -> String {
         text.push_str(subject.split('\n').next().unwrap_or(subject));
     }
     text
+}
+
+/// The Log line one **Pickup** binding leaves on the issue it bound (#397).
+///
+/// Names the order as well as the issue, because "the runner took the oldest"
+/// and "the runner took the only one left" are different facts about a backlog
+/// and position alone cannot tell them apart.
+fn pickup_bound_text(pickup: &Pickup) -> String {
+    let mut text = format!("Pickup: bound {}", pickup_issue_label(&pickup.issue));
+    let detail = [
+        pickup.reason.clone().filter(|reason| !reason.is_empty()),
+        pickup_order_phrase(pickup),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    if !detail.is_empty() {
+        text.push_str(&format!(" ({detail})"));
+    }
+    text
+}
+
+/// The Log line one passed-over candidate earns, on its own ledger entry.
+///
+/// Attributed to the issue it names rather than to whichever issue happened to
+/// be Active: a skip folded into the Active issue would say a Run passed over
+/// the issue it was working.
+fn pickup_skipped_text(pickup: &Pickup) -> String {
+    let mut text = format!("Pickup: skipped {}", pickup_issue_label(&pickup.issue));
+    if let Some(order) = pickup_order_phrase(pickup) {
+        text.push_str(&format!(" at {order}"));
+    }
+    if let Some(reason) = pickup.reason.as_deref().filter(|reason| !reason.is_empty()) {
+        text.push_str(&format!(" ({reason})"));
+    }
+    text
+}
+
+/// `position N of M`, or nothing when the Orchestrator reported no order.
+fn pickup_order_phrase(pickup: &Pickup) -> Option<String> {
+    match (pickup.position, pickup.considered) {
+        (Some(position), Some(considered)) => Some(format!("position {position} of {considered}")),
+        (Some(position), None) => Some(format!("position {position}")),
+        _ => None,
+    }
+}
+
+fn pickup_issue_label(issue: &IssueRef) -> String {
+    match issue {
+        IssueRef::Number(number) => format!("#{number}"),
+        IssueRef::Path(path) => path.clone(),
+    }
 }
 
 fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {

@@ -166,7 +166,11 @@ from git_loopy.skill_install import (
 )
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rollup import IterationRollupAccumulator
-from git_loopy.serial_pickup import SerialPickup, pick_serial
+from git_loopy.serial_pickup import (
+    SerialPickup,
+    pick_serial,
+    reason_for_labels,
+)
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -959,6 +963,69 @@ class _Loop:
                 reason=exclusion.reason,
             )
 
+    # -- Pickup records (#397) ---------------------------------------------
+
+    def _emit_pickup_bound(
+        self,
+        *,
+        iter_num: int | None,
+        issue: int | str,
+        reason: str,
+        position: int,
+        considered: int,
+    ) -> None:
+        """Record which issue a **Pickup** bound, why, and out of what (#397).
+
+        The payload shape is declared here and at
+        :meth:`_emit_pickup_skipped`, once each, because both call sites — a
+        serial **Iteration** and a **Lane** — have to produce the same record
+        for a replay to read them as one vocabulary.
+
+        ``position`` and ``considered`` travel together on purpose. Position
+        alone answers "was this the head of the order?", and the question an
+        operator actually asks is "did the runner take the oldest, or was this
+        the only one left?" — which needs both. Neither is recoverable later:
+        afterwards the order that gave them meaning is gone.
+        """
+        self._emit(
+            events_module.WRAPPER_PICKUP_BOUND,
+            iter_num=iter_num,
+            issue=issue,
+            reason=reason,
+            position=position,
+            considered=considered,
+        )
+
+    def _emit_pickup_skipped(
+        self,
+        *,
+        iter_num: int | None,
+        issue: int | str,
+        reason: str,
+        position: int,
+        considered: int,
+    ) -> None:
+        """Record one candidate a **Pickup** passed over, and why (#397).
+
+        A record rather than a log line, and that is the entire point: the
+        starvation ADR-0032 fixes was invisible *precisely* because being
+        passed over left no trace, so an issue could be skipped fifty times and
+        the only evidence was that it was still in the backlog. Fifty log lines
+        are not evidence a replay or the Dashboard can show.
+
+        Emitted before the :meth:`_emit_pickup_bound` that ended the walk, the
+        way an exclusion precedes the collection it explains — so a replay
+        reads what was passed over and then what was taken instead.
+        """
+        self._emit(
+            events_module.WRAPPER_PICKUP_SKIPPED,
+            iter_num=iter_num,
+            issue=issue,
+            reason=reason,
+            position=position,
+            considered=considered,
+        )
+
     def _observe_continuation(self, iter_num: int, *, phase: str) -> None:
         """Render read-only Continuation guidance for one Iteration boundary.
 
@@ -1476,17 +1543,30 @@ class _Loop:
             return None
 
         pickup = pick_serial(pool, admit=admit)
+        considered = len(pickup.considered)
         for skip in pickup.skipped:
-            # #397 makes this a skip Event. Until then stderr is the whole
-            # audience, which is the invisibility that ticket exists to fix:
-            # an issue passed over fifty times leaves fifty log lines and
-            # nothing a replay or the Dashboard can show.
+            self._emit_pickup_skipped(
+                iter_num=iter_num,
+                issue=skip.ref,
+                reason=skip.reason,
+                position=skip.position,
+                considered=considered,
+            )
             self._diag.warning(
                 "serial Pickup skipped #%s at position %d of %d: %s",
                 skip.ref,
                 skip.position,
-                len(pool),
+                considered,
                 skip.reason,
+            )
+        if pickup.item is not None:
+            assert pickup.position is not None and pickup.reason is not None
+            self._emit_pickup_bound(
+                iter_num=iter_num,
+                issue=pickup.item.ref,
+                reason=pickup.reason,
+                position=pickup.position,
+                considered=considered,
             )
         return pickup
 
@@ -2740,11 +2820,33 @@ class _ParallelLoop:
         scheduler = self._scheduler
         item = reservation.item
         ref = item.ref
+
+        def passed_over(reason: str) -> None:
+            """Record this candidate as passed over before releasing it (#397).
+
+            §3.3 releases a failed setup "with no trace", which was defensible
+            while the trace nobody kept was of a candidate that simply stayed
+            eligible for the next Lane. It is not defensible as the *only*
+            record: a candidate whose ``task-type:`` label never parses is
+            refused by every Lane forever, which is precisely the
+            indefinitely-passed-over shape ADR-0032 exists to make visible.
+            The release itself is unchanged — this leaves the record, not a
+            different scheduling decision.
+            """
+            self._serial._emit_pickup_skipped(
+                iter_num=None,
+                issue=ref,
+                reason=reason,
+                position=reservation.position,
+                considered=reservation.considered,
+            )
+
         if not isinstance(ref, int):
             # Rolling-eligible candidates are always int refs
             # (`is_parallel_safe` requires it); this only defends a future
             # non-int ref from ever reaching a worktree/branch-name helper
             # that assumes one.
+            passed_over("not an issue number")
             scheduler.release(reservation)
             return
 
@@ -2764,6 +2866,7 @@ class _ParallelLoop:
             )
         except TaskTypeError as exc:
             self._diag.error("lane #%s routing refused: %s", ref, exc)
+            passed_over(f"routing refused: {exc}")
             scheduler.release(reservation)
             raise
 
@@ -2777,6 +2880,7 @@ class _ParallelLoop:
                 "worktree add for issue #%s failed: %s; releasing reservation",
                 ref, exc,
             )
+            passed_over(f"worktree setup failed: {exc}")
             scheduler.release(reservation)
             return
 
@@ -2798,6 +2902,19 @@ class _ParallelLoop:
 
         lane_binding = self._serial._new_active_issue_binding(
             None, allowed_refs=(ref,), lane_issue=ref
+        )
+        # The **Pickup** record, written where the binding is published rather
+        # than where routing resolved (#397). Everything between those two
+        # points can still pass the candidate over, and a Lane that emitted
+        # "bound" and then a skip for the same issue would be two facts where
+        # there is one. So the binding record is emitted only once the Lane
+        # genuinely holds the issue, and every skip precedes it.
+        self._serial._emit_pickup_bound(
+            iter_num=None,
+            issue=ref,
+            reason=reason_for_labels(item.labels),
+            position=reservation.position,
+            considered=reservation.considered,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
 

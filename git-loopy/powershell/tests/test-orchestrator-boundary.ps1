@@ -1350,6 +1350,43 @@ exit 97
             "activation observation timestamp"
         )
     }
+    # #397: selection is a runner decision, and a decision nobody can see is a
+    # decision nobody can audit. The binding is a record of its own -- which
+    # issue, why it was chosen, and where it sat in the order -- emitted after
+    # the activation that publishes it, so it never describes a binding the rest
+    # of the stream does not contain. This port admits every candidate, so it
+    # binds and never skips; `wrapper.pickup.skipped` is carried in the
+    # vocabulary and produced the day this port gains something to refuse.
+    $PickupEvents = @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "wrapper.pickup.bound" }
+    )
+    Assert-Equal 2 $PickupEvents.Count "one Pickup record per Iteration"
+    foreach ($Event in $PickupEvents) {
+        Assert-Equal 41 $Event["issue"] "the Pickup record names what it bound"
+        Assert-Equal "order" $Event["reason"] "the Pickup record names why"
+        Assert-Equal 1 $Event["position"] "the Pickup record names where"
+        Assert-Equal 1 $Event["considered"] "the Pickup record names how many"
+    }
+    Assert-Equal 0 @(
+        $CapEvents |
+            Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" }
+    ).Count "this port admits every candidate, so it never skips"
+    $PickupOrder = @(
+        $CapEvents |
+            Where-Object {
+                $_["type"] -ceq "wrapper.issue.activated" -or
+                $_["type"] -ceq "wrapper.pickup.bound" -or
+                $_["type"] -ceq "agent.output"
+            } |
+            ForEach-Object { $_["type"] }
+    )
+    Assert-True (
+        [Array]::IndexOf($PickupOrder, "wrapper.issue.activated") -lt
+        [Array]::IndexOf($PickupOrder, "wrapper.pickup.bound") -and
+        [Array]::IndexOf($PickupOrder, "wrapper.pickup.bound") -lt
+        [Array]::IndexOf($PickupOrder, "agent.output")
+    ) "the Pickup record sits between its binding and the turn"
     # A marker for an issue outside the Pool used to get its own diagnostic.
     # Since #394 the Iteration is already bound when the first marker arrives,
     # so every later marker — in-Pool or not — lands on the disagreement branch
@@ -1447,7 +1484,8 @@ exit 97
     $CommitsEvents = Read-Events -Path $CommitsStdout
     Assert-Equal (
         "wrapper.run.start,wrapper.iteration.start,wrapper.pool.excluded," +
-        "wrapper.afk_ready.collected,wrapper.issue.activated,agent.output," +
+        "wrapper.afk_ready.collected,wrapper.issue.activated," +
+        "wrapper.pickup.bound,agent.output," +
         "wrapper.commit.recorded,wrapper.commit.recorded," +
         "wrapper.iteration.end,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
@@ -2855,6 +2893,36 @@ Start-Sleep -Seconds $Sleep
         "a refused activation renders the head of the order"
     )
     Reset-GitLoopyIterationLifecycleState
+
+    # #397: the Pickup record carries *why* the head is the head and how big the
+    # order was. `priority` is a human assertion read off the issue and never
+    # inferred, and `considered` is what separates "the runner took the oldest"
+    # from "the runner took the only one left" -- position alone cannot.
+    $PickupRecord = Get-GitLoopyPickupRecord `
+        -Ref "9" `
+        -Head ([ordered]@{
+            number = 9
+            labels = @([ordered]@{ name = "ready-for-agent" })
+        }) `
+        -Considered 3
+    Assert-Equal (
+        "issue=9,reason=order,position=1,considered=3"
+    ) ([string]::Join(",", @(
+        $PickupRecord.Keys | ForEach-Object { "$_=$($PickupRecord[$_])" }
+    ))) "the Pickup record for an ordered head"
+    $PriorityRecord = Get-GitLoopyPickupRecord `
+        -Ref "9" `
+        -Head ([ordered]@{
+            number = 9
+            labels = @(
+                [ordered]@{ name = "ready-for-agent" },
+                [ordered]@{ name = "priority" }
+            )
+        }) `
+        -Considered 3
+    Assert-Equal "priority" $PriorityRecord["reason"] (
+        "a Priority head is bound because it carried the label, not by order"
+    )
 
     # --- Closed-world Skill policy fails closed (contract §17.6) ---------------
     # This port has no `config.toml` tier yet, so it cannot honour a configured

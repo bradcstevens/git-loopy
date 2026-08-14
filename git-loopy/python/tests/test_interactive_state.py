@@ -398,3 +398,130 @@ def test_state_module_imports_are_constrained() -> None:
     # is exactly one hop deep: state.py imports usage, not pricing directly.
     assert "git_loopy.usage" in seen, "state.py folds Consumption through UsageTally"
     assert "git_loopy.pricing" not in seen, "state.py imports usage, not pricing"
+
+
+# --------------------------------------------------------------------------- #
+# Pickup and skip records (#397)                                              #
+# --------------------------------------------------------------------------- #
+
+
+def _pickup_log(state: LiveRunState, ref: int | str) -> list[str]:
+    return [line.text for line in state.log(ref)]
+
+
+def test_a_pickup_binding_reaches_the_issue_it_bound() -> None:
+    state = LiveRunState()
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_BOUND,
+            "iter": 1,
+            "issue": 7,
+            "reason": "order",
+            "position": 1,
+            "considered": 4,
+        }
+    )
+
+    assert _pickup_log(state, 7) == ["Pickup: bound #7 (order, position 1 of 4)"]
+
+
+def test_a_passed_over_issue_carries_the_reason_it_was_passed_over() -> None:
+    """#397: being skipped used to leave no trace an operator could see."""
+    state = LiveRunState()
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_SKIPPED,
+            "iter": 1,
+            "issue": 7,
+            "reason": "routing refused: unsupported task-type label",
+            "position": 1,
+            "considered": 2,
+        }
+    )
+
+    assert _pickup_log(state, 7) == [
+        "Pickup: skipped #7 at position 1 of 2 "
+        "(routing refused: unsupported task-type label)"
+    ]
+
+
+def test_a_skip_lands_on_the_issue_it_passed_over_not_on_the_active_one() -> None:
+    """A record folded into the Active issue would say a Run passed over its
+    own work. Attribution is the whole value of the Event."""
+    state = LiveRunState()
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "iter": 1,
+            "issue": 31,
+            "binding_source": "serial_pickup",
+        }
+    )
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_SKIPPED,
+            "iter": 1,
+            "issue": 7,
+            "reason": "routing refused",
+            "position": 1,
+            "considered": 2,
+        }
+    )
+
+    assert _pickup_log(state, 7) == [
+        "Pickup: skipped #7 at position 1 of 2 (routing refused)"
+    ]
+    assert _pickup_log(state, 31) == []
+
+
+def test_a_passed_over_issue_earns_a_queue_row_but_no_active_time() -> None:
+    """It enters the ledger queued: considered, never worked."""
+    state = LiveRunState()
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_SKIPPED,
+            "iter": 1,
+            "issue": 7,
+            "reason": "routing refused",
+            "position": 1,
+            "considered": 1,
+        }
+    )
+
+    entry = state.ledger[7]
+    assert entry.status == state_module.STATUS_QUEUED
+    assert entry.active_seconds(now=1000.0) == 0.0
+    assert state.active_ref is None
+
+
+def test_a_pickup_record_naming_no_issue_is_ignored() -> None:
+    state = LiveRunState()
+
+    state.render({"type": events_module.WRAPPER_PICKUP_BOUND, "iter": 1})
+    state.render({"type": events_module.WRAPPER_PICKUP_SKIPPED, "iter": 1})
+
+    assert state.ledger == {}
+
+
+def test_a_pickup_record_missing_its_order_still_names_the_issue() -> None:
+    state = LiveRunState()
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_BOUND,
+            "iter": 1,
+            "issue": 7,
+            "reason": "order",
+        }
+    )
+
+    assert _pickup_log(state, 7) == ["Pickup: bound #7 (order)"]
+
+
+def test_pickup_event_type_constants_match_events() -> None:
+    assert state_module._PICKUP_BOUND == events_module.WRAPPER_PICKUP_BOUND
+    assert state_module._PICKUP_SKIPPED == events_module.WRAPPER_PICKUP_SKIPPED

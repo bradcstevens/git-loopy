@@ -1888,8 +1888,58 @@ git_loopy_pick_serial() {
   fi
   _GIT_LOOPY_PICKUP_REF="$ref"
   _GIT_LOOPY_PICKUP_AT="$observed_at"
+  local considered
+  considered="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
+  _git_loopy_emit_pickup_bound "$iteration" "$ref" "$head" "$considered" \
+    "$observed_at" || return 1
   printf 'git-loopy: serial Pickup bound %s (position 1 of %s)\n' \
-    "$label" "$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" >&2
+    "$label" "$considered" >&2
+}
+
+# One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
+# where it sat in the order. Emitted after the binding is published, because a
+# Pickup record for a binding no `wrapper.issue.activated` announced would
+# describe a decision the rest of the stream does not contain.
+_git_loopy_emit_pickup_bound() {
+  local iteration="$1"
+  local ref="$2"
+  local head="$3"
+  local considered="$4"
+  local observed_at="$5"
+  local issue_arg reason payload
+
+  if [[ "$ref" =~ ^[0-9]+$ ]]; then
+    issue_arg="$ref"
+  else
+    issue_arg="$(jq -cn --arg ref "$ref" '$ref')" || return 1
+  fi
+  # `priority` is a human assertion read off the issue, never inferred; every
+  # other head is the head because the order put it there.
+  reason="$(
+    jq -r '
+      if ((.labels // []) | map(if type == "object" then .name else . end)
+           | index("priority"))
+      then "priority" else "order" end
+    ' <<<"$head"
+  )" || return 1
+  payload="$(
+    jq -cn \
+      --argjson issue "$issue_arg" \
+      --arg reason "$reason" \
+      --argjson position 1 \
+      --argjson considered "$considered" \
+      '{
+        issue: $issue,
+        reason: $reason,
+        position: $position,
+        considered: $considered
+      }'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_PICKUP_BOUND]}" \
+    "$iteration" \
+    "$payload" \
+    "$observed_at"
 }
 
 _git_loopy_bind_active_issue() {

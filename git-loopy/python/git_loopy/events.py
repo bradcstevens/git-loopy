@@ -77,6 +77,8 @@ __all__ = [
     "WRAPPER_ITERATION_END",
     "WRAPPER_AFK_READY_COLLECTED",
     "WRAPPER_POOL_EXCLUDED",
+    "WRAPPER_PICKUP_BOUND",
+    "WRAPPER_PICKUP_SKIPPED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
     "WRAPPER_PUSH_RECORDED",
@@ -224,6 +226,24 @@ WRAPPER_AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
 # the ``wrapper.afk_ready.collected`` it explains, so a replay reads the
 # exclusions and then the Pool they were taken out of.
 WRAPPER_POOL_EXCLUDED = "wrapper.pool.excluded"
+# The two halves of one **Pickup** walk (#397, ADR-0032 §8). Selection became a
+# runner decision when serial Iterations gained a Pickup, and a decision nobody
+# can see is a decision nobody can audit — the starvation ADR-0032 fixes was
+# invisible *precisely* because being passed over left no trace. So the skip is
+# a record rather than a log line: an issue passed over fifty times leaves fifty
+# rows a replay and the Dashboard can both show, attributable to the issue they
+# passed over.
+#
+# Run-scoped, for the same reason ``wrapper.pool.excluded`` is: a Pickup runs
+# *before* the work it binds exists, so a Lane's ``contribution_id`` has not
+# been minted yet and there is nothing to attribute the record to but the Run.
+#
+# Every skip is emitted before the ``wrapper.pickup.bound`` that ended the walk,
+# mirroring exclusions preceding the ``wrapper.afk_ready.collected`` they
+# explain, so a replay reads what was passed over and then what was taken. A
+# walk that binds nothing emits its skips and no binding.
+WRAPPER_PICKUP_BOUND = "wrapper.pickup.bound"
+WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in

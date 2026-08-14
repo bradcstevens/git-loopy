@@ -51,6 +51,7 @@ from git_loopy import measured_routing as measured_routing_module
 from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
+from git_loopy import serial_pickup
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy import rollup as rollup_module
 from git_loopy.skill_exposure import SkillExposure
@@ -353,6 +354,70 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
     assert actual == case["expected"]
 
 
+def test_pickup_reason_vocabulary_has_one_declaration() -> None:
+    """#397: the reason an operator reads is the reason the runner produced.
+
+    ``serial_pickup.PICKUP_REASONS`` is the only place the vocabulary is
+    written down in Python, and this is what holds the fixture to it — the
+    same discipline ``CONTRIBUTION_TERMINAL_REASONS`` gets. Both Pickup Events
+    are pinned against the one declaration, so a reason cannot be added to a
+    port without the schema and the Dashboard reader learning it.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.pickup.bound"]
+    assert tuple(contract["reason_values"]) == serial_pickup.PICKUP_REASONS
+
+    # A skip's reason is deliberately open: it originates in whatever admission
+    # the port applied, so closing it would date the vocabulary to today.
+    skip = _EVENT_SCHEMA["payload_contracts"]["wrapper.pickup.skipped"]
+    assert skip["reason_values"] is None
+
+
+def test_pickup_events_are_run_scoped_not_contribution_scoped() -> None:
+    """A Pickup precedes the work it binds, so it can name no contribution."""
+    identity = _EVENT_SCHEMA["contribution_identity"]
+    for literal in ("wrapper.pickup.bound", "wrapper.pickup.skipped"):
+        assert literal in identity["scheduler_scoped_types"]
+        assert literal not in identity["lifecycle_types"]
+        assert literal not in identity["stamped_types"]
+        assert literal not in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+
+
+def test_a_pinned_stream_passes_a_candidate_over_without_binding() -> None:
+    """The skip is only meaningful if it can outlive the walk that bound.
+
+    A Pickup that skipped and then bound is the easy case. The one worth
+    pinning is the walk that skipped and bound *nothing*, because that is the
+    shape an operator sees when a backlog is full of work the runner cannot
+    take — and it is the shape a reader that assumes every skip is followed by
+    a binding renders wrong.
+    """
+    unbound = 0
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        types = [event["type"] for event in case["events"]]
+        if "wrapper.pickup.skipped" not in types:
+            continue
+        last_skip = len(types) - 1 - types[::-1].index("wrapper.pickup.skipped")
+        if "wrapper.pickup.bound" not in types[last_skip:]:
+            unbound += 1
+    assert unbound, "no pinned stream passes a candidate over without binding"
+
+
+def test_a_pinned_stream_binds_every_lane_before_its_contribution() -> None:
+    """Pickup precedes session start, which is what makes the binding a fact.
+
+    ADR-0032's whole claim is that the runner decides *before* the agent
+    speaks. A ``wrapper.contribution.start`` with no ``wrapper.pickup.bound``
+    ahead of it would be a contribution whose issue nothing chose.
+    """
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        bound: set[int | str] = set()
+        for event in case["events"]:
+            if event["type"] == "wrapper.pickup.bound":
+                bound.add(event["issue"])
+            elif event["type"] == "wrapper.contribution.start":
+                assert event["issue"] in bound, (case["id"], event["issue"])
+
+
 def test_event_type_fixture_pins_every_exported_literal() -> None:
     actual = {
         name: value
@@ -366,7 +431,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.12"
+    assert _EVENT_SCHEMA["contract_version"] == "1.13"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:
@@ -1598,7 +1663,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.12"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.13"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -3372,3 +3437,87 @@ def test_calibration_search_fixture_pins_every_way_a_search_can_stop() -> None:
     for case in _CALIBRATION_SEARCH["cases"]:
         if case["expected"]["stop"] != "winner":
             assert case["expected"]["winner"] is None, case["id"]
+
+
+def test_the_dashboard_fixture_makes_a_passed_over_issue_visible() -> None:
+    """A skip reaches the **Dashboard** through the issue it passed over (#397).
+
+    The starvation ADR-0032 fixes was invisible because being passed over left
+    no trace, so the fixture has to reach the corner the Event exists for: a
+    candidate the runner declined, drilled into by an operator who wants to know
+    *why*. Pinning only a binding would leave every renderer free to drop the
+    skip and still replay green -- which is exactly the hole this ticket closes.
+    """
+    case = _dashboard_case("pickup-records-make-a-passed-over-issue-visible")
+    skipped = next(
+        event
+        for event in case["events"]
+        if event["type"] == events_module.WRAPPER_PICKUP_SKIPPED
+    )
+    bound = next(
+        event
+        for event in case["events"]
+        if event["type"] == events_module.WRAPPER_PICKUP_BOUND
+    )
+    # The passed-over candidate is not the bound one, and the Run drills into
+    # it: a case that skipped the issue it went on to work would pin nothing.
+    assert skipped["issue"] != bound["issue"]
+    assert case["inputs"]["drill_in_issue"] == skipped["issue"]
+    assert bound["reason"] in serial_pickup.PICKUP_REASONS
+
+    for snapshot in case["snapshots"]:
+        drill_in = snapshot["expected"]["drill_in"]
+        assert drill_in["log"]["issue"] == skipped["issue"]
+        assert [line["text"] for line in drill_in["log"]["lines"]] == [
+            "Pickup: skipped #46 at position 1 of 2 "
+            "(routing refused: unsupported task-type label)"
+        ]
+        # Considered, never worked: a skip opens no Active stint.
+        assert drill_in["detail_header"]["active_seconds"] == 0.0
+        assert drill_in["detail_header"]["status"] == "queued"
+        # ...and still earns a Queue row, so it is visible without drilling in.
+        rows = snapshot["expected"]["dashboard"]["queue"]["rows"]
+        assert skipped["issue"] in [row["issue"] for row in rows]
+
+
+def test_both_dashboard_reducers_render_one_pickup_record() -> None:
+    """The Textual reducer emits the text the Rust reader's fixture pins.
+
+    ``dashboard-insights.json`` is consumed as a projection oracle by the Rust
+    core alone, so nothing was holding the Python **Dashboard** to the same
+    strings -- two renderers of one Event stream, one of them unpinned. Replaying
+    the fixture's own events through :class:`LiveRunState` and comparing against
+    the fixture's own expected Log lines closes that, without the Textual side
+    needing a full projection adapter.
+    """
+    case = _dashboard_case("pickup-records-make-a-passed-over-issue-visible")
+    expected: dict[int, list[str]] = {}
+    for snapshot in case["snapshots"]:
+        drill_in = snapshot["expected"]["drill_in"]
+        expected[drill_in["log"]["issue"]] = [
+            line["text"] for line in drill_in["log"]["lines"]
+        ]
+        activity = snapshot["expected"]["dashboard"]["activity"]
+        if activity["issue"] is not None:
+            expected.setdefault(
+                activity["issue"],
+                [
+                    line["text"]
+                    for line in activity["lines"]
+                    if line["text"].startswith("Pickup: ")
+                ],
+            )
+
+    state = LiveRunState()
+    for event in case["events"]:
+        state.render(event)
+
+    for issue, texts in expected.items():
+        rendered = [
+            line.text for line in state.log(issue) if line.text.startswith("Pickup: ")
+        ]
+        assert rendered == [text for text in texts if text.startswith("Pickup: ")], (
+            issue
+        )
+    # Vacuously true over an empty inventory is not a parity claim.
+    assert any(texts for texts in expected.values())

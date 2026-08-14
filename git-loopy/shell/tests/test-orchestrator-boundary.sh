@@ -740,6 +740,36 @@ jq -se '
 ' "$temp_dir/github-cap.stdout" >/dev/null ||
   fail "serial Pickup did not precede the agent turn"
 
+# #397: selection is a runner decision, and a decision nobody can see is a
+# decision nobody can audit. The binding is a record of its own — which issue,
+# why it was chosen, and where it sat in the order — emitted after the
+# activation that publishes it, so it never describes a binding the rest of the
+# stream does not contain. This port admits every candidate, so it binds and
+# never skips; `wrapper.pickup.skipped` is carried in the vocabulary and
+# produced the day this port gains something to refuse.
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.bound")] | length == 2)
+  and ([.[] | select(.type == "wrapper.pickup.bound")]
+    | all(
+      .issue == 41
+      and .reason == "order"
+      and .position == 1
+      and .considered == 1
+    ))
+  and ([.[] | select(.type == "wrapper.pickup.skipped")] | length == 0)
+' "$temp_dir/github-cap.stdout" >/dev/null ||
+  fail "the shell Pickup record did not name what it bound and where"
+jq -se '
+  [.[] | select(
+    .type == "wrapper.issue.activated"
+    or .type == "wrapper.pickup.bound"
+    or .type == "agent.output"
+  ) | .type]
+  | index("wrapper.issue.activated") < index("wrapper.pickup.bound")
+  and index("wrapper.pickup.bound") < index("agent.output")
+' "$temp_dir/github-cap.stdout" >/dev/null ||
+  fail "the shell Pickup record did not sit between its binding and the turn"
+
 # The prompt is one issue, and the Working marker naming another one is a
 # disagreement the runner records rather than a reassignment it obeys.
 assert_contains "$(<"$temp_dir/github-cap.stderr")" \
@@ -798,6 +828,7 @@ expected_commit_seq="$(
     "wrapper.pool.excluded",
     "wrapper.afk_ready.collected",
     "wrapper.issue.activated",
+    "wrapper.pickup.bound",
     "agent.output",
     "wrapper.commit.recorded",
     "wrapper.commit.recorded",
@@ -2020,6 +2051,34 @@ jq -se '
     fail "the prompt still carries an issue the Pickup did not bind"
   fi
 ) || fail "the shell serial Pickup does not hand the agent the head of the order"
+
+# #397: the Pickup record carries *why* the head is the head and how big the
+# order was. `priority` is a human assertion read off the issue and never
+# inferred, and `considered` is what separates "the runner took the oldest"
+# from "the runner took the only one left" -- position alone cannot.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+  emitted=""
+  git_loopy_emit_event() {
+    emitted="$(jq -c --arg type "$1" --argjson payload "$3" \
+      '$payload + {type: $type}' <<<'{}')"
+  }
+
+  head='{"number": 9, "labels": [{"name": "ready-for-agent"}]}'
+  _git_loopy_emit_pickup_bound 1 9 "$head" 3 "2026-02-01T00:00:00Z" ||
+    fail "the shell Pickup record could not be emitted"
+  assert_equal \
+    '{"considered":3,"issue":9,"position":1,"reason":"order","type":"wrapper.pickup.bound"}' \
+    "$(jq -cS . <<<"$emitted")" \
+    "the shell Pickup record for an ordered head"
+
+  head='{"number": 9, "labels": [{"name": "ready-for-agent"}, {"name": "priority"}]}'
+  _git_loopy_emit_pickup_bound 1 9 "$head" 3 "2026-02-01T00:00:00Z" ||
+    fail "the shell Pickup record could not be emitted for a Priority head"
+  assert_equal "priority" "$(jq -r '.reason' <<<"$emitted")" \
+    "a Priority head is bound because it carried the label, not because of order"
+) || fail "the shell Pickup record does not say why it bound what it bound"
 
 # A **Pickup** is *prospective*: it names the issue as the work on it begins, so
 # Active time starts at the binding. Only the three after-the-fact fallbacks are

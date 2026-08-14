@@ -207,7 +207,7 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert isinstance(item, AfkReadyItem)
         assert item.ref == 31
@@ -230,7 +230,7 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None and item.ref == 7
         assert pool.candidate_refs == ()
@@ -253,7 +253,7 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None and item.ref == 7
         # 31 survives, in its original FIFO position, marked unresolved.
@@ -266,9 +266,9 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        assert pool.take().ref == 7
+        assert pool.take().item.ref == 7
         # The second take must not re-attempt the quarantined head every time.
-        assert pool.take().ref == 19
+        assert pool.take().item.ref == 19
         assert source.pickup_calls == [31, 7, 19]
 
     def test_a_later_complete_refresh_releases_the_quarantine(self) -> None:
@@ -278,12 +278,12 @@ class TestTake:
         )
         pool = _pool(source)
         pool.start()
-        assert pool.take() is None
+        assert pool.take().item is None
 
         source.set_pickup(31, PICKUP_VALIDATED)
         pool.service(refillable=1)
 
-        item = pool.take()
+        item = pool.take().item
         assert item is not None and item.ref == 31
 
     def test_returns_none_when_every_candidate_is_unresolvable(self) -> None:
@@ -294,7 +294,7 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        assert pool.take() is None
+        assert pool.take().item is None
         assert pool.candidate_refs == (31,)
 
     def test_returns_none_on_an_empty_cache_without_touching_the_source(self) -> None:
@@ -302,7 +302,7 @@ class TestTake:
         pool = _pool(source)
         pool.start()
 
-        assert pool.take() is None
+        assert pool.take().item is None
         assert source.pickup_calls == []
 
 
@@ -523,7 +523,7 @@ class TestConfirmEmpty:
         source = ScriptedSource([_snapshot([31])], pickups={31: PICKUP_UNAVAILABLE})
         pool = _pool(source)
         pool.start()
-        assert pool.take() is None
+        assert pool.take().item is None
 
         assert pool.confirm_empty() is False
 
@@ -592,6 +592,7 @@ class TestModuleStructure:
         from git_loopy import rolling_pool as module
 
         assert set(module.__all__) == {
+            "PoolTake",
             "RefreshBackoff",
             "RollingPool",
             "is_parallel_safe",
@@ -634,7 +635,7 @@ class TestDispatchabilityCounts:
         pool = _pool(source)
         pool.start()
 
-        assert pool.take() is not None  # 31 quarantines, 7 validates and leaves
+        assert pool.take().item is not None  # 31 quarantines, 7 validates and leaves
 
         assert pool.candidate_refs == (31,)
         assert pool.available_count == 0
@@ -710,7 +711,7 @@ class TestLanesWorkOldestFirst:
         )
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None
         assert item.ref == 7
@@ -724,7 +725,7 @@ class TestLanesWorkOldestFirst:
         )
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None
         assert item.ref == 31
@@ -754,7 +755,7 @@ class TestLanesWorkOldestFirst:
         pool.start()
         assert pool.candidate_refs == (7, 19, 31)
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None
         assert item.ref == 19
@@ -782,7 +783,7 @@ class TestLanesWorkOldestFirst:
         pool = _pool(GitHubIssueSource(_silent_logger(), gh=gh))
         pool.start()
 
-        item = pool.take()
+        item = pool.take().item
 
         assert item is not None
         assert item.ref == 19
@@ -851,7 +852,7 @@ class TestLanesWorkOldestFirst:
         )
         pool.start()
 
-        first = pool.take()
+        first = pool.take().item
         assert first is not None and first.ref == 7
         worked.add(first.ref)
 
@@ -859,3 +860,56 @@ class TestLanesWorkOldestFirst:
 
         assert 7 not in pool.candidate_refs
         assert pool.candidate_refs == (19,)
+
+
+class TestTakeReportsWhereInTheOrderItLooked:
+    """#397: a Lane **Pickup** has to be able to say where its issue sat.
+
+    The Pool is the order (Wrapper contract section 3.2), and the position a
+    candidate held in it is knowable only during the walk — afterwards the
+    candidate has left the cache and the order that gave the number meaning is
+    gone. So ``take`` reports it rather than returning a bare item.
+    """
+
+    def test_the_head_is_position_one_of_the_whole_cache(self) -> None:
+        pool = _pool(ScriptedSource([_snapshot([31, 7, 19])]))
+        pool.start()
+
+        take = pool.take()
+
+        assert (take.item.ref, take.position, take.considered) == (31, 1, 3)
+
+    def test_a_candidate_walked_past_moves_the_position_it_reports(self) -> None:
+        """Position 2 of 3 and position 1 of 3 are different facts."""
+        pool = _pool(
+            ScriptedSource([_snapshot([31, 7, 19])], pickups={31: PICKUP_UNAVAILABLE})
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert (take.item.ref, take.position, take.considered) == (7, 2, 3)
+
+    def test_a_walk_that_finds_nothing_still_reports_what_it_looked_at(self) -> None:
+        """An exhausted cache and an empty one are different Run states."""
+        pool = _pool(
+            ScriptedSource(
+                [_snapshot([31, 7])],
+                pickups={31: PICKUP_UNAVAILABLE, 7: PICKUP_STALE},
+            )
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert take.item is None
+        assert take.position is None
+        assert take.considered == 2
+
+    def test_an_empty_cache_reports_an_empty_order(self) -> None:
+        pool = _pool(ScriptedSource([_snapshot([])]))
+        pool.start()
+
+        take = pool.take()
+
+        assert (take.item, take.position, take.considered) == (None, None, 0)

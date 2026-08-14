@@ -53,8 +53,11 @@ from git_loopy.sources import AfkReadyItem
 
 __all__ = [
     "PICKUP_REASON_ORDER",
+    "PICKUP_REASON_PIN",
     "PICKUP_REASON_PRIORITY",
+    "PICKUP_REASONS",
     "Admit",
+    "reason_for_labels",
     "SerialSkip",
     "SerialPickup",
     "pick_serial",
@@ -66,8 +69,28 @@ PICKUP_REASON_ORDER: Final[str] = "order"
 #: This candidate was taken because a human asserted **Priority** on it. A
 #: distinct reason from :data:`PICKUP_REASON_ORDER` because the two answer
 #: different operator questions: "is the backlog draining oldest-first?" and
-#: "did my Priority label do anything?". #396 adds the third, ``pin``.
+#: "did my Priority label do anything?".
 PICKUP_REASON_PRIORITY: Final[str] = "priority"
+
+#: This candidate was taken because an operator named it for this invocation.
+#: Declared here and nowhere else, but **not produced here**: #396 owns
+#: ``--issue N`` and is its only future emitter. It is declared ahead of its
+#: producer because the vocabulary is what the Event schema and the Dashboard
+#: reader are pinned against, and a reason those two learn only when it first
+#: appears in a stream is a reason that renders as an unknown string the first
+#: time an operator uses the flag.
+PICKUP_REASON_PIN: Final[str] = "pin"
+
+#: Every reason a **Pickup** may give, in precedence order. Closed, and the
+#: single declaration the Event schema's ``reason_values`` is pinned against —
+#: the same discipline as
+#: :data:`git_loopy.events.CONTRIBUTION_TERMINAL_REASONS`. A reason with no
+#: entry here is a reason no replay and no Dashboard can name.
+PICKUP_REASONS: Final[tuple[str, ...]] = (
+    PICKUP_REASON_ORDER,
+    PICKUP_REASON_PRIORITY,
+    PICKUP_REASON_PIN,
+)
 
 #: Whether one candidate may be bound. Returns the reason it may *not* be, or
 #: ``None`` to accept — so the common answer is the falsy one and a caller with
@@ -131,15 +154,21 @@ class SerialPickup:
         return self.item is not None
 
 
-def _reason_for(item: AfkReadyItem) -> str:
-    """Why this candidate was taken.
+def reason_for_labels(labels: Sequence[str]) -> str:
+    """Why a candidate carrying ``labels`` was taken.
 
-    Read off the bound item's own labels rather than the Pool's, so a skipped
-    **Priority** issue never lends its reason to the successor that replaced it.
-    Matching is exact, for :func:`git_loopy.issue_order.priority_rank`'s reason:
-    a prefixed neighbour like ``priority:high`` is a vocabulary nobody decided.
+    The one place the question is answered, for every kind of **Pickup**:
+    ADR-0032 gave a serial **Iteration** and a **Lane** the same instant, so a
+    second implementation would let a Parallel Run and a serial Run disagree
+    about whether a human's **Priority** label did anything.
+
+    Read off the *bound* candidate's own labels rather than the Pool's, so a
+    skipped Priority issue never lends its reason to the successor that
+    replaced it. Matching is exact, for :func:`git_loopy.issue_order.
+    priority_rank`'s reason: a prefixed neighbour like ``priority:high`` is a
+    vocabulary nobody decided.
     """
-    if LABEL_PRIORITY in item.labels:
+    if LABEL_PRIORITY in labels:
         return PICKUP_REASON_PRIORITY
     return PICKUP_REASON_ORDER
 
@@ -170,7 +199,7 @@ def pick_serial(
             return SerialPickup(
                 item=item,
                 position=position,
-                reason=_reason_for(item),
+                reason=reason_for_labels(item.labels),
                 skipped=tuple(skipped),
                 considered=tuple(considered),
             )

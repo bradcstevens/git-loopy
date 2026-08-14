@@ -101,6 +101,10 @@ pub enum EventPayload {
     AfkReadyCollected(AfkReadyCollected),
     /// `wrapper.issue.activated`
     IssueActivated(IssueActivated),
+    /// `wrapper.pickup.bound`
+    PickupBound(Pickup),
+    /// `wrapper.pickup.skipped`
+    PickupSkipped(Pickup),
     /// `agent.output`
     AgentOutput(AgentOutput),
     /// `usage.context_window`
@@ -184,6 +188,35 @@ pub struct IssueActivated {
     /// How the Orchestrator derived the binding.
     #[serde(default)]
     pub binding_source: Option<String>,
+}
+
+/// One **Pickup** decision: the issue it named, why, and where in the order.
+///
+/// The same shape carries both halves of the walk (`wrapper.pickup.bound` and
+/// `wrapper.pickup.skipped`, #397), because a binding and a skip answer the
+/// same three questions about the same order and a reader that modelled them
+/// separately would be two decoders of one record.
+///
+/// Only `issue` is required. A record naming no issue is unattributable and
+/// therefore useless, but a port that reports the binding without its order is
+/// merely *degraded* — the issue and the reason are still worth showing, so
+/// `position` and `considered` are optional rather than defaulted to a
+/// position the runner never claimed.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Pickup {
+    /// The issue this Pickup bound, or passed over.
+    pub issue: IssueRef,
+    /// Why it was taken (`order`, `priority`, `pin`), or why it was passed
+    /// over. Open text on a skip: the reason originates in whatever admission
+    /// the Orchestrator applied.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The candidate's 1-based place in the order it was decided over.
+    #[serde(default)]
+    pub position: Option<i64>,
+    /// How long that order was.
+    #[serde(default)]
+    pub considered: Option<i64>,
 }
 
 /// One timestamped, unclassified line of agent output.
@@ -445,6 +478,17 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
             Ok(activated) => EventPayload::IssueActivated(activated),
             // An activation naming no usable issue binds nothing; it is
             // unusable telemetry, not a reason to drop the Event.
+            Err(_) => EventPayload::Other,
+        },
+        // A Pickup record is only worth anything attributed to the issue it
+        // names, so one that names none degrades the same way an activation
+        // does rather than landing on whichever issue happened to be Active.
+        "wrapper.pickup.bound" => match serde_json::from_value(value.clone()) {
+            Ok(pickup) => EventPayload::PickupBound(pickup),
+            Err(_) => EventPayload::Other,
+        },
+        "wrapper.pickup.skipped" => match serde_json::from_value(value.clone()) {
+            Ok(pickup) => EventPayload::PickupSkipped(pickup),
             Err(_) => EventPayload::Other,
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.12",
+  "contract_version": "1.13",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -185,6 +185,21 @@
       "emitted": "Once per ready-for-agent candidate the AFK-ready discriminator rejected, in source order, before the wrapper.afk_ready.collected it explains. A candidate the source could not read is not an exclusion: it was never discriminated against.",
       "scope": "Run-scoped, not contribution-scoped. It names work that never became a Lane contribution, so it carries the collecting Iteration's iter and no contribution identity."
     },
+    "wrapper.pickup.bound": {
+      "required_when_present": ["issue", "reason", "position", "considered"],
+      "reason_values": ["order", "priority", "pin"],
+      "emitted": "Once per Pickup that bound an issue, before the unit of work's agent session starts — a serial Iteration and a Lane alike, because ADR-0032 gave every unit of work a Pickup. A walk that bound nothing emits its skips and no binding.",
+      "position": "The bound candidate's 1-based place in the selection order it was chosen from; considered is the length of that order. Both are required together: position 1 alone cannot tell 'the runner took the oldest' from 'the runner took the only one left', which is the question this Event exists to answer.",
+      "reason_note": "pin is declared here ahead of its producer. #396 owns git-loopy run --issue N and is the only thing that may emit it; a reader that learns the value only when a stream first carries it renders an operator's first pin as an unknown string.",
+      "scope": "Run-scoped, not contribution-scoped. A Pickup precedes the work it binds, so a Lane's contribution_id has not been minted yet and there is nothing but the Run to attribute it to."
+    },
+    "wrapper.pickup.skipped": {
+      "required_when_present": ["issue", "reason", "position", "considered"],
+      "emitted": "Once per candidate a Pickup passed over, in order, before the wrapper.pickup.bound that ended the walk. Selection never blocks on a human (Wrapper contract section 7), so a candidate that cannot be taken is skipped rather than raised — and the skip is a record rather than a log line because the starvation ADR-0032 fixes was invisible precisely for want of one.",
+      "reason_values": null,
+      "reason_note": "Open text, unlike wrapper.pool.excluded's closed set. A refusal originates in whatever admission the port applies — a routing refusal names the label it could not resolve — and closing the vocabulary would force every future admission to pick from a list written before it existed.",
+      "scope": "Run-scoped, for the same reason wrapper.pickup.bound is."
+    },
     "wrapper.contribution.start": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]
     },
@@ -350,6 +365,8 @@
     "scheduler_scoped_types": [
       "wrapper.pool.refreshed",
       "wrapper.pool.excluded",
+      "wrapper.pickup.bound",
+      "wrapper.pickup.skipped",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
@@ -380,6 +397,8 @@
     "WRAPPER_ITERATION_END": "wrapper.iteration.end",
     "WRAPPER_AFK_READY_COLLECTED": "wrapper.afk_ready.collected",
     "WRAPPER_POOL_EXCLUDED": "wrapper.pool.excluded",
+    "WRAPPER_PICKUP_BOUND": "wrapper.pickup.bound",
+    "WRAPPER_PICKUP_SKIPPED": "wrapper.pickup.skipped",
     "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
@@ -1176,7 +1195,7 @@
   "rolling_stream_cases": [
     {
       "id": "two-lanes-refill-park-recover-and-latch-serial",
-      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, recovers one contribution inside its private stage, and then latches Serial-required work.",
+      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing.",
       "distributions": [
         "python",
         "shell",
@@ -1191,7 +1210,8 @@
           "issues": [
             42,
             43,
-            44
+            44,
+            46
           ]
         },
         {
@@ -1207,6 +1227,16 @@
           "host_state": "healthy"
         },
         {
+          "ts": "2026-05-16T00:00:02.400Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pickup.bound",
+          "issue": 42,
+          "reason": "order",
+          "position": 1,
+          "considered": 4
+        },
+        {
           "ts": "2026-05-16T00:00:03.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1214,6 +1244,16 @@
           "contribution_id": "c-0001",
           "issue": 42,
           "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:03.400Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pickup.bound",
+          "issue": 43,
+          "reason": "order",
+          "position": 1,
+          "considered": 3
         },
         {
           "ts": "2026-05-16T00:00:04.000Z",
@@ -1252,6 +1292,16 @@
           "contribution_id": "c-0001",
           "issue": 42,
           "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:07.400Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pickup.bound",
+          "issue": 44,
+          "reason": "order",
+          "position": 1,
+          "considered": 2
         },
         {
           "ts": "2026-05-16T00:00:08.000Z",
@@ -1533,6 +1583,16 @@
           "reason": "serial_granted"
         },
         {
+          "ts": "2026-05-16T00:00:31.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pickup.skipped",
+          "issue": 46,
+          "position": 1,
+          "considered": 1,
+          "reason": "routing refused: unknown task-type label 'task-type:chore '"
+        },
+        {
           "ts": "2026-05-16T00:00:32.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1542,13 +1602,16 @@
         }
       ],
       "jsonl": [
-        "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44]}\n",
+        "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44, 46]}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:03.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 3, \"issue\": 43, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.commit.recorded\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"sha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"subject\": \"feat: 42\"}\n",
         "{\"ts\": \"2026-05-16T00:00:06.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.work_finished\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:07.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:07.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 2, \"issue\": 44, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:08.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:09.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:10.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 0, \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
@@ -1573,6 +1636,7 @@
         "{\"ts\": \"2026-05-16T00:00:29.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:30.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:31.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"serial_ownership\", \"reason\": \"serial_granted\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:31.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.skipped\", \"considered\": 1, \"issue\": 46, \"position\": 1, \"reason\": \"routing refused: unknown task-type label 'task-type:chore '\"}\n",
         "{\"ts\": \"2026-05-16T00:00:32.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.rolling.refill_turn\", \"effective_lane_limit\": 2, \"reservations\": 0}\n"
       ]
     },

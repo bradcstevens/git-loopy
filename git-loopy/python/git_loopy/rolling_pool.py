@@ -64,6 +64,7 @@ from git_loopy.sources import (
 )
 
 __all__ = [
+    "PoolTake",
     "RefreshBackoff",
     "RollingPool",
     "is_parallel_safe",
@@ -109,6 +110,36 @@ class _CachedCandidate:
 
     candidate: PoolCandidate
     quarantined: bool = False
+
+
+@dataclass(frozen=True)
+class PoolTake:
+    """One walk of the cache, and where in it the walk stopped (#397).
+
+    ``take`` used to return a bare item, which threw away the one fact a
+    **Lane Pickup** record cannot reconstruct later: the candidate's place in
+    the order it was chosen from. The Pool *is* the order (Wrapper contract
+    §3.2), and by the time the Lane binds, the taken candidate has left the
+    cache and the sequence that gave its position meaning is gone.
+
+    It carries the same three facts as
+    :class:`git_loopy.serial_pickup.SerialPickup` — what was taken, where it
+    sat, and how long the order was — so both kinds of Pickup produce one
+    vocabulary rather than two.
+
+    Attributes:
+        item: The validated, enriched candidate, or ``None`` when nothing in
+            the cache currently resolves.
+        position: The taken candidate's 1-based place in the cache as it stood
+            at the start of the walk, or ``None`` when nothing was taken.
+        considered: How many candidates that cache held. Reported even for a
+            walk that took nothing, because an exhausted cache and an empty one
+            are different Run states and only this number tells them apart.
+    """
+
+    item: AfkReadyItem | None
+    position: int | None
+    considered: int
 
 
 @dataclass
@@ -229,7 +260,7 @@ class RollingPool:
 
     # -- reservation -------------------------------------------------------- #
 
-    def take(self) -> AfkReadyItem | None:
+    def take(self) -> PoolTake:
         """Validate candidates in FIFO order and return the first dispatchable one.
 
         This is the only path from a cached candidate to Lane work, and it
@@ -244,17 +275,22 @@ class RollingPool:
         head-of-line-block the candidates behind it.
 
         Returns:
-            The validated, enriched item — removed from the cache, since a
-            reserved candidate must not be offered to a second **Lane** — or
-            ``None`` when nothing currently resolves.
+            The walk (#397): the validated, enriched item — removed from the
+            cache, since a reserved candidate must not be offered to a second
+            **Lane** — together with where it sat in the order and how long that
+            order was. A walk that resolves nothing reports the order it looked
+            at anyway; see :class:`PoolTake`.
         """
-        for entry in list(self._entries):
+        walked = list(self._entries)
+        for position, entry in enumerate(walked, start=1):
             if entry.quarantined or not self.eligible(entry.candidate):
                 continue
             pickup = self.source.pickup(entry.candidate.ref)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
                 self._entries.remove(entry)
-                return pickup.item
+                return PoolTake(
+                    item=pickup.item, position=position, considered=len(walked)
+                )
             if pickup.outcome == PICKUP_UNAVAILABLE:
                 entry.quarantined = True
                 self.diag.warning(
@@ -264,7 +300,7 @@ class RollingPool:
                 )
                 continue
             self._entries.remove(entry)
-        return None
+        return PoolTake(item=None, position=None, considered=len(walked))
 
     # -- termination -------------------------------------------------------- #
 

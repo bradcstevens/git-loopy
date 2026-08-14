@@ -2502,6 +2502,160 @@ def test_a_pool_whose_every_candidate_is_skipped_strikes_rather_than_exits(
     assert run_end["outcome"] != "empty_pool"
 
 
+def _pickup_events(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every Pickup record this Run wrote, bindings and skips alike, in order."""
+    return [
+        event
+        for raw in _log_lines(tmp_path)
+        if (event := json.loads(raw))["type"]
+        in ("wrapper.pickup.bound", "wrapper.pickup.skipped")
+    ]
+
+
+def test_a_serial_pickup_records_what_it_bound_and_why(tmp_path, monkeypatch) -> None:
+    """#397: a decision nobody can see is a decision nobody can audit.
+
+    ``position`` and ``considered`` travel together because position 1 alone
+    cannot tell "the runner took the oldest" from "the runner took the only one
+    left" — which is the question the Event exists to answer.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(31, "2026-05-01T00:00:00Z"),
+            _dated(7, "2026-01-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    assert _pickup_events(tmp_path) == [
+        {
+            "ts": _pickup_events(tmp_path)[0]["ts"],
+            "run_id": _pickup_events(tmp_path)[0]["run_id"],
+            "iter": 1,
+            "type": "wrapper.pickup.bound",
+            "issue": 7,
+            "reason": "order",
+            "position": 1,
+            "considered": 2,
+        }
+    ]
+
+
+def test_a_priority_binding_says_the_label_is_why(tmp_path, monkeypatch) -> None:
+    """"Is the backlog draining oldest-first?" and "did my label do anything?"
+    are different operator questions, so they get different reasons."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(
+                31, "2026-05-01T00:00:00Z", labels=["ready-for-agent", "priority"]
+            ),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    bound = _pickup_events(tmp_path)
+    assert [(e["issue"], e["reason"], e["position"]) for e in bound] == [
+        (31, "priority", 1)
+    ]
+
+
+def test_a_passed_over_issue_leaves_a_record_not_only_a_log_line(
+    tmp_path, monkeypatch
+) -> None:
+    """The starvation ADR-0032 fixes was invisible *for want of this record*.
+
+    An issue could be passed over fifty times and the only evidence was that it
+    was still there. The skip carries its position because being skipped at the
+    head of the order and being skipped behind ten other candidates are
+    different facts about a backlog.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    records = _pickup_events(tmp_path)
+    assert [e["type"] for e in records] == [
+        "wrapper.pickup.skipped",
+        "wrapper.pickup.bound",
+    ]
+    skipped, bound = records
+    assert (skipped["issue"], skipped["position"], skipped["considered"]) == (7, 1, 2)
+    assert "not-a-real-key" in skipped["reason"]
+    assert (bound["issue"], bound["position"], bound["considered"]) == (31, 2, 2)
+
+
+def test_a_walk_that_binds_nothing_still_records_every_skip(
+    tmp_path, monkeypatch
+) -> None:
+    """The Run going nowhere is exactly the one whose reasons matter most."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7, "2026-01-01T00:00:00Z", labels=["ready-for-agent", "task-type:nope"]
+            ),
+            _dated(
+                31, "2026-05-01T00:00:00Z", labels=["ready-for-agent", "task-type:nah"]
+            ),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    records = _pickup_events(tmp_path)
+    assert [e["type"] for e in records] == ["wrapper.pickup.skipped"] * 2
+    assert [e["issue"] for e in records] == [7, 31]
+
+
+def test_the_binding_record_precedes_the_session_it_bound_for(
+    tmp_path, monkeypatch
+) -> None:
+    """Replay order is the claim: the runner decided before the agent spoke."""
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    types_seen = _logged_types(tmp_path)
+    assert types_seen.index("wrapper.afk_ready.collected") < types_seen.index(
+        "wrapper.pickup.bound"
+    )
+    assert types_seen.index("wrapper.pickup.bound") < types_seen.index(
+        "wrapper.issue.activated"
+    )
+
+
+def test_a_clean_pool_records_a_binding_and_no_skip(tmp_path, monkeypatch) -> None:
+    """This slice adds visibility; it must not invent a skip that never was."""
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    assert [e["type"] for e in _pickup_events(tmp_path)] == ["wrapper.pickup.bound"]
+
+
 def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
     """The pair the session is built with comes from the Pickup, not the config.
 

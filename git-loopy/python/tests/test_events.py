@@ -1299,3 +1299,34 @@ def test_events_module_imports_are_constrained() -> None:
             seen.add(node.module)
     leaked = seen - allow
     assert not leaked, f"events.py imports non-allowlisted modules: {leaked}"
+
+
+def test_pickup_event_constants_are_literal_strings() -> None:
+    """#397: selection is a runner decision, so it is a record, not a log line.
+
+    One noun and two verbs, the shape ``wrapper.pool.excluded`` /
+    ``wrapper.pool.refreshed`` already uses, because the skip and the binding
+    are two outcomes of one walk and a replay reads them as a pair.
+    """
+    assert events_module.WRAPPER_PICKUP_BOUND == "wrapper.pickup.bound"
+    assert events_module.WRAPPER_PICKUP_SKIPPED == "wrapper.pickup.skipped"
+
+
+def test_pickup_events_carry_no_contribution_identity() -> None:
+    """A Pickup precedes the contribution it creates, so it cannot name one.
+
+    A Lane's ``contribution_id`` is minted by ``start_session``, which runs
+    *after* the candidate has been taken and admitted — so a Pickup Event that
+    demanded the identity triple could never be emitted at the moment it
+    describes.
+    """
+    for literal in (
+        events_module.WRAPPER_PICKUP_BOUND,
+        events_module.WRAPPER_PICKUP_SKIPPED,
+    ):
+        assert literal not in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+        event = events_module.make_event(
+            literal, run_id="r1", iter=3, issue=7, reason="order",
+            position=1, considered=4,
+        )
+        assert event["iter"] == 3

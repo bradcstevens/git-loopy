@@ -104,6 +104,14 @@ _STRIKE = "wrapper.strike"
 # pool, commits, closures, and per-iteration boundaries all flow through the
 # same #22 fan-out, so the ledger folds out of them with no new plumbing.
 _AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+#: The two halves of one **Pickup** walk (#397). Attributed to the issue each
+#: names rather than to the **Active issue**, which is the whole value of the
+#: record: a skip folded into the issue a Run was working would say the Run
+#: passed over its own work. Neither ever opens an Active stint — a passed-over
+#: candidate was considered, never worked, and a binding's stint belongs to the
+#: ``wrapper.issue.activated`` that publishes it.
+_PICKUP_BOUND = "wrapper.pickup.bound"
+_PICKUP_SKIPPED = "wrapper.pickup.skipped"
 _COMMIT_RECORDED = "wrapper.commit.recorded"
 #: A runner-authored **Checkpoint** (issue #32 / ADR-0004). Folded into the
 #: per-issue Log as a distinct event line but, unlike a commit, it does NOT
@@ -542,6 +550,14 @@ class LiveRunState:
             self._begin_iteration(now)
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
+        elif etype == _PICKUP_BOUND:
+            self._record_pickup_line(
+                event.get("issue"), _log_pickup_bound_text(event), now
+            )
+        elif etype == _PICKUP_SKIPPED:
+            self._record_pickup_line(
+                event.get("issue"), _log_pickup_skipped_text(event), now
+            )
         elif etype == _TOOL_CALL:
             self._record_event_line(_log_tool_text(event))
         elif etype == _COMMIT_RECORDED:
@@ -1196,6 +1212,32 @@ class LiveRunState:
         self._lane_commits = {}
         self._iter_lane_refs = set()
 
+    def _record_pickup_line(self, ref: Any, text: str, now: float) -> None:
+        """Attribute one **Pickup** record to the issue it names (#397).
+
+        The Python analogue of the Rust reader's per-issue Log append, and
+        deliberately *not* :meth:`_record_event_line`: that one pivots on the
+        Active issue, and a Pickup record's whole value is that it names its
+        own subject. A skip folded into whatever was Active would read as a Run
+        passing over the issue it was working.
+
+        The entry enters the ledger ``queued`` if it is not there already, so a
+        passed-over candidate gets a **Queue** row rather than being visible
+        only to whoever drills into it — but no Active stint opens. A candidate
+        the runner declined to take was considered, not worked, and charging it
+        for the consideration would put time against an issue nothing ran.
+        """
+        if ref is None or not text:
+            return
+        key = self._normalize_ref(ref)
+        if key not in self.ledger:
+            self.ledger[key] = IssueLedgerEntry(
+                ref=key, first_seen_at=now, first_seen_iter=self.iteration
+            )
+        self._emit_event_line(
+            self._lane_stream_state(key), self._lane_provider(key), text
+        )
+
     def _record_pool(self, issues: Any, now: float) -> None:
         """Fold one ``afk_ready.collected`` pool into the ledger.
 
@@ -1600,6 +1642,53 @@ def _log_commit_text(event: Mapping[str, Any]) -> str:
         lines = str(subject).splitlines()
         text += f"  {lines[0] if lines else str(subject)}"
     return text
+
+
+def _log_pickup_bound_text(event: Mapping[str, Any]) -> str:
+    """A **Pickup** binding as a Log ``event`` line (#397).
+
+    Names the order as well as the issue, because "the runner took the oldest"
+    and "the runner took the only one left" are different facts about a backlog
+    and position alone cannot tell them apart. Held byte-identical to the Rust
+    reader's ``pickup_bound_text`` by ``conformance/dashboard-insights.json``.
+    """
+    detail = [
+        part
+        for part in (str(event.get("reason") or ""), _pickup_order_phrase(event))
+        if part
+    ]
+    text = f"Pickup: bound {_pickup_issue_label(event)}"
+    if detail:
+        text += f" ({', '.join(detail)})"
+    return text
+
+
+def _log_pickup_skipped_text(event: Mapping[str, Any]) -> str:
+    """One passed-over candidate as a Log ``event`` line (#397)."""
+    text = f"Pickup: skipped {_pickup_issue_label(event)}"
+    order = _pickup_order_phrase(event)
+    if order:
+        text += f" at {order}"
+    reason = str(event.get("reason") or "")
+    if reason:
+        text += f" ({reason})"
+    return text
+
+
+def _pickup_order_phrase(event: Mapping[str, Any]) -> str:
+    """``position N of M``, or nothing when the Orchestrator reported no order."""
+    position = event.get("position")
+    considered = event.get("considered")
+    if not isinstance(position, int):
+        return ""
+    if isinstance(considered, int):
+        return f"position {position} of {considered}"
+    return f"position {position}"
+
+
+def _pickup_issue_label(event: Mapping[str, Any]) -> str:
+    issue = event.get("issue")
+    return f"#{issue}" if isinstance(issue, int) else str(issue)
 
 
 def _log_checkpoint_text(event: Mapping[str, Any]) -> str:

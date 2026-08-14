@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.12 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.13 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -205,7 +205,7 @@ An Orchestrator running serially MUST:
   `task-type:` label refuses to resolve a **Routed pair** (§14) — MUST be passed over and the next
   candidate tried. A serial Run has no second Lane to leave the candidate for, so a refusal that
   ended the Run would end it over one mislabelled issue. Each skip MUST be reported with the
-  issue and the reason.
+  issue and the reason, as a `wrapper.pickup.skipped` Event (§12) and not only as a diagnostic.
 
   **The admissible set is the member's own, and today only one member has a refusal to make.**
   Admission is whatever an Orchestrator must resolve at Pickup in order to start the session on
@@ -217,6 +217,13 @@ An Orchestrator running serially MUST:
   then match the reference member's. Admission MUST NOT be widened past that into re-deciding
   eligibility — the `ready-for-agent` label and the AFK-ready discriminator settle that at
   collection (§3.1), and a second opinion at Pickup would be a second place for it to disagree.
+- **Record the binding (contract 1.13).** A **Pickup** that binds MUST emit
+  `wrapper.pickup.bound` (§12) carrying the issue, the selection reason, and where the candidate
+  sat in the order. Selection is the runner's decision as of contract 1.12, and a decision nobody
+  can see is a decision nobody can audit: the starvation §3.2 exists to end was invisible
+  precisely because being passed over left no trace. The record is emitted *after* the
+  `wrapper.issue.activated` that publishes the binding, so it never describes a binding the rest
+  of the stream does not contain, and every skip that ended in this binding MUST precede it.
 - **Select and publish are two steps.** The prompt renders the candidate the Pickup *selected*,
   even when publishing its activation fails. An Orchestrator MUST NOT fall back to rendering the
   whole Pool on a failed activation: that restores the menu this section removes, on the one path
@@ -234,7 +241,9 @@ marker is recorded rather than obeyed. This is the same immutability §12 alread
 first activation; contract 1.12 only moves which event is first.
 
 Serial Pickup does not change **Rolling dispatch**: a **Lane** already binds one issue at pickup
-(`binding_source: lane_pickup`) and keeps doing so.
+(`binding_source: lane_pickup`) and keeps doing so — and emits the same `wrapper.pickup.bound`
+record when it does, because an operator auditing selection is asking one question about a Run,
+not two questions about two schedulers.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -541,6 +550,19 @@ Orchestrator rollout tickets own enabling those producers.
   is not a valid activation: it MUST NOT bind, because binding it would republish a
   non-RFC3339 `first_started_at` on every later Iteration end. The Iteration reports no issue
   contribution and the Run continues.
+- `wrapper.pickup.bound` and `wrapper.pickup.skipped` (contract 1.13): `issue`, `reason`,
+  `position`, and `considered` — which issue, why, where it sat in the order, and how long the
+  order was. Both are **Run-scoped**: they carry no `contribution_id` and no `lane_id`, because a
+  Lane's contribution identity is minted when its session starts and a Pickup happens before
+  that — an Event that demanded the identity triple could never be emitted at the moment it
+  describes. `reason` on a binding is one of `order`, `priority`, or `pin`; on a skip it is the
+  free-text reason the candidate was passed over. `considered` is required rather than derivable:
+  *the runner took the oldest* and *the runner took the only one left* are different facts about
+  a backlog, and `position: 1` alone cannot tell them apart. Every skip that ended in a binding
+  MUST precede that binding, which is the same ordering `wrapper.pool.excluded` already keeps
+  against `wrapper.afk_ready.collected`. A stream recorded before contract 1.13 carries neither
+  record and MUST still replay: a consumer that requires them to reconstruct a Run is reading a
+  guarantee this schema does not make.
 - `agent.output`: `text` and `kind`, where the only schema-1 kind is `unclassified`. Once produced,
   native CLI text MUST NOT be relabeled as SDK reasoning, assistant, tool-call, or tool-result
   data.

@@ -529,8 +529,18 @@ reassignment.
 The instant the runner binds one issue to a unit of work, before that unit's agent
 session begins. Because the issue is known first, pickup is where its **Routed pair**
 resolves and where its **Lease** is taken. Every unit of work has a pickup — a serial
-**Iteration** as much as a **Lane**.
+**Iteration** as much as a **Lane** — and every pickup is carried as a
+`wrapper.pickup.bound` **Event** naming which issue, why, and where it sat in the order.
 _Avoid_: assignment, dispatch, selection.
+
+**Pickup skip**:
+A candidate the runner walked past at **Pickup** without binding — today, one whose
+`task-type:` label refuses to resolve a **Routed pair**. Distinct from a **Pool
+exclusion**, which happens at collection and is a human's mistake to fix: a skip is the
+runner declining work it could not start, and it carries a `wrapper.pickup.skipped`
+**Event** so that being passed over leaves a trace. An issue passed over fifty times
+used to be indistinguishable from one nobody had reached yet.
+_Avoid_: rejection, exclusion, deferral.
 
 **Lease**:
 A run's exclusive right to work one issue, taken at **Pickup**, held while its owner
