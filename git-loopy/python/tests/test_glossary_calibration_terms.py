@@ -19,6 +19,7 @@ claim must.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import re
 from pathlib import Path
@@ -157,73 +158,99 @@ def test_calibration_publishes_no_prose_conclusion() -> None:
     assert "no written analysis" in entry
 
 
-#: The three seams a **Calibration** has to reach to actually happen: the walk
-#: that decides which **Trials** to buy, the Trial runner that spends, and the
-#: writer that publishes the result. Written as *call sites*, because all three
-#: definitions ship — it is the calling of them that does not.
-_SPENDING_SEAMS: tuple[str, ...] = (
-    "search_price_staircase(",
-    "ReplayTrialRunner(",
-    "write_measured_routing(",
+#: The modules that drive **unattended** work: the run loop and the session it
+#: spawns, the scheduler that keeps **Lanes** fed, and the preflight that
+#: compares the live roster to the artifact. The **Calibration** entry's
+#: strongest claim is about exactly these — *"it never starts itself, not on a
+#: first Run, not at preflight, not when the roster moves."*
+_UNATTENDED_MODULES: tuple[str, ...] = (
+    "loop.py",
+    "session.py",
+    "rolling_scheduler.py",
+    "roster_preflight.py",
+    "roster_drift.py",
 )
 
+#: The modules a Calibration spends through: the walk that decides which
+#: **Trials** to buy, the surface that drives a whole search, the Trial runner
+#: itself and the dispatcher that widens it. Reaching any one of them is what
+#: *"starting a Calibration"* would have to mean.
+_SPENDING_MODULES: frozenset[str] = frozenset(
+    {
+        "git_loopy.calibration_run",
+        "git_loopy.calibration_search",
+        "git_loopy.trial",
+        "git_loopy.trial_concurrency",
+    }
+)
 
-def _package_call_sites(seam: str) -> list[str]:
-    """Every line in the shipped package that *calls* ``seam``.
+#: The one name in :mod:`git_loopy.measured_routing` that *changes* the artifact.
+#: The loader is fair game for an unattended path — preflight reads the artifact
+#: to compare it against the roster — so the module cannot be forbidden wholesale
+#: and the writer is named on its own.
+_ARTIFACT_WRITER = "write_measured_routing"
 
-    Definitions are skipped, so ``def search_price_staircase(`` does not count as
-    a caller of itself, and tests are out of scope by construction: a seam
-    exercised only from ``tests/`` is exactly the state this asserts.
+
+def _imported_names(module: str) -> set[str]:
+    """Every module and name ``module`` imports, including inside a function.
+
+    Parsed rather than grepped so a docstring cross-reference cannot count as a
+    dependency — several of these modules discuss a **Calibration** at length —
+    and so a lazy import inside a function is caught, which is where a
+    late-arriving one would most plausibly hide.
     """
     root = _repo_root()
     if root is None:  # pragma: no cover - installed wheel, no source checkout
         pytest.skip("no source checkout to read the package from")
-    calls: list[str] = []
-    for module in sorted((root / "git-loopy" / "python" / "git_loopy").rglob("*.py")):
-        for line in module.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith(("def ", "class ", "async def ")):
-                continue
-            if seam in stripped:
-                calls.append(f"{module.name}: {stripped}")
-    return calls
+    path = root / "git-loopy" / "python" / "git_loopy" / module
+    assert path.is_file(), f"{module} is missing"
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            source = node.module or ""
+            names.add(source)
+            names.update(f"{source}.{alias.name}" for alias in node.names)
+            names.update(alias.name for alias in node.names)
+    return names
 
 
-@pytest.mark.parametrize("seam", _SPENDING_SEAMS)
-def test_no_shipped_path_runs_a_calibration(seam: str) -> None:
-    """The entry's *"nothing runs one yet"* is pinned to the code, not asserted.
+@pytest.mark.parametrize("module", _UNATTENDED_MODULES)
+def test_no_unattended_path_can_start_a_calibration(module: str) -> None:
+    """The entry's load-bearing claim, asserted as a fact rather than as prose.
 
-    ``git-loopy calibrate`` requires ``--status`` or ``--dry-run`` and both are
-    structurally incapable of spending, so the walk, the **Trial** runner and the
-    artifact writer are reachable from the test suite and from nothing else. This
-    is the guard that makes the claim expire on its own: whichever commit wires
-    the spending path (#372) fails here, and the entry has to be corrected in the
-    same breath rather than quietly becoming false.
+    ``test_calibration_records_that_it_never_starts_itself`` pins the *sentence*;
+    nothing pinned the thing it describes. That gap matters more than most,
+    because the whole tolerance for an unattended overnight **Run** rests on a
+    Calibration being unable to begin inside one — a vendor shipping a model on a
+    Tuesday must not turn tonight's Run into a benchmark suite (ADR-0027,
+    ADR-0028).
+
+    Structural, like #371's carve-out: a module that never imports the walk, the
+    Trial runner or the spending surface cannot reach them by any argument, so a
+    later refactor that wires one in fails here instead of quietly re-arming the
+    hazard. The artifact **loader** is deliberately allowed — preflight reads the
+    artifact to tell an operator that re-calibrating could change an answer, and
+    reading is what makes the notification possible without spending.
     """
-    assert _package_call_sites(seam) == [], (
-        f"{seam!r} now has a caller, so a Calibration can be run — "
-        "the **Calibration** entry's 'nothing runs one yet' is stale"
+    imported = _imported_names(module)
+
+    reached = sorted(
+        name
+        for name in imported
+        if any(
+            name == spending or name.startswith(f"{spending}.")
+            for spending in _SPENDING_MODULES
+        )
     )
-
-
-def test_the_calibration_entry_records_that_nothing_runs_one_yet() -> None:
-    """The term names an act, and no operator can perform it (ADR-0019's rule).
-
-    Every clause above this one describes ``search_price_staircase``, which no
-    shipped path calls — so an entry that stopped at *"always an explicit
-    operator act"* would read as though the act were available, which is the
-    same claim-ahead-of-code failure **Demotion** is held out of Language for.
-    The line is drawn where the operator documentation already draws it: two
-    modes that report, and no mode that buys.
-    """
-    entry = _entry("Calibration")
-
-    assert "nothing runs one yet" in entry
-    assert "no command surface reaches them" in entry
-    assert "hand-placed" in entry, (
-        "an artifact present today was written by a human, "
-        "which is what the Measured routing entry's `git blame` property "
-        "cannot say for itself"
+    assert reached == [], (
+        f"{module} imports {reached}, so an unattended path can reach a "
+        "Calibration — which is the one thing the term promises it cannot"
+    )
+    assert _ARTIFACT_WRITER not in imported, (
+        f"{module} imports {_ARTIFACT_WRITER}: an unattended path may read the "
+        "**Measured routing** artifact, never write it"
     )
 
 
@@ -539,12 +566,18 @@ def test_demotion_is_not_written_into_language_ahead_of_its_code() -> None:
     """The fifth term stays out, because nothing demotes yet.
 
     ADR-0030 fixes **Demotion** and the **Measured routing** artifact already
-    carries the ``demoted`` and ``provisional`` states it would write, but no
-    code counts a pair's no-progress contributions or replaces an entry. Writing
-    the entry now would state as shipped reality a mechanism a reader cannot
-    invoke — the precise failure ADR-0019's precedent exists to prevent, and the
-    one ``test_every_new_term_is_implemented_by_shipped_code`` pins for the
-    other four.
+    carries the ``provisional`` state it would write, but no code counts a pair's
+    no-progress contributions or replaces an entry. Writing the entry now would
+    state as shipped reality a mechanism a reader cannot invoke — the precise
+    failure ADR-0019's precedent exists to prevent, and the one
+    ``test_every_new_term_is_implemented_by_shipped_code`` pins for the other
+    four.
+
+    The state named here is ``provisional`` alone. The older ``demoted`` one is
+    superseded and has no writer (``test_the_demoted_state_is_documented_as_
+    superseded_not_as_the_live_rule``), so naming it beside ``provisional`` was
+    the same error c0d85ea corrected in three other voices — surviving here, in
+    the guard for the very claim.
     """
     assert _find_entry("Demotion") is None, (
         "**Demotion** has a glossary entry but no implementation; "
