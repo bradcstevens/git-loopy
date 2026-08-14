@@ -52,6 +52,13 @@ GIT_LOOPY_POOL_COMPLETE=1
 GIT_LOOPY_ISSUE_LIST_JSON='[]'
 # Tri-state interactive request: "on", "off", or empty for "no flag given".
 GIT_LOOPY_INTERACTIVE_FLAG=""
+# Wrapper contract §3.2 — the invocation-scoped **Pin** (`--issue N`, #396), or
+# empty when unpinned. Deliberately *not* seeded from the environment, unlike
+# every other knob below: an env var is inherited by every Run launched from
+# that shell, which is the same globally-scoped hazard that rules out expressing
+# the pin as a label (ADR-0032). A flag is the only surface whose lifetime
+# matches the thing being expressed.
+GIT_LOOPY_ISSUE_PIN=""
 # Continuation authority is collected as three uncombined sources and resolved
 # by the native Continuation module during preflight. An empty value preserves
 # the pre-Continuation Pool lifecycle byte-for-byte.
@@ -69,6 +76,12 @@ Options:
   --model ID
   --reasoning-effort none|minimal|low|medium|high|xhigh|max
   --issue-source github|prds
+  --issue N                     Pin issue N for this invocation (ADR-0032):
+                                work N instead of the head of the selection
+                                order. At most once. Bypasses order and nothing
+                                else -- a pinned issue that is closed, missing,
+                                unreadable, lacks ready-for-agent, or fails the
+                                AFK-ready discriminator fails the invocation.
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
@@ -104,6 +117,31 @@ _git_loopy_require_option_value() {
   (($# >= 1)) &&
     [[ "$1" != -* ]] ||
     _git_loopy_config_error "$option requires a value"
+}
+
+# Accepts one `--issue N` and refuses a second. Exactly one issue may be pinned
+# per invocation (#396): "the last one wins" is the silent substitution the pin
+# exists to prevent, arrived at by an argument-parsing default. A malformed
+# invocation is a *usage* error (exit 2), not the preflight failure an
+# ineligible-but-well-formed pin produces.
+#
+# Writes `issue_pin` / `issue_pin_seen` in the caller's scope, which are
+# `git_loopy_resolve_config`'s locals — the same convention the repeatable
+# `--deny-tool` accumulators use.
+_git_loopy_accept_issue_pin() {
+  local raw="$1"
+  ((issue_pin_seen == 0)) ||
+    _git_loopy_config_error \
+      "--issue may be given at most once; exactly one issue may be pinned per invocation" ||
+    return 2
+  [[ "$raw" =~ ^[0-9]+$ ]] ||
+    _git_loopy_config_error "--issue must be an issue number, got '$raw'" ||
+    return 2
+  ((10#$raw >= 1)) ||
+    _git_loopy_config_error "--issue must be a positive issue number, got '$raw'" ||
+    return 2
+  issue_pin="$((10#$raw))"
+  issue_pin_seen=1
 }
 
 _git_loopy_trim() {
@@ -562,6 +600,8 @@ git_loopy_resolve_config() {
   local send_timeout="${env_timeout:-7200}"
   local max_iterations=0
   local positional_seen=0
+  local issue_pin=""
+  local issue_pin_seen=0
   local -a cli_tools=()
   local -a cli_skills=()
   # Tri-state, exactly like the Python reference: empty means "no flag", so the
@@ -595,6 +635,15 @@ git_loopy_resolve_config() {
       --reasoning-effort=*)
         effort="${1#*=}"
         effort_explicit=1
+        shift
+        ;;
+      --issue)
+        _git_loopy_require_option_value "$@" || return 2
+        _git_loopy_accept_issue_pin "$2" || return 2
+        shift 2
+        ;;
+      --issue=*)
+        _git_loopy_accept_issue_pin "${1#*=}" || return 2
         shift
         ;;
       --issue-source)
@@ -765,6 +814,7 @@ git_loopy_resolve_config() {
   GIT_LOOPY_MAX_NMT_STRIKES="$((10#$max_strikes))"
   GIT_LOOPY_SEND_TIMEOUT_SECONDS="$send_timeout"
   GIT_LOOPY_INTERACTIVE_FLAG="$interactive_flag"
+  GIT_LOOPY_ISSUE_PIN="$issue_pin"
 }
 
 git_loopy_is_afk_ready() {
@@ -931,8 +981,17 @@ git_loopy_timestamp_defect() {
 # instant, then the issue number. The dated bit sits *between* the rank and the
 # instant, which is exactly what "sorts last within its own priority rank"
 # means. The number makes the order total, so no two distinct issues tie.
+#
+# The optional second argument is the invocation's **Pin** (`--issue N`, #396).
+# It is applied to the *finished* order rather than folded into the sort key,
+# because §3.2 requires the key to be a pure function of the fetched issue
+# fields and a pin is one operator's instruction, not a property of any issue.
+# The promotion is stable — everything else keeps its §3.2 sequence behind the
+# pin — and a pin naming an issue that is not here is a no-op; refusing that
+# invocation is `_git_loopy_preflight_pin`'s job, and it has already run.
 git_loopy_order_issues() {
   local issues_json="$1"
+  local pin="${2:-}"
   local -a keyed=()
   local candidate
 
@@ -987,6 +1046,11 @@ git_loopy_order_issues() {
   if ((${#ordered[@]} > 0)); then
     order_json="$(printf '%s\n' "${ordered[@]}" | jq -cs 'map(tonumber)')" ||
       return 1
+    if [[ -n "$pin" ]]; then
+      order_json="$(jq -c --argjson pin "$pin" \
+        'map(select(. == $pin)) + map(select(. != $pin))' \
+        <<<"$order_json")" || return 1
+    fi
   fi
   if ((${#undated[@]} > 0)); then
     undated_json="$(printf '%s\n' "${undated[@]}" |
@@ -1293,6 +1357,7 @@ git_loopy_preflight() {
         'git-loopy: gh could not resolve this GitHub repository.' >&2
       return 1
     }
+    _git_loopy_preflight_pin || return 1
   fi
 
   local prompt_path
@@ -1305,6 +1370,82 @@ git_loopy_preflight() {
 
   GIT_LOOPY_REPO_ROOT="$repo_root"
   GIT_LOOPY_PROMPT_PATH="$prompt_path"
+}
+
+# Wrapper contract §3.2 — refuse the invocation when `--issue N` names an issue
+# this Run cannot work (#396, ADR-0032).
+#
+# The pin bypasses order and *nothing else*, so every rule §3.1 already applies
+# to a candidate applies to a pin — the difference is what a failure means. §3.3
+# makes a candidate the runner cannot take a **skip**, because a serial Run
+# merely walked past it and ending the Run over one mislabelled issue would be
+# worse than moving on. A pin is an operator naming an issue, and there is no
+# next candidate that honours what they asked for: silently working a different
+# issue than the one named is worse than stopping.
+#
+# It runs *here*, before the Pool, for two reasons. An ineligible pin costs one
+# `issue view` rather than a whole collection that would then be
+# indistinguishable from a backlog which simply did not contain the issue. And
+# it runs once per invocation rather than once per Iteration, because the pin
+# names an invocation's intent — re-asking each Iteration would kill a healthy
+# Run the moment it legitimately closed the issue it was pinned to.
+#
+# The shell Orchestrator is serial, so `parallel-safe` is deliberately not part
+# of this: §14's Parallel mode is future work for this port, and a rule with
+# nothing to enforce it against would be a rule that drifts unnoticed.
+_git_loopy_preflight_pin() {
+  [[ -n "$GIT_LOOPY_ISSUE_PIN" ]] || return 0
+
+  local raw normalized state body exclusion
+  raw="$(gh issue view "$GIT_LOOPY_ISSUE_PIN" \
+    --json "$GIT_LOOPY_SHALLOW_ISSUE_FIELDS,comments" 2>/dev/null)" || {
+    printf '%s\n' \
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN could not be read from the tracker; it may not exist or may not be visible to this gh login." \
+      >&2
+    return 1
+  }
+  normalized="$(_git_loopy_normalize_issue <<<"$raw" 2>/dev/null)" || {
+    printf '%s\n' \
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN could not be read from the tracker; it may not exist or may not be visible to this gh login." \
+      >&2
+    return 1
+  }
+
+  state="$(jq -r '.state' <<<"$normalized")" || return 1
+  if [[ "${state^^}" != "OPEN" ]]; then
+    printf '%s\n' \
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN is closed." >&2
+    return 1
+  fi
+
+  if ! jq -e --arg label "$GIT_LOOPY_READY_LABEL" \
+    'any(.labels[]?; . == $label)' <<<"$normalized" >/dev/null 2>&1; then
+    printf '%s\n' \
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN does not carry the $GIT_LOOPY_READY_LABEL label." \
+      >&2
+    return 1
+  fi
+
+  body="$(jq -r '.body' <<<"$normalized")" || return 1
+  exclusion="$(git_loopy_afk_ready_exclusion "$body")"
+  if [[ -n "$exclusion" ]]; then
+    printf '%s\n' \
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN is not AFK-ready; its body is missing $(_git_loopy_missing_sections "$exclusion")." \
+      >&2
+    return 1
+  fi
+}
+
+# Names the section(s) an AFK-ready exclusion reason says are absent. #396 asks
+# for the *specific* missing section, because the operator's next action is to
+# edit the issue and a message that sends them back to the discriminator to work
+# out which heading is missing has failed at the only job it had.
+_git_loopy_missing_sections() {
+  case "$1" in
+    missing_what_to_build) printf '`## What to build`\n' ;;
+    missing_acceptance_criteria) printf '`## Acceptance criteria`\n' ;;
+    *) printf '`## What to build` and `## Acceptance criteria`\n' ;;
+  esac
 }
 
 _git_loopy_normalize_issue() {
@@ -1354,6 +1495,9 @@ GIT_LOOPY_LIST_MAX_LIMIT=1600
 # The `--json` field set every shallow issue read asks for, named once so this
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
 GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt"
+# The label the Pool query filters on, named once so the pin's eligibility check
+# (`_git_loopy_preflight_pin`) cannot drift from the query it must agree with.
+GIT_LOOPY_READY_LABEL="ready-for-agent"
 
 # Fetches every `ready-for-agent` candidate into `GIT_LOOPY_ISSUE_LIST_JSON` and
 # reports completeness in `GIT_LOOPY_POOL_COMPLETE` (1 = provably exhaustive,
@@ -1370,7 +1514,7 @@ _git_loopy_gh_issue_list_to_completion() {
     page="$(
       gh issue list \
         --state open \
-        --label ready-for-agent \
+        --label "$GIT_LOOPY_READY_LABEL" \
         --limit "$limit" \
         --json "$GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
     )" || return 1
@@ -1417,7 +1561,8 @@ _git_loopy_order_candidates() {
         }
     ]' <<<"$candidates"
   )" || return 1
-  ordering="$(git_loopy_order_issues "$normalized")" || return 1
+  ordering="$(git_loopy_order_issues "$normalized" "$GIT_LOOPY_ISSUE_PIN")" ||
+    return 1
   order_json="$(jq -c '.order' <<<"$ordering")" || return 1
   undated_json="$(jq -c '.undated' <<<"$ordering")" || return 1
 
@@ -1913,11 +2058,17 @@ _git_loopy_emit_pickup_bound() {
   else
     issue_arg="$(jq -cn --arg ref "$ref" '$ref')" || return 1
   fi
-  # `priority` is a human assertion read off the issue, never inferred; every
-  # other head is the head because the order put it there.
+  # `pin` outranks `priority`, which outranks `order`. A pinned issue reached
+  # the head because an operator named it (#396) whatever its labels said, so
+  # crediting the label would make "did my Priority label do anything?"
+  # unanswerable on exactly the Runs where someone overrode it. `priority` in
+  # turn is a human assertion read off the issue, never inferred; every other
+  # head is the head because the order put it there.
   reason="$(
-    jq -r '
-      if ((.labels // []) | map(if type == "object" then .name else . end)
+    jq -r --arg pin "${GIT_LOOPY_ISSUE_PIN:-}" '
+      if ($pin != "" and ((.number // .ref) | tostring) == $pin)
+      then "pin"
+      elif ((.labels // []) | map(if type == "object" then .name else . end)
            | index("priority"))
       then "priority" else "order" end
     ' <<<"$head"

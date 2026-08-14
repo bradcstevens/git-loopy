@@ -461,9 +461,18 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
+    """Two axes, and the literals are what keep them from being read as one.
+
+    ``contract_version`` moved to 1.14 with the **Pin** (#396): the schema's
+    ``reason_values`` did not change — ``pin`` has been declared there since
+    1.13 — but the contract that says *when* a member emits it did, so the
+    fixture tracks it. ``event_schema_version`` deliberately did not: no record
+    gained, lost or re-typed a field, and a consumer pinned to 1.1 reads a
+    1.14 stream unchanged.
+    """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.13"
+    assert _EVENT_SCHEMA["contract_version"] == "1.14"
 
 
 def test_event_fixture_pins_dashboard_insight_contract() -> None:

@@ -93,7 +93,11 @@ Assert-Equal `
 
 foreach ($Case in $IssueOrdering["cases"]) {
     $CaseId = $Case["id"]
-    $Result = Get-GitLoopyIssueOrder -Candidates @($Case["issues"])
+    # The **Pin** (#396) is the fixture's optional per-case dimension; absent on
+    # every pre-1.14 case, which is what keeps those a regression test for the
+    # unpinned path.
+    $Pin = if ($Case.Contains("pin")) { $Case["pin"] } else { $null }
+    $Result = Get-GitLoopyIssueOrder -Candidates @($Case["issues"]) -Pin $Pin
     $Expected = $Case["expected"]
 
     Assert-Equal `
@@ -117,6 +121,14 @@ foreach ($Case in $IssueOrdering["cases"]) {
         }) -join ","
     Assert-Equal $ExpectedUndated $ActualUndated "issue-ordering undated: $CaseId"
 }
+
+if (@($IssueOrdering["cases"] | Where-Object { $_.Contains("pin") }).Count -eq 0) {
+    throw "FAIL: no issue-ordering case exercises the pin"
+}
+Assert-Equal `
+    $true `
+    $IssueOrdering["pin_outranks_priority"] `
+    "issue-ordering: the fixture declares that a Pin outranks Priority"
 
 foreach ($Defect in @($IssueOrdering["timestamp_defects"])) {
     $Covered = @($IssueOrdering["cases"] | Where-Object {

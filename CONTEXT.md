@@ -557,6 +557,17 @@ never affects order. Priority reorders work; it does not change what is eligible
 it never lets an issue past a **Lease**.
 _Avoid_: severity, urgency, task type.
 
+**Pin**:
+One issue an operator names for one invocation (`--issue N`), worked ahead of the head
+of the order and ahead of **Priority** — it outranks the label because a human said so
+directly rather than in advance. A pin bypasses order and *nothing else*: the issue
+still has to be eligible, and a pin that is not fails the invocation rather than
+falling back to the order, because silently working a different issue than the one
+named is worse than stopping. It lasts exactly one invocation, which is why it is
+neither a label nor an environment variable — both are global, and would point every
+concurrent run at the same issue.
+_Avoid_: lock, claim, assignment, selection, priority.
+
 **Queue**:
 The per-run ledger of every issue seen in any pool during the run, each carrying a
 status; the selectable list shown in the live interface. Distinct from the pool,

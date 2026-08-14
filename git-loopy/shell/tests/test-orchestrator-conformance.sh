@@ -68,7 +68,11 @@ assert_equal \
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   issues_json="$(jq -c '.issues' <<<"$case_json")"
-  result_json="$(git_loopy_order_issues "$issues_json")"
+  # The **Pin** (#396) is the fixture's optional per-case dimension; absent on
+  # every pre-1.14 case, which is what keeps those a regression test for the
+  # unpinned path.
+  pin_value="$(jq -r '.pin // "" | tostring' <<<"$case_json")"
+  result_json="$(git_loopy_order_issues "$issues_json" "$pin_value")"
 
   assert_equal \
     "$(jq -c '.expected.order' <<<"$case_json")" \
@@ -90,6 +94,14 @@ while IFS= read -r defect; do
     "$conformance_dir/issue-ordering.json" >/dev/null ||
     fail "no issue-ordering case covers timestamp defect $defect"
 done < <(jq -r '.timestamp_defects[]' "$conformance_dir/issue-ordering.json")
+
+jq -e 'any(.cases[]; .pin != null)' \
+  "$conformance_dir/issue-ordering.json" >/dev/null ||
+  fail "no issue-ordering case exercises the pin"
+assert_equal \
+  "true" \
+  "$(jq -r '.pin_outranks_priority' "$conformance_dir/issue-ordering.json")" \
+  "issue-ordering: the fixture declares that a Pin outranks Priority"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

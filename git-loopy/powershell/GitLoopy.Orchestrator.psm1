@@ -157,6 +157,13 @@ function Resolve-GitLoopyConfig {
     $ShowHelp = $false
     # Tri-state interactive request: "on", "off", or empty for "no flag given".
     $InteractiveFlag = ""
+    # Wrapper contract §3.2 — the invocation-scoped **Pin** (`--issue N`, #396),
+    # or `$null` when unpinned. Deliberately *not* read from `$Environment`,
+    # unlike every other knob above: an env var is inherited by every Run
+    # launched from that shell, which is the same globally-scoped hazard that
+    # rules out expressing the pin as a label (ADR-0032). A flag is the only
+    # surface whose lifetime matches the thing being expressed.
+    $IssuePin = $null
     $CliTools = [Collections.Generic.List[string]]::new()
     $CliSkills = [Collections.Generic.List[string]]::new()
     $SkillPolicyFlagsSeen = [Collections.Generic.HashSet[string]]::new(
@@ -191,6 +198,7 @@ function Resolve-GitLoopyConfig {
             "--model",
             "--reasoning-effort",
             "--issue-source",
+            "--issue",
             "--max-nmt-strikes",
             "--deny-tool",
             "--deny-skill",
@@ -224,6 +232,44 @@ function Resolve-GitLoopyConfig {
                     $EffortExplicit = $true
                 }
                 "--issue-source" { $IssueSource = $Value }
+                # Exactly one issue may be pinned per invocation (#396). "The
+                # last one wins" is the silent substitution the pin exists to
+                # prevent, and it is not something to arrive at by an
+                # argument-parsing default.
+                "--issue" {
+                    if ($null -ne $IssuePin) {
+                        throw (
+                            New-GitLoopyParseException (
+                                "--issue may be given at most once; exactly " +
+                                "one issue may be pinned per invocation"
+                            )
+                        )
+                    }
+                    [int]$Pinned = 0
+                    if (
+                        -not [int]::TryParse(
+                            $Value,
+                            [Globalization.NumberStyles]::None,
+                            [Globalization.CultureInfo]::InvariantCulture,
+                            [ref]$Pinned
+                        )
+                    ) {
+                        throw (
+                            New-GitLoopyParseException (
+                                "--issue must be an issue number, got '$Value'"
+                            )
+                        )
+                    }
+                    if ($Pinned -lt 1) {
+                        throw (
+                            New-GitLoopyParseException (
+                                "--issue must be a positive issue number, " +
+                                "got '$Value'"
+                            )
+                        )
+                    }
+                    $IssuePin = $Pinned
+                }
                 "--max-nmt-strikes" { $MaxNmtStrikesText = $Value }
                 "--deny-tool" { $CliTools.Add($Value) }
                 "--deny-skill" { $CliSkills.Add($Value) }
@@ -392,6 +438,7 @@ function Resolve-GitLoopyConfig {
         )
         SendTimeoutSeconds = $SendTimeoutSeconds
         InteractiveFlag = $InteractiveFlag
+        IssuePin = $IssuePin
         ShowHelp = $ShowHelp
     }
 }
@@ -601,6 +648,114 @@ function Get-GitLoopyAfkReadyExclusion {
     return "missing_acceptance_criteria"
 }
 
+# Wrapper contract §3.2 — refuse the invocation when `--issue N` names an issue
+# this Run cannot work (#396, ADR-0032). Returns `$true` when the invocation may
+# proceed, including when nothing is pinned.
+#
+# The pin bypasses order and *nothing else*, so every rule §3.1 already applies
+# to a candidate applies to a pin — the difference is what a failure means. §3.3
+# makes a candidate the runner cannot take a **skip**, because a serial Run
+# merely walked past it and ending the Run over one mislabelled issue would be
+# worse than moving on. A pin is an operator naming an issue, and there is no
+# next candidate that honours what they asked for: silently working a different
+# issue than the one named is worse than stopping.
+#
+# It runs during preflight, before the Pool, for two reasons. An ineligible pin
+# costs one `issue view` rather than a whole collection that would then be
+# indistinguishable from a backlog which simply did not contain the issue. And
+# it runs once per invocation rather than once per Iteration, because the pin
+# names an invocation's intent — re-asking each Iteration would kill a healthy
+# Run the moment it legitimately closed the issue it was pinned to.
+#
+# The PowerShell Orchestrator is serial, so `parallel-safe` is deliberately not
+# part of this: §14's Parallel mode is future work for this port, and a rule
+# with nothing to enforce it against would be a rule that drifts unnoticed.
+function Assert-GitLoopyPinEligible {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Pin
+    )
+
+    if ($null -eq $Pin) {
+        return $true
+    }
+    [int]$Number = [int]$Pin
+    $Unreadable = (
+        "git-loopy: --issue ${Number}: #${Number} could not be read from the " +
+        "tracker; it may not exist or may not be visible to this gh login."
+    )
+
+    $ViewOutput = @(
+        & gh issue view $Number `
+            --json "$($Script:GitLoopyShallowIssueFields),comments" 2>$null
+    )
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine($Unreadable)
+        return $false
+    }
+    $Issue = ConvertFrom-GitLoopyExternalJsonText `
+        -Output $ViewOutput `
+        -Description "gh issue view #$Number"
+    if ($null -eq $Issue -or $Issue -isnot [Collections.IDictionary]) {
+        [Console]::Error.WriteLine($Unreadable)
+        return $false
+    }
+
+    $State = [string]$Issue["state"]
+    if (-not [string]::IsNullOrEmpty($State) -and
+        $State.ToUpperInvariant() -cne "OPEN") {
+        [Console]::Error.WriteLine(
+            "git-loopy: --issue ${Number}: #${Number} is closed."
+        )
+        return $false
+    }
+
+    $Labels = @(
+        foreach ($Label in @($Issue["labels"])) {
+            if ($Label -is [Collections.IDictionary]) { [string]$Label["name"] }
+            else { [string]$Label }
+        }
+    )
+    if ($Script:GitLoopyReadyLabel -cnotin $Labels) {
+        [Console]::Error.WriteLine(
+            "git-loopy: --issue ${Number}: #${Number} does not carry the " +
+            "$($Script:GitLoopyReadyLabel) label."
+        )
+        return $false
+    }
+
+    $Body = [string]$Issue["body"]
+    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body
+    if ($null -ne $Exclusion) {
+        [Console]::Error.WriteLine(
+            "git-loopy: --issue ${Number}: #${Number} is not AFK-ready; its " +
+            "body is missing $(Get-GitLoopyMissingSections -Reason $Exclusion)."
+        )
+        return $false
+    }
+
+    return $true
+}
+
+# Names the section(s) an AFK-ready exclusion reason says are absent. #396 asks
+# for the *specific* missing section, because the operator's next action is to
+# edit the issue and a message that sends them back to the discriminator to work
+# out which heading is missing has failed at the only job it had.
+function Get-GitLoopyMissingSections {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Reason
+    )
+
+    switch -CaseSensitive ($Reason) {
+        "missing_what_to_build" { return '`## What to build`' }
+        "missing_acceptance_criteria" { return '`## Acceptance criteria`' }
+        default { return '`## What to build` and `## Acceptance criteria`' }
+    }
+}
+
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 #
 # Before this the order was `gh issue list`'s undeclared
@@ -622,8 +777,18 @@ $Script:GitLoopyPriorityLabel = "priority"
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
 $Script:GitLoopyListPageLimit = 100
 $Script:GitLoopyListMaxLimit = 1600
+# Wrapper contract §3.2 — this invocation's **Pin** (`--issue N`, #396), or
+# `$null` when unpinned. Carried in script scope because `Get-GitLoopyIssueOrder`
+# is reached through the Pool read rather than through the config object, and
+# threading one nullable through every frame between them would touch the
+# Conformance seam's callers to carry a value all but one of them ignores.
+$Script:GitLoopyIssuePin = $null
+
 $Script:GitLoopyShallowIssueFields =
     "number,title,body,labels,state,url,createdAt"
+# The label the Pool query filters on, named once so the pin's eligibility check
+# (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
+$Script:GitLoopyReadyLabel = "ready-for-agent"
 
 # The accepted `created_at` year range. The floor keeps every division below on a
 # non-negative operand, which is what lets three languages agree.
@@ -887,12 +1052,23 @@ function Get-GitLoopyTimestampDefect {
 # instant, then the issue number. The dated bit sits *between* the rank and the
 # instant, which is exactly what "sorts last within its own priority rank"
 # means. The number makes the order total, so no two distinct issues tie.
+#
+# `-Pin` is the invocation's **Pin** (`--issue N`, #396). It is applied to the
+# *finished* order rather than folded into the sort key, because §3.2 requires
+# the key to be a pure function of the fetched issue fields and a pin is one
+# operator's instruction, not a property of any issue. The promotion is stable —
+# everything else keeps its §3.2 sequence behind the pin — and a pin naming an
+# issue that is not here is a no-op; refusing that invocation is
+# `Assert-GitLoopyPinEligible`'s job, and it has already run.
 function Get-GitLoopyIssueOrder {
     [CmdletBinding()]
     param(
         [AllowNull()]
         [AllowEmptyCollection()]
-        [object[]]$Candidates
+        [object[]]$Candidates,
+
+        [AllowNull()]
+        [object]$Pin
     )
 
     $Keyed = [System.Collections.Generic.List[object]]::new()
@@ -929,8 +1105,21 @@ function Get-GitLoopyIssueOrder {
         }
     }
 
+    $Promoted = $Order
+    if ($null -ne $Pin -and -not ($Pin -is [string] -and
+            [string]::IsNullOrEmpty($Pin))) {
+        [long]$PinNumber = [long]$Pin
+        $Promoted = [System.Collections.Generic.List[object]]::new()
+        foreach ($Number in $Order) {
+            if ([long]$Number -eq $PinNumber) { $Promoted.Add($Number) }
+        }
+        foreach ($Number in $Order) {
+            if ([long]$Number -ne $PinNumber) { $Promoted.Add($Number) }
+        }
+    }
+
     return @{
-        order   = $Order.ToArray()
+        order   = $Promoted.ToArray()
         undated = $Undated.ToArray()
     }
 }
@@ -1476,6 +1665,10 @@ function Invoke-GitLoopyPreflight {
             )
             return $null
         }
+        $Script:GitLoopyIssuePin = $Config.IssuePin
+        if (-not (Assert-GitLoopyPinEligible -Pin $Config.IssuePin)) {
+            return $null
+        }
     }
 
     $PromptPath = Resolve-GitLoopyPrompt `
@@ -1573,7 +1766,7 @@ function Get-GitLoopyIssueListToCompletion {
         $ListOutput = @(
             & gh issue list `
                 --state open `
-                --label ready-for-agent `
+                --label $Script:GitLoopyReadyLabel `
                 --limit $Limit `
                 --json $Script:GitLoopyShallowIssueFields 2>$null
         )
@@ -1718,7 +1911,8 @@ function Get-GitLoopyOrderedCandidates {
             labels = @($Labels)
         }
     }
-    $Ordering = Get-GitLoopyIssueOrder -Candidates @($Projected)
+    $Ordering = Get-GitLoopyIssueOrder -Candidates @($Projected) `
+        -Pin $Script:GitLoopyIssuePin
     foreach ($Entry in @($Ordering["undated"])) {
         $Key = "$($Entry["issue"])/$($Entry["defect"])"
         if (-not $script:GitLoopyReportedUndated.Add($Key)) {
@@ -2739,15 +2933,24 @@ function Get-GitLoopyPickupRecord {
     )
 
     $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
-    # `priority` is a human assertion read off the issue, never inferred; every
-    # other head is the head because the order put it there.
     $Labels = @(
         foreach ($Label in @($Head["labels"])) {
             if ($Label -is [Collections.IDictionary]) { [string]$Label["name"] }
             elseif ($null -ne $Label) { [string]$Label }
         }
     )
-    $Reason = if ($Labels -ccontains "priority") { "priority" } else { "order" }
+    # `pin` outranks `priority`, which outranks `order`. A pinned issue reached
+    # the head because an operator named it (#396) whatever its labels said, so
+    # crediting the label would make "did my Priority label do anything?"
+    # unanswerable on exactly the Runs where someone overrode it. `priority` in
+    # turn is a human assertion read off the issue, never inferred; every other
+    # head is the head because the order put it there.
+    $Reason = if (
+        $null -ne $Script:GitLoopyIssuePin -and
+        $Ref -ceq ([string]$Script:GitLoopyIssuePin)
+    ) { "pin" }
+    elseif ($Labels -ccontains "priority") { "priority" }
+    else { "order" }
     return [ordered]@{
         issue = $Issue
         reason = $Reason
@@ -3869,6 +4072,12 @@ Options:
   --model ID
   --reasoning-effort none|minimal|low|medium|high|xhigh|max
   --issue-source github|prds
+  --issue N                     Pin issue N for this invocation (ADR-0032):
+                                work N instead of the head of the selection
+                                order. At most once. Bypasses order and nothing
+                                else -- a pinned issue that is closed, missing,
+                                unreadable, lacks ready-for-agent, or fails the
+                                AFK-ready discriminator fails the invocation.
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
@@ -3947,6 +4156,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueInstant",
     "Get-GitLoopyTimestampDefect",
     "Get-GitLoopyIssueOrder",
+    "Assert-GitLoopyPinEligible",
+    "Get-GitLoopyMissingSections",
     "Get-GitLoopyOrderedCandidates",
     "Select-GitLoopySerialPickup",
     "Write-GitLoopyPickupBound",

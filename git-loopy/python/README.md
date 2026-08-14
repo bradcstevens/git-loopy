@@ -299,11 +299,26 @@ CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
 `--deny-skill` (deprecated), `--interactive` /
-`--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`)
+`--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`,
+`--issue N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
 env, project / global config, and the built-in default). See `git-loopy --help`
 for the full list.
+
+`--issue N` **pins** one issue for one invocation (ADR-0032): the run works
+issue `N` instead of the head of the selection order, and every other issue
+keeps its place in that order behind it. The pin **bypasses order and nothing
+else** — a pinned issue still has to be eligible, and a pin that is closed,
+missing, unreadable, lacks `ready-for-agent`, fails the AFK-ready body
+discriminator, or (in **Parallel mode**) lacks `parallel-safe` **fails the
+invocation** rather than falling back to normal order, because silently working
+a different issue than the one you named is worse than stopping. The refusal
+names what is wrong, down to the specific missing `##` section. It is
+deliberately a flag and not a label or an env var: those are globally scoped and
+would point every concurrent run at the same issue, which is the opposite of
+what pinning is for. At most one issue may be pinned per invocation; a second
+`--issue` is a usage error. There is no config-file or environment equivalent.
 
 ---
 

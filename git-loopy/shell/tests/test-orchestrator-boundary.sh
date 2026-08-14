@@ -3039,4 +3039,196 @@ jq -se '
 ' "$temp_dir/execute-frontier-freeze-fault.stdout" >/dev/null ||
   fail "a Run that could not freeze did not close its own envelope"
 
+# --------------------------------------------------------------------------
+# Wrapper contract §3.2 — the invocation-scoped **Pin** (`--issue N`, #396).
+#
+# The pin bypasses order and nothing else. These cases pin the two halves of
+# that sentence: what it *does* (promote one issue to the head of a §3.2 order
+# that is otherwise untouched) and what it refuses to do (work a different
+# issue than the one the operator named, for any reason at all).
+# --------------------------------------------------------------------------
+
+pin_repo="$temp_dir/pin-repo"
+pin_bin="$temp_dir/pin-bin"
+make_repo "$pin_repo"
+write_fake_tools "$pin_bin"
+mkdir -p "$temp_dir/pin-views"
+export FAKE_GH_LOG="$temp_dir/pin-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/pin-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/pin-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/pin-views"
+printf '[]\n' >"$FAKE_GH_LIST_JSON"
+
+write_pin_view() {
+  local number="$1"
+  local state="$2"
+  local labels_json="$3"
+  local body="$4"
+  jq -n \
+    --argjson number "$number" \
+    --arg state "$state" \
+    --argjson labels "$labels_json" \
+    --arg body "$body" \
+    '{
+      number: $number,
+      title: ("Pinned #" + ($number | tostring)),
+      body: $body,
+      labels: ($labels | map({name: .})),
+      state: $state,
+      url: "https://example.invalid/issues/",
+      createdAt: "2026-01-01T00:00:00Z",
+      comments: []
+    }' >"$FAKE_GH_VIEW_DIR/$number.json"
+}
+
+pin_afk_body=$'## What to build\n\nthing\n\n## Acceptance criteria\n\n- [ ] done\n'
+
+# Malformed invocations are usage errors (exit 2), decided before any tracker
+# read: a second `--issue` is not "the last one wins", because that default is
+# exactly the silent substitution the pin exists to prevent.
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-twice.stdout" "$temp_dir/pin-twice.stderr" \
+  --issue 41 --issue 42 || pin_status=$?
+assert_equal "2" "$pin_status" "a second --issue is a usage error"
+assert_contains "$(<"$temp_dir/pin-twice.stderr")" \
+  "exactly one issue may be pinned per invocation" \
+  "the second --issue says why one is the limit"
+
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-twice-eq.stdout" "$temp_dir/pin-twice-eq.stderr" \
+  --issue=41 --issue=42 || pin_status=$?
+assert_equal "2" "$pin_status" \
+  "the --issue=N spelling counts toward the one-pin limit too"
+
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-word.stdout" "$temp_dir/pin-word.stderr" \
+  --issue=banana || pin_status=$?
+assert_equal "2" "$pin_status" "a non-numeric --issue is a usage error"
+assert_contains "$(<"$temp_dir/pin-word.stderr")" \
+  "--issue must be an issue number" "a non-numeric --issue names the value"
+
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-zero.stdout" "$temp_dir/pin-zero.stderr" \
+  --issue 0 || pin_status=$?
+assert_equal "2" "$pin_status" "--issue 0 is a usage error"
+
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-bare.stdout" "$temp_dir/pin-bare.stderr" \
+  --issue || pin_status=$?
+assert_equal "2" "$pin_status" "--issue with no value is a usage error"
+
+pin_status=0
+run_entrypoint "$pin_repo" "$pin_bin" \
+  "$temp_dir/pin-help.stdout" "$temp_dir/pin-help.stderr" --help || pin_status=$?
+assert_equal "0" "$pin_status" "--help exits successfully"
+assert_contains "$(<"$temp_dir/pin-help.stdout")" "--issue N" \
+  "--issue is documented in CLI help"
+
+# An ineligible pin fails the *invocation* (exit 1, preflight), and never falls
+# back to normal order — §3.3's skip-and-advance is for a candidate the runner
+# merely walked past, and there is no next candidate that honours what the
+# operator asked for.
+assert_pin_refused() {
+  local number="$1"
+  local label="$2"
+  local needle="$3"
+  local status=0
+  : >"$FAKE_GH_LOG"
+  run_entrypoint "$pin_repo" "$pin_bin" \
+    "$temp_dir/pin-$label.stdout" "$temp_dir/pin-$label.stderr" \
+    --issue "$number" || status=$?
+  assert_equal "1" "$status" "an ineligible pin ($label) fails the invocation"
+  assert_contains "$(<"$temp_dir/pin-$label.stderr")" "$needle" \
+    "the refused pin ($label) says what is wrong"
+  if grep -q '^issue list ' "$FAKE_GH_LOG"; then
+    fail "a refused pin ($label) still collected a Pool to fall back to"
+  fi
+}
+
+write_pin_view 41 "CLOSED" '["ready-for-agent"]' "$pin_afk_body"
+assert_pin_refused 41 closed "#41 is closed"
+
+write_pin_view 42 "OPEN" '["bug"]' "$pin_afk_body"
+assert_pin_refused 42 unready "does not carry the ready-for-agent label"
+
+write_pin_view 43 "OPEN" '["ready-for-agent"]' $'## What to build\n\nthing\n'
+assert_pin_refused 43 no-ac 'missing `## Acceptance criteria`'
+
+write_pin_view 44 "OPEN" '["ready-for-agent"]' $'## Acceptance criteria\n\n- [ ] a\n'
+assert_pin_refused 44 no-wtb 'missing `## What to build`'
+
+write_pin_view 45 "OPEN" '["ready-for-agent"]' $'nothing structured here\n'
+assert_pin_refused 45 no-sections \
+  'missing `## What to build` and `## Acceptance criteria`'
+
+assert_pin_refused 46 missing "could not be read from the tracker"
+
+# The other half: an eligible pin is worked *instead of* the head of the order,
+# the Pickup Event says `pin` rather than crediting the order or a Priority
+# label the pinned issue happens to lack, and the rest of the Pool keeps its
+# §3.2 sequence behind it — "bypasses order and nothing else" is a statement
+# about one issue's position, not about anyone's eligibility.
+pin_turn_repo="$temp_dir/pin-turn-repo"
+pin_turn_bin="$temp_dir/pin-turn-bin"
+make_real_repo "$pin_turn_repo"
+write_turn_tools "$pin_turn_bin"
+mkdir -p "$temp_dir/pin-turn-views"
+export FAKE_GH_LOG="$temp_dir/pin-turn-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/pin-turn-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/pin-turn-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/pin-turn-views"
+export FAKE_GH_CLOSED="$temp_dir/pin-turn-closed"
+setup_copilot_env "pin-turn"
+export FAKE_COPILOT_COMMITS=0
+
+# Oldest first, so #70 is the head the order would have chosen unaided and #72
+# is the issue only an operator could reach.
+jq -n --arg body "$pin_afk_body" '[
+  {number: 70, title: "Oldest", body: $body, labels: [{name: "ready-for-agent"}],
+   state: "OPEN", url: "https://example.invalid/70", createdAt: "2026-01-01T00:00:00Z"},
+  {number: 71, title: "Middle", body: $body, labels: [{name: "ready-for-agent"}],
+   state: "OPEN", url: "https://example.invalid/71", createdAt: "2026-02-01T00:00:00Z"},
+  {number: 72, title: "Newest", body: $body, labels: [{name: "ready-for-agent"}],
+   state: "OPEN", url: "https://example.invalid/72", createdAt: "2026-03-01T00:00:00Z"}
+]' >"$FAKE_GH_LIST_JSON"
+for pin_number in 70 71 72; do
+  FAKE_GH_VIEW_DIR="$temp_dir/pin-turn-views" \
+    write_pin_view "$pin_number" "OPEN" '["ready-for-agent"]' "$pin_afk_body"
+done
+
+pin_turn_status=0
+run_turn_entrypoint "$pin_turn_repo" "$pin_turn_bin" \
+  "$temp_dir/pin-turn.stdout" "$temp_dir/pin-turn.stderr" 1 --issue 72 ||
+  pin_turn_status=$?
+unset FAKE_COPILOT_COMMITS
+assert_equal "0" "$pin_turn_status" \
+  "a pinned Run did not exit 0: $(<"$temp_dir/pin-turn.stderr")"
+
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    | all(. == [72, 70, 71]))
+' "$temp_dir/pin-turn.stdout" >/dev/null ||
+  fail "the pin did not reach the head, or did not leave the rest in §3.2 order"
+
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.bound")] | length == 1)
+  and ([.[] | select(.type == "wrapper.pickup.bound")]
+    | all(.issue == 72 and .reason == "pin" and .position == 1
+      and .considered == 3))
+' "$temp_dir/pin-turn.stdout" >/dev/null ||
+  fail "the Pickup record did not attribute the binding to the pin"
+
+jq -se '
+  ([.[] | select(.type == "wrapper.issue.activated") | .issue] | all(. == 72))
+' "$temp_dir/pin-turn.stdout" >/dev/null ||
+  fail "the pinned issue was not the Active issue"
+
+assert_contains "$(<"$FAKE_COPILOT_PROMPT")" "=== Issue #72:" \
+  "the agent was handed the pinned issue"
+
 printf 'shell Orchestrator boundary: ok\n'

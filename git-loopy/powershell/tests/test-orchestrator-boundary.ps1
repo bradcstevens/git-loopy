@@ -3969,6 +3969,254 @@ Start-Sleep -Seconds $Sleep
     finally {
         Remove-Item -LiteralPath "function:global:gh" -ErrorAction SilentlyContinue
     }
+
+    # ----------------------------------------------------------------------
+    # Wrapper contract §3.2 — the invocation-scoped **Pin** (`--issue N`, #396).
+    #
+    # The pin bypasses order and nothing else. These cases pin the two halves of
+    # that sentence: what it *does* (promote one issue to the head of a §3.2
+    # order that is otherwise untouched) and what it refuses to do (work a
+    # different issue than the one the operator named, for any reason at all).
+    # ----------------------------------------------------------------------
+
+    $PinRepo = Join-Path $TempDir "pin"
+    $PinBin = Join-Path $TempDir "pin-bin"
+    New-TestRepo -Root $PinRepo
+    Write-FakeTools -BinDir $PinBin
+    $PinViews = Join-Path $TempDir "pin-views"
+    [IO.Directory]::CreateDirectory($PinViews) | Out-Null
+    $PinList = Join-Path $TempDir "pin-list.json"
+    [IO.File]::WriteAllText($PinList, "[]`n")
+    $env:FAKE_GH_LOG = Join-Path $TempDir "pin-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "pin-list.count"
+    $env:FAKE_GH_LIST_JSON = $PinList
+    $env:FAKE_GH_VIEW_DIR = $PinViews
+
+    $PinAfkBody = "## What to build`nthing`n`n## Acceptance criteria`n- [ ] done"
+
+    function Write-PinView {
+        param(
+            [Parameter(Mandatory)][int]$Number,
+            [Parameter(Mandatory)][string]$State,
+            [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Labels,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Body,
+            [Parameter(Mandatory)][string]$ViewDir
+        )
+
+        $Payload = [ordered]@{
+            number = $Number
+            title = "Pinned #$Number"
+            body = $Body
+            labels = @($Labels | ForEach-Object { [ordered]@{ name = $_ } })
+            state = $State
+            url = "https://example.invalid/issues/$Number"
+            createdAt = "2026-01-01T00:00:00Z"
+            comments = @()
+        }
+        [IO.File]::WriteAllText(
+            (Join-Path $ViewDir "$Number.json"),
+            ($Payload | ConvertTo-Json -Depth 10)
+        )
+    }
+
+    function Invoke-PinRun {
+        param(
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$PinArgs
+        )
+
+        [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+        $Out = Join-Path $TempDir "pin-$Label.stdout"
+        $Err = Join-Path $TempDir "pin-$Label.stderr"
+        $Code = Invoke-Entrypoint `
+            -Repo $PinRepo `
+            -FakeBin $PinBin `
+            -StdoutPath $Out `
+            -StderrPath $Err `
+            -Arguments $PinArgs
+        return [pscustomobject]@{
+            Status = $Code
+            Stdout = [IO.File]::ReadAllText($Out)
+            Stderr = [IO.File]::ReadAllText($Err)
+        }
+    }
+
+    # Malformed invocations are usage errors, decided before any tracker read: a
+    # second `--issue` is not "the last one wins", because that default is
+    # exactly the silent substitution the pin exists to prevent.
+    $UsageCode = Get-GitLoopyExitCode -Reason "usage_error"
+    $PinTwice = Invoke-PinRun -Label "twice" -PinArgs @("--issue", "41", "--issue", "42")
+    Assert-Equal $UsageCode $PinTwice.Status "a second --issue is a usage error"
+    Assert-Contains $PinTwice.Stderr "exactly one issue may be pinned per invocation" (
+        "the second --issue says why one is the limit"
+    )
+
+    $PinTwiceEq = Invoke-PinRun -Label "twice-eq" -PinArgs @("--issue=41", "--issue=42")
+    Assert-Equal $UsageCode $PinTwiceEq.Status (
+        "the --issue=N spelling counts toward the one-pin limit too"
+    )
+
+    $PinWord = Invoke-PinRun -Label "word" -PinArgs @("--issue=banana")
+    Assert-Equal $UsageCode $PinWord.Status "a non-numeric --issue is a usage error"
+    Assert-Contains $PinWord.Stderr "--issue must be an issue number" (
+        "a non-numeric --issue names the value"
+    )
+
+    $PinZero = Invoke-PinRun -Label "zero" -PinArgs @("--issue", "0")
+    Assert-Equal $UsageCode $PinZero.Status "--issue 0 is a usage error"
+
+    $PinBare = Invoke-PinRun -Label "bare" -PinArgs @("--issue")
+    Assert-Equal $UsageCode $PinBare.Status "--issue with no value is a usage error"
+
+    $PinHelp = Invoke-PinRun -Label "help" -PinArgs @("--help")
+    Assert-Equal 0 $PinHelp.Status "--help exits successfully"
+    Assert-Contains $PinHelp.Stdout "--issue N" "--issue is documented in CLI help"
+
+    # An ineligible pin fails the *invocation* (preflight), and never falls back
+    # to normal order — §3.3's skip-and-advance is for a candidate the runner
+    # merely walked past, and there is no next candidate that honours what the
+    # operator asked for.
+    $PreflightCode = Get-GitLoopyExitCode -Reason "preflight_failed"
+    function Assert-PinRefused {
+        param(
+            [Parameter(Mandatory)][int]$Number,
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][string]$Needle
+        )
+
+        $Run = Invoke-PinRun -Label $Label -PinArgs @("--issue", [string]$Number)
+        Assert-Equal $PreflightCode $Run.Status (
+            "an ineligible pin ($Label) fails the invocation"
+        )
+        Assert-Contains $Run.Stderr $Needle (
+            "the refused pin ($Label) says what is wrong"
+        )
+        $Log = [IO.File]::ReadAllText($env:FAKE_GH_LOG)
+        Assert-True (-not ($Log -match "(?m)^issue list")) (
+            "a refused pin ($Label) still collected a Pool to fall back to"
+        )
+    }
+
+    Write-PinView -Number 41 -State "CLOSED" -Labels @("ready-for-agent") `
+        -Body $PinAfkBody -ViewDir $PinViews
+    Assert-PinRefused -Number 41 -Label "closed" -Needle "#41 is closed"
+
+    Write-PinView -Number 42 -State "OPEN" -Labels @("bug") `
+        -Body $PinAfkBody -ViewDir $PinViews
+    Assert-PinRefused -Number 42 -Label "unready" `
+        -Needle "does not carry the ready-for-agent label"
+
+    Write-PinView -Number 43 -State "OPEN" -Labels @("ready-for-agent") `
+        -Body "## What to build`nthing" -ViewDir $PinViews
+    Assert-PinRefused -Number 43 -Label "no-ac" `
+        -Needle 'missing `## Acceptance criteria`'
+
+    Write-PinView -Number 44 -State "OPEN" -Labels @("ready-for-agent") `
+        -Body "## Acceptance criteria`n- [ ] a" -ViewDir $PinViews
+    Assert-PinRefused -Number 44 -Label "no-wtb" `
+        -Needle 'missing `## What to build`'
+
+    Write-PinView -Number 45 -State "OPEN" -Labels @("ready-for-agent") `
+        -Body "nothing structured here" -ViewDir $PinViews
+    Assert-PinRefused -Number 45 -Label "no-sections" `
+        -Needle 'missing `## What to build` and `## Acceptance criteria`'
+
+    Assert-PinRefused -Number 46 -Label "missing" `
+        -Needle "could not be read from the tracker"
+
+    # The other half: an eligible pin is worked *instead of* the head of the
+    # order, the Pickup record says `pin` rather than crediting the order, and
+    # the rest of the Pool keeps its §3.2 sequence behind it — "bypasses order
+    # and nothing else" is a statement about one issue's position, not about
+    # anyone's eligibility.
+    $PinTurnRepo = Join-Path $TempDir "pin-turn"
+    $PinTurnBin = Join-Path $TempDir "pin-turn-bin"
+    New-RealTestRepo -Root $PinTurnRepo
+    Write-TurnTools -BinDir $PinTurnBin
+    $PinTurnViews = Join-Path $TempDir "pin-turn-views"
+    [IO.Directory]::CreateDirectory($PinTurnViews) | Out-Null
+    # Oldest first, so #70 is the head the order would have chosen unaided and
+    # #72 is the issue only an operator could reach.
+    $PinTurnRows = @(
+        @{ number = 70; createdAt = "2026-01-01T00:00:00Z" },
+        @{ number = 71; createdAt = "2026-02-01T00:00:00Z" },
+        @{ number = 72; createdAt = "2026-03-01T00:00:00Z" }
+    ) | ForEach-Object {
+        Write-PinView -Number $_.number -State "OPEN" `
+            -Labels @("ready-for-agent") -Body $PinAfkBody -ViewDir $PinTurnViews
+        [ordered]@{
+            number = $_.number
+            title = "Pinned #$($_.number)"
+            body = $PinAfkBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://example.invalid/issues/$($_.number)"
+            createdAt = $_.createdAt
+        }
+    }
+    $PinTurnList = Join-Path $TempDir "pin-turn-list.json"
+    [IO.File]::WriteAllText(
+        $PinTurnList,
+        (@($PinTurnRows) | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $env:FAKE_GH_LOG = Join-Path $TempDir "pin-turn-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "pin-turn-list.count"
+    $env:FAKE_GH_LIST_JSON = $PinTurnList
+    $env:FAKE_GH_VIEW_DIR = $PinTurnViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "pin-turn-closed.txt"
+    Set-CopilotEnv -Prefix "pin-turn"
+    $env:FAKE_COPILOT_COMMITS = "0"
+
+    $PinTurnStdout = Join-Path $TempDir "pin-turn.stdout"
+    $PinTurnStderr = Join-Path $TempDir "pin-turn.stderr"
+    $PinTurnStatus = Invoke-Entrypoint `
+        -Repo $PinTurnRepo `
+        -FakeBin $PinTurnBin `
+        -StdoutPath $PinTurnStdout `
+        -StderrPath $PinTurnStderr `
+        -Arguments @("1", "--issue", "72")
+    $env:FAKE_COPILOT_COMMITS = $null
+    Assert-Equal 0 $PinTurnStatus (
+        "a pinned Run did not exit 0: " +
+        [IO.File]::ReadAllText($PinTurnStderr)
+    )
+
+    $PinEvents = @(
+        [IO.File]::ReadAllLines($PinTurnStdout) |
+            Where-Object { $_.Trim().Length -gt 0 } |
+            ForEach-Object { $_ | ConvertFrom-Json -AsHashtable -DateKind String }
+    )
+    $PinCollected = @(
+        $PinEvents | Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" }
+    )
+    Assert-Equal 1 $PinCollected.Count "the pinned Run collected once"
+    Assert-Equal "72,70,71" (
+        [string]::Join(",", @($PinCollected[0]["issues"]))
+    ) "the pin did not reach the head, or the rest lost its §3.2 order"
+
+    $PinBound = @(
+        $PinEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.bound" }
+    )
+    Assert-Equal 1 $PinBound.Count "the pinned Run recorded one Pickup"
+    Assert-Equal 72 $PinBound[0]["issue"] "the Pickup bound the pinned issue"
+    Assert-Equal "pin" $PinBound[0]["reason"] (
+        "the Pickup record did not attribute the binding to the pin"
+    )
+    Assert-Equal 1 $PinBound[0]["position"] "the pin sat at the head"
+    Assert-Equal 3 $PinBound[0]["considered"] (
+        "the pin narrowed the Pool it was chosen from"
+    )
+
+    $PinActivated = @(
+        $PinEvents | Where-Object { $_["type"] -ceq "wrapper.issue.activated" }
+    )
+    Assert-Equal 1 $PinActivated.Count "the pinned Run activated one issue"
+    Assert-Equal 72 $PinActivated[0]["issue"] (
+        "the pinned issue was not the Active issue"
+    )
+    Assert-Contains ([IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)) "=== Issue #72:" (
+        "the agent was handed the pinned issue"
+    )
 }
 finally {
     foreach ($Name in @(
