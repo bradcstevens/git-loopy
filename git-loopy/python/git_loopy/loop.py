@@ -835,6 +835,33 @@ class _ChainedObserver:
             observer.observe(event)
 
 
+#: ``wrapper.run.end`` outcome for a Run that left through a
+#: :class:`BaseException` — an operator's ``Ctrl+C``, the ``SIGHUP`` of a closed
+#: terminal, or an :class:`asyncio.CancelledError` from the Dashboard driver.
+#:
+#: It exists because a driver's ``finally`` has to name an outcome for an exit
+#: nobody decided, and every other value it could name is a claim about the Run
+#: that is not true. ``iteration_cap`` was that value until #398: a Run
+#: configured ``max_iterations=0`` — the cap disabled entirely — reported
+#: ``iteration_cap`` when its terminal was closed, so the one outcome the
+#: configuration made impossible was the one an interrupted Run recorded, and
+#: an operator reading the log could not tell a Run that finished its work from
+#: a Run that was killed mid-iteration.
+#:
+#: Deliberately **not** a :data:`~git_loopy.wrapper.ExitReason`. An interrupted
+#: Run does not choose its exit status — the propagating ``KeyboardInterrupt``
+#: does — so pinning an exit code to this name would invent a contract for a
+#: path the process never returns through, and would owe every other member of
+#: the Runner family a ``conformance/exit-codes.json`` case for it.
+RUN_OUTCOME_INTERRUPTED = "interrupted"
+
+#: Outcomes whose Run stopped *during* iteration ``iter_num`` rather than after
+#: it, so the iteration in flight was never finished and must not be counted.
+#: ``iteration_cap`` breaks the loop on the round that would have exceeded the
+#: cap, before it runs; an interrupt lands inside one.
+_RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTED})
+
+
 class _Loop:
     """Stateful orchestrator for one ``git-loopy`` invocation.
 
@@ -2024,7 +2051,12 @@ class _Loop:
         )
 
         exit_code = exit_code_for("iteration_cap")
-        outcome_label = "iteration_cap"
+        # Not `iteration_cap`: the only ways out of the loop below that skip
+        # every assignment to this name are `KeyboardInterrupt` and
+        # `CancelledError`, which are `BaseException` and so pass the
+        # `except Exception` handler untouched. Whatever this is initialised to
+        # is therefore exactly what an interrupted Run reports (#398).
+        outcome_label = RUN_OUTCOME_INTERRUPTED
         iter_num = 0
         try:
             try:
@@ -2068,9 +2100,9 @@ class _Loop:
                     iter_num=None,
                     outcome=outcome_label,
                     iterations_run=(
-                        iter_num
-                        if outcome_label != "iteration_cap"
-                        else iter_num - 1
+                        max(iter_num - 1, 0)
+                        if outcome_label in _RUN_OUTCOMES_MID_ITERATION
+                        else iter_num
                     ),
                 )
             except Exception as exc:  # pragma: no cover - defensive
@@ -2397,7 +2429,13 @@ class _ParallelLoop:
             ),
         )
 
-        outcome_label = "iteration_cap"
+        # Same reasoning as `_Loop.drive` (#398): an interrupt bypasses the
+        # `except Exception` below and reports whatever this name holds, so it
+        # must not hold a claim the Run never earned. `iterations_run` stays 0
+        # because the completed count lives inside the `_drive_*` return this
+        # path never reaches — 0 understates it, but it is not a Run outcome
+        # the operator can act on wrongly.
+        outcome_label = RUN_OUTCOME_INTERRUPTED
         exit_code = exit_code_for("iteration_cap")
         iterations_run = 0
         try:
