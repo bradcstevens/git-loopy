@@ -3,8 +3,8 @@
 :mod:`git_loopy.roster_drift` decides *what is worth reporting*; this module
 decides *when it is asked, and what asking costs*. It is the second consumer of
 that one comparison — ``git-loopy calibrate --status`` is the first — so an
-operator's Run and the report they are sent to cannot disagree about whether
-re-calibrating would change anything.
+operator's Run and the report they are sent to share one definition of "cheaper
+and unmeasured" rather than each carrying its own.
 
 Design notes:
 
@@ -72,6 +72,7 @@ async def notify_roster_drift(
     listing: LiveModelListing,
     rate_card: RateCard | None,
     warn: Callable[[str], None],
+    configured_classifier: tuple[str, str | None] | None = None,
 ) -> tuple[RosterNotification, ...]:
     """Compare the live roster to the **Measured routing** artifact, and report.
 
@@ -90,6 +91,13 @@ async def notify_roster_drift(
         warn: The Run's non-fatal warning sink — stderr on both drive paths, the
             one voice the kit already uses for a preflight fact an operator
             should see but that stops nothing.
+        configured_classifier: The operator's ``classifier_model`` /
+            ``classifier_effort`` knob, or ``None`` for "not configured". Passed
+            through to :func:`~git_loopy.task_type_classifier.resolve_classifier_pair`
+            rather than compared here, because *that* function is where "the
+            knob, else the cheapest rung" is decided. Ignoring it would compare
+            the stamp against a pin the classifier would not have used, and warn
+            on every Run of a repository that pinned its classifier deliberately.
 
     Returns:
         The notifications raised, in the order they were warned. Returned as well
@@ -108,13 +116,18 @@ async def notify_roster_drift(
         return ()
     # Short-circuited before the roster is touched, so the repository that never
     # calibrated — every repository, by default — pays nothing for this at all.
-    if not artifact.entries:
+    # Keyed on the provenance as well as the records: an artifact carrying only a
+    # stamped classifier pin has a pin that can still have moved, and skipping it
+    # here would let `calibrate --status` report a refresh this Run did not.
+    if not artifact.entries and artifact.provenance is None:
         return ()
     models = await _roster(listing)
     if models is None:
         return ()
     staircase = build_price_staircase(models, rate_card)
-    pin = resolve_classifier_pair(staircase)
+    pin = resolve_classifier_pair(
+        staircase, configured=_configured_pair(configured_classifier)
+    )
     found = roster_notifications(
         artifact,
         staircase,
@@ -125,6 +138,14 @@ async def notify_roster_drift(
     if found:
         warn(RECALIBRATE_HINT)
     return found
+
+
+def _configured_pair(configured: tuple[str, str | None] | None) -> ClassifierPair | None:
+    """The operator's knob as a pair, or ``None`` for "not configured"."""
+    if configured is None:
+        return None
+    model, effort = configured
+    return ClassifierPair(model=model, effort=effort)
 
 
 async def _roster(listing: LiveModelListing) -> Sequence[object] | None:

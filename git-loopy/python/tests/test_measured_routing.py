@@ -800,14 +800,40 @@ def test_a_reasoning_incapable_classifier_pin_stamps_the_empty_effort(
     assert artifact.provenance.classifier_effort == ""
 
 
-def test_a_stamped_effort_without_its_model_is_rejected(tmp_path: Path) -> None:
-    """Half a pair is not a pair, and would compare as one."""
+@pytest.mark.parametrize(
+    ("stamped", "missing"),
+    [
+        ('classifier_effort = "low"', "classifier_model"),
+        ('classifier_model = "synthetic-cheap-1"', "classifier_effort"),
+    ],
+)
+def test_half_a_pinned_classifier_pair_is_rejected(
+    tmp_path: Path, stamped: str, missing: str
+) -> None:
+    """Both keys or neither, in either direction.
+
+    A model without an effort is not a weaker stamp but an ambiguous one: the
+    comparison normalises a missing effort to the *empty* one, so a half-stamp
+    would compare equal to a reasoning-incapable pin and unequal to every other.
+    """
     body = _MEASURED_TOML.replace(
-        "candidate_count = 85", 'candidate_count = 85\nclassifier_effort = "low"'
+        "candidate_count = 85", f"candidate_count = 85\n{stamped}"
     )
 
-    with pytest.raises(SettingsError, match="classifier_model"):
+    with pytest.raises(SettingsError, match=missing):
         measured_routing.load_measured_routing(_write(tmp_path, body))
+
+
+def test_the_writer_refuses_the_same_half_pair_the_reader_does() -> None:
+    """The two halves of one seam, so a writer cannot emit a file its reader rejects."""
+    with pytest.raises(ValueError, match="half a pair"):
+        measured_routing.Provenance(
+            cli_version="1.0.67",
+            calibrated_at="z",
+            candidate_count=1,
+            gate_loops=(),
+            classifier_model="synthetic-cheap-1",
+        )
 
 
 def test_the_classifier_pin_round_trips_through_the_writer(tmp_path: Path) -> None:

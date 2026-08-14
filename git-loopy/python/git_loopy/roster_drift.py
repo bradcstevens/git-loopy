@@ -308,9 +308,15 @@ def roster_notifications(
     The flat fold **Run** preflight reports. ``git-loopy calibrate --status``
     renders the same facts per-record rather than as a list, so it reaches for
     :func:`compare_roster_to_measured` and :func:`compare_classifier_pin`
-    directly — but through *those* functions and not a second walk, so a Run and
-    the report it sends the operator to cannot disagree about whether
-    re-calibrating would change anything.
+    directly — but through *those* functions and not a second walk, so the two
+    surfaces cannot disagree about what "cheaper and unmeasured" means.
+
+    They can still be handed different *pins*: preflight passes the operator's
+    ``classifier_model`` knob to
+    :func:`~git_loopy.task_type_classifier.resolve_classifier_pair` and
+    ``--status`` does not yet, so a repository that pinned its classifier sees the
+    pin line from the report and not from the Run. The comparison is shared; the
+    input is not. Closing that is ``--status``'s to do.
 
     Ordered deterministically, because two Runs over one repository reporting the
     same facts in two orders is a diff an operator would read as a change. The

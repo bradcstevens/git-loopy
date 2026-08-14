@@ -2247,19 +2247,24 @@ async def _notify_roster_drift(
     from git_loopy import roster_preflight
 
     try:
-        repo_root: Path | None = resolve_repo_root()
-    except RuntimeError:
-        # Off-repo the artifact — a tracked file — cannot exist, so there is
-        # nothing to compare. Passed through as ``None`` rather than skipped, so
-        # the decision stays in one place.
-        repo_root = None
-    try:
+        try:
+            repo_root: Path | None = resolve_repo_root()
+        except RuntimeError:
+            # Off-repo the artifact — a tracked file — cannot exist, so there is
+            # nothing to compare. Passed through as ``None`` rather than skipped,
+            # so the decision stays in one place.
+            repo_root = None
         await roster_preflight.notify_roster_drift(
             repo_root=repo_root,
             parallel=config.parallel,
             listing=listing,
             rate_card=rate_card,
             warn=_warn,
+            configured_classifier=(
+                (config.classifier_model, config.classifier_effort)
+                if config.classifier_model is not None
+                else None
+            ),
         )
     except Exception as exc:
         _warn(

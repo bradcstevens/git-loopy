@@ -192,10 +192,18 @@ class Provenance:
     classifier_effort: str | None = None
 
     def __post_init__(self) -> None:
-        if self.classifier_effort is not None and self.classifier_model is None:
+        """Refuse half a pinned pair, in either direction.
+
+        ``model`` without ``effort`` is not a weaker stamp, it is an ambiguous
+        one: :func:`~git_loopy.roster_drift.compare_classifier_pin` normalises a
+        missing effort to the *empty* effort, so a half-stamp would compare equal
+        to a reasoning-incapable pin and unequal to every other — silently
+        answering a question nobody asked. Both or neither.
+        """
+        if (self.classifier_model is None) != (self.classifier_effort is None):
             raise ValueError(
-                "a stamped 'classifier_effort' needs its 'classifier_model'; "
-                "half a pair is not a pair"
+                "a pinned classifier pair stamps both 'classifier_model' and "
+                "'classifier_effort', or neither; half a pair is not a pair"
             )
 
 
@@ -475,11 +483,13 @@ def _parse_provenance(raw: object, path: Path) -> Provenance | None:
         path=path,
     )
     _require(entry, _PROVENANCE_KEYS, where="provenance", path=path)
-    if "classifier_effort" in entry and "classifier_model" not in entry:
+    stamped = _PROVENANCE_OPTIONAL_KEYS & set(entry)
+    if stamped and stamped != _PROVENANCE_OPTIONAL_KEYS:
         raise _error(
             path,
-            "provenance carries 'classifier_effort' without 'classifier_model'; "
-            "half a pinned classifier pair is not a pair",
+            f"provenance carries {sorted(stamped)} without "
+            f"{sorted(_PROVENANCE_OPTIONAL_KEYS - stamped)}; a pinned classifier "
+            f"pair stamps both keys or neither",
         )
     return Provenance(
         cli_version=_str(entry, "cli_version", "provenance", path),
@@ -771,17 +781,14 @@ def dump_measured_routing(artifact: MeasuredRouting) -> str:
             + ", ".join(_toml_str(loop) for loop in provenance.gate_loops)
             + "]",
         ]
-        # Emitted only when stamped: a writer that emitted `classifier_model =
-        # ""` would invent a pin nobody classified under, and the comparison
-        # would read it as a change.
+        # Both or neither, matching the reader: a writer that emitted
+        # `classifier_model = ""` would invent a pin nobody classified under, and
+        # the comparison would read it as a change.
         if provenance.classifier_model is not None:
-            lines.append(
-                f"classifier_model = {_toml_str(provenance.classifier_model)}"
-            )
-        if provenance.classifier_effort is not None:
-            lines.append(
-                f"classifier_effort = {_toml_str(provenance.classifier_effort)}"
-            )
+            lines += [
+                f"classifier_model = {_toml_str(provenance.classifier_model)}",
+                f"classifier_effort = {_toml_str(provenance.classifier_effort or '')}",
+            ]
     for key, entry in artifact.entries.items():
         table = f"routing.{_toml_key(key)}"
         lines += ["", f"[{table}]", f"status = {_toml_str(entry.status.value)}"]

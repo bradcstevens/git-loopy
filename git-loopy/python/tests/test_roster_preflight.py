@@ -126,6 +126,7 @@ def _notify(
     parallel: int = 5,
     listing: LiveModelListing | None = None,
     rate_card: RateCard | None = _UNSET,
+    configured_classifier: tuple[str, str | None] | None = None,
 ) -> tuple[list[str], tuple[Any, ...]]:
     warnings: list[str] = []
     found = asyncio.run(
@@ -135,6 +136,7 @@ def _notify(
             listing=listing if listing is not None else _listing(_roster()),
             rate_card=_card() if rate_card is _UNSET else rate_card,
             warn=warnings.append,
+            configured_classifier=configured_classifier,
         )
     )
     return warnings, found
@@ -193,6 +195,78 @@ def test_a_moved_classifier_pin_notifies_a_proving_set_refresh(tmp_path: Path) -
     )
 
     _warnings, found = _notify(tmp_path)
+
+    assert [notification.drift for notification in found] == [
+        RosterDrift.CLASSIFIER_PIN_MOVED
+    ]
+
+
+def test_an_entryless_artifact_still_has_its_classifier_pin_compared(
+    tmp_path: Path,
+) -> None:
+    """A **Calibration** stamps the pin; the entries arrive per Task type, later.
+
+    Short-circuiting on ``entries`` alone would make the pin invisible for the
+    whole window between the two, and would make a Run and ``calibrate --status``
+    — which reads the same provenance — disagree about whether re-calibrating
+    would change anything.
+    """
+    _write_artifact(
+        tmp_path,
+        {},
+        classifier_model="synth-retired-1",
+        classifier_effort="low",
+    )
+
+    _warnings, found = _notify(tmp_path)
+
+    assert [notification.drift for notification in found] == [
+        RosterDrift.CLASSIFIER_PIN_MOVED
+    ]
+
+
+def test_a_pinned_classifier_is_compared_against_the_pin_not_the_cheapest_rung(
+    tmp_path: Path,
+) -> None:
+    """The operator's knob is the pin, so a Run must not report it as having moved.
+
+    Without this the comparison warns on every single Run of a repository that
+    pinned its classifier deliberately — the exact false positive #370 exists to
+    avoid, since a notification that always fires is one nobody reads.
+    """
+    _write_artifact(
+        tmp_path,
+        {"docs": _measured("synth-cheap-1", "low", walked=[("synth-cheap-1", "low")])},
+        classifier_model="synth-dear-1",
+        classifier_effort="high",
+    )
+
+    warnings, found = _notify(
+        tmp_path, configured_classifier=("synth-dear-1", "high")
+    )
+
+    assert found == ()
+    assert warnings == []
+
+
+def test_a_pinned_classifier_that_moved_off_the_stamp_still_notifies(
+    tmp_path: Path,
+) -> None:
+    """Honouring the knob is not the same as never comparing.
+
+    Re-pointing the knob at a different pair invalidates the **Proving set** just
+    as a roster change would, so the notification survives the fix above.
+    """
+    _write_artifact(
+        tmp_path,
+        {"docs": _measured("synth-cheap-1", "low", walked=[("synth-cheap-1", "low")])},
+        classifier_model="synth-cheap-1",
+        classifier_effort="low",
+    )
+
+    _warnings, found = _notify(
+        tmp_path, configured_classifier=("synth-dear-1", "high")
+    )
 
     assert [notification.drift for notification in found] == [
         RosterDrift.CLASSIFIER_PIN_MOVED
@@ -429,19 +503,34 @@ _CANNOT_BE_REACHED = {
 # --------------------------------------------------------------------------- #
 
 
+@dataclass
+class _Wiring:
+    """What the drive path did, and in what order."""
+
+    events: list[str] = field(default_factory=list)
+    notify_kwargs: list[dict[str, Any]] = field(default_factory=list)
+
+
 @pytest.fixture
-def captured_notify(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Replace the asker with a recorder so only the wiring is under test."""
+def wiring(monkeypatch: pytest.MonkeyPatch) -> _Wiring:
+    """Replace the asker *and* the loop with recorders, so order is observable.
+
+    Recording both is what makes "asks before the Run starts" falsifiable: a
+    comparison run *after* ``loop.run`` returned would satisfy every assertion
+    about its arguments and none about its purpose.
+    """
     from git_loopy import cli as cli_module
     from git_loopy import loop as loop_module
 
-    calls: list[dict[str, Any]] = []
+    recorded = _Wiring()
 
     async def _fake_notify(**kwargs: Any) -> tuple[Any, ...]:
-        calls.append(kwargs)
+        recorded.events.append("notify")
+        recorded.notify_kwargs.append(kwargs)
         return ()
 
     async def _fake_run(_config: Any, **_kwargs: Any) -> int:
+        recorded.events.append("run")
         return 0
 
     monkeypatch.setattr(roster_preflight, "notify_roster_drift", _fake_notify)
@@ -449,17 +538,18 @@ def captured_notify(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     monkeypatch.setattr(
         cli_module, "_make_model_listing", lambda: _listing(_roster())
     )
-    return calls
+    return recorded
 
 
 @pytest.mark.parametrize("path", ["_drive_line_printer", "_drive_interactive"])
 def test_both_drive_paths_ask_before_the_run_starts(
-    monkeypatch: pytest.MonkeyPatch,
-    captured_notify: list[dict[str, Any]],
-    tmp_path: Path,
-    path: str,
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring, tmp_path: Path, path: str
 ) -> None:
-    """The unattended path is the one that matters most, so it is not the interactive one only."""
+    """The unattended path is the one that matters most, so it is not the interactive one only.
+
+    A notification an operator reads *after* an overnight Run finished is one
+    they cannot act on, so the order is the assertion.
+    """
     from git_loopy import cli as cli_module
     from git_loopy.config import RunConfig
 
@@ -469,18 +559,59 @@ def test_both_drive_paths_ask_before_the_run_starts(
     if path == "_drive_line_printer":
         asyncio.run(cli_module._drive_line_printer(config))
     else:
-        monkeypatch.setattr(cli_module, "_should_run_interactive", lambda _value: False)
         asyncio.run(cli_module._drive_interactive(config, select_model=False))
 
-    assert len(captured_notify) == 1
-    assert captured_notify[0]["repo_root"] == tmp_path
-    assert captured_notify[0]["parallel"] == 4
+    assert wiring.events == ["notify", "run"]
+    assert wiring.notify_kwargs[0]["repo_root"] == tmp_path
+    assert wiring.notify_kwargs[0]["parallel"] == 4
+
+
+def test_the_operators_classifier_knob_is_what_the_pin_is_compared_against(
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """A pinned classifier does not move, so it must not be reported as moving.
+
+    ``resolve_classifier_pair`` is where "the knob, else the cheapest rung" is
+    decided; comparing the stamp against the cheapest rung regardless would warn
+    on every Run of a repository that pinned its classifier deliberately.
+    """
+    from git_loopy import cli as cli_module
+    from git_loopy.config import RunConfig
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+
+    asyncio.run(
+        cli_module._drive_line_printer(
+            RunConfig(
+                issue_source="github",
+                classifier_model="synth-pinned-1",
+                classifier_effort="high",
+            )
+        )
+    )
+
+    assert wiring.notify_kwargs[0]["configured_classifier"] == (
+        "synth-pinned-1",
+        "high",
+    )
+
+
+def test_an_unset_classifier_knob_is_an_absence_not_a_default(
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring, tmp_path: Path
+) -> None:
+    """``None`` lets the cheapest rung supply the pin, which is the shipped rule."""
+    from git_loopy import cli as cli_module
+    from git_loopy.config import RunConfig
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+
+    asyncio.run(cli_module._drive_line_printer(RunConfig(issue_source="github")))
+
+    assert wiring.notify_kwargs[0]["configured_classifier"] is None
 
 
 def test_the_comparison_reads_the_runs_own_listing(
-    monkeypatch: pytest.MonkeyPatch,
-    captured_notify: list[dict[str, Any]],
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring, tmp_path: Path
 ) -> None:
     """One listing, read once — never a second round trip for the comparison (ADR-0019)."""
     from git_loopy import cli as cli_module
@@ -498,11 +629,11 @@ def test_the_comparison_reads_the_runs_own_listing(
     asyncio.run(cli_module._drive_line_printer(RunConfig(issue_source="github")))
 
     assert len(listings) == 1
-    assert captured_notify[0]["listing"] is listings[0]
+    assert wiring.notify_kwargs[0]["listing"] is listings[0]
 
 
 def test_a_run_outside_a_repository_still_starts(
-    monkeypatch: pytest.MonkeyPatch, captured_notify: list[dict[str, Any]]
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring
 ) -> None:
     """``resolve_repo_root`` raises outside one; the comparison is told ``None``, not skipped."""
     from git_loopy import cli as cli_module
@@ -518,7 +649,8 @@ def test_a_run_outside_a_repository_still_starts(
     )
 
     assert exit_code == 0
-    assert captured_notify[0]["repo_root"] is None
+    assert wiring.events == ["notify", "run"]
+    assert wiring.notify_kwargs[0]["repo_root"] is None
 
 
 def test_a_failed_comparison_never_stops_a_run(
@@ -533,10 +665,13 @@ def test_a_failed_comparison_never_stops_a_run(
     from git_loopy import loop as loop_module
     from git_loopy.config import RunConfig
 
+    started: list[str] = []
+
     async def _explode(**_kwargs: Any) -> tuple[Any, ...]:
         raise RuntimeError("the comparison fell over")
 
     async def _fake_run(_config: Any, **_kwargs: Any) -> int:
+        started.append("run")
         return 0
 
     monkeypatch.setattr(roster_preflight, "notify_roster_drift", _explode)
@@ -550,3 +685,28 @@ def test_a_failed_comparison_never_stops_a_run(
         asyncio.run(cli_module._drive_line_printer(RunConfig(issue_source="github")))
         == 0
     )
+    assert started == ["run"]
+
+
+def test_an_unresolvable_repository_root_never_stops_a_run(
+    monkeypatch: pytest.MonkeyPatch, wiring: _Wiring
+) -> None:
+    """``resolve_repo_root`` shells out to git, so it can fail in ways beyond ``RuntimeError``.
+
+    A ``PermissionError`` from the lookup must not be the reason an unattended
+    Run never starts — the whole comparison is inside the guard, not just the
+    call it wraps.
+    """
+    from git_loopy import cli as cli_module
+    from git_loopy.config import RunConfig
+
+    def _denied() -> Path:
+        raise PermissionError("cannot execute git")
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", _denied)
+
+    assert (
+        asyncio.run(cli_module._drive_line_printer(RunConfig(issue_source="github")))
+        == 0
+    )
+    assert wiring.events == ["run"]
