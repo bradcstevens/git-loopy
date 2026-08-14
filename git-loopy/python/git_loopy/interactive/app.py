@@ -208,6 +208,114 @@ class _ActivityScroll(VerticalScroll):
         self.anchor()
 
 
+class _ActivityBandHandle(Static):
+    """The **Activity** band's header row, which is also its **drag handle**.
+
+    ADR-0021 said it first — *"its header row is the drag handle"* — and ADR-0031
+    is what makes that survivable: a **Collapsed** band still renders this row, so
+    the gesture that collapsed the band has something left to grab.
+
+    Pointer bookkeeping lives here and sizing lives on the band: the handle
+    converts pointer rows into a height and hands it to
+    :meth:`_ActivityBand.drag_to`, so the mouse states its intent in the same
+    absolute rows the keyboard does.
+
+    Three gestures, and the third is the one that is *not* implemented: a drag
+    sizes the band, a bare click toggles **Collapsed**, and the **wheel is left
+    alone** — resize-by-wheel is exactly the accidental gesture ADR-0021's
+    Context section is an argument against, so no wheel handler exists here to
+    remove later. Together with ``shift+↑`` / ``shift+↓`` that is the
+    **drag → click → keys** ladder: a terminal reporting motion gets all three,
+    one reporting clicks but not motion keeps the click, one with no mouse
+    reporting keeps the keys.
+
+    The click is the **band** header's alone. ADR-0021 reserves a click on an
+    **Activity window** header for drilling into that issue's **Log**, and
+    drill-in already has its own mouse path through the Queue's row click.
+
+    Unlike ``grow`` and ``shrink`` these gestures need no "is the Dashboard on
+    screen" guard: a Level-2 Log hides the whole Dashboard, so there is no handle
+    under the pointer to grab in the first place.
+    """
+
+    #: The handle is a **control**, not prose. Textual starts a text selection on
+    #: a mouse-down over selectable content, and it starts it before the capture
+    #: below is taken, so a drag would otherwise paint a selection across
+    #: everything the pointer crossed and leave it there on release.
+    ALLOW_SELECT = False
+
+    #: The screen row the pointer was grabbed on, or ``None`` when no drag is in
+    #: progress. The whole drag is measured from it rather than from the previous
+    #: move, so a pointer that runs past the band's ceiling and comes back lands
+    #: where it started instead of drifting.
+    _grab_row: int | None = None
+
+    #: The band's height on screen when it was grabbed.
+    _grab_height: int = 0
+
+    #: Whether the pointer has left the row it was grabbed on. A press and
+    #: release that never does is a **click** — a *toggle* gesture — and not a
+    #: drag that happened to size the band to where it already was.
+    _moved: bool = False
+
+    @property
+    def _band(self) -> "_ActivityBand | None":
+        parent = self.parent
+        return parent if isinstance(parent, _ActivityBand) else None
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        """Take the handle, and **capture the mouse** for the whole drag.
+
+        Capture is what keeps a drag that wanders down over the Queue from
+        selecting a row or opening a **Log**: every subsequent mouse event is
+        delivered here regardless of what it is over.
+        """
+        band = self._band
+        if band is None:
+            return
+        event.stop()
+        self._grab_row = event.screen_y
+        self._grab_height = band.on_screen_height
+        self._moved = False
+        self.capture_mouse()
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        """Track the pointer: the handle is the band's top edge, and the band's
+        bottom edge does not move, so the height is the rows between them."""
+        if self._grab_row is None:
+            return
+        event.stop()
+        rows = self._grab_row - event.screen_y
+        if rows == 0 and not self._moved:
+            return
+        self._moved = True
+        band = self._band
+        if band is not None:
+            band.drag_to(self._grab_height + rows)
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        """Let the handle go — and, if the pointer never moved, read the gesture
+        as a **click**, which toggles collapse.
+
+        A drag that ends where it began is indistinguishable from a click, so
+        the click needs a meaning; a one-row stub is a fiddly drag target but a
+        forgiving click target, so that meaning is the toggle (ADR-0031). A drag
+        that wandered and came back is still a drag: it stated a size, and
+        collapsing the band the operator has just finished sizing would be the
+        opposite of what they asked for.
+        """
+        if self._grab_row is None:
+            return
+        event.stop()
+        moved = self._moved
+        self._grab_row = None
+        self._moved = False
+        self.release_mouse()
+        band = self._band
+        if not moved and band is not None:
+            band.toggle_collapsed()
+
+
 class _ActivityBand(Vertical):
     """Level 1: the always-on **Activity** band — the live current tail below the
     Queue (issue #69, ADR-0011).
@@ -217,9 +325,11 @@ class _ActivityBand(Vertical):
     compact one-line ``#activity-header`` names the **Active issue**
     (:func:`~git_loopy.interactive.state.format_activity_header`) above a
     non-focusable :class:`_ActivityScroll` holding the ``#activity-body`` tail.
-    The band is a **UI-layer view over existing per-issue Log state** — it
-    renders ``state.log()`` via ``log_line_views``, the same helpers the Level-2
-    Log uses — so there is no new state buffer.
+    That header is also the band's :class:`_ActivityBandHandle` — the mouse's
+    way into the same state machine the keys drive. The band is a **UI-layer
+    view over existing per-issue Log state** — it renders ``state.log()`` via
+    ``log_line_views``, the same helpers the Level-2 Log uses — so there is no
+    new state buffer.
 
     The band is **operator-sized** (ADR-0031). It holds two numbers, not one:
     :attr:`requested` is the operator's stated intent in absolute rows, starting
@@ -230,15 +340,17 @@ class _ActivityBand(Vertical):
     whatever is left (``1fr``) and is never crushed by the band.
 
     Only an explicit gesture writes ``requested`` — which is why it is read-only
-    from outside and moves solely through :meth:`grow` and :meth:`shrink` — so a
-    clamp is never destructive of the operator's setting: a terminal that shrinks
-    and grows again returns the band to the height that was asked for.
+    from outside and moves solely through :meth:`grow`, :meth:`shrink` and
+    :meth:`drag_to` — so a clamp is never destructive of the operator's setting:
+    a terminal that shrinks and grows again returns the band to the height that
+    was asked for.
 
     Below the floor the band is **Collapsed** (:meth:`toggle_collapsed`, or
-    :meth:`shrink` past the floor): its one-line header and nothing else, still
-    in the Dashboard layout. That replaces issue #70's ``display = False``, which
-    removed the band — and with it the handle a gesture needs to undo itself
-    (ADR-0031, superseding ADR-0021's snap-to-collapsed clause).
+    :meth:`shrink` / :meth:`drag_to` past the floor): its one-line header and
+    nothing else, still in the Dashboard layout. That replaces issue #70's
+    ``display = False``, which removed the band — and with it the handle a
+    gesture needs to undo itself (ADR-0031, superseding ADR-0021's
+    snap-to-collapsed clause).
 
     The state lives on this widget, as issue #70's ``display`` toggle does, so
     ``LiveRunState`` still imports no Textual (ADR-0001) and no **Config** or
@@ -259,7 +371,7 @@ class _ActivityBand(Vertical):
     _container_height: int = 0
 
     def compose(self) -> ComposeResult:
-        yield Static(id="activity-header")
+        yield _ActivityBandHandle(id="activity-header")
         with _ActivityScroll(id="activity-scroll"):
             yield Static(id="activity-body")
 
@@ -290,6 +402,19 @@ class _ActivityBand(Vertical):
         if ceiling is None:
             return max(self._requested, _ACTIVITY_BAND_MIN_HEIGHT)
         return max(_ACTIVITY_BAND_MIN_HEIGHT, min(self._requested, ceiling))
+
+    @property
+    def on_screen_height(self) -> int:
+        """The rows the band currently occupies: the stub's one, or
+        :attr:`effective`.
+
+        The one number a pointer gesture can measure itself against — a drag
+        states its intent relative to what the operator can see, which is what
+        makes the header row stay under the pointer.
+        """
+        if self._collapsed:
+            return _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        return self.effective
 
     def _ceiling(self) -> int | None:
         """The largest height that still leaves the Queue its floor.
@@ -333,9 +458,7 @@ class _ActivityBand(Vertical):
         what the arithmetic happens to produce.
         """
         collapsed = self._collapsed
-        self.styles.height = (
-            _ACTIVITY_BAND_COLLAPSED_HEIGHT if collapsed else self.effective
-        )
+        self.styles.height = self.on_screen_height
         self.query_one("#activity-scroll", _ActivityScroll).display = not collapsed
 
     # -- gestures ----------------------------------------------------------
@@ -382,7 +505,8 @@ class _ActivityBand(Vertical):
         self._apply_height()
 
     def toggle_collapsed(self) -> None:
-        """``a``: collapse to the stub, or restore the operator's height.
+        """``a``, or a bare click on the header: collapse to the stub, or restore
+        the operator's height.
 
         A **toggle** gesture, so it preserves ``requested`` rather than writing
         it (ADR-0031) — which is what gives the restore something of the
@@ -390,6 +514,39 @@ class _ActivityBand(Vertical):
         """
         self._collapsed = not self._collapsed
         self._apply_height()
+
+    def drag_to(self, height: int) -> None:
+        """A drag of the header handle: size the band to ``height`` rows.
+
+        A **sizing** gesture, so it writes ``requested`` exactly as ``shift+up``
+        and ``shift+down`` do — the mouse reaches the one state machine the keys
+        drive (ADR-0031), rather than a parallel notion of height of its own.
+
+        The ceiling is applied to ``requested`` and not only to
+        :attr:`effective`, for the reason :meth:`grow` caps there too: a pointer
+        dragged off the top of the screen must not store up height that springs
+        out the moment the terminal grows. A terminal too short even for the
+        band's own floor has no room to give, so the floor wins there as it does
+        in :attr:`effective`.
+
+        Below the floor the band releases into **Collapsed**, and the intent
+        recorded is the one ``shrink`` records when it crosses the same line —
+        one row short of the floor. A pointer can state a height of minus twenty
+        where a key press can only ever state one row less; saturating keeps
+        "the operator's stated intent" a number the band could plausibly be
+        asked for, and lands both sizing gestures in one state.
+        """
+        ceiling = self._ceiling()
+        if ceiling is not None:
+            height = min(height, max(ceiling, _ACTIVITY_BAND_MIN_HEIGHT))
+        if height < _ACTIVITY_BAND_MIN_HEIGHT:
+            self._collapsed = True
+            self._requested = _ACTIVITY_BAND_MIN_HEIGHT - 1
+        else:
+            self._collapsed = False
+            self._requested = height
+        self._apply_height()
+
 
     def note_container_height(self, height: int | None = None) -> None:
         """Re-derive the ceiling from the Dashboard's laid-out height.
@@ -508,7 +665,8 @@ class GitLoopyApp(App[None]):
     to the line printer and the run keeps going); ``a`` collapses the always-on
     **Activity** band to its one-line header stub and restores it, and
     ``shift+up`` / ``shift+down`` size it a row at a time (issue #70, ADR-0031 —
-    in-session only).
+    in-session only). The same band takes the mouse on its header row: a drag
+    sizes it and a bare click toggles the stub (:class:`_ActivityBandHandle`).
     """
 
     TITLE = "git-loopy"
