@@ -884,7 +884,10 @@ cheapest rung and stops at the first pair whose five **Trials** against the gate
 green — unanimity over a deliberately thin sample, never a reliability estimate — bounded by an
 **AI Credits** ceiling and an elapsed wall-clock one, both applied per **Task type** so an
 expensive walk cannot spend the credits the next one was to be measured with; a search that
-exhausts either keeps the incumbent and publishes no winner at all. Its objective
+exhausts either, or is interrupted, publishes no winner at all and keeps the incumbent — and
+where that incumbent is a pair an earlier Calibration measured, the pair stays in the artifact,
+because a walk that stopped disagreed with nothing about it and so records *around* it rather
+than over it. Its objective
 is inverted from the obvious reading — the gate is a bar, not a gradient, so the target is the
 *cheapest* pair that reliably clears it, never the most capable one. Its output is a
 measurement table and an argmax, with no written analysis and no prose conclusion anywhere in

@@ -50,6 +50,7 @@ from git_loopy.measured_routing import (
     Rung,
     load_measured_routing,
     measured_routing_path,
+    write_measured_routing,
 )
 from git_loopy.proving_admission import AdmittedProvingSet, AdmittedProvingTask
 from git_loopy.proving_set import ProvingCandidate
@@ -557,6 +558,20 @@ def _measured_entry(model: str) -> MeasuredEntry:
     )
 
 
+def _incomplete_entry(*, stopped_at_rung: int = 1) -> MeasuredEntry:
+    return MeasuredEntry(
+        status=MeasuredStatus.INCOMPLETE,
+        stopped_at_rung=stopped_at_rung,
+        rungs_available=2,
+        credits=2.0,
+        wall_clock_seconds=120,
+        rungs=(
+            Rung(model="synth-cheap-1", effort="low", passed=3, total=5, credits=2.0),
+        ),
+        proving_tasks=_pins(),
+    )
+
+
 def test_a_single_task_type_calibration_leaves_every_other_record_alone() -> None:
     """``calibrate docs`` re-measures ``docs``, and nothing else.
 
@@ -615,6 +630,124 @@ def test_a_search_that_wrote_nothing_leaves_the_incumbent_record_standing() -> N
     merged = calibration_run.merge_records(existing, outcome, _provenance())
 
     assert merged.entries["docs"].model == "incumbent-model"
+
+
+def test_a_stopped_search_never_takes_the_incumbents_measured_pair_away() -> None:
+    """A ceiling measured nothing about the pair already in force, so it removes nothing.
+
+    An ``incomplete`` record carries no **Routed pair**, so writing one over a
+    ``measured`` record does not merely re-describe the Task type — it drops the
+    pair out of the tier entirely, and the Run after it routes on **Config**. That
+    is the one thing the operator was told would not happen: ``calibrate`` prints
+    *"The incumbent is kept"* on exactly this path.
+    """
+    existing = MeasuredRouting(entries={"bugfix": _measured_entry("incumbent-model")})
+    outcome = CalibrationOutcome(
+        calibration_id="cal01",
+        calibrated=(
+            TaskTypeCalibration(
+                task_type="bugfix",
+                result=_result(
+                    SearchStop.CREDIT_CEILING, rungs=[_rung(CHEAP, passed=3, total=5)]
+                ),
+                decision=RecordDecision(entry=_incomplete_entry()),
+            ),
+        ),
+    )
+
+    merged = calibration_run.merge_records(existing, outcome, _provenance())
+
+    assert merged.entries["bugfix"].status is MeasuredStatus.MEASURED
+    assert merged.routing["bugfix"] == ("incumbent-model", "low")
+
+
+def test_a_stopped_search_does_replace_a_record_that_was_routing_nothing() -> None:
+    """Withholding is about the pair, not about the status.
+
+    Where the incumbent record supplies no pair — an earlier stopped walk, or no
+    record at all — the newer stop *is* the current state, and ADR-0028 stores
+    current state only. Refusing to write here would freeze the artifact on the
+    first walk that ever stopped.
+    """
+    existing = MeasuredRouting(entries={"bugfix": _incomplete_entry()})
+    outcome = CalibrationOutcome(
+        calibration_id="cal01",
+        calibrated=(
+            TaskTypeCalibration(
+                task_type="bugfix",
+                result=_result(
+                    SearchStop.CREDIT_CEILING, rungs=[_rung(DEAR, passed=3, total=5)]
+                ),
+                decision=RecordDecision(entry=_incomplete_entry(stopped_at_rung=2)),
+            ),
+            TaskTypeCalibration(
+                task_type="docs",
+                result=_result(
+                    SearchStop.CREDIT_CEILING, rungs=[_rung(CHEAP, passed=3, total=5)]
+                ),
+                decision=RecordDecision(entry=_incomplete_entry()),
+            ),
+        ),
+    )
+
+    merged = calibration_run.merge_records(existing, outcome, _provenance())
+
+    assert merged.entries["bugfix"].stopped_at_rung == 2
+    assert merged.entries["docs"].status is MeasuredStatus.INCOMPLETE
+
+
+def test_a_winner_supersedes_the_incumbent_it_beat() -> None:
+    """The withholding rule must not make the artifact unwritable.
+
+    A ``measured`` record replacing a ``measured`` one is the whole point of
+    re-calibrating; only a record with *no* pair is withheld.
+    """
+    existing = MeasuredRouting(entries={"bugfix": _measured_entry("incumbent-model")})
+    outcome = CalibrationOutcome(
+        calibration_id="cal01",
+        calibrated=(
+            TaskTypeCalibration(
+                task_type="bugfix",
+                result=_result(
+                    SearchStop.WINNER,
+                    rungs=[_rung(CHEAP, passed=5, total=5)],
+                    winner=CHEAP,
+                ),
+                decision=RecordDecision(entry=_measured_entry("new-model")),
+            ),
+        ),
+    )
+
+    merged = calibration_run.merge_records(existing, outcome, _provenance())
+
+    assert merged.routing["bugfix"] == ("new-model", "low")
+
+
+def test_a_withheld_record_is_reported_rather_than_dropped_in_silence() -> None:
+    """A record the Calibration bought and did not write is a fact the operator owns.
+
+    It goes out through the same *nothing written* channel an unknown spend uses,
+    naming the pair that survived, so the diff matching the report is checkable
+    rather than assumed.
+    """
+    existing = MeasuredRouting(entries={"bugfix": _measured_entry("incumbent-model")})
+    outcome = CalibrationOutcome(
+        calibration_id="cal01",
+        calibrated=(
+            TaskTypeCalibration(
+                task_type="bugfix",
+                result=_result(
+                    SearchStop.CREDIT_CEILING, rungs=[_rung(CHEAP, passed=3, total=5)]
+                ),
+                decision=RecordDecision(entry=_incomplete_entry()),
+            ),
+        ),
+    )
+
+    _entries, kept = calibration_run.records_to_write(existing, outcome)
+
+    assert [item.task_type for item in kept] == ["bugfix"]
+    assert "incumbent-model" in kept[0].reason
 
 
 def _provenance() -> Provenance:
@@ -951,6 +1084,49 @@ def test_a_ceiling_keeps_the_incumbent_and_names_which_ceiling_stopped_it(
     assert entry.status is MeasuredStatus.INCOMPLETE
     assert entry.routed_pair is None
     assert (entry.stopped_at_rung, entry.rungs_available) == (1, 2)
+
+
+def test_a_ceiling_on_a_re_calibration_leaves_the_measured_pair_routing(
+    tmp_path: Path,
+) -> None:
+    """ "The incumbent is kept" has to be true of the diff, not only of the report.
+
+    The Task type already has a winner from an earlier Calibration. This one hits
+    the **AI Credits** ceiling, which measured nothing about the pair in force —
+    so the record it would write, carrying no pair, is withheld and the artifact
+    still routes what it routed before.
+    """
+    github = _corpus(tmp_path)
+    write_measured_routing(
+        tmp_path,
+        MeasuredRouting(
+            entries={"bugfix": _measured_entry("incumbent-model")},
+            provenance=Provenance(
+                cli_version="0.0.1",
+                calibrated_at="2020-01-01T00:00:00Z",
+                candidate_count=2,
+                gate_loops=("Python suite",),
+            ),
+        ),
+    )
+
+    code, out, _err, _runner = _run(
+        tmp_path,
+        github,
+        runner=_ScriptedRunner({}),
+        budget=SearchBudget(
+            credit_ceiling=Decimal("0.4"), wall_clock_ceiling_seconds=1e9
+        ),
+    )
+
+    assert code == 0
+    assert "The incumbent is kept" in out.text
+    assert "nothing written" in out.text
+    artifact = load_measured_routing(measured_routing_path(tmp_path))
+    assert artifact.entries["bugfix"].status is MeasuredStatus.MEASURED
+    assert artifact.routing["bugfix"] == ("incumbent-model", "low")
+    assert artifact.provenance is not None
+    assert artifact.provenance.calibrated_at == "2020-01-01T00:00:00Z"
 
 
 def test_an_interrupted_calibration_keeps_what_it_measured_and_publishes_no_winner(

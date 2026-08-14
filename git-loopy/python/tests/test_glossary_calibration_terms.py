@@ -262,6 +262,57 @@ def test_each_task_types_search_is_bought_with_its_own_budget() -> None:
     raise AssertionError(f"{CALIBRATION_RUN} declares no `calibrate`")
 
 
+def test_the_calibration_entry_records_what_a_stopped_search_leaves_alone() -> None:
+    """*"Keeps the incumbent"* has to name the artifact, or it names nothing.
+
+    An ``incomplete`` record carries no **Routed pair**, so writing one over a
+    ``measured`` record would take the pair out of the tier and the next **Run**
+    would route on **Config**. A ceiling and an interrupt measured nothing about
+    the pair already in force, so the entry says what survives them rather than
+    leaving *"the incumbent"* to be read as the tier below.
+    """
+    entry = _entry("Calibration")
+
+    assert "keeps the incumbent" in entry
+    assert "stays in the artifact" in entry
+
+
+def _function(relative: str, name: str) -> ast.FunctionDef:
+    """One module-level function's syntax tree, read from source rather than imported."""
+    for node in ast.walk(ast.parse(_doc(relative))):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{relative} declares no `{name}`")
+
+
+def test_a_stopped_search_cannot_take_the_incumbents_pair_out_of_the_artifact() -> None:
+    """The entry's *"keeps the incumbent"* clause, pinned to the code that keeps it.
+
+    ``merge_records`` folds one Calibration's records into the committed artifact,
+    and the fault this exists for is the one it shipped with: folding
+    ``outcome.records`` straight in, which lets a pairless ``incomplete`` replace a
+    ``measured`` record and silently un-route the **Task type**. Which records may
+    land is ``records_to_write``'s single rule, so the artifact and the operator's
+    report cannot disagree about what changed.
+    """
+    merge = _function(CALIBRATION_RUN, "merge_records")
+    calls = {
+        node.func.id
+        for node in ast.walk(merge)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "records_to_write" in calls, (
+        "merge_records no longer asks which records may land, so a stopped search "
+        "can remove a measured pair the glossary says it keeps"
+    )
+    assert not [
+        node
+        for node in ast.walk(merge)
+        if isinstance(node, ast.Attribute) and node.attr == "records"
+    ], "merge_records reads `outcome.records` directly, bypassing the rule"
+
+
 #: The modules that drive **unattended** work: the run loop and the session it
 #: spawns, the scheduler that keeps **Lanes** fed, and the preflight that
 #: compares the live roster to the artifact. The **Calibration** entry's

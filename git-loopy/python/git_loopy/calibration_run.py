@@ -158,7 +158,9 @@ def record_for(result: SearchResult) -> RecordDecision:
       every rung walked and the **Proving tasks** measured (ADR-0028).
     * A ceiling, an interrupt or an exhausted staircase becomes an ``incomplete``
       record: where the walk got to, what it cost, what it measured, and no pair at
-      all. The incumbent keeps routing because there is nothing to supersede it.
+      all. The incumbent keeps routing because there is nothing to supersede it —
+      and where the incumbent is itself a record in this artifact,
+      :func:`records_to_write` is what keeps it there.
     * A search that ran no Trial writes nothing. ``stopped_at_rung = 0`` would
       record a Calibration that never started as one that started and stopped, and
       it would overwrite whatever the Task type's incumbent record said.
@@ -300,11 +302,15 @@ class CalibrationOutcome:
 
     @property
     def records(self) -> dict[str, MeasuredEntry]:
-        """The entries to write, keyed by **Task type**.
+        """The entries this Calibration *produced*, keyed by **Task type**.
 
         Only the searches that produced one: a refused search and a search whose
         spend is unknown both keep the incumbent, and keeping it means writing
         nothing over it.
+
+        What of these actually reaches the artifact is
+        :func:`records_to_write`'s decision, because that question needs the
+        artifact already on disk and this record has never seen it.
         """
         return {
             item.task_type: item.decision.entry
@@ -590,6 +596,61 @@ def provenance_for(
     )
 
 
+@dataclass(frozen=True)
+class KeptIncumbent:
+    """A record this Calibration measured and deliberately did not write."""
+
+    task_type: str
+    reason: str
+
+
+def records_to_write(
+    existing: MeasuredRouting, outcome: CalibrationOutcome
+) -> tuple[dict[str, MeasuredEntry], tuple[KeptIncumbent, ...]]:
+    """Split this Calibration's records into the ones that may land, and the rest.
+
+    One rule, in one place: **a record carrying no Routed pair never displaces one
+    that carries a pair.** The artifact holds one record per **Task type**, so an
+    ``incomplete`` written over a ``measured`` does not merely re-describe the Task
+    type — it takes the pair out of the tier, and the next **Run** routes on
+    **Config** instead. A ceiling, an interrupt and an exhausted staircase measured
+    nothing about the pair already in force, so none of them may remove it; that is
+    what *"the incumbent is kept"* means everywhere else in this module, and it is
+    the operator-facing promise ``calibrate`` prints on exactly this path.
+
+    Withheld is not the same as forgotten. The stopped walk's evidence lives in the
+    Calibration's own event log (#371), and the record is reported through the same
+    *nothing written* channel an unknown spend uses.
+
+    The rule is about the **pair**, not the status: where the incumbent record
+    supplies none — an earlier walk that stopped, or no record at all — the newer
+    stop *is* the current state, and ADR-0028 stores current state only.
+    """
+    writable: dict[str, MeasuredEntry] = {}
+    kept: list[KeptIncumbent] = []
+    for key, entry in outcome.records.items():
+        incumbent = existing.entries.get(key)
+        if (
+            entry.routed_pair is None
+            and incumbent is not None
+            and (pair := incumbent.routed_pair) is not None
+        ):
+            kept.append(KeptIncumbent(task_type=key, reason=_kept_reason(pair)))
+            continue
+        writable[key] = entry
+    return writable, tuple(kept)
+
+
+def _kept_reason(pair: tuple[str, str]) -> str:
+    """Why one stopped search left the artifact's pair where it was."""
+    return (
+        f"this search published no winner, and the record it would write carries "
+        f"no pair — writing it would have removed the "
+        f"{render_pair(pair[0], pair[1])} already in force, which nothing this "
+        f"Calibration measured disagreed with"
+    )
+
+
 def merge_records(
     existing: MeasuredRouting,
     outcome: CalibrationOutcome,
@@ -600,10 +661,13 @@ def merge_records(
     A fold rather than a rebuild, because the artifact is one file for the whole
     taxonomy: ``calibrate docs`` that rewrote it from its own outcomes would
     silently retract every **Task type** the operator did not ask about — a
-    Calibration that cost nothing and deleted evidence.
+    Calibration that cost nothing and deleted evidence. Which records may land is
+    :func:`records_to_write`'s rule, so the artifact and the report cannot disagree
+    about what changed.
     """
     entries = dict(existing.entries)
-    entries.update(outcome.records)
+    writable, _kept = records_to_write(existing, outcome)
+    entries.update(writable)
     return MeasuredRouting(entries=entries, provenance=provenance)
 
 
@@ -936,9 +1000,15 @@ def _write_outcome(
                 f"{TASK_TYPE_LABEL_PREFIX}{item.task_type}: nothing written — "
                 f"{item.decision.unwritten_reason}."
             )
+    writable, kept = records_to_write(found.artifact, outcome)
+    for incumbent in kept:
+        out(
+            f"{TASK_TYPE_LABEL_PREFIX}{incumbent.task_type}: nothing written — "
+            f"{incumbent.reason}."
+        )
     if outcome.interrupted:
         out("Interrupted. This Calibration is unfinished and published no winner.")
-    if not outcome.records:
+    if not writable:
         out("Nothing was written: the measured routing artifact is unchanged.")
         return
     merged = merge_records(
