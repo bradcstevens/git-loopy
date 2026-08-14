@@ -82,6 +82,8 @@ __all__ = [
     "SERIAL_FALLBACK_NONE_LABELLED",
     "SERIAL_FALLBACK_REASONS",
     "SERIAL_FALLBACK_UNAVAILABLE",
+    "SERIAL_LATCH_NOT_PARALLEL_SAFE",
+    "SERIAL_LATCH_REASONS",
     "STRIKE_ADD",
     "STRIKE_RESET",
     "SerialFallback",
@@ -95,6 +97,21 @@ REASON_PUBLISHED = "published"
 REASON_UNCHANGED_BRANCH = "unchanged_branch"
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
 REASON_SERIAL_FALLBACK = "serial_fallback"
+
+# Why refill stopped (#219 §5.1-5.3, #356). Every latch has exactly one of
+# these causes, and the operator's reading of each differs: a serial-required
+# candidate the driver's own peek found is ordinary drain-everything work
+# waiting its turn, while an Integration fallback is a contribution that
+# already failed. Closed here rather than at the call site because
+# :meth:`RollingScheduler.request_serial` refuses anything else — the reason
+# reaches the operator through ``wrapper.serial.requested``, and a reason the
+# Conformance fixture has never heard of would render as an unexplained stop
+# in every Orchestrator that replays the log.
+SERIAL_LATCH_NOT_PARALLEL_SAFE = "not_parallel_safe"
+SERIAL_LATCH_REASONS: tuple[str, ...] = (
+    SERIAL_LATCH_NOT_PARALLEL_SAFE,
+    REASON_SERIAL_FALLBACK,
+)
 
 # What a finalized contribution does to the shared Strike machine (#219 §7.4,
 # §7.6). The scheduler records the reaction; :class:`~git_loopy.loop._Loop`
@@ -677,7 +694,19 @@ class RollingScheduler:
         flight is cancelled (§5.4). Existing reservations complete setup and
         either open a contribution or release; the pipeline then drains to full
         quiescence before serial ownership is granted.
+
+        Args:
+            ref: The issue whose demand latched this, or ``None``.
+            reason: One of :data:`SERIAL_LATCH_REASONS`.
+
+        Raises:
+            ValueError: The reason is outside the closed set. Refused here
+                rather than validated by the reporter, so a latch that the
+                operator's ``wrapper.serial.requested`` line could not explain
+                cannot be created in the first place.
         """
+        if reason not in SERIAL_LATCH_REASONS:
+            raise ValueError(f"unknown serial-latch reason: {reason!r}")
         self._serial_latched = True
         self._serial_requests.append((ref, reason))
 

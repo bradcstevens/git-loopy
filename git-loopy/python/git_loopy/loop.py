@@ -2431,7 +2431,9 @@ class _ParallelLoop:
         turn (mirroring how often the retired Wave's own
         ``_collect_pool_safely`` ran) and asks the scheduler to latch serial
         ownership (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`)
-        the moment it finds anything else.
+        the moment it finds anything else — and reports that latch
+        (:meth:`_report_serial_latch`), since this is the only place in the Run
+        that ever knows how big that half of the Pool is (#356).
 
         Returns:
             Whether this turn saw the **whole** serial-required half of the
@@ -2453,12 +2455,67 @@ class _ParallelLoop:
             # API capacity. Nothing was seen, so nothing may be claimed.
             return False
         collection = self._collect_pool_safely()
-        for item in collection.items:
-            if isinstance(item.ref, int) and LABEL_PARALLEL_SAFE in item.labels:
-                continue
-            self._scheduler.request_serial(ref=item.ref, reason="not_parallel_safe")
-            break
+        serial_required = [
+            item
+            for item in collection.items
+            if not (isinstance(item.ref, int) and LABEL_PARALLEL_SAFE in item.labels)
+        ]
+        if serial_required:
+            # The whole peek is counted before the latch, not just the first
+            # hit: the ref is what the scheduler needs and the count is what
+            # the operator needs. One latched issue number cannot tell "one
+            # more thing to do after this Lane" from "forty" (#356).
+            self._scheduler.request_serial(
+                ref=serial_required[0].ref,
+                reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE,
+            )
+            self._report_serial_latch(
+                ref=serial_required[0].ref,
+                reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE,
+                serial_required=len(serial_required),
+            )
         return collection.complete
+
+    def _report_serial_latch(
+        self,
+        *,
+        ref: int | str | None,
+        reason: str,
+        serial_required: int | None,
+    ) -> None:
+        """Say that refill just stopped, and what is waiting behind the drain (#356).
+
+        Emitted where the latch happens rather than where the serial turn is
+        finally granted. Those are not the same moment: in between sit every
+        in-flight Lane's session, its **Integration** and any bounded
+        auto-resolution, and an explicit ``max-iterations`` cap can end the Run
+        before the grant ever arrives (:meth:`_drive_rolling`) — in which case
+        the grant-time report (:meth:`_report_serial_fallback`) never runs at
+        all and the latched half of the **Pool** is never mentioned. The
+        Run-start banner is scoped to **Lanes**, so an operator watching that
+        window has nothing to correct the impression that non-``parallel-safe``
+        work is excluded from the Run.
+
+        Args:
+            ref: The issue whose demand latched this.
+            reason: One of
+                :data:`~git_loopy.rolling_scheduler.SERIAL_LATCH_REASONS`.
+            serial_required: How many serial-required items the peek saw, or
+                ``None`` when nothing counted them. The driver's peek is the
+                only thing that ever can (Pool membership filters down to
+                **Parallel-safe** candidates) and it is skipped once demand is
+                latched, so an **Integration** fallback latch genuinely does
+                not know — and an unknown count is reported as unknown rather
+                than as a ``1`` nobody measured.
+        """
+        self._serial._emit(
+            events_module.WRAPPER_SERIAL_REQUESTED,
+            iter_num=None,
+            issue=ref,
+            reason=reason,
+            serial_required=serial_required,
+            refill_stopped=True,
+        )
 
     def _collect_pool_safely(self) -> PoolCollection:
         """Peek the full AFK-ready pool for the serial-required demand check.
@@ -2856,6 +2913,7 @@ class _ParallelLoop:
         """
         assert self._scheduler is not None
         async with self._integration_lock:
+            latched_before = self._scheduler.serial_latched
             lane_work = self._lane_work.pop(contribution.contribution_id, None)
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
@@ -2868,6 +2926,21 @@ class _ParallelLoop:
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
+            if latched_before != self._scheduler.serial_latched:
+                # §5.2: an unpublished contribution requests serial service of
+                # its own. Reported on the same terms as the peek's latch —
+                # refill has stopped and the operator is owed the reason —
+                # with no count, because nothing counted the serial half here.
+                # On the transition only: a second failed contribution while
+                # demand is already latched stops no refill that is not already
+                # stopped, and its own `wrapper.contribution.end` carries the
+                # same `serial_fallback` disposition. The peek obeys the same
+                # rule by being skipped entirely once latched.
+                self._report_serial_latch(
+                    ref=contribution.ref,
+                    reason=rolling_scheduler.REASON_SERIAL_FALLBACK,
+                    serial_required=None,
+                )
             self._apply_strike_reaction(contribution)
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO

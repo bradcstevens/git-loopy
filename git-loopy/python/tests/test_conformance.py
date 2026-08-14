@@ -494,6 +494,40 @@ def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
     )
 
 
+def test_event_fixture_pins_the_serial_latch_contract() -> None:
+    """#356: the latch report's reason vocabulary is one closed set too.
+
+    Same discipline as the fallback report, and for the same reason: the
+    operator's line is rendered from ``reason``, so a value the fixture never
+    heard of renders as an unexplained stop in every Orchestrator that replays
+    the log. Pinned as a relationship against the production constant that
+    :meth:`RollingScheduler.request_serial` itself enforces, so the fixture
+    cannot drift from the only code that can create a latch.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_SERIAL_REQUESTED
+    ]
+    assert contract["required_when_present"] == [
+        "issue",
+        "reason",
+        "serial_required",
+        "refill_stopped",
+    ]
+    assert tuple(contract["reason_values"]) == (
+        rolling_scheduler_module.SERIAL_LATCH_REASONS
+    )
+    # A count nobody took is unknown, never zero (ADR-0026's rule for an
+    # unobserved quantity): the driver's Pool peek is the only thing that can
+    # count the serial half, and an Integration fallback latch never ran one.
+    assert "serial_required" in contract["nullable"]
+    assert events_module.WRAPPER_SERIAL_REQUESTED in (
+        _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    )
+    assert events_module.WRAPPER_SERIAL_REQUESTED not in (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
+
+
 def _parallel_capability_producers() -> dict[str, bool]:
     """Which rolling capabilities this distribution *actually* has a producer for.
 

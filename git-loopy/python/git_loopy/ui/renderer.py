@@ -66,6 +66,7 @@ from git_loopy.events import (
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
+    WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
 )
 
@@ -220,6 +221,12 @@ class Renderer:
         serial Run, so an operator whose tracker carried no ``parallel-safe``
         issue reasonably concluded the flag was broken. A serial Run carries
         none of these keys and this prints nothing.
+
+        The line is scoped to **Lanes** and says so (#356). Its predecessor —
+        "only issues labelled parallel-safe take a Lane" — was true about Lanes
+        and read as a claim about the **Pool**, which is the opposite of
+        ADR-0008's drain-everything promise: a Parallel Run works the rest of
+        the Pool serially in the same Run.
         """
         if not event.get("parallel_mode"):
             return
@@ -242,7 +249,8 @@ class Renderer:
         if effective != lane_cap:
             text.append(f", starting at {effective}", style=STYLES["meta"])
         text.append(
-            "  •  only issues labelled parallel-safe take a Lane",
+            "  •  issues labelled parallel-safe take a Lane; the rest are "
+            "worked serially in this same run",
             style=STYLES["meta"],
         )
         self.console.print(text)
@@ -275,6 +283,44 @@ class Renderer:
         text.append("serial iteration", style=STYLES["meta"])
         text.append(
             f"  ({eligible} eligible parallel-safe issues — {explanation})",
+            style=STYLES["meta"],
+        )
+        self.console.print(text)
+
+    def _on_serial_requested(self, event: dict[str, Any]) -> None:
+        """Say that refill stopped and what is waiting behind the drain (#356).
+
+        A Parallel Run's banner is scoped to **Lanes** — "only issues labelled
+        parallel-safe take a Lane" — and until this line existed nothing
+        contradicted the reading that everything else was excluded from the Run
+        until the serial **Iteration** finally started, which can be hours
+        later or (under an explicit ``max-iterations`` cap) never.
+
+        The count is the whole point: "one more after this Lane" and "forty"
+        are different situations. An **Integration** fallback latch counted
+        nothing — the driver's peek is the only thing that can, and it is
+        skipped once demand is latched — so it says how, and never guesses a
+        number.
+        """
+        seen = event.get("serial_required")
+        ref = event.get("issue")
+        text = Text()
+        text.append("⇉ ", style=STYLES["meta"])
+        text.append("serial work queued", style=STYLES["meta"])
+        if seen is None:
+            detail = (
+                f"#{ref} needs a serial iteration"
+                if ref is not None
+                else "a serial iteration is needed"
+            )
+        else:
+            detail = (
+                f"{seen} ready-for-agent issue(s) are not parallel-safe, "
+                f"starting with #{ref}"
+            )
+        text.append(
+            f"  ({detail} — no new Lane starts; they are worked after the "
+            "open Lanes finish)",
             style=STYLES["meta"],
         )
         self.console.print(text)
@@ -687,6 +733,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
+    WRAPPER_SERIAL_REQUESTED: Renderer._on_serial_requested,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,
     WRAPPER_CONCURRENCY_CHANGED: Renderer._on_concurrency_changed,

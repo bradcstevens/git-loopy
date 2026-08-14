@@ -278,9 +278,16 @@
       "unavailable": "A signal the Run cannot observe is null, never an estimated or zero value."
     },
     "wrapper.serial.requested": {
-      "required_when_present": ["issue", "reason"],
-      "nullable": ["issue"],
-      "reason_values": ["validated_serial_candidate", "integration_fallback"]
+      "required_when_present": [
+        "issue",
+        "reason",
+        "serial_required",
+        "refill_stopped"
+      ],
+      "nullable": ["issue", "serial_required"],
+      "reason_values": ["not_parallel_safe", "serial_fallback"],
+      "emitted": "When refill stops, not when the serial turn is finally granted. Everything in flight drains first, and an iteration cap can end the Run before the grant, so a consumer that waits for the grant may never learn the serial half of the Pool existed.",
+      "serial_required": "How many serial-required items the peek that latched this saw. Null when nothing counted them: only the driver's own Pool peek can, and it is skipped once demand is latched. Never 0 — a latch with nothing behind it cannot happen."
     },
     "wrapper.pipeline.quiescent": {
       "required_when_present": ["phase", "reason"],
@@ -1450,7 +1457,9 @@
           "iter": null,
           "type": "wrapper.serial.requested",
           "issue": 45,
-          "reason": "validated_serial_candidate"
+          "reason": "not_parallel_safe",
+          "serial_required": 2,
+          "refill_stopped": true
         },
         {
           "ts": "2026-05-16T00:00:26.000Z",
@@ -1557,7 +1566,7 @@
         "{\"ts\": \"2026-05-16T00:00:22.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.recovery_started\", \"attempt\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"max_attempts\": 3}\n",
         "{\"ts\": \"2026-05-16T00:00:23.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:24.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 1, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
-        "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.serial.requested\", \"issue\": 45, \"reason\": \"validated_serial_candidate\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.serial.requested\", \"issue\": 45, \"reason\": \"not_parallel_safe\", \"refill_stopped\": true, \"serial_required\": 2}\n",
         "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"draining_for_serial\", \"reason\": \"serial_latched\"}\n",
         "{\"ts\": \"2026-05-16T00:00:27.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:28.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 2, \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",

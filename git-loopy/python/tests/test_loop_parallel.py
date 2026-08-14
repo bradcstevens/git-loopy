@@ -2315,6 +2315,16 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
 
+    # #356: this latch stops refill too, so it is reported on the same terms as
+    # the peek's — but it counted nothing. Only the driver's Pool peek can
+    # count the serial half, and it is skipped once demand is latched, so the
+    # count is unknown rather than a 1 nobody measured (ADR-0026).
+    latches = [e for e in events if e["type"] == "wrapper.serial.requested"]
+    assert [latch["reason"] for latch in latches] == ["serial_fallback"]
+    assert latches[0]["issue"] == 42
+    assert latches[0]["serial_required"] is None
+    assert latches[0]["refill_stopped"] is True
+
 
 def test_parallel_run_drains_lanes_then_serial_in_one_run(
     tmp_path, monkeypatch
@@ -2880,6 +2890,139 @@ def test_parallel_serial_fallback_separates_already_worked_from_unlabelled(
     assert [f["reason"] for f in fallbacks] == ["all_parallel_safe_worked"]
     assert fallbacks[0]["eligible"] == 0
     assert fallbacks[0]["worked"] == 1
+
+
+def test_parallel_reports_latched_serial_demand_when_it_latches(
+    tmp_path, monkeypatch
+) -> None:
+    """A mixed Pool says its serial half is queued at latch time (#356).
+
+    #304 covered the Pool that carries no ``parallel-safe`` label at all. The
+    case it deliberately left out is the **mixed** Pool, where the serial half
+    is latched on the driver's first peek and then goes unmentioned for as long
+    as the open **Lanes** take to drain — the only signal in that window being
+    a Run-start banner that reads as a claim those issues are excluded.
+
+    So the latch itself is reported, and it names how many serial-required
+    items the peek saw: "one" and "forty" are different situations, and a
+    single latched ref cannot tell them apart.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+            _make_issue(45, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    latches = [e for e in events if e["type"] == "wrapper.serial.requested"]
+    # One report per latch, and the count is re-read each time: the latch
+    # releases when its serial turn is granted, so the next peek sees a Pool
+    # with one fewer serial-required item and says so.
+    assert [latch["issue"] for latch in latches] == [44, 45]
+    assert [latch["serial_required"] for latch in latches] == [2, 1]
+    assert {latch["reason"] for latch in latches} == {"not_parallel_safe"}
+    assert all(latch["refill_stopped"] is True for latch in latches)
+    # Scheduler-scoped: it names work that never became a Lane contribution.
+    assert all("contribution_id" not in latch for latch in latches)
+    assert all("lane_id" not in latch for latch in latches)
+
+    # The first lands when refill stops, not when the serial turn is finally
+    # granted: before the Lane it held back finished its own work, and before
+    # the fallback report that precedes the serial Iteration.
+    types = [e["type"] for e in events]
+    lane_closure = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "wrapper.auto_close" and event.get("issue") == 42
+    )
+    assert types.index("wrapper.serial.requested") < lane_closure
+    assert types.index("wrapper.serial.requested") < types.index(
+        "wrapper.iteration.start"
+    )
+    # Dispatch is unchanged: the Lane still ran and both plain issues drained.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 44, 45]
+
+
+def test_parallel_latched_serial_demand_is_visible_even_when_stranded(
+    tmp_path, monkeypatch
+) -> None:
+    """A cap that strands the serial half still leaves the strand in the log (#356).
+
+    ``max_iterations`` is spent by the Lane, so the latched serial demand is
+    left latched and un-run: a drain finishes started work rather than starting
+    more. Without a latch-time report the whole fact is invisible — the serial
+    turn that would have mentioned it never happens.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    events = _logged_events(tmp_path)
+    latches = [e for e in events if e["type"] == "wrapper.serial.requested"]
+    assert len(latches) == 1, f"the strand must still be reported, got {latches}"
+    assert latches[0]["serial_required"] == 1
+    # The strand is exactly the case #304's report cannot cover: no serial
+    # Iteration ever ran, so nothing else in the log mentions #44.
+    assert [e for e in events if e["type"] == "wrapper.iteration.start"] == []
 
 
 # ---------------------------------------------------------------------------

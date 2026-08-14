@@ -53,6 +53,7 @@ from git_loopy.events import (
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
+    WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
     make_event,
 )
@@ -1882,6 +1883,29 @@ def test_run_start_announces_parallel_mode_and_lane_cap() -> None:
     assert "3" in out
 
 
+def test_run_start_banner_scopes_its_claim_to_Lanes_not_to_the_Run() -> None:
+    """The banner says what is true of the Pool, not only of Lanes (#356).
+
+    "Only issues labelled parallel-safe take a Lane" is true about **Lanes**
+    and reads as a statement about the **Pool**. A Parallel Run works the rest
+    serially in the same Run (ADR-0008 drain-everything), and an operator who
+    watches for ten minutes and interrupts has seen nothing that says so.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_RUN_START,
+            "run_id": "01HXR0000000000000000000A6",
+            "parallel_mode": True,
+            "lane_cap": 2,
+            "effective_lane_limit": 2,
+        }
+    )
+    out = buf.getvalue()
+    assert "only issues labelled parallel-safe" not in out
+    assert "serial" in out.lower(), "the banner must name the other half's route"
+
+
 def test_run_start_of_a_serial_run_says_nothing_about_parallel_mode() -> None:
     renderer, _summary, buf = _make_renderer()
     renderer.render(
@@ -1951,6 +1975,51 @@ def test_serial_fallback_reports_the_eligible_count() -> None:
         }
     )
     assert "0 eligible" in buf.getvalue()
+
+
+def test_latched_serial_demand_says_how_much_and_that_it_is_queued() -> None:
+    """The latch reaches the console, not only the replay log (#356).
+
+    The operator's only signal in the window between latch and grant is a
+    Run-start banner scoped to **Lanes**, so a latch that lived in the JSONL
+    alone would not have fixed the reported problem — the same rule #303 and
+    #304 established for **Pool** exclusions and the fallback reason.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_SERIAL_REQUESTED,
+            "issue": 44,
+            "reason": "not_parallel_safe",
+            "serial_required": 7,
+            "refill_stopped": True,
+        }
+    )
+    out = buf.getvalue()
+    assert "7" in out, "the operator must be able to tell one from forty"
+    assert "serial" in out.lower()
+    assert "after" in out.lower(), "it says the work is queued, not dropped"
+
+
+def test_latched_serial_demand_with_no_count_claims_none() -> None:
+    """An **Integration** fallback latch counted nothing, and says nothing (#356).
+
+    ADR-0026's rule for an unobserved quantity: unknown renders as unavailable,
+    never as a number nobody measured.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_SERIAL_REQUESTED,
+            "issue": 44,
+            "reason": "serial_fallback",
+            "serial_required": None,
+            "refill_stopped": True,
+        }
+    )
+    out = buf.getvalue()
+    assert "#44" in out
+    assert "0 " not in out and "1 " not in out
 
 
 @pytest.mark.parametrize(

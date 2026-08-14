@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from git_loopy.rolling_concurrency import ConcurrencyController
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rolling_scheduler import RollingScheduler
@@ -484,6 +486,25 @@ def test_serial_demand_stops_new_reservations() -> None:
 
     assert scheduler.refillable == 0
     assert scheduler.reserve() == ()
+
+
+def test_a_latch_cannot_be_created_with_a_reason_nobody_can_render() -> None:
+    """#356: the latch vocabulary is closed where latches are made.
+
+    The reason reaches the operator through ``wrapper.serial.requested``, and
+    every renderer in the family turns it into a sentence. Validating it in the
+    reporter would leave the unrenderable latch itself constructible — refill
+    would stop for a reason nothing could explain — so the only method that can
+    stop refill is the one that refuses.
+    """
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+
+    with pytest.raises(ValueError, match="unknown serial-latch reason"):
+        scheduler.request_serial(ref=99, reason="because_i_said_so")
+
+    assert scheduler.serial_latched is False, "a refused latch stops no refill"
+    assert scheduler.refillable > 0
 
 
 def test_serial_demand_does_not_cancel_setup_already_in_progress() -> None:
