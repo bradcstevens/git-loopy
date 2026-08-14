@@ -12,6 +12,7 @@ artifact and routing honours it, on exactly the terms ADR-0028 fixes.
 
 from __future__ import annotations
 
+import dataclasses
 import textwrap
 from pathlib import Path
 
@@ -740,3 +741,99 @@ def test_a_measured_entry_cannot_be_constructed_without_its_evidence() -> None:
             credits=1.0,
             wall_clock_seconds=2,
         )
+
+
+# ---------------------------------------------------------------------------
+# The pinned classifier pair (ADR-0028's amendment, #370). The classifier runs
+# on the cheapest rung of the live roster, so it moves when the roster moves —
+# and a Proving set stratified by one pin, measured against work labelled by
+# another, compares across a taxonomy that shifted underneath it. The pin change
+# is the only observable signal that happened, so the artifact stamps the pin it
+# was measured under and the comparison has something to be a change *from*.
+# ---------------------------------------------------------------------------
+
+
+def test_provenance_stamps_the_classifier_pin_it_was_measured_under(
+    tmp_path: Path,
+) -> None:
+    body = _MEASURED_TOML.replace(
+        "candidate_count = 85",
+        'candidate_count = 85\nclassifier_model = "synthetic-cheap-1"\n'
+        'classifier_effort = "low"',
+    )
+
+    artifact = measured_routing.load_measured_routing(_write(tmp_path, body))
+
+    assert artifact.provenance is not None
+    assert artifact.provenance.classifier_model == "synthetic-cheap-1"
+    assert artifact.provenance.classifier_effort == "low"
+
+
+def test_an_artifact_written_before_the_pin_was_stamped_still_loads(
+    tmp_path: Path,
+) -> None:
+    """Optional, because a required key would reject every schema-1 file already written.
+
+    An unstamped artifact is not a drifted one — it is one that cannot answer
+    the question — so it reads as ``None`` and the comparison stays silent.
+    """
+    artifact = measured_routing.load_measured_routing(_write(tmp_path, _MEASURED_TOML))
+
+    assert artifact.provenance is not None
+    assert artifact.provenance.classifier_model is None
+    assert artifact.provenance.classifier_effort is None
+
+
+def test_a_reasoning_incapable_classifier_pin_stamps_the_empty_effort(
+    tmp_path: Path,
+) -> None:
+    """TOML has no ``None``; the empty effort is spelled ``""``, as the rungs spell it."""
+    body = _MEASURED_TOML.replace(
+        "candidate_count = 85",
+        'candidate_count = 85\nclassifier_model = "synthetic-cheap-1"\n'
+        'classifier_effort = ""',
+    )
+
+    artifact = measured_routing.load_measured_routing(_write(tmp_path, body))
+
+    assert artifact.provenance is not None
+    assert artifact.provenance.classifier_effort == ""
+
+
+def test_a_stamped_effort_without_its_model_is_rejected(tmp_path: Path) -> None:
+    """Half a pair is not a pair, and would compare as one."""
+    body = _MEASURED_TOML.replace(
+        "candidate_count = 85", 'candidate_count = 85\nclassifier_effort = "low"'
+    )
+
+    with pytest.raises(SettingsError, match="classifier_model"):
+        measured_routing.load_measured_routing(_write(tmp_path, body))
+
+
+def test_the_classifier_pin_round_trips_through_the_writer(tmp_path: Path) -> None:
+    original = measured_routing.load_measured_routing(_write(tmp_path, _MEASURED_TOML))
+    assert original.provenance is not None
+    stamped = measured_routing.MeasuredRouting(
+        entries=original.entries,
+        provenance=dataclasses.replace(
+            original.provenance,
+            classifier_model="synthetic-cheap-1",
+            classifier_effort="",
+        ),
+    )
+
+    round_tripped = measured_routing.load_measured_routing(
+        _write(tmp_path, measured_routing.dump_measured_routing(stamped))
+    )
+
+    assert round_tripped == stamped
+
+
+def test_an_unstamped_provenance_emits_neither_classifier_key(tmp_path: Path) -> None:
+    """A writer that emitted ``classifier_model = ""`` would invent a pin nobody used."""
+    original = measured_routing.load_measured_routing(_write(tmp_path, _MEASURED_TOML))
+
+    dumped = measured_routing.dump_measured_routing(original)
+
+    assert "classifier_model" not in dumped
+    assert "classifier_effort" not in dumped

@@ -98,10 +98,21 @@ _SCOPE = "measured routing"
 #: The artifact's top-level keys. Anything else is rejected, not dropped.
 _TOP_LEVEL_KEYS = frozenset({"schema_version", "provenance", "routing"})
 
-#: ``[provenance]``'s keys — all four required, none of them free text.
+#: ``[provenance]``'s required keys — all four, none of them free text.
 _PROVENANCE_KEYS = frozenset(
     {"cli_version", "calibrated_at", "candidate_count", "gate_loops"}
 )
+
+#: ``[provenance]``'s optional keys: the **pinned classifier pair** the
+#: **Calibration** stratified its **Proving set** under (ADR-0028's amendment,
+#: ADR-0029). Optional rather than required, because a required key would reject
+#: every schema-1 artifact already written for a fact those files could not have
+#: carried — and an unstamped artifact is not a *drifted* one, it is one that
+#: cannot answer the question, which reads as silence rather than as a change.
+#:
+#: The effort is spelled the way the rungs spell it: TOML has no ``None``, so a
+#: reasoning-incapable model stamps ``""``.
+_PROVENANCE_OPTIONAL_KEYS = frozenset({"classifier_model", "classifier_effort"})
 
 #: ``[[routing.<key>.rung]]``'s keys.
 _RUNG_KEYS = frozenset({"model", "effort", "passed", "total", "credits"})
@@ -167,6 +178,25 @@ class Provenance:
     calibrated_at: str
     candidate_count: int
     gate_loops: tuple[str, ...]
+    #: The **Task-type classifier** pair this Calibration's **Proving set** was
+    #: stratified under, or ``None`` on an artifact written before the pin was
+    #: stamped. The classifier runs on the cheapest rung of the live roster
+    #: (ADR-0029), so it moves when the roster moves — and a Proving set
+    #: stratified by one pin, measured against work labelled by another, is
+    #: comparing across a taxonomy that shifted underneath it. Stamping the pin
+    #: here is what gives that change something to be a change *from*.
+    classifier_model: str | None = None
+    #: The pinned pair's reasoning effort, ``""`` for a reasoning-incapable
+    #: model. Meaningless without :attr:`classifier_model`, and refused without
+    #: it — half a pair is not a pair, and would compare as one.
+    classifier_effort: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.classifier_effort is not None and self.classifier_model is None:
+            raise ValueError(
+                "a stamped 'classifier_effort' needs its 'classifier_model'; "
+                "half a pair is not a pair"
+            )
 
 
 @dataclass(frozen=True)
@@ -438,13 +468,34 @@ def _parse_provenance(raw: object, path: Path) -> Provenance | None:
     if not isinstance(raw, dict):
         raise _error(path, "'provenance' must be a table")
     entry = cast("Mapping[str, object]", raw)
-    _reject_unknown(entry, _PROVENANCE_KEYS, where="provenance", path=path)
+    _reject_unknown(
+        entry,
+        _PROVENANCE_KEYS | _PROVENANCE_OPTIONAL_KEYS,
+        where="provenance",
+        path=path,
+    )
     _require(entry, _PROVENANCE_KEYS, where="provenance", path=path)
+    if "classifier_effort" in entry and "classifier_model" not in entry:
+        raise _error(
+            path,
+            "provenance carries 'classifier_effort' without 'classifier_model'; "
+            "half a pinned classifier pair is not a pair",
+        )
     return Provenance(
         cli_version=_str(entry, "cli_version", "provenance", path),
         calibrated_at=_str(entry, "calibrated_at", "provenance", path),
         candidate_count=_int(entry, "candidate_count", "provenance", path),
         gate_loops=_str_tuple(entry, "gate_loops", "provenance", path),
+        classifier_model=(
+            _str(entry, "classifier_model", "provenance", path)
+            if "classifier_model" in entry
+            else None
+        ),
+        classifier_effort=(
+            _str(entry, "classifier_effort", "provenance", path)
+            if "classifier_effort" in entry
+            else None
+        ),
     )
 
 
@@ -720,6 +771,17 @@ def dump_measured_routing(artifact: MeasuredRouting) -> str:
             + ", ".join(_toml_str(loop) for loop in provenance.gate_loops)
             + "]",
         ]
+        # Emitted only when stamped: a writer that emitted `classifier_model =
+        # ""` would invent a pin nobody classified under, and the comparison
+        # would read it as a change.
+        if provenance.classifier_model is not None:
+            lines.append(
+                f"classifier_model = {_toml_str(provenance.classifier_model)}"
+            )
+        if provenance.classifier_effort is not None:
+            lines.append(
+                f"classifier_effort = {_toml_str(provenance.classifier_effort)}"
+            )
     for key, entry in artifact.entries.items():
         table = f"routing.{_toml_key(key)}"
         lines += ["", f"[{table}]", f"status = {_toml_str(entry.status.value)}"]
