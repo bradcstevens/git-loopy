@@ -390,6 +390,136 @@ def test_range_count_raises_on_invalid_sha(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# commits_reachable (the Proving set's closing-commit index, #362)             #
+# --------------------------------------------------------------------------- #
+
+
+def test_commits_reachable_returns_the_ref_s_history_newest_first(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    first = _commit(tmp_path, "first")
+    second = _commit(tmp_path, "second")
+    reachable = SubprocessGitClient(tmp_path).commits_reachable("main")
+    assert [c.sha for c in reachable] == [second, first]
+
+
+def test_commits_reachable_excludes_commits_on_another_branch(
+    tmp_path: Path,
+) -> None:
+    """Only what the default branch can reach shipped; a side branch has not."""
+    _init_repo(tmp_path)
+    main_sha = _commit(tmp_path, "on main")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-q", "-b", "side"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    side_sha = _commit(tmp_path, "on side")
+    reachable = SubprocessGitClient(tmp_path).commits_reachable("main")
+    assert [c.sha for c in reachable] == [main_sha]
+    assert side_sha not in {c.sha for c in reachable}
+
+
+# --------------------------------------------------------------------------- #
+# changed_paths / parent_sha (the Proving set's oracle and base commit, #362)  #
+# --------------------------------------------------------------------------- #
+
+
+def test_changed_paths_returns_only_that_commit_s_paths(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "earlier", file_name="untouched.txt")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_fix.py").write_text("assert True\n")
+    (tmp_path / "src.py").write_text("value = 1\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "-A"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "fix"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    head = SubprocessGitClient(tmp_path).head_sha()
+    assert sorted(SubprocessGitClient(tmp_path).changed_paths(head)) == [
+        "src.py",
+        "tests/test_fix.py",
+    ]
+
+
+def test_changed_paths_reports_a_root_commit_s_own_tree(tmp_path: Path) -> None:
+    """A root commit changed everything in it; ``--root`` is what says so."""
+    _init_repo(tmp_path)
+    root = _commit(tmp_path, "root", file_name="only.txt")
+    assert SubprocessGitClient(tmp_path).changed_paths(root) == ["only.txt"]
+
+
+def test_changed_paths_reads_a_merge_against_its_first_parent(
+    tmp_path: Path,
+) -> None:
+    """A merge changed what it merged in, measured from the parent replay restores.
+
+    ``diff-tree`` shows a merge nothing at all unless it is told which parent to
+    compare against, so the unqualified read called every merged-in fix a commit
+    that shipped no test change — an exclusion reported under the wrong reason.
+    The first parent is the one :meth:`parent_sha` hands back as the base commit,
+    so it is the one the oracle has to be measured from.
+    """
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "base", file_name="base.txt")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-q", "-b", "side"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (tmp_path / "tests").mkdir()
+    _commit(tmp_path, "side work", file_name="tests/test_side.py", content="pass\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-q", "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "merge", "-q", "--no-ff", "-m", "merge", "side"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    client = SubprocessGitClient(tmp_path)
+    merge = client.head_sha()
+    assert client.parent_sha(merge) == base
+    assert client.changed_paths(merge) == ["tests/test_side.py"]
+
+
+def test_parent_sha_returns_the_commit_before_the_fix(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "before the fix")
+    fix = _commit(tmp_path, "the fix")
+    assert SubprocessGitClient(tmp_path).parent_sha(fix) == base
+
+
+def test_parent_sha_is_none_for_a_root_commit(tmp_path: Path) -> None:
+    """A root commit has no parent, so it has no base commit to replay from."""
+    _init_repo(tmp_path)
+    root = _commit(tmp_path, "root")
+    assert SubprocessGitClient(tmp_path).parent_sha(root) is None
+
+
+def test_parent_sha_is_none_for_an_unknown_commit(tmp_path: Path) -> None:
+    """Unresolvable is reported as "no checkable-out parent", not as a failure."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "root")
+    assert SubprocessGitClient(tmp_path).parent_sha("deadbeef" * 5) is None
+
+
+# --------------------------------------------------------------------------- #
 # Parser robustness                                                            #
 # --------------------------------------------------------------------------- #
 

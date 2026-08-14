@@ -25,6 +25,26 @@ def test_fake_git_client_satisfies_gitclient_protocol(tmp_path: Path) -> None:
     assert not isinstance(object(), GitClient)
 
 
+def test_mining_reads_mirror_the_linear_log(tmp_path: Path) -> None:
+    """The **Proving set**'s three reads stay consistent with the fake's log.
+
+    ``commits_reachable`` is that log newest-first, ``parent_sha`` is the entry
+    before a commit, and ``changed_paths`` answers from the scripted map — so a
+    fake candidate's base commit is the one its own log says it is.
+    """
+    git = FakeGitClient(
+        tmp_path,
+        commits=[Commit(sha="base", subject="before the fix", body="")],
+        changed_paths={"fix": ("tests/test_it.py", "src.py")},
+    )
+    git.simulate_agent_commit(subject="the fix", body="Closes #7", sha="fix")
+    assert [c.sha for c in git.commits_reachable("main")] == ["fix", "base"]
+    assert git.parent_sha("fix") == "base"
+    assert git.parent_sha("base") is None
+    assert git.changed_paths("fix") == ["tests/test_it.py", "src.py"]
+    assert git.changed_paths("base") == []
+
+
 def test_head_and_recent_track_the_linear_log(tmp_path: Path) -> None:
     seed = Commit(sha="s0", subject="root", body="", date="2026-01-01")
     git = FakeGitClient(tmp_path, commits=[seed])
