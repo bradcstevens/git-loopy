@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.10 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.11 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -53,6 +53,34 @@ never cache across iterations:
 An empty Pool at the start of an Iteration is the **clean-exit-on-empty** condition (exit `0`,
 §10). The next Iteration's collection — not any sentinel — is the source of truth on whether work
 remains.
+
+### 2.1 Fetch completeness (contract 1.11, MUST)
+
+The candidate list MUST be read **to completion**, and the read MUST request `created_at` among
+its fields.
+
+`gh issue list` pages internally up to whatever `--limit` asks for, so a page *shorter* than the
+requested limit proves the source had nothing more to give and a page exactly at the limit proves
+nothing. An Orchestrator MUST therefore re-ask with a **doubled** limit until a page comes back
+short or a declared ceiling is reached. A fixed limit was survivable while the Pool was ordered
+newest-first: it hid the *oldest* candidates, which nothing was about to select. Under §3.2 it
+hides the *newest* — so an issue filed today, including a **Priority** one, would fall outside the
+window exactly when it matters most.
+
+A read still full at its ceiling is **not authoritative**: it establishes neither that the Pool is
+empty nor which issue is the head of the order. An Orchestrator MUST report such a read to the
+operator and MUST NOT treat it as the whole backlog. It is not a Run failure — selection is
+unattended, and a partial Pool is still work.
+
+`created_at` MUST ride the collected candidate rather than being fetched later: §3.2 orders
+*collected items*, so a candidate that only acquires its timestamp at an authoritative per-issue
+read acquires it after the decision that needed it. A member whose JSON reader coerces
+ISO-8601-shaped strings into a native date type MUST read this field through a reader that does
+not — a re-rendered value is a different value, and a coercing reader is typically *wider* than
+§3.2's grammar, so it would silently rescue timestamps the rest of the family calls `malformed`.
+
+A source with no page limit — the local-markdown Pool's directory walk — is complete by
+construction and MUST report itself so, including when it is empty.
 
 ## 3. Discriminator (phase 1, MUST)
 

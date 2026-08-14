@@ -458,6 +458,16 @@ class FakeGitHubClient:
     paths); the whole-operation ``auth_status_error`` / ``repo_view_error`` /
     ``issue_list_error`` / ``pr_list_error`` fail a list/preflight call outright.
 
+    **The store is unbounded and the completeness flag is a knob.** Real
+    pagination lives inside :class:`~git_loopy.gh.SubprocessGitHubClient`, below
+    this seam, so the fake models the *outcome* the caller has to cope with
+    rather than the doubling loop: seed as many issues as you like and they all
+    come back in one :class:`~git_loopy.gh.IssueListPage`, and set
+    ``issue_list_complete=False`` to model a read that hit its ceiling. That
+    pairing is what lets a test show a backlog larger than one page reaching the
+    **Pool** intact, and separately show a truncated read refusing to stand in
+    for the whole backlog (Wrapper contract §2).
+
     Unlike :class:`FakeGitClient` there is **no root / cwd binding** — ``gh`` runs
     in the process cwd — so the constructor takes no ``root`` and the methods keep
     their real signatures.
@@ -474,8 +484,7 @@ class FakeGitHubClient:
         auth_status_error: GhError | None = None,
         repo_view_error: GhError | None = None,
         issue_list_error: GhError | None = None,
-        issue_list_membership_error: GhError | None = None,
-        membership_complete: bool = True,
+        issue_list_complete: bool = True,
         pr_list_error: GhError | None = None,
         issue_view_errors: Mapping[int, GhError] | None = None,
         issue_close_errors: Mapping[int, GhError] | None = None,
@@ -495,8 +504,7 @@ class FakeGitHubClient:
         self.auth_status_error = auth_status_error
         self.repo_view_error = repo_view_error
         self.issue_list_error = issue_list_error
-        self.issue_list_membership_error = issue_list_membership_error
-        self.membership_complete = membership_complete
+        self.issue_list_complete = issue_list_complete
         self.pr_list_error = pr_list_error
         # Per-number injected failures (a single item fails; the pool proceeds).
         self._issue_view_errors: dict[int, GhError] = dict(issue_view_errors or {})
@@ -507,7 +515,6 @@ class FakeGitHubClient:
         self._pr_view_errors: dict[int, GhError] = dict(pr_view_errors or {})
         # Read/write spies.
         self.issue_list_calls: list[tuple[str, str]] = []
-        self.issue_list_membership_calls: list[tuple[str, str]] = []
         self.issue_view_calls: list[int] = []
         self.issue_close_calls: list[tuple[int, str]] = []
         self.issue_comment_calls: list[tuple[int, str]] = []
@@ -548,24 +555,16 @@ class FakeGitHubClient:
             self._fail(self.repo_view_error)
         return self.repo
 
-    def issue_list(self, label: str, state: str = "open") -> list[Issue]:
+    def issue_list(self, label: str, state: str = "open") -> IssueListPage:
         self.issue_list_calls.append((label, state))
         if self.issue_list_error is not None:
             self._fail(self.issue_list_error)
-        return [issue for issue in self._issues.values() if _state_matches(issue.state, state)]
-
-    def issue_list_membership(
-        self, label: str, state: str = "open"
-    ) -> IssueListPage:
-        self.issue_list_membership_calls.append((label, state))
-        if self.issue_list_membership_error is not None:
-            self._fail(self.issue_list_membership_error)
         issues = tuple(
             issue
             for issue in self._issues.values()
             if _state_matches(issue.state, state)
         )
-        return IssueListPage(issues=issues, complete=self.membership_complete)
+        return IssueListPage(issues=issues, complete=self.issue_list_complete)
 
     def issue_view(self, number: int) -> Issue:
         self.issue_view_calls.append(number)

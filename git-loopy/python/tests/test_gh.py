@@ -251,7 +251,9 @@ def test_issue_list_happy_path(monkeypatch) -> None:
         return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
 
     _install_fake_run(monkeypatch, fake_run)
-    items = issue_list("ready-for-agent")
+    page = issue_list("ready-for-agent")
+    items = page.issues
+    assert page.complete is True
     assert len(items) == 2
     assert items[0].number == 13
     assert items[0].title == "Docs parity"
@@ -268,8 +270,116 @@ def test_issue_list_happy_path(monkeypatch) -> None:
     # one-pass fetch — body+labels+state+url all in one --json arg
     json_arg_idx = captured["cmd"].index("--json")
     json_fields = captured["cmd"][json_arg_idx + 1]
-    for f in ("number", "title", "body", "labels", "state", "url"):
+    for f in ("number", "title", "body", "labels", "state", "url", "createdAt"):
         assert f in json_fields
+
+
+def test_issue_list_requests_and_parses_the_creation_timestamp(monkeypatch) -> None:
+    """The ordering seam's second key has to be *fetched* before it can be read.
+
+    ``git_loopy.issue_order`` orders on ``created_at`` (Wrapper contract §3.2),
+    and until this field is in the ``--json`` set the seam is inert: every issue
+    would carry an ``absent`` timestamp defect and the order would collapse to
+    issue number. ``gh`` spells it ``createdAt``; :class:`Issue` spells it
+    ``created_at``, matching :class:`Comment`.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [],
+                        "state": "OPEN",
+                        "url": "u",
+                        "createdAt": "2026-01-02T03:04:05Z",
+                    }
+                ]
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "createdAt" in json_fields
+    assert page.issues[0].created_at == "2026-01-02T03:04:05Z"
+
+
+def test_issue_list_leaves_an_unstamped_issue_undated_rather_than_failing(
+    monkeypatch,
+) -> None:
+    """A missing timestamp is the ordering seam's ``absent`` defect, not a parse error.
+
+    §3.2 requires an undated issue to sort last within its priority rank and be
+    *reported*; the Run must not fail over it. So the adapter normalises a null
+    or missing ``createdAt`` to ``""`` and lets the order decide, exactly as it
+    normalises a null body.
+    """
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [],
+                        "state": "OPEN",
+                        "url": "u",
+                        "createdAt": None,
+                    }
+                ]
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    [issue] = issue_list("ready-for-agent").issues
+    assert issue.created_at == ""
+
+
+def test_issue_view_requests_the_creation_timestamp(monkeypatch) -> None:
+    """The authoritative per-issue read carries the ordering field too.
+
+    A **Pickup** re-reads its candidate authoritatively before dispatch, and
+    that read is what supplies the dispatched item. If only the list carried
+    ``createdAt`` the field would be dropped at exactly the point selection
+    binds it.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "u",
+                    "createdAt": "2026-01-02T03:04:05Z",
+                    "comments": [],
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "createdAt" in json_fields
+    assert issue.created_at == "2026-01-02T03:04:05Z"
 
 
 def test_issue_list_custom_state_arg_propagates(monkeypatch) -> None:
@@ -289,7 +399,7 @@ def test_issue_list_empty_array_returns_empty_list(monkeypatch) -> None:
         return _completed(cmd, stdout="[]")
 
     _install_fake_run(monkeypatch, fake_run)
-    assert issue_list("anything") == []
+    assert issue_list("anything").issues == ()
 
 
 def test_issue_list_nonzero_exit_raises_gh_error(monkeypatch) -> None:
@@ -334,7 +444,7 @@ def test_issue_list_normalises_null_body_to_empty_string(monkeypatch) -> None:
         )
 
     _install_fake_run(monkeypatch, fake_run)
-    [i] = issue_list("foo")
+    [i] = issue_list("foo").issues
     assert i.body == ""
 
 
@@ -480,7 +590,7 @@ def test_issue_close_nonzero_close_subprocess_raises(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# issue_list_membership (Rolling dispatch shallow membership, #219 §2)         #
+# issue_list pagination (Wrapper contract §2, #219 §2.8)                       #
 # --------------------------------------------------------------------------- #
 
 
@@ -499,7 +609,7 @@ def _membership_payload(numbers: list[int]) -> list[dict[str, Any]]:
     ]
 
 
-def test_issue_list_membership_short_page_is_complete(monkeypatch) -> None:
+def test_issue_list_short_page_is_complete(monkeypatch) -> None:
     """A page shorter than the requested limit proves the snapshot is complete."""
     calls: list[list[str]] = []
 
@@ -508,7 +618,7 @@ def test_issue_list_membership_short_page_is_complete(monkeypatch) -> None:
         return _completed(cmd, stdout=json.dumps(_membership_payload([13, 6])))
 
     _install_fake_run(monkeypatch, fake_run)
-    page = _client.issue_list_membership("ready-for-agent")
+    page = _client.issue_list("ready-for-agent")
 
     assert page.complete is True
     assert [i.number for i in page.issues] == [13, 6]
@@ -516,7 +626,7 @@ def test_issue_list_membership_short_page_is_complete(monkeypatch) -> None:
     assert len(calls) == 1
 
 
-def test_issue_list_membership_full_page_reasks_with_doubled_limit(
+def test_issue_list_full_page_reasks_with_doubled_limit(
     monkeypatch,
 ) -> None:
     """A page exactly at the limit is ambiguous, so the reader asks again wider."""
@@ -531,7 +641,7 @@ def test_issue_list_membership_full_page_reasks_with_doubled_limit(
         )
 
     _install_fake_run(monkeypatch, fake_run)
-    page = _client.issue_list_membership("ready-for-agent")
+    page = _client.issue_list("ready-for-agent")
 
     assert page.complete is True
     assert len(page.issues) == 100
@@ -539,7 +649,7 @@ def test_issue_list_membership_full_page_reasks_with_doubled_limit(
     assert limits == ["100", "200"]
 
 
-def test_issue_list_membership_at_ceiling_is_incomplete(monkeypatch) -> None:
+def test_issue_list_at_ceiling_is_incomplete(monkeypatch) -> None:
     """A read still full at the ceiling is reported incomplete, not silently truncated.
 
     Per #219 §2.13 an incomplete snapshot may not establish that the **Pool**
@@ -553,7 +663,7 @@ def test_issue_list_membership_at_ceiling_is_incomplete(monkeypatch) -> None:
         )
 
     _install_fake_run(monkeypatch, fake_run)
-    page = _client.issue_list_membership("ready-for-agent")
+    page = _client.issue_list("ready-for-agent")
 
     assert page.complete is False
     assert len(page.issues) == 1600
@@ -918,7 +1028,6 @@ def test_every_gh_mechanic_reports_the_throttle_it_hit(monkeypatch) -> None:
     for call in (
         lambda: client.repo_view(),
         lambda: client.issue_list("ready-for-agent"),
-        lambda: client.issue_list_membership("ready-for-agent"),
         lambda: client.issue_view(42),
         lambda: client.issue_close(42, "done"),
         lambda: client.issue_comment(42, "note"),
@@ -928,7 +1037,7 @@ def test_every_gh_mechanic_reports_the_throttle_it_hit(monkeypatch) -> None:
         with pytest.raises(GhError):
             call()
 
-    assert client.rate_limited_reads() == 8
+    assert client.rate_limited_reads() == 7
 
 
 def test_a_throttled_close_verification_is_counted_too(monkeypatch) -> None:

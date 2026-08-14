@@ -3594,6 +3594,160 @@ Start-Sleep -Seconds $Sleep
         [IO.File]::ReadAllLines($env:FAKE_TUI_STARTED) |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     ).Count "the reaped helper was not the one this Run started"
+
+    # Wrapper contract §2 — the candidate fetch reaches the end of the backlog,
+    # and §3.2's ordering field is among the fields it asks for. Driven in
+    # process against a `gh` function rather than the process-boundary fake,
+    # because what is under test is the *shape of the request* and the doubling
+    # loop around it — both invisible from outside once the array is back — and
+    # because the ceiling case makes 1600 candidate reads, which is a minute of
+    # process spawns to observe one boolean.
+    $script:FetchRequests = [Collections.Generic.List[string]]::new()
+    $script:FetchBacklog = 0
+    $script:FetchCreatedAt = "2026-01-01T00:00:00Z"
+    $script:FetchBody = "## What to build`nx`n`n## Acceptance criteria`n- y"
+
+    function global:gh {
+        $global:LASTEXITCODE = 0
+        $script:FetchRequests.Add([string]::Join(" ", $args))
+        if ($args.Count -ge 2 -and $args[0] -ceq "issue" -and $args[1] -ceq "list") {
+            $Limit = 0
+            for ($Index = 0; $Index -lt $args.Count; $Index++) {
+                if ($args[$Index] -ceq "--limit") {
+                    $Limit = [int]$args[$Index + 1]
+                }
+            }
+            $Count = [Math]::Min($Limit, $script:FetchBacklog)
+            $Items = @(
+                for ($Number = 1; $Number -le $Count; $Number++) {
+                    New-FetchIssue -Number $Number
+                }
+            )
+            # Piped, not `-InputObject`: the pipeline unrolls and `-AsArray`
+            # re-wraps, so a one-issue backlog is still a JSON array and a
+            # three-issue one is not wrapped twice.
+            return ($Items | ConvertTo-Json -Depth 8 -AsArray -Compress)
+        }
+        if ($args.Count -ge 3 -and $args[0] -ceq "issue" -and $args[1] -ceq "view") {
+            $Issue = New-FetchIssue -Number ([int]$args[2])
+            $Issue["comments"] = @()
+            return ($Issue | ConvertTo-Json -Depth 8 -Compress)
+        }
+        $global:LASTEXITCODE = 92
+    }
+
+    function New-FetchIssue {
+        param([Parameter(Mandatory)][int]$Number)
+
+        return [ordered]@{
+            number = $Number
+            title = "issue"
+            body = $script:FetchBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "u"
+            createdAt = $script:FetchCreatedAt
+        }
+    }
+
+    # Only the list requests carry a limit, and their limits are the doubling
+    # loop made visible.
+    function Get-RequestedLimits {
+        return [string]::Join(" ", @(
+            $script:FetchRequests |
+                Where-Object { $_.StartsWith("issue list ") } |
+                ForEach-Object {
+                    $Words = $_ -split " "
+                    $Words[[Array]::IndexOf($Words, "--limit") + 1]
+                }
+        ))
+    }
+
+    # `Get-GitLoopyGitHubPool` reports truncation on stderr, which in process is
+    # the test's own stderr unless it is redirected for the duration.
+    function Invoke-CandidateFetch {
+        param([Parameter(Mandatory)][ref]$Stderr)
+
+        $script:FetchRequests.Clear()
+        $Captured = [IO.StringWriter]::new()
+        $Previous = [Console]::Error
+        [Console]::SetError($Captured)
+        try {
+            $Pool = @(Get-GitLoopyGitHubPool)
+        }
+        finally {
+            [Console]::SetError($Previous)
+        }
+        $Stderr.Value = $Captured.ToString()
+        return , $Pool
+    }
+
+    function Get-PoolComplete {
+        return & (Get-Module -Name "GitLoopy.Orchestrator") {
+            $script:GitLoopyPoolComplete
+        }
+    }
+
+    try {
+        # A short page proves completeness in one request.
+        $script:FetchBacklog = 3
+        $FetchStderr = ""
+        $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
+        Assert-Equal "100" (Get-RequestedLimits) (
+            "a short page asked for more than one page"
+        )
+        Assert-Contains (
+            [string]::Join("`n", $script:FetchRequests)
+        ) "createdAt" "the candidate fetch requests the ordering field"
+        Assert-True (Get-PoolComplete) "a short page was not reported complete"
+        Assert-Equal "2026-01-01T00:00:00Z" ([string]$Pool[0]["created_at"]) (
+            "a Pool item did not carry the timestamp the order is built on"
+        )
+
+        # A page exactly at the limit is ambiguous, so the reader asks again
+        # wider — and the backlog past row 100 arrives, which is where a
+        # Priority issue filed today lands once the order runs oldest-first.
+        $script:FetchBacklog = 150
+        $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
+        Assert-Equal "100 200" (Get-RequestedLimits) (
+            "the fetch did not double its limit"
+        )
+        Assert-True (Get-PoolComplete) (
+            "an exhausted fetch was reported incomplete"
+        )
+        Assert-Equal 150 $Pool.Count (
+            "the backlog past the old page limit did not reach the Pool"
+        )
+
+        # Still full at the ceiling: the read is reported incomplete rather than
+        # silently truncated, because it establishes neither emptiness nor the
+        # head of the order.
+        $script:FetchBacklog = 100000
+        $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
+        Assert-Equal "100 200 400 800 1600" (Get-RequestedLimits) (
+            "the fetch stopped short of its ceiling"
+        )
+        Assert-True (-not (Get-PoolComplete)) (
+            "a fetch still full at the ceiling claimed to be complete"
+        )
+        Assert-Contains $FetchStderr "did not paginate to completion" (
+            "a truncated candidate fetch says so"
+        )
+
+        # The reader may not date what §3.2 refuses. `ConvertFrom-Json` coerces
+        # this zone-less value to a `[datetime]` and re-renders it as something
+        # the grammar accepts, which would make this port order issues the rest
+        # of the family calls `malformed`. The bytes survive instead.
+        $script:FetchBacklog = 1
+        $script:FetchCreatedAt = "2026-01-01T00:00:00"
+        $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
+        Assert-Equal "2026-01-01T00:00:00" ([string]$Pool[0]["created_at"]) (
+            "the candidate reader coerced a timestamp §3.2 refuses"
+        )
+    }
+    finally {
+        Remove-Item -LiteralPath "function:global:gh" -ErrorAction SilentlyContinue
+    }
 }
 finally {
     foreach ($Name in @(

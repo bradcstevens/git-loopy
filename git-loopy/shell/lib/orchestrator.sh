@@ -40,6 +40,16 @@ GIT_LOOPY_POOL_JSON='[]'
 # rejected, as `{issue, title, reason}` objects in source order. Rebuilt with
 # the Pool on every Iteration, never carried across one.
 GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
+# Wrapper contract §2 — whether this Iteration's candidate fetch reached the end
+# of the backlog. `0` means the read hit its ceiling or failed outright, so the
+# candidates it did return may not stand in for the whole Pool: they establish
+# neither emptiness (ADR-0020 §2.13) nor the head of the order (§3.2). Rebuilt
+# with the Pool on every Iteration.
+GIT_LOOPY_POOL_COMPLETE=1
+# The raw `gh issue list` array the paginating reader last produced, carried as
+# a global because a command substitution's subshell would discard the
+# completeness flag that has to travel with it.
+GIT_LOOPY_ISSUE_LIST_JSON='[]'
 # Tri-state interactive request: "on", "off", or empty for "no flag given".
 GIT_LOOPY_INTERACTIVE_FLAG=""
 # Continuation authority is collected as three uncombined sources and resolved
@@ -1295,6 +1305,7 @@ _git_loopy_normalize_issue() {
     ],
     state: (.state // "OPEN"),
     url: (.url // ""),
+    created_at: (.createdAt // .created_at // ""),
     comments: [
       (.comments // [])[]
       | {
@@ -1311,26 +1322,78 @@ _git_loopy_normalize_issue() {
   }'
 }
 
+# Wrapper contract §2 — the candidate fetch reaches the end of the backlog.
+#
+# `gh issue list` pages internally up to whatever `--limit` asks for, so
+# completeness is provable by the returned length: a page *shorter* than the
+# requested limit means the server had nothing more to give. A page exactly at
+# the limit is ambiguous, so the reader asks again with a doubled limit until
+# either the page comes back short or the ceiling is reached — at which point
+# the read is reported incomplete rather than silently truncated.
+#
+# The ceiling matters more than it used to. Under §3.2's oldest-first order a
+# page limit stops hiding the *oldest* issues and starts hiding the *newest*, so
+# a **Priority** issue filed today would fall outside the oldest hundred and be
+# invisible exactly when it matters most.
+GIT_LOOPY_LIST_PAGE_LIMIT=100
+GIT_LOOPY_LIST_MAX_LIMIT=1600
+
+# The `--json` field set every shallow issue read asks for, named once so this
+# port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
+GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt"
+
+# Fetches every `ready-for-agent` candidate into `GIT_LOOPY_ISSUE_LIST_JSON` and
+# reports completeness in `GIT_LOOPY_POOL_COMPLETE` (1 = provably exhaustive,
+# 0 = hit the ceiling). Both are globals rather than stdout because a command
+# substitution runs in a subshell, and a completeness flag set there would be
+# discarded at exactly the moment the caller needs it. Returns 0 on a usable
+# read, 1 when `gh` failed, 2 when it returned something that is not an array.
+_git_loopy_gh_issue_list_to_completion() {
+  local limit="$GIT_LOOPY_LIST_PAGE_LIMIT"
+  local page count
+  GIT_LOOPY_ISSUE_LIST_JSON='[]'
+  GIT_LOOPY_POOL_COMPLETE=1
+  while true; do
+    page="$(
+      gh issue list \
+        --state open \
+        --label ready-for-agent \
+        --limit "$limit" \
+        --json "$GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
+    )" || return 1
+    jq -e 'type == "array"' <<<"$page" >/dev/null 2>&1 || return 2
+    count="$(jq -r 'length' <<<"$page")" || return 2
+    GIT_LOOPY_ISSUE_LIST_JSON="$page"
+    if ((count < limit)); then
+      return 0
+    fi
+    if ((limit >= GIT_LOOPY_LIST_MAX_LIMIT)); then
+      GIT_LOOPY_POOL_COMPLETE=0
+      return 0
+    fi
+    limit=$((limit * 2))
+  done
+}
+
 git_loopy_collect_github_pool() {
-  local candidates
-  if ! candidates="$(
-    gh issue list \
-      --state open \
-      --label ready-for-agent \
-      --limit 100 \
-      --json number,title,body,labels,state,url
-  )"; then
-    printf 'git-loopy: gh issue list failed; treating this Pool as empty.\n' >&2
+  local candidates status=0
+  GIT_LOOPY_POOL_COMPLETE=1
+  _git_loopy_gh_issue_list_to_completion || status=$?
+  if ((status != 0)); then
+    if ((status == 2)); then
+      printf 'git-loopy: gh issue list returned malformed JSON.\n' >&2
+    else
+      printf 'git-loopy: gh issue list failed; treating this Pool as empty.\n' >&2
+    fi
     GIT_LOOPY_POOL_JSON='[]'
     GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
+    GIT_LOOPY_POOL_COMPLETE=0
     return 0
   fi
-  jq -e 'type == "array"' <<<"$candidates" >/dev/null 2>&1 || {
-    printf 'git-loopy: gh issue list returned malformed JSON.\n' >&2
-    GIT_LOOPY_POOL_JSON='[]'
-    GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
-    return 0
-  }
+  candidates="$GIT_LOOPY_ISSUE_LIST_JSON"
+  if ((GIT_LOOPY_POOL_COMPLETE == 0)); then
+    printf 'git-loopy: gh issue list did not paginate to completion; this Pool is partial and may not be treated as the whole backlog.\n' >&2
+  fi
 
   local -a pool_items=()
   local -a exclusion_items=()
@@ -1363,7 +1426,7 @@ git_loopy_collect_github_pool() {
     local full
     if ! full="$(
       gh issue view "$number" \
-        --json number,title,body,labels,state,url,comments
+        --json "$GIT_LOOPY_SHALLOW_ISSUE_FIELDS,comments"
     )"; then
       printf 'git-loopy: gh issue view #%s failed; skipping this Iteration.\n' \
         "$number" >&2
@@ -1411,6 +1474,9 @@ git_loopy_collect_prds_pool() {
   local -a pool_items=()
   local -a exclusion_items=()
   local prds_dir="$repo_root/prds"
+  # A directory walk has no page limit and no ceiling: the local-markdown Pool
+  # is exhaustive by construction, including when the tree holds nothing.
+  GIT_LOOPY_POOL_COMPLETE=1
   if [[ ! -d "$prds_dir" ]]; then
     GIT_LOOPY_POOL_JSON='[]'
     GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'

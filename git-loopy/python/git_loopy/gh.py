@@ -39,8 +39,10 @@ The client's mechanics:
 * :meth:`~SubprocessGitHubClient.repo_view` — current repository's ``owner`` /
   ``name`` / default branch.
 * :meth:`~SubprocessGitHubClient.issue_list` — list issues filtered by label and
-  state. One pass pulls every field the loop's prompt needs; ``comments`` is
-  left empty.
+  state, **paginating to completion**. One pass pulls every field the loop's
+  prompt and the ordering seam need; ``comments`` is left empty. Returns an
+  :class:`IssueListPage` so a truncated read cannot be mistaken for an
+  exhaustive one.
 * :meth:`~SubprocessGitHubClient.issue_view` — full single-issue view including
   ``comments``.
 * :meth:`~SubprocessGitHubClient.issue_close` — close an issue with a wrap-up
@@ -114,13 +116,27 @@ _STDERR_TAIL_LIMIT: Final[int] = 400
 #: JSON array into one, so this bounds each request, not the result.
 _LABEL_PAGE_SIZE: Final[int] = 100
 
-# Shallow-membership pagination bounds (#219 §2.8). The first read asks for
-# ``_MEMBERSHIP_PAGE_LIMIT``; each ambiguous full page doubles the ask until a
-# short page proves completeness or ``_MEMBERSHIP_MAX_LIMIT`` is reached, at
-# which point the snapshot is reported incomplete rather than silently
-# truncated.
-_MEMBERSHIP_PAGE_LIMIT: Final[int] = 100
-_MEMBERSHIP_MAX_LIMIT: Final[int] = 1600
+# Shallow issue-list pagination bounds (#219 §2.8, Wrapper contract §2). The
+# first read asks for ``_LIST_PAGE_LIMIT``; each ambiguous full page doubles the
+# ask until a short page proves completeness or ``_LIST_MAX_LIMIT`` is reached,
+# at which point the read is reported incomplete rather than silently truncated.
+_LIST_PAGE_LIMIT: Final[int] = 100
+_LIST_MAX_LIMIT: Final[int] = 1600
+
+#: The ``--json`` field set every shallow issue read asks for, named once so the
+#: **Pool** collection and the **Rolling dispatch** refresh cannot drift apart
+#: (Wrapper contract §2). ``createdAt`` is the ordering seam's second key (§3.2);
+#: ``comments`` is deliberately absent — :meth:`SubprocessGitHubClient.issue_view`
+#: appends it, and paying for it on a list read would cost a round-trip per
+#: candidate the discriminator is about to drop.
+_SHALLOW_ISSUE_FIELDS: Final[str] = "number,title,body,labels,state,url,createdAt"
+
+#: The PR-surface analogue, named for the same reason. PR mode is opt-in and
+#: §3.2 orders *issues*, but a mixed serial **Pool** carries PR items beside
+#: issue items, so a PR reaches selection with the same fields an issue does.
+_SHALLOW_PR_FIELDS: Final[str] = (
+    "number,title,body,labels,state,url,headRefOid,headRefName,createdAt"
+)
 
 # The stderr phrasings GitHub throttles with, lowercased. See
 # :attr:`GhError.rate_limited` for why the set is exactly this wide.
@@ -275,6 +291,13 @@ class Issue:
         labels: Label names attached to the issue, in the order ``gh`` returns them.
         state: ``"OPEN"`` or ``"CLOSED"`` (upper-case as ``gh`` returns it).
         url: Canonical https URL to the issue.
+        created_at: The issue's GitHub creation timestamp, verbatim as the
+            source reported it (``createdAt`` in ``gh``'s JSON), or ``""`` when
+            the source carried no value. This is the ordering seam's second key
+            (Wrapper contract §3.2): it MUST be read from the source and MUST
+            NOT be computed locally or mutated, so the adapter normalises a null
+            to ``""`` — an *absent* timestamp — and never substitutes a clock
+            reading of its own.
         comments: Tuple of :class:`Comment`, only populated by :func:`issue_view`.
     """
 
@@ -284,6 +307,7 @@ class Issue:
     labels: list[str]
     state: str
     url: str
+    created_at: str = ""
     comments: tuple[Comment, ...] = field(default=())
 
 
@@ -334,6 +358,11 @@ class PullRequest:
             even though no commit landed on the base branch locally.
         head_branch: The PR head branch name (``headRefName``) — the branch
             ``gh pr checkout <number>`` puts you on.
+        created_at: The PR's creation timestamp as the source reported it, or
+            ``""``. PR mode is opt-in and §3.2 orders *issues*, so nothing sorts
+            on this yet — but a mixed serial **Pool** carries PR items beside
+            issue items, and an item that reached selection with no timestamp at
+            all would be undated for a reason the source could have answered.
         comments: Tuple of :class:`Comment`, only populated by :func:`pr_view`.
     """
 
@@ -345,6 +374,7 @@ class PullRequest:
     url: str
     head_sha: str
     head_branch: str
+    created_at: str = ""
     comments: tuple[Comment, ...] = field(default=())
 
 
@@ -518,6 +548,7 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
             labels=labels,
             state=str(data["state"]),
             url=str(data["url"]),
+            created_at=str(data.get("createdAt") or data.get("created_at") or ""),
             comments=tuple(comments),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -567,6 +598,7 @@ def _parse_pr(data: object, cmd: Sequence[str]) -> PullRequest:
             url=str(data["url"]),
             head_sha=str(data.get("headRefOid") or ""),
             head_branch=str(data.get("headRefName") or ""),
+            created_at=str(data.get("createdAt") or data.get("created_at") or ""),
             comments=tuple(comments),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -607,20 +639,19 @@ class GitHubClient(Protocol):
         """Return the current repository's identifying ``owner``/``name`` triple."""
         ...
 
-    def issue_list(self, label: str, state: str = "open") -> list[Issue]:
-        """List issues filtered by ``label`` / ``state`` (``comments`` left empty)."""
-        ...
-
-    def issue_list_membership(
-        self, label: str, state: str = "open"
-    ) -> IssueListPage:
+    def issue_list(self, label: str, state: str = "open") -> IssueListPage:
         """Read shallow issue membership, paginating to completion.
 
-        The **Rolling dispatch** candidate refresh (#219 §2) needs the same
-        cheap list :meth:`issue_list` performs, but must be able to tell a
-        genuinely exhausted read from a truncated one — an incomplete read may
-        not establish that the **Pool** is empty. Returns an
-        :class:`IssueListPage` carrying both.
+        The one shallow issue read: both the **Pool** collection and the
+        **Rolling dispatch** candidate refresh go through it, so they cannot ask
+        for different fields or reach different completeness guarantees.
+        ``comments`` is left empty; the caller enriches per-issue via
+        :meth:`issue_view` only for the candidates it means to dispatch.
+
+        Returns an :class:`IssueListPage` rather than a bare list because a
+        truncated read may not establish that the **Pool** is empty (#219 §2.13)
+        nor that its first element is the head of the order (§3.2) — a caller
+        that cannot tell the two apart would act on either.
         """
         ...
 
@@ -1348,8 +1379,34 @@ class SubprocessGitHubClient:
                 f"gh repo view JSON missing or malformed field: {exc}",
             ) from exc
 
-    def issue_list(self, label: str, state: str = "open") -> list[Issue]:
-        """List issues filtered by label and state.
+    def issue_list(self, label: str, state: str = "open") -> IssueListPage:
+        """List issues filtered by label and state, paginating to completion.
+
+        ``gh issue list`` pages internally up to whatever ``--limit`` asks for,
+        so completeness is provable by the returned length: a page *shorter*
+        than the requested limit means the server had nothing more to give.
+        A page exactly at the limit is ambiguous, so the reader asks again with
+        a doubled limit until either the page comes back short (complete) or
+        the ceiling is reached (incomplete — the caller must not conclude the
+        **Pool** is empty from it, nor that its first element is the head of the
+        order, per #219 §2.13 and Wrapper contract §2).
+
+        **Why one reader and not two.** Until #392 the **Pool** collection used
+        a fixed ``--limit 100`` while the **Rolling dispatch** membership
+        refresh paginated, and the two asked for the same fields by convention
+        alone. Under §3.2's oldest-first order a page limit stops hiding the
+        oldest issues and starts hiding the *newest*, so a **Priority** issue
+        filed today would fall outside the oldest hundred and become invisible
+        exactly when it matters most — completeness became a correctness
+        requirement rather than a nicety, on both reads. Two methods that must
+        request identical fields and reach an identical completeness guarantee
+        are one method with two names, so the guarantee is structural here
+        rather than maintained.
+
+        The field set is deliberately shallow: identity, title, state, labels,
+        the ``created_at`` §3.2 orders on, and the body the AFK-ready shape
+        discriminator reads. No comments, no per-issue round-trip — the caller
+        decides which candidates are worth enriching via :meth:`issue_view`.
 
         Args:
             label: A single label name (matches ``gh``'s single ``--label`` flag).
@@ -1358,63 +1415,14 @@ class SubprocessGitHubClient:
                 AFK-ready issue collector.
 
         Returns:
-            A list of :class:`Issue` with ``comments`` always empty. The loop
-            decides whether to fetch comments per-issue via :meth:`issue_view`.
-
-        Raises:
-            GhError: On any subprocess or parse failure.
-        """
-        cmd = [
-            "issue",
-            "list",
-            "--state",
-            state,
-            "--label",
-            label,
-            "--limit",
-            "100",
-            "--json",
-            "number,title,body,labels,state,url",
-        ]
-        raw = self._checked(cmd)
-        parsed = _parse_json(raw, [_GH_BIN, *cmd])
-        if not isinstance(parsed, list):
-            raise GhError(
-                [_GH_BIN, *cmd],
-                0,
-                f"expected JSON array from gh issue list, got {type(parsed).__name__}",
-            )
-        return [_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed]
-
-    def issue_list_membership(
-        self, label: str, state: str = "open"
-    ) -> IssueListPage:
-        """Read shallow issue membership, paginating to completion.
-
-        ``gh issue list`` pages internally up to whatever ``--limit`` asks for,
-        so completeness is provable by the returned length: a page *shorter*
-        than the requested limit means the server had nothing more to give.
-        A page exactly at the limit is ambiguous, so the reader asks again with
-        a doubled limit until either the page comes back short (complete) or
-        the ceiling is reached (incomplete — the caller must not conclude the
-        **Pool** is empty from it, per #219 §2.13).
-
-        The field set is deliberately identical to :meth:`issue_list`: identity,
-        source order, title, state, labels, and the body the AFK-ready shape
-        discriminator reads. No comments, no per-issue round-trip.
-
-        Args:
-            label: A single label name.
-            state: ``"open"``, ``"closed"``, or ``"all"``.
-
-        Returns:
             An :class:`IssueListPage` whose ``complete`` flag says whether the
-            read is provably exhaustive.
+            read is provably exhaustive. Every :class:`Issue` has ``comments``
+            empty.
 
         Raises:
             GhError: On any subprocess or parse failure.
         """
-        limit = _MEMBERSHIP_PAGE_LIMIT
+        limit = _LIST_PAGE_LIMIT
         while True:
             cmd = [
                 "issue",
@@ -1426,7 +1434,7 @@ class SubprocessGitHubClient:
                 "--limit",
                 str(limit),
                 "--json",
-                "number,title,body,labels,state,url",
+                _SHALLOW_ISSUE_FIELDS,
             ]
             raw = self._checked(cmd)
             parsed = _parse_json(raw, [_GH_BIN, *cmd])
@@ -1440,7 +1448,7 @@ class SubprocessGitHubClient:
             issues = tuple(_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed)
             if len(issues) < limit:
                 return IssueListPage(issues=issues, complete=True)
-            if limit >= _MEMBERSHIP_MAX_LIMIT:
+            if limit >= _LIST_MAX_LIMIT:
                 return IssueListPage(issues=issues, complete=False)
             limit *= 2
 
@@ -1461,7 +1469,7 @@ class SubprocessGitHubClient:
             "view",
             str(number),
             "--json",
-            "number,title,body,labels,state,url,comments",
+            f"{_SHALLOW_ISSUE_FIELDS},comments",
         ]
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
@@ -1544,7 +1552,7 @@ class SubprocessGitHubClient:
             "--limit",
             "100",
             "--json",
-            "number,title,body,labels,state,url,headRefOid,headRefName",
+            _SHALLOW_PR_FIELDS,
         ]
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
@@ -1575,7 +1583,7 @@ class SubprocessGitHubClient:
             "view",
             str(number),
             "--json",
-            "number,title,body,labels,state,url,headRefOid,headRefName,comments",
+            f"{_SHALLOW_PR_FIELDS},comments",
         ]
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])

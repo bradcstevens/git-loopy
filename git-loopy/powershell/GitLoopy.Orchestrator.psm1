@@ -617,6 +617,13 @@ function Get-GitLoopyAfkReadyExclusion {
 # The label that carries **Priority**. A human assertion, read at selection and
 # never inferred. Provisioning it is #395's job; ordering needs only its name.
 $Script:GitLoopyPriorityLabel = "priority"
+# Wrapper contract §2 - the doubling-limit bounds the candidate fetch walks, and
+# the `--json` field set every shallow issue read asks for. Named once so this
+# port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
+$Script:GitLoopyListPageLimit = 100
+$Script:GitLoopyListMaxLimit = 1600
+$Script:GitLoopyShallowIssueFields =
+    "number,title,body,labels,state,url,createdAt"
 
 # The accepted `created_at` year range. The floor keeps every division below on a
 # non-negative operand, which is what lets three languages agree.
@@ -1511,6 +1518,96 @@ function ConvertFrom-GitLoopyExternalJson {
     }
 }
 
+# The date-safe reader for anything the ordering seam will see.
+#
+# `ConvertFrom-GitLoopyExternalJson` goes through `ConvertFrom-Json`, which
+# coerces an ISO-8601-shaped string into a `[datetime]` — and it is *more*
+# liberal than §3.2's grammar, so a value Python and the shell Orchestrator call
+# `malformed` would arrive here already dated and be re-rendered as a timestamp
+# the rest of the family refuses. That divergence is invisible from inside this
+# port: every one of its own tests would pass.
+#
+# `createdAt` is the ordering seam's second key, so every read that carries it
+# comes through here instead. Same failure reporting, same indexable shape —
+# only the coercion is gone.
+function ConvertFrom-GitLoopyExternalJsonText {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Output,
+        [Parameter(Mandatory)]
+        [string]$Description
+    )
+
+    $Raw = [string]::Join([Environment]::NewLine, $Output)
+    try {
+        return ConvertFrom-GitLoopyJsonText -Text $Raw
+    }
+    catch {
+        [Console]::Error.WriteLine(
+            "git-loopy: $Description returned malformed JSON."
+        )
+        return $null
+    }
+}
+
+# Wrapper contract §2 — the candidate fetch reaches the end of the backlog.
+#
+# `gh issue list` pages internally up to whatever `--limit` asks for, so a page
+# *shorter* than the requested limit proves the server had nothing more to give.
+# A page exactly at the limit is ambiguous, so the reader asks again with a
+# doubled limit until either the page comes back short or the ceiling is
+# reached — at which point the read is reported incomplete rather than silently
+# truncated.
+#
+# The ceiling matters more than it used to: under §3.2's oldest-first order a
+# page limit stops hiding the *oldest* issues and starts hiding the *newest*, so
+# a **Priority** issue filed today would fall outside the oldest hundred and be
+# invisible exactly when it matters most.
+function Get-GitLoopyIssueListToCompletion {
+    [CmdletBinding()]
+    param()
+
+    $Limit = $Script:GitLoopyListPageLimit
+    while ($true) {
+        $ListOutput = @(
+            & gh issue list `
+                --state open `
+                --label ready-for-agent `
+                --limit $Limit `
+                --json $Script:GitLoopyShallowIssueFields 2>$null
+        )
+        if ($LASTEXITCODE -ne 0) {
+            return @{
+                ok = $false
+                message =
+                    "git-loopy: gh issue list failed; treating this Pool as empty."
+            }
+        }
+        $Candidates = ConvertFrom-GitLoopyExternalJsonText `
+            -Output $ListOutput `
+            -Description "gh issue list"
+        if ($null -eq $Candidates) {
+            # The reader already named the malformed payload; a second line
+            # would report one failure twice.
+            return @{ ok = $false; message = $null }
+        }
+        if ($Candidates -isnot [Collections.IList]) {
+            return @{
+                ok = $false
+                message = "git-loopy: gh issue list did not return a JSON array."
+            }
+        }
+        if ($Candidates.Count -lt $Limit) {
+            return @{ ok = $true; candidates = $Candidates; complete = $true }
+        }
+        if ($Limit -ge $Script:GitLoopyListMaxLimit) {
+            return @{ ok = $true; candidates = $Candidates; complete = $false }
+        }
+        $Limit = $Limit * 2
+    }
+}
+
 # `gh` emits comment timestamps as canonical UTC ISO-8601 strings
 # (YYYY-MM-DDTHH:MM:SSZ). `ConvertFrom-Json` coerces those into [datetime]
 # values, whose default string form is the host's locale ("03/01/2026 ..."),
@@ -1575,29 +1672,22 @@ function Get-GitLoopyGitHubPool {
     [CmdletBinding()]
     param()
 
-    $ListOutput = @(
-        & gh issue list `
-            --state open `
-            --label ready-for-agent `
-            --limit 100 `
-            --json number,title,body,labels,state,url 2>$null
-    )
-    if ($LASTEXITCODE -ne 0) {
-        [Console]::Error.WriteLine(
-            "git-loopy: gh issue list failed; treating this Pool as empty."
-        )
-        return
-    }
-    $Candidates = ConvertFrom-GitLoopyExternalJson `
-        -Output $ListOutput `
-        -Description "gh issue list"
-    if ($null -eq $Candidates -or $Candidates -isnot [Collections.IList]) {
-        if ($null -ne $Candidates) {
-            [Console]::Error.WriteLine(
-                "git-loopy: gh issue list did not return a JSON array."
-            )
+    $script:GitLoopyPoolComplete = $true
+    $Page = Get-GitLoopyIssueListToCompletion
+    if (-not $Page["ok"]) {
+        $script:GitLoopyPoolComplete = $false
+        if ($null -ne $Page["message"]) {
+            [Console]::Error.WriteLine($Page["message"])
         }
         return
+    }
+    $Candidates = $Page["candidates"]
+    if (-not $Page["complete"]) {
+        $script:GitLoopyPoolComplete = $false
+        [Console]::Error.WriteLine(
+            "git-loopy: gh issue list did not paginate to completion; this " +
+            "Pool is partial and may not be treated as the whole backlog."
+        )
     }
 
     foreach ($Candidate in $Candidates) {
@@ -1627,7 +1717,7 @@ function Get-GitLoopyGitHubPool {
 
         $ViewOutput = @(
             & gh issue view $Number `
-                --json number,title,body,labels,state,url,comments 2>$null
+                --json "$($Script:GitLoopyShallowIssueFields),comments" 2>$null
         )
         if ($LASTEXITCODE -ne 0) {
             [Console]::Error.WriteLine(
@@ -1636,7 +1726,10 @@ function Get-GitLoopyGitHubPool {
             )
             continue
         }
-        $Full = ConvertFrom-GitLoopyExternalJson `
+        # The date-safe reader: this read carries `createdAt`, and
+        # `ConvertFrom-Json` would hand the ordering seam a `[datetime]` re-
+        # rendered under a grammar wider than §3.2's.
+        $Full = ConvertFrom-GitLoopyExternalJsonText `
             -Output $ViewOutput `
             -Description "gh issue view #$Number"
         if ($null -eq $Full -or $Full -isnot [Collections.IDictionary]) {
@@ -1698,6 +1791,7 @@ function Get-GitLoopyGitHubPool {
             labels = [string[]]$Labels
             state = [string]$Full["state"]
             url = [string]$Full["url"]
+            created_at = [string]($Full["createdAt"] ?? $Full["created_at"] ?? "")
             comments = [object[]]$Comments
         }
     }
@@ -1710,6 +1804,9 @@ function Get-GitLoopyPrdsPool {
         [string]$RepoRoot
     )
 
+    # A directory walk has no page limit and no ceiling: the local-markdown Pool
+    # is exhaustive by construction, including when the tree holds nothing.
+    $script:GitLoopyPoolComplete = $true
     $PrdsDir = Join-Path $RepoRoot "prds"
     if (-not [IO.Directory]::Exists($PrdsDir)) {
         return
@@ -2069,6 +2166,11 @@ $script:GitLoopySourceClosedRefs = [Collections.Generic.List[string]]::new()
 # it without being mistaken for eligible work; it accumulates here instead and
 # is drained by the caller that emits wrapper.pool.excluded.
 $script:GitLoopyPoolExclusions = [Collections.Generic.List[object]]::new()
+# Wrapper contract §2 - whether this Iteration's candidate fetch reached the end
+# of the backlog. `$false` means the read hit its ceiling or failed outright, so
+# the candidates it did return may not stand in for the whole Pool: they
+# establish neither emptiness (ADR-0020 §2.13) nor the head of the order (§3.2).
+$script:GitLoopyPoolComplete = $true
 
 function Reset-GitLoopyIterationLifecycleState {
     [CmdletBinding()]
@@ -3599,6 +3701,8 @@ Export-ModuleMember -Function @(
     "Test-GitLoopyAfkReady",
     "Get-GitLoopyAfkReadyExclusion",
     "ConvertFrom-GitLoopyJsonText",
+    "ConvertFrom-GitLoopyExternalJsonText",
+    "Get-GitLoopyIssueListToCompletion",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",

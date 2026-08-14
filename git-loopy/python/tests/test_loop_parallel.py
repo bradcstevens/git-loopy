@@ -1240,7 +1240,7 @@ class _StaleOnPickupGitHubClient(FakeGitHubClient):
     """A candidate a human closed between the membership read and pickup.
 
     Models the one divergence Rolling dispatch's two-read seam is built for
-    (#219 §2.10): the cheap ``issue_list_membership`` snapshot that put a
+    (#219 §2.10): the cheap ``issue_list`` snapshot that put a
     candidate in the **Pool** cache is never authority to start a **Lane
     contribution**, because the issue may have moved on since. ``issue_view``
     — the authoritative read :meth:`~git_loopy.sources.GitHubIssueSource.pickup`
@@ -1266,17 +1266,8 @@ class _StaleOnPickupGitHubClient(FakeGitHubClient):
 
     def issue_list(
         self, label: str, state: str = "open"
-    ) -> list[gh_module.Issue]:
-        return [
-            issue
-            for issue in super().issue_list(label, state)
-            if issue.number not in self._observed_stale
-        ]
-
-    def issue_list_membership(
-        self, label: str, state: str = "open"
     ) -> gh_module.IssueListPage:
-        page = super().issue_list_membership(label, state)
+        page = super().issue_list(label, state)
         return replace(
             page,
             issues=tuple(

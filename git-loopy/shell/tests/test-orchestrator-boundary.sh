@@ -1845,6 +1845,105 @@ jq -se '
   ' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON" >/dev/null
 ) || fail "wall-clock adjustment changed monotonic shell lifecycle durations"
 
+# Wrapper contract §2 — the candidate fetch reaches the end of the backlog, and
+# §3.2's ordering field is among the fields it asks for. Driven against a `gh`
+# shell function rather than the process-boundary fake because what is under
+# test is the *shape of the request* and the doubling loop around it, and both
+# are invisible from outside once the array comes back.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  # `gh` runs inside a command substitution, so its subshell cannot hand a
+  # variable back — the request log is a file for the same reason the production
+  # reader's completeness flag is a global.
+  fetch_log="$temp_dir/issue-list-requests.log"
+  : >"$fetch_log"
+  backlog_size=0
+  gh() {
+    local limit="" fields="" i
+    if [[ "${1-} ${2-}" == "issue list" ]]; then
+      for ((i = 1; i <= $#; i++)); do
+        case "${!i}" in
+          --limit) limit="${@:i+1:1}" ;;
+          --json) fields="${@:i+1:1}" ;;
+        esac
+      done
+      printf '%s %s\n' "$limit" "$fields" >>"$fetch_log"
+      jq -cn \
+        --argjson limit "$limit" \
+        --argjson total "$backlog_size" \
+        '[range(0; if $total < $limit then $total else $limit end)
+          | {number: (. + 1),
+             title: "issue",
+             body: "## What to build\nx\n\n## Acceptance criteria\n- y",
+             labels: [{name: "ready-for-agent"}],
+             state: "OPEN",
+             url: "u",
+             createdAt: "2026-01-01T00:00:00Z"}]'
+      return 0
+    fi
+    if [[ "${1-}" == "issue" && "${2-}" == "view" ]]; then
+      jq -cn \
+        --argjson number "${3}" \
+        '{number: $number,
+          title: "issue",
+          body: "## What to build\nx\n\n## Acceptance criteria\n- y",
+          labels: [{name: "ready-for-agent"}],
+          state: "OPEN",
+          url: "u",
+          createdAt: "2026-01-01T00:00:00Z",
+          comments: []}'
+      return 0
+    fi
+    return 92
+  }
+
+  requested_limits() {
+    tr ' ' '\n' <"$fetch_log" | awk 'NR % 2 == 1' | tr '\n' ' ' | sed 's/ $//'
+  }
+
+  # A short page proves completeness in one request.
+  backlog_size=3
+  git_loopy_collect_github_pool
+  [[ "$(requested_limits)" == "100" ]] ||
+    fail "a short page asked for more than one page: $(requested_limits)"
+  grep -q 'createdAt' "$fetch_log" ||
+    fail "the candidate fetch did not request createdAt: $(<"$fetch_log")"
+  ((GIT_LOOPY_POOL_COMPLETE == 1)) ||
+    fail "a short page was not reported complete"
+  jq -e '.[0].created_at == "2026-01-01T00:00:00Z"' \
+    <<<"$GIT_LOOPY_POOL_JSON" >/dev/null ||
+    fail "a Pool item did not carry the timestamp the order is built on"
+
+  # A page exactly at the limit is ambiguous, so the reader asks again wider —
+  # and the backlog past row 100 arrives, which is where a Priority issue filed
+  # today lands once the order runs oldest-first.
+  : >"$fetch_log"
+  backlog_size=150
+  git_loopy_collect_github_pool
+  [[ "$(requested_limits)" == "100 200" ]] ||
+    fail "the fetch did not double its limit: $(requested_limits)"
+  ((GIT_LOOPY_POOL_COMPLETE == 1)) ||
+    fail "an exhausted fetch was reported incomplete"
+  [[ "$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" == "150" ]] ||
+    fail "the backlog past the old page limit did not reach the Pool"
+
+  # Still full at the ceiling: the read is reported incomplete rather than
+  # silently truncated, because it establishes neither emptiness nor the head
+  # of the order.
+  : >"$fetch_log"
+  backlog_size=100000
+  git_loopy_collect_github_pool 2>"$temp_dir/truncated.stderr"
+  [[ "$(requested_limits)" == "100 200 400 800 1600" ]] ||
+    fail "the fetch stopped short of its ceiling: $(requested_limits)"
+  ((GIT_LOOPY_POOL_COMPLETE == 0)) ||
+    fail "a fetch still full at the ceiling claimed to be complete"
+  assert_contains "$(<"$temp_dir/truncated.stderr")" \
+    "did not paginate to completion" \
+    "a truncated candidate fetch says so"
+) || fail "the shell candidate fetch does not paginate to completion"
+
 # The shared TUI helper (PRD #173). Every case below drives the real entrypoint
 # against a fake `git-loopy-tui` that records what it was asked to do, so
 # discovery, the compatibility probe, transport, mid-Run failure, and teardown

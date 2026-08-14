@@ -59,6 +59,7 @@ def _make_issue(
     state: str = "OPEN",
     labels: list[str] | None = None,
     title: str | None = None,
+    created_at: str = "",
     comments: tuple[gh_module.Comment, ...] = (),
 ) -> gh_module.Issue:
     return gh_module.Issue(
@@ -68,6 +69,7 @@ def _make_issue(
         labels=labels if labels is not None else ["ready-for-agent"],
         state=state,
         url=f"https://github.com/x/y/issues/{number}",
+        created_at=created_at,
         comments=comments,
     )
 
@@ -1458,7 +1460,7 @@ class TestShallowMembership:
     def test_failed_read_is_incomplete_rather_than_empty(self) -> None:
         """A failed refresh may never be read as 'the Pool is empty' (#219 §2.13)."""
         gh = FakeGitHubClient(
-            issue_list_membership_error=gh_module.GhError(["gh"], 1, "boom")
+            issue_list_error=gh_module.GhError(["gh"], 1, "boom")
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
 
@@ -1468,13 +1470,127 @@ class TestShallowMembership:
         assert snapshot.complete is False
 
     def test_truncated_read_is_incomplete(self) -> None:
-        gh = FakeGitHubClient(issues=[_make_issue(31)], membership_complete=False)
+        gh = FakeGitHubClient(issues=[_make_issue(31)], issue_list_complete=False)
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
 
         snapshot = impl.shallow_membership()
 
         assert [c.ref for c in snapshot.candidates] == [31]
         assert snapshot.complete is False
+
+    def test_a_candidate_carries_the_timestamp_the_order_is_built_on(self) -> None:
+        """**Rolling dispatch** orders its cache, so the field has to reach the cache.
+
+        A candidate that only acquires ``created_at`` at the authoritative
+        pickup read acquires it *after* the decision that needed it — the Lane
+        has already been reserved for whatever the cache put at the front.
+        """
+        gh = FakeGitHubClient(
+            issues=[_make_issue(31, created_at="2026-01-02T03:04:05Z")]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [candidate] = impl.shallow_membership().candidates
+
+        assert candidate.created_at == "2026-01-02T03:04:05Z"
+
+    def test_an_unstamped_candidate_is_undated_rather_than_dropped(self) -> None:
+        """§3.2: an undated issue sorts last within its rank; it stays eligible."""
+        gh = FakeGitHubClient(issues=[_make_issue(31)])
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [candidate] = impl.shallow_membership().candidates
+
+        assert candidate.created_at == ""
+
+
+class TestPoolFetchCompleteness:
+    """Wrapper contract §2: the candidate fetch reaches the end of the backlog.
+
+    Under §3.2's oldest-first order a page limit stops hiding the *oldest*
+    issues and starts hiding the *newest*, so a **Priority** issue filed today
+    would fall outside the oldest hundred and be invisible exactly when it
+    matters most. Completeness is therefore a correctness requirement for
+    Priority, not a nicety (#392).
+    """
+
+    def test_a_backlog_larger_than_one_page_reaches_the_pool_intact(self) -> None:
+        """The true oldest eligible issue is present, not cut off at row 100."""
+        issues = [
+            _make_issue(n, created_at=f"2026-01-01T00:00:{n % 60:02d}Z")
+            for n in range(1, 151)
+        ]
+        gh = FakeGitHubClient(issues=issues)
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        assert collection.complete is True
+        assert len(collection.items) == 150
+        assert collection.items[0].ref == 1
+        assert collection.items[-1].ref == 150
+
+    def test_a_priority_issue_past_the_old_page_limit_is_still_fetched(self) -> None:
+        """The specific failure oldest-first would have introduced.
+
+        A **Priority** issue filed today is the *newest* row, which is precisely
+        what a fixed ``--limit 100`` would have dropped once the order flipped.
+        """
+        issues = [_make_issue(n, created_at="2025-01-01T00:00:00Z") for n in range(1, 121)]
+        issues.append(
+            _make_issue(
+                999,
+                labels=["ready-for-agent", "priority"],
+                created_at="2026-08-13T00:00:00Z",
+            )
+        )
+        gh = FakeGitHubClient(issues=issues)
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        pinned = [item for item in collection.items if item.ref == 999]
+        assert [item.labels for item in pinned] == [("ready-for-agent", "priority")]
+
+    def test_an_incomplete_fetch_is_not_authoritative(self) -> None:
+        """A truncated read may not stand in for the whole backlog.
+
+        ADR-0020 §2.13 already forbade concluding *emptiness* from a partial
+        read; oldest-first extends the same rule to the *head* of the order,
+        because the rows a ceiling cut off are the ones a Priority issue lands
+        among. The candidates read are still returned — what they may not do is
+        claim to be all of them.
+        """
+        gh = FakeGitHubClient(issues=[_make_issue(31)], issue_list_complete=False)
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        assert [item.ref for item in collection.items] == [31]
+        assert collection.complete is False
+
+    def test_reading_past_one_page_does_not_change_eligibility(self) -> None:
+        """Completeness is a fetch property; the discriminator is untouched."""
+        issues = [_make_issue(n) for n in range(1, 120)]
+        issues.append(_make_issue(500, body="just a thought"))
+        gh = FakeGitHubClient(issues=issues)
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        collection = impl.collect_pool()
+
+        assert 500 not in [item.ref for item in collection.items]
+        assert [e.ref for e in collection.exclusions] == [500]
+
+    def test_a_pool_item_carries_the_timestamp_the_order_is_built_on(self) -> None:
+        """Selection happens over collected items, so the field travels with them."""
+        gh = FakeGitHubClient(
+            issues=[_make_issue(31, created_at="2026-01-02T03:04:05Z")]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = impl.collect_pool().items
+
+        assert item.created_at == "2026-01-02T03:04:05Z"
 
 
 class TestPickup:

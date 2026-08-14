@@ -357,9 +357,12 @@ def test_issue_list_and_view_derive_from_one_store() -> None:
     gh = FakeGitHubClient(issues=[_issue(42), _issue(43, state="CLOSED")])
     # issue_list filters by state (open by default); the numbers stay consistent
     # with what issue_view returns.
-    assert [i.number for i in gh.issue_list("ready-for-agent")] == [42]
-    assert {i.number for i in gh.issue_list("ready-for-agent", "all")} == {42, 43}
-    assert [i.number for i in gh.issue_list("ready-for-agent", "closed")] == [43]
+    assert [i.number for i in gh.issue_list("ready-for-agent").issues] == [42]
+    assert {i.number for i in gh.issue_list("ready-for-agent", "all").issues} == {
+        42,
+        43,
+    }
+    assert [i.number for i in gh.issue_list("ready-for-agent", "closed").issues] == [43]
     assert gh.issue_view(42).state == "OPEN"
     assert gh.issue_list_calls == [
         ("ready-for-agent", "open"),
@@ -377,7 +380,7 @@ def test_issue_close_records_and_flips_state_to_closed() -> None:
     assert gh.issue_close_calls == [(42, "done via Closes #42")]
     # ...and the close lands, exactly as real ``gh`` would (a later view sees it).
     assert gh.issue_view(42).state == "CLOSED"
-    assert gh.issue_list("ready-for-agent") == []
+    assert gh.issue_list("ready-for-agent").issues == ()
 
 
 def test_issue_comment_records_without_changing_state() -> None:
@@ -455,7 +458,7 @@ def test_issue_views_override_diverges_view_from_list() -> None:
         comments=(),
     )
     gh = FakeGitHubClient(issues=[listed], issue_views={42: full})
-    assert gh.issue_list("ready-for-agent")[0].body == "body"
+    assert gh.issue_list("ready-for-agent").issues[0].body == "body"
     assert gh.issue_view(42).body == "no discriminator anymore"
 
 

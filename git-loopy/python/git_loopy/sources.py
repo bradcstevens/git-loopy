@@ -227,6 +227,14 @@ class AfkReadyItem:
             ``parallel-safe``. Populated by the GitHub backend from the
             issue/PR labels; empty for the PRDs backend (local markdown has
             no labels). Eligibility is a label, never an inference.
+        created_at: The item's creation timestamp exactly as the source
+            reported it, or ``""`` when the source has none. This is the
+            ordering seam's second key (Wrapper contract §3.2) and it travels
+            on the item because selection happens over collected items, not
+            over the client's response. Empty for the PRDs backend, whose
+            local markdown carries no source timestamp — a local-markdown Pool
+            therefore orders by ref alone, which is what an absent timestamp
+            already means.
     """
 
     ref: int | str
@@ -235,6 +243,7 @@ class AfkReadyItem:
     kind: str = "issue"
     head_sha: str = ""
     labels: tuple[str, ...] = ()
+    created_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -343,11 +352,18 @@ class PoolCandidate:
         title: Display title, for diagnostics and the **Dashboard** **Queue**.
         labels: The item's labels — the carrier of the human **Parallel-safe**
             assertion. Eligibility is read from here, never inferred.
+        created_at: The candidate's creation timestamp as the source reported
+            it, or ``""`` when the source has none. **Rolling dispatch** picks
+            candidates up in cache order (#219 §2), so the field the order is
+            built on has to survive the cheap refresh — a candidate that only
+            acquires its timestamp at the authoritative pickup read acquires it
+            after the decision that needed it.
     """
 
     ref: int | str
     title: str
     labels: tuple[str, ...] = ()
+    created_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -596,10 +612,22 @@ class GitHubIssueSource:
         pass that already had to run.
         """
         try:
-            candidates = self._gh.issue_list("ready-for-agent")
+            page = self._gh.issue_list(LABEL_READY_FOR_AGENT)
         except gh_module.GhError as exc:
             self._diag.error("gh issue list failed: %s", exc)
             return PoolCollection(complete=False)
+        if not page.complete:
+            # Wrapper contract §2: a truncated read may not establish the Pool's
+            # emptiness *or* its head. Under §3.2's oldest-first order the two
+            # failures are the same failure — the issues the ceiling cut off are
+            # the newest ones, which is exactly where a **Priority** issue filed
+            # today lands. The candidates read are still usable; what they may
+            # not do is stand in for the whole Pool.
+            self._diag.warning(
+                "gh issue list did not paginate to completion; this Pool is "
+                "partial and may not be treated as the whole backlog"
+            )
+        candidates = page.issues
 
         exclusions: list[PoolExclusion] = []
         ready_candidates = []
@@ -645,6 +673,7 @@ class GitHubIssueSource:
                     title=full.title,
                     rendered_block=_format_github_issue_block(full),
                     labels=tuple(full.labels),
+                    created_at=full.created_at,
                 )
             )
 
@@ -653,7 +682,7 @@ class GitHubIssueSource:
         return PoolCollection(
             items=tuple(items),
             exclusions=tuple(exclusions),
-            complete=not unread,
+            complete=page.complete and not unread,
         )
 
     def shallow_membership(self) -> MembershipSnapshot:
@@ -669,7 +698,7 @@ class GitHubIssueSource:
         from establishing emptiness.
         """
         try:
-            page = self._gh.issue_list_membership(LABEL_READY_FOR_AGENT)
+            page = self._gh.issue_list(LABEL_READY_FOR_AGENT)
         except gh_module.GhError as exc:
             self._diag.warning(
                 "gh issue list (membership refresh) failed: %s; "
@@ -683,6 +712,7 @@ class GitHubIssueSource:
                 ref=issue.number,
                 title=issue.title,
                 labels=tuple(issue.labels),
+                created_at=issue.created_at,
             )
             for issue in page.issues
             if is_afk_ready(issue.body or "")
@@ -731,6 +761,7 @@ class GitHubIssueSource:
                 title=full.title,
                 rendered_block=_format_github_issue_block(full),
                 labels=labels,
+                created_at=full.created_at,
             ),
         )
 
@@ -769,6 +800,7 @@ class GitHubIssueSource:
                     rendered_block=_format_github_pr_block(full),
                     kind="pr",
                     head_sha=full.head_sha,
+                    created_at=full.created_at,
                 )
             )
         return items
