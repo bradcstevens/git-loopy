@@ -394,6 +394,26 @@ def test_issue_list_custom_state_arg_propagates(monkeypatch) -> None:
     assert "all" in captured["cmd"]
 
 
+def test_issue_list_with_no_label_omits_the_filter(monkeypatch) -> None:
+    """An empty label is *no* label filter, so mining can read every closed issue.
+
+    The **Proving set** (#362) has to see the issues carrying no ``task-type:``
+    label — they are the largest class of exclusion, and a corpus that never
+    mentions them is one a loop engineer cannot judge. Omitting the flag is what
+    makes that our decision rather than a tolerance of ``gh``'s.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(cmd, stdout="[]")
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_list("", state="closed")
+    assert "--label" not in captured["cmd"]
+    assert "closed" in captured["cmd"]
+
+
 def test_issue_list_empty_array_returns_empty_list(monkeypatch) -> None:
     def fake_run(cmd, **kw):
         return _completed(cmd, stdout="[]")

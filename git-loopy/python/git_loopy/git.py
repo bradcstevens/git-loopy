@@ -330,6 +330,18 @@ class GitClient(Protocol):
         """Return the number of commits in ``pre..head``."""
         ...
 
+    def commits_reachable(self, ref: str) -> list[Commit]:
+        """Return every commit reachable from ``ref``, newest first."""
+        ...
+
+    def changed_paths(self, sha: str) -> list[str]:
+        """Return the repo-relative paths ``sha`` changed, measured from its first parent."""
+        ...
+
+    def parent_sha(self, sha: str) -> str | None:
+        """Return ``sha``'s first parent, or ``None`` when there is none."""
+        ...
+
     def add_worktree(self, path: Path, *, branch: str, base: str) -> GitClient:
         """Create a git worktree at ``path`` on a new ``branch`` cut from ``base``.
 
@@ -713,6 +725,117 @@ class SubprocessGitClient:
             return 0
         out = _run(["rev-list", "--count", f"{pre}..{head}"], cwd=self._root)
         return int(out.strip())
+
+    def commits_reachable(self, ref: str) -> list[Commit]:
+        """Return every commit reachable from ``ref``, newest first.
+
+        Mirrors ``git log <ref>``. The **Proving set** (#362) reads the whole
+        history in one call rather than asking ``--grep`` per closed issue: the
+        map it wants is *commit -> the issues that commit closes*, and
+        :func:`git_loopy.wrapper.extract_close_refs` already derives that from
+        ``commit.message`` under the Wrapper contract's own keyword rule. One
+        pass over the log therefore answers every issue at once, and answers it
+        through the same reader the auto-close backstop uses.
+
+        Args:
+            ref: Any commit-ish. Mining passes the repository's default branch,
+                because "reachable from the default branch" is what makes a
+                closing commit the one that shipped.
+
+        Returns:
+            A list of :class:`Commit`, newest first.
+
+        Raises:
+            GitError: On any subprocess failure (unknown ref, etc.).
+        """
+        return _parse_log_z(
+            ["log", _LOG_FORMAT, "--date=short", "-z", ref],
+            cwd=self._root,
+        )
+
+    def changed_paths(self, sha: str) -> list[str]:
+        """Return the repo-relative paths ``sha`` changed, in git's own order.
+
+        Mirrors ``git diff-tree --no-commit-id --name-only -r -z --root -m
+        --first-parent <sha>``. Every flag is load-bearing for the **Proving set**
+        (#362), which reads this to decide whether a fixing commit shipped a test
+        change and to pin the oracle's paths:
+
+        * ``-r`` recurses into trees, so a change deep inside ``tests/`` is
+          reported as its own path rather than as the top-level directory it
+          happens to sit under.
+        * ``-z`` returns NUL-separated raw paths, so a filename carrying a quote,
+          a space or a non-ASCII byte arrives verbatim instead of in git's
+          C-quoted form — a path this reader would then have to unquote to match
+          against, and would get wrong.
+        * ``--root`` makes a root commit report its own tree instead of nothing.
+          Without it a repository's first commit reads as having changed no file,
+          and mining would report it as shipping no test change — a true-looking
+          answer to the wrong question, since what disqualifies a root commit is
+          having no parent to restore.
+        * ``-m --first-parent`` makes a merge report what it merged in.
+          ``diff-tree`` shows a merge *nothing at all* unless it is told which
+          parent to compare against, so without this a fix that reached the
+          default branch through a merge commit read as shipping no test change —
+          an exclusion filed under a reason that was not the truth. The first
+          parent is the one :meth:`parent_sha` hands back as the base commit, so
+          it is the one an oracle measured here can actually be replayed from.
+
+        Args:
+            sha: Any commit-ish.
+
+        Returns:
+            The changed paths, relative to the repository root.
+
+        Raises:
+            GitError: On any subprocess failure (unknown commit, etc.).
+        """
+        out = _run(
+            [
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "-z",
+                "--root",
+                "-m",
+                "--first-parent",
+                sha,
+            ],
+            cwd=self._root,
+        )
+        return [path for path in out.split("\0") if path]
+
+    def parent_sha(self, sha: str) -> str | None:
+        """Return ``sha``'s first parent, or ``None`` when there is none to check out.
+
+        Mirrors ``git rev-parse --verify --quiet <sha>^1^{commit}``. The
+        **Proving set** (#362) replays a fixing commit from the commit *before*
+        it, so this answers the question that decides whether a candidate is
+        replayable at all.
+
+        ``None`` covers every way that answer can be no — a root commit, a
+        commit whose parent is missing from a shallow clone, an unresolvable
+        commit-ish — deliberately, because mining's rule is "no checkable-out
+        parent" and each of those is a case of it. The distinction between them
+        would be a diagnosis nothing acts on, bought at the price of a raise on
+        a read that is allowed to say no.
+
+        Args:
+            sha: Any commit-ish.
+
+        Returns:
+            The full 40-character parent SHA, or ``None``.
+
+        Raises:
+            GitError: Only when ``git`` itself cannot be run.
+        """
+        out = _run(
+            ["rev-parse", "--verify", "--quiet", f"{sha}^1^{{commit}}"],
+            cwd=self._root,
+            check=False,
+        )
+        return out.strip() or None
 
     def add_worktree(
         self, path: Path, *, branch: str, base: str
