@@ -12,8 +12,9 @@ Two groups:
 * pure unit tests for :func:`~git_loopy.interactive.state.format_activity_header`
   (the band's compact one-line header), and
 * Pilot tests for the band's placement, live tail rendering, header attribution,
-  empty/idle placeholder, non-focusability (the Queue keeps focus), the fixed
-  band height vs the flexing Queue, and the Log-open / Esc display ride-along.
+  empty/idle placeholder, non-focusability (the Queue keeps focus), the
+  operator-sized band vs the flexing Queue (keyboard and mouse), and the
+  Log-open / Esc display ride-along.
 
 Gated behind ``pytest.importorskip("textual")`` so the base (no ``[tui]`` extra)
 install skips the Pilot tests; the pure header helper is exercised alongside.
@@ -26,7 +27,9 @@ import pytest
 pytest.importorskip("textual")
 
 from rich.text import Text  # noqa: E402
+from textual import events  # noqa: E402
 from textual.containers import VerticalScroll  # noqa: E402
+from textual.widget import Widget  # noqa: E402
 from textual.widgets import DataTable, Static  # noqa: E402
 from textual.widgets._footer import FooterKey  # noqa: E402
 
@@ -38,6 +41,7 @@ from git_loopy.interactive.app import (  # noqa: E402
     _ActivityBand,
     _Dashboard,
     _LogView,
+    _QUEUE_MIN_HEIGHT,
     GitLoopyApp,
 )
 from git_loopy.interactive.state import (  # noqa: E402
@@ -451,6 +455,360 @@ async def test_shift_down_from_the_stub_is_a_no_op() -> None:
         for _ in range(3):
             await pilot.press("shift+down")
         await pilot.pause()
+
+        assert band.collapsed is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+
+# ---------------------------------------------------------------------------
+# The mouse: the band's header row is its drag handle, and a bare click on it
+# toggles collapse (ADR-0031 — the drag → click → keys ladder)
+# ---------------------------------------------------------------------------
+
+
+def _handle_row(app: GitLoopyApp) -> int:
+    """The screen row the band's header — its drag handle — currently occupies."""
+    return app.query_one("#activity-header", Static).region.y
+
+
+async def test_dragging_the_header_up_grows_the_band_with_the_pointer() -> None:
+    """Grab the band's header row and pull up: the band follows the pointer row
+    for row, and the Queue's ``1fr`` gives the rows back.
+
+    The drag is a **sizing** gesture, so it writes ``requested`` (ADR-0031) — the
+    same number ``shift+up`` writes, reached with the mouse.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, grab - 2))
+        await pilot.mouse_up(offset=(10, grab - 2))
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 2
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 2
+        assert queue.size.height == queue_before - 2
+
+
+async def test_dragging_the_header_down_shrinks_the_band_with_the_pointer() -> None:
+    """Push the header down and the band shrinks row for row, the Queue taking
+    every row it gives up — the drag undoes itself in the direction it came."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, grab + 3))
+        await pilot.mouse_up(offset=(10, grab + 3))
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 3
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT - 3
+        assert queue.size.height == queue_before + 3
+
+
+async def test_dragging_up_never_squeezes_the_queue_below_its_floor() -> None:
+    """A drag that runs to the top of the terminal stops at the band's ceiling:
+    the largest height that still leaves the Queue its three rows.
+
+    The cap is written into ``requested`` too, as ``shift+up``'s is — a pointer
+    dragged off the top of the screen must not store up height that springs out
+    the moment the terminal grows.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, 0))
+        await pilot.mouse_up(offset=(10, 0))
+        await pilot.pause()
+
+        # Dashboard (23 rows: the terminal less the Footer) less the #23 header
+        # and the Summary band (1 each), less the Queue's own three-row floor.
+        assert band.size.height == 23 - 2 - 3
+        assert queue.size.height == _QUEUE_MIN_HEIGHT
+        assert band.requested == band.size.height
+
+
+async def test_dragging_below_the_floor_releases_into_the_collapsed_stub() -> None:
+    """Push the header past the band's three-row floor and it releases into
+    **Collapsed**: the one-line header and nothing else, still in the layout.
+
+    It lands in exactly the state ``shift+down`` past the floor lands in — the
+    same remembered intent, one row short of the floor — so what ``a`` restores
+    does not depend on which gesture collapsed the band.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+        grab = _handle_row(app)
+
+        # Nine rows down from a nine-row band: a band of zero rows was asked for.
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, grab + _ACTIVITY_BAND_HEIGHT))
+        await pilot.mouse_up(offset=(10, grab + _ACTIVITY_BAND_HEIGHT))
+        await pilot.pause()
+
+        assert band.collapsed is True
+        # A state, not an absence: still in the layout, still one row tall.
+        assert band.display is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert app.query_one("#activity-scroll", VerticalScroll).display is False
+        assert queue.size.height == (
+            queue_before + _ACTIVITY_BAND_HEIGHT - _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        )
+        assert band.requested == _ACTIVITY_BAND_MIN_HEIGHT - 1
+
+
+async def test_one_drag_can_collapse_the_band_and_pull_it_back_out() -> None:
+    """The whole point of the one-row stub (ADR-0031): the handle survives the
+    gesture, so a single unbroken drag can push the band into **Collapsed** and
+    pull it straight back out. No keyboard is needed to recover.
+
+    The drag is measured from where it was grabbed, not from the band's current
+    height, so coming back past the grab row comes back to the height that was
+    there before it.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, grab + _ACTIVITY_BAND_HEIGHT))
+        assert band.collapsed is True
+
+        # Still holding the button: pull back up, past where it was grabbed.
+        await pilot.hover(offset=(10, grab - 1))
+        await pilot.mouse_up(offset=(10, grab - 1))
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 1
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 1
+        assert app.query_one("#activity-scroll", VerticalScroll).display is True
+
+
+async def test_a_fresh_drag_on_the_stub_reopens_the_band_at_the_floor() -> None:
+    """The stub is a drag handle in its own right: grabbing the collapsed band's
+    one row and pulling up reopens it, floored at three rows.
+
+    A one-row pull asks for a two-row band, which is not a height this band has,
+    so it stays collapsed — the floor is a floor and not a snap. Two rows is the
+    smallest deliberate pull that reopens it, and it lands the header back under
+    the pointer.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is True
+        stub = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, stub - 1))
+        assert band.collapsed is True
+
+        await pilot.hover(offset=(10, stub - 4))
+        await pilot.mouse_up(offset=(10, stub - 4))
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_COLLAPSED_HEIGHT + 4
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT + 4
+
+
+async def test_clicking_the_header_collapses_the_band_like_the_a_key() -> None:
+    """A bare click on the band header is a **toggle** gesture: it reaches the
+    same **Collapsed** state ``a`` produces, and preserves ``requested``.
+
+    A terminal that reports clicks but not motion — the middle rung of the
+    drag → click → keys ladder — has exactly this and nothing else, which is why
+    the click is driven here without any intervening pointer motion.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        queue_before = queue.size.height
+        # Size it away from the named default first, so a click that wrote
+        # ``requested`` instead of preserving it could not pass unnoticed.
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 1
+
+        await pilot.click("#activity-header")
+        await pilot.pause()
+
+        assert band.collapsed is True
+        assert band.display is True
+        assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        assert app.query_one("#activity-scroll", VerticalScroll).display is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT - 1
+        assert queue.size.height == (
+            queue_before + _ACTIVITY_BAND_HEIGHT - _ACTIVITY_BAND_COLLAPSED_HEIGHT
+        )
+
+
+async def test_clicking_the_stub_reopens_the_band_at_the_requested_height() -> None:
+    """From **Collapsed** the click restores the operator's height, not the
+    named default and not the floor — it is a toggle, and toggles preserve
+    ``requested`` so there is something of the operator's to come back to.
+
+    This is the forgiving half of the gesture pair: a one-row stub is an awkward
+    thing to drag and an easy thing to click.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        await pilot.press("shift+up")
+        await pilot.press("shift+up")
+        await pilot.pause()
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 2
+
+        await pilot.click("#activity-header")
+        await pilot.pause()
+        assert band.collapsed is True
+
+        await pilot.click("#activity-header")
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT + 2
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 2
+        assert app.query_one("#activity-scroll", VerticalScroll).display is True
+
+
+async def test_a_drag_that_ends_where_it_began_is_read_as_a_click() -> None:
+    """Press, release, no motion in between: indistinguishable from a click, and
+    therefore treated as one (ADR-0031).
+
+    A drag that *did* wander and came back is not: it stated a size, and
+    collapsing a band the operator has just finished sizing would be the
+    opposite of what they asked for.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        grab = _handle_row(app)
+
+        # Press and release on the very row it was grabbed on -> a click.
+        await pilot.mouse_down("#activity-header")
+        await pilot.mouse_up("#activity-header")
+        await pilot.pause()
+        assert band.collapsed is True
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+
+        # Back out with a click, then drag away and back: a drag, not a click.
+        await pilot.click("#activity-header")
+        await pilot.pause()
+        assert band.collapsed is False
+
+        await pilot.mouse_down("#activity-header")
+        await pilot.hover(offset=(10, grab - 3))
+        await pilot.hover(offset=(10, grab))
+        await pilot.mouse_up(offset=(10, grab))
+        await pilot.pause()
+
+        assert band.collapsed is False
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+
+
+async def test_a_drag_that_wanders_over_the_queue_leaves_the_queue_alone() -> None:
+    """The mouse is **captured** for the duration of the drag, so every event
+    goes to the handle wherever the pointer happens to be.
+
+    Dragging the band taller means dragging *over* the Queue, and without capture
+    that pointer would be moving the Queue's cursor, selecting a row, opening a
+    **Log**, and dragging out a text selection across everything it crossed. The
+    band grows and the Queue is otherwise untouched.
+    """
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        queue = app.query_one("#queue", DataTable)
+        cursor_before = queue.cursor_row
+        grab = _handle_row(app)
+
+        await pilot.mouse_down("#activity-header")
+        # Straight up through the Queue's rows, then let go over one of them.
+        await pilot.hover(offset=(10, grab - 3))
+        await pilot.hover(offset=(10, grab - 6))
+        await pilot.mouse_up(offset=(10, grab - 6))
+        await pilot.pause()
+
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT + 6
+        assert queue.cursor_row == cursor_before
+        assert app.query_one("#log", _LogView).display is False
+        assert app.screen.get_selected_text() is None
+
+
+async def _wheel(pilot, widget: Widget, event_cls, turns: int = 3) -> None:
+    """Turn the wheel over ``widget``.
+
+    ``Pilot`` has no wheel gesture, so the event is posted the way the driver
+    posts a real one — through the screen, which is also how ``Pilot`` posts the
+    gestures it does have.
+    """
+    for _ in range(turns):
+        x, y = widget.region.offset
+        pilot.app.screen._forward_event(
+            event_cls(
+                widget, x, y, 0, 0, 0, False, False, False, screen_x=x, screen_y=y
+            )
+        )
+        await pilot.pause()
+
+
+async def test_the_wheel_never_resizes_the_expanded_band() -> None:
+    """Resize-by-wheel is the accidental gesture ADR-0021's Context section is an
+    argument against, so the wheel keeps doing what it does today and the band's
+    height is not one of the things it does."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        header = app.query_one("#activity-header", Static)
+        body = app.query_one("#activity-body", Static)
+
+        for target in (header, body):
+            for event_cls in (events.MouseScrollUp, events.MouseScrollDown):
+                await _wheel(pilot, target, event_cls)
+
+        assert band.collapsed is False
+        assert band.requested == _ACTIVITY_BAND_HEIGHT
+        assert band.size.height == _ACTIVITY_BAND_HEIGHT
+
+
+async def test_the_wheel_never_reopens_the_collapsed_stub() -> None:
+    """The stub is one row of header under the pointer and the wheel is the
+    gesture most likely to be turned over it by accident. It does not resize the
+    band and it does not reopen it — that is the drag's and the click's job."""
+    app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
+    async with app.run_test(size=(80, 24)) as pilot:
+        band = app.query_one("#activity", _ActivityBand)
+        await pilot.press("a")
+        await pilot.pause()
+        assert band.collapsed is True
+
+        header = app.query_one("#activity-header", Static)
+        for event_cls in (events.MouseScrollUp, events.MouseScrollDown):
+            await _wheel(pilot, header, event_cls)
 
         assert band.collapsed is True
         assert band.size.height == _ACTIVITY_BAND_COLLAPSED_HEIGHT

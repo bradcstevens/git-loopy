@@ -94,6 +94,33 @@ def test_the_glossary_records_the_activity_band_as_operator_sized() -> None:
     assert "**Collapsed**" in entry
 
 
+def test_the_glossary_records_the_band_header_as_the_drag_handle() -> None:
+    """The band is sized by the mouse as well as by the keys (#383).
+
+    ADR-0021 asked for the header row to be the drag handle and ADR-0031 is what
+    made that survivable. A glossary that still says "from the keyboard" would
+    describe a band the operator can only half drive.
+    """
+    entry = _entry("Activity")
+
+    assert "drag" in entry
+    assert "header" in entry
+
+
+def test_the_glossary_records_the_mouse_path_into_and_out_of_collapsed() -> None:
+    """**drag → click → keys** is a ladder with no dead end (ADR-0031), so the
+    two mouse rungs belong to the term's definition rather than to one
+    renderer's implementation of it.
+
+    The claim that matters most is the recovery: a drag can pull the band back
+    out of the stub, which is the whole reason **Collapsed** keeps a row.
+    """
+    entry = _entry("Collapsed")
+
+    assert "drag" in entry
+    assert "click" in entry
+
+
 def test_the_collapsed_activity_band_decision_is_accepted() -> None:
     """The ADR is not a proposal once the code implements it."""
     status = [
