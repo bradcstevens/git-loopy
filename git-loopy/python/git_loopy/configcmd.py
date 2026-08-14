@@ -72,6 +72,8 @@ __all__ = [
     "run_list",
     "run_path",
     "run_edit",
+    "resolve_effective_config",
+    "routing_report",
     "run_routing_guided",
     "run_routing_list",
     "run_routing_set",
@@ -554,7 +556,9 @@ def run_routing_list(
     try:
         project, global_, measured, provisional = _load_tables(repo_root, env)
         walked = cli.merge_routing_tiers(project, global_, measured, provisional)
-        resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
+        resolved = resolve_effective_config(
+            repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}")
+        )
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
@@ -694,7 +698,7 @@ def _load_tables(
     return project, global_, artifact.routing, artifact.provisional_keys
 
 
-def _resolve(
+def resolve_effective_config(
     repo_root: Path | None,
     env: Mapping[str, str],
     *,
@@ -706,6 +710,10 @@ def _resolve(
     namespace, the live ``env``, and both loaded scopes, so ``get`` / ``list``
     report what a bare ``git-loopy`` would actually use. ``cli`` is imported
     lazily (it is already loaded at dispatch) to keep this module SDK-free.
+
+    Public because ``config`` is no longer its only asker: ``git-loopy calibrate
+    --status`` (#367) reports the same **Routed pair** and the same tier, and a
+    second resolution of the precedence chain is a second chain to disagree with.
     """
     from git_loopy import cli
 
@@ -760,7 +768,7 @@ def _render_pair(model: str | None, effort: str | None) -> str:
     return " ".join(parts)
 
 
-def _routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
+def routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
     """The gated ``(model, effort)`` display and tier label for one task-type key.
 
     The pair is resolved through :func:`git_loopy.config.resolve_iteration_model`
@@ -806,7 +814,7 @@ def _note_routing_inert_in_serial(
     Both the rule and the wording come from :mod:`git_loopy.routing_scope`, so
     this note and the refusal ``git-loopy calibrate`` prints for the same reason
     (#372, #379) cannot drift into two accounts of one fact. Run-wide
-    suppression is the one case that stays silent here: ``_routing_report`` has
+    suppression is the one case that stays silent here: ``routing_report`` has
     already said routing is off entirely, and a second note would explain the
     inertness of a chain the operator has already been told is not running.
     """
@@ -872,7 +880,9 @@ def run_get(
         err(f"git-loopy: error: {_unknown_key_message(key)}")
         return 1
     try:
-        resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
+        resolved = resolve_effective_config(
+            repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}")
+        )
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
@@ -880,7 +890,7 @@ def run_get(
         err(f"git-loopy: error: {task_type_refusal(exc)}")
         return 1
     if task_type is not None:
-        value, tier = _routing_report(resolved, task_type)
+        value, tier = routing_report(resolved, task_type)
         out(f"{value} ({tier})")
         _note_unadopted_recommended_route(task_type, tier, err)
         _note_routing_inert_in_serial(resolved, err)
@@ -914,7 +924,9 @@ def run_list(
     try:
         project, global_, measured, provisional = _load_tables(repo_root, env)
         walked = cli.merge_routing_tiers(project, global_, measured, provisional)
-        resolved = _resolve(repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}"))
+        resolved = resolve_effective_config(
+            repo_root, env, warn=lambda m: err(f"git-loopy: warning: {m}")
+        )
     except settings.SettingsError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
@@ -924,7 +936,7 @@ def run_list(
     for name in SETTABLE_KEYS:
         out(f"{name} = {_display_value(_KEYS[name].read(resolved))}")
     for task_type in sorted(walked):
-        value, tier = _routing_report(resolved, task_type)
+        value, tier = routing_report(resolved, task_type)
         out(f"{TASK_TYPE_LABEL_PREFIX}{task_type} = {value} ({tier})")
     if walked:
         _note_routing_inert_in_serial(resolved, err)

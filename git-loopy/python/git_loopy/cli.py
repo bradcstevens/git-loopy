@@ -256,6 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
             "                                 See `git-loopy skills -h`.\n"
             "  continuation                   Native Continuation contract commands.\n"
             "                                 See `git-loopy continuation -h`.\n"
+            "  calibrate --status             What this repository's corpus "
+            "supports per Task type.\n"
+            "  calibrate --dry-run            What a Calibration would cost, "
+            "before it spends.\n"
+            "                                 See `git-loopy calibrate -h`.\n"
             "\n"
             "Environment variables:\n"
             "  GIT_LOOPY_MODEL              Copilot model id override "
@@ -494,7 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "continuation")
+_SUBCOMMANDS = ("init", "config", "skills", "continuation", "calibrate")
 
 
 def _add_scope_flags(
@@ -539,14 +544,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
-            "git-loopy subcommands (setup, Config, Skill management, and "
-            "Continuation)."
+            "git-loopy subcommands (setup, Config, Skill management, "
+            "Continuation, and Calibration)."
         ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,continuation}",
+        metavar="{init,config,skills,continuation,calibrate}",
     )
 
     init = sub.add_parser(
@@ -785,6 +790,39 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Seed the recommended task-type routing core into a scope.",
     )
     _add_scope_flags(routing_recommended, suppress_default=True)
+
+    calibrate = sub.add_parser(
+        "calibrate",
+        help="Inspect what a Calibration could measure, and what it would cost.",
+        description=(
+            "Report everything about a Calibration that can be known before it "
+            "spends. Neither mode runs a Trial, spawns a session, creates a "
+            "worktree or consumes an AI Credit."
+        ),
+    )
+    # A mode is required and the two are exclusive. There is no default because
+    # both available defaults are wrong: falling back to a report is a guess
+    # about which question was asked, and falling back to the spending path is a
+    # guess that costs AI Credits. A Calibration is always an explicit act.
+    mode = calibrate.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--status",
+        action="store_true",
+        help=(
+            "Per Task type: the current Routed pair and the tier behind it, the "
+            "replayable Proving tasks that exist, and whether the live roster "
+            "offers an unmeasured pair cheaper than the measured winner."
+        ),
+    )
+    mode.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help=(
+            "The candidate staircase, the Proving set it would measure against, "
+            "the AI-Credit and wall-clock ceilings, and the maximum Trial count."
+        ),
+    )
     return parser
 
 
@@ -917,6 +955,29 @@ def _run_skills(args: argparse.Namespace) -> int:
             env=os.environ,
         )
     raise AssertionError(f"unhandled skills command: {args.skills_command}")
+
+
+def _run_calibrate(args: argparse.Namespace) -> int:
+    """Dispatch one non-spending ``git-loopy calibrate`` mode (#367).
+
+    The handler module (:mod:`git_loopy.calibratecmd`) is imported lazily so the
+    subcommand parser stays SDK-free, exactly as ``config`` and ``skills`` do.
+
+    Unlike those two, a missing repository is an **error** rather than a fallback
+    to the global scope: the **Proving set** *is* this repository's closed
+    history and the **Measured routing** artifact is a tracked file in it, so
+    off-repo there is nothing to report. The refusal itself is the handler's, so
+    both modes phrase it once.
+    """
+    from git_loopy import calibratecmd
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    if args.dry_run:
+        return calibratecmd.run_calibrate_dry_run(repo_root=repo_root, env=os.environ)
+    return calibratecmd.run_calibrate_status(repo_root=repo_root, env=os.environ)
 
 
 def _run_continuation(args: argparse.Namespace) -> int:
@@ -1993,6 +2054,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_skills(sub_args)
         if sub_args.command == "continuation":
             return _run_continuation(sub_args)
+        if sub_args.command == "calibrate":
+            return _run_calibrate(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()

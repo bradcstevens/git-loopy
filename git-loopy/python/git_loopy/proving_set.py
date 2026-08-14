@@ -54,6 +54,7 @@ __all__ = [
     "MinedProvingSet",
     "closed_issues",
     "is_test_path",
+    "labelling_candidates",
     "mine_proving_set",
 ]
 
@@ -269,66 +270,118 @@ def mine_proving_set(
                 )
             )
             continue
-        body_defect = afk_ready_exclusion(issue.body)
-        if body_defect is not None:
-            exclusions.append(
-                ProvingExclusion(
-                    issue=issue.number, reason=_BODY_REASONS[body_defect]
-                )
-            )
-            continue
-        shas = closers.get(issue.number, ())
-        if not shas:
-            exclusions.append(
-                ProvingExclusion(
-                    issue=issue.number, reason=ExclusionReason.NO_CLOSING_COMMIT
-                )
-            )
-            continue
-        if len(shas) > 1:
-            exclusions.append(
-                ProvingExclusion(
-                    issue=issue.number,
-                    reason=ExclusionReason.AMBIGUOUS_CLOSING_COMMITS,
-                    detail=", ".join(shas),
-                )
-            )
-            continue
-        oracle_commit = shas[0]
-        oracle_paths = tuple(
-            path for path in git.changed_paths(oracle_commit) if is_test_path(path)
-        )
-        if not oracle_paths:
-            exclusions.append(
-                ProvingExclusion(
-                    issue=issue.number, reason=ExclusionReason.NO_TEST_CHANGE
-                )
-            )
-            continue
-        base_commit = git.parent_sha(oracle_commit)
-        if base_commit is None:
-            exclusions.append(
-                ProvingExclusion(
-                    issue=issue.number,
-                    reason=ExclusionReason.NO_PARENT_COMMIT,
-                    detail=oracle_commit,
-                )
-            )
-            continue
-        candidates.append(
-            ProvingCandidate(
-                issue=issue.number,
-                task_type=task_type,
-                base_commit=base_commit,
-                oracle_commit=oracle_commit,
-                oracle_paths=oracle_paths,
-                task_text=issue.body,
-            )
-        )
+        resolved = _resolve_replay(issue, task_type, closers, git)
+        if isinstance(resolved, ProvingExclusion):
+            exclusions.append(resolved)
+        else:
+            candidates.append(resolved)
     return MinedProvingSet(
         candidates=tuple(candidates),
         exclusions=tuple(exclusions),
         classifier_pin=classifier_pin,
+    )
+
+
+def labelling_candidates(
+    issues: Iterable[gh_module.Issue],
+    git: GitClient,
+    *,
+    default_branch: str,
+) -> tuple[int, ...]:
+    """The closed issues that qualify on every rule **except** the ``task-type:`` label.
+
+    :attr:`~ExclusionReason.NO_TASK_TYPE` is the first rule
+    :func:`mine_proving_set` applies, so an exclusion carrying it says the label
+    was absent and *nothing at all* about the four rules after it. That makes the
+    exclusion list unusable for the one question an operator growing the corpus
+    actually has — "what would qualify if somebody labelled it?" — because most
+    of that list would qualify for a second, unrelated reason nobody had checked.
+
+    So the same rule chain is run again over the unlabelled issues, with the
+    label rule lifted. Run *again* rather than reordered: the exclusion list must
+    keep reporting the label as the first thing missing, since that is the
+    cheapest defect to fix and reporting a deeper one instead would send an
+    operator after the wrong repair.
+
+    This is a **report and nothing else**. It applies no label, proposes none,
+    and never reaches the **Task-type classifier** — inference belongs to the
+    classifier's own path (#377, #378), not to a surface whose whole contract is
+    that it changes nothing.
+
+    Returns:
+        The issue numbers, lowest first, so two reads of an unchanged repository
+        read the same.
+    """
+    closers = _closing_commits(git, default_branch)
+    return tuple(
+        sorted(
+            issue.number
+            for issue in issues
+            if issue.state.upper() == "CLOSED"
+            and labelled_task_type(issue.labels) is None
+            and isinstance(
+                _resolve_replay(issue, _UNLABELLED, closers, git), ProvingCandidate
+            )
+        )
+    )
+
+
+#: The stand-in **Task type** :func:`labelling_candidates` resolves against. The
+#: chain never reads it — a candidate's task type only ever groups it afterwards
+#: — and it is deliberately not a real key, so a candidate built here can never
+#: be mistaken for one that had a label.
+_UNLABELLED = ""
+
+
+def _resolve_replay(
+    issue: gh_module.Issue,
+    task_type: str,
+    closers: Mapping[int, Sequence[str]],
+    git: GitClient,
+) -> ProvingCandidate | ProvingExclusion:
+    """Apply every replayability rule after the label one, in order.
+
+    The single statement of what makes a closed issue replayable, so mining and
+    :func:`labelling_candidates` cannot come to different answers about the same
+    issue. Each rule is *necessary* and none is sufficient (see the module note):
+    admission (#380) is the only thing that can establish what these approximate.
+    """
+    body_defect = afk_ready_exclusion(issue.body)
+    if body_defect is not None:
+        return ProvingExclusion(issue=issue.number, reason=_BODY_REASONS[body_defect])
+    shas = closers.get(issue.number, ())
+    if not shas:
+        return ProvingExclusion(
+            issue=issue.number, reason=ExclusionReason.NO_CLOSING_COMMIT
+        )
+    if len(shas) > 1:
+        return ProvingExclusion(
+            issue=issue.number,
+            reason=ExclusionReason.AMBIGUOUS_CLOSING_COMMITS,
+            detail=", ".join(shas),
+        )
+    oracle_commit = shas[0]
+    oracle_paths = tuple(
+        path for path in git.changed_paths(oracle_commit) if is_test_path(path)
+    )
+    if not oracle_paths:
+        return ProvingExclusion(
+            issue=issue.number, reason=ExclusionReason.NO_TEST_CHANGE
+        )
+    base_commit = git.parent_sha(oracle_commit)
+    if base_commit is None:
+        return ProvingExclusion(
+            issue=issue.number,
+            reason=ExclusionReason.NO_PARENT_COMMIT,
+            detail=oracle_commit,
+        )
+    return ProvingCandidate(
+        issue=issue.number,
+        task_type=task_type,
+        base_commit=base_commit,
+        oracle_commit=oracle_commit,
+        oracle_paths=oracle_paths,
+        task_text=issue.body,
     )
 
 

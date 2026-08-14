@@ -42,6 +42,7 @@ from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
 
 __all__ = [
+    "DEFAULT_SEARCH_BUDGET",
     "PROMOTION_TRIALS",
     "TrialResult",
     "TrialRunner",
@@ -49,7 +50,9 @@ __all__ = [
     "WalkedRung",
     "SearchStop",
     "SearchResult",
+    "maximum_trials",
     "search_price_staircase",
+    "tasks_for_every_rung",
 ]
 
 #: **Five Proving tasks, unanimously** (ADR-0027). Not a rate estimate and never
@@ -118,6 +121,44 @@ class SearchBudget:
 
     credit_ceiling: Decimal
     wall_clock_ceiling_seconds: float
+
+
+#: The ceilings a **Calibration** takes when nothing else says otherwise, **per
+#: Task type** — one search, one staircase, one budget.
+#:
+#: These are **stated bounds, not measurements**, and this module will not
+#: pretend otherwise: no Calibration has run here yet, so there is no observed
+#: cost per **Trial** to derive them from. They are chosen from ADR-0027's own
+#: arithmetic — at most eight rungs times :data:`PROMOTION_TRIALS` is forty
+#: Trials for one Task type, each an agent session followed by a full five-loop
+#: gate — and set where an unattended search stays inside a working session
+#: rather than running overnight unsupervised.
+#:
+#: Hitting either is a **first-class outcome**, not a failure: the search keeps
+#: the incumbent, records ``incomplete`` with the rung it reached, and names
+#: which ceiling stopped it. That is why a conservative default is the safe one
+#: to ship — it costs a re-run with a raised ceiling, where a generous one costs
+#: credits nobody authorised.
+#:
+#: ``git-loopy calibrate --dry-run`` prints both, before anything is spent,
+#: precisely because they are assertions an operator should get to overrule.
+DEFAULT_SEARCH_BUDGET = SearchBudget(
+    credit_ceiling=Decimal("100"),
+    wall_clock_ceiling_seconds=4 * 60 * 60,
+)
+
+
+def maximum_trials(*, rungs_available: int) -> int:
+    """The most **Trials** a search over ``rungs_available`` rungs can run.
+
+    The worst case and never an estimate: a search that promotes nothing walks
+    every rung, and a rung that goes five of five runs
+    :data:`PROMOTION_TRIALS` of them. A rung abandoned on an early failure runs
+    fewer, so the real count is bounded by this and unknowable before the walk —
+    which is the whole reason ``--dry-run`` reports a maximum rather than a
+    forecast.
+    """
+    return rungs_available * PROMOTION_TRIALS
 
 
 @dataclass(frozen=True)
@@ -220,7 +261,7 @@ def search_price_staircase(
         The :class:`SearchResult`, which carries a winner only when a rung went
         five of five.
     """
-    tasks = _tasks_for_every_rung(proving_set)
+    tasks = tasks_for_every_rung(proving_set)
     walked: list[_RungTally] = []
     available = len(candidates)
     in_progress: _RungTally | None = None
@@ -315,8 +356,13 @@ class _RungTally:
         )
 
 
-def _tasks_for_every_rung(proving_set: Sequence[ProvingTask]) -> tuple[ProvingTask, ...]:
+def tasks_for_every_rung(proving_set: Sequence[ProvingTask]) -> tuple[ProvingTask, ...]:
     """The :data:`PROMOTION_TRIALS` tasks *every* rung of this search measures.
+
+    Public because ``git-loopy calibrate --dry-run`` (#367) promises an operator
+    the **Proving tasks** a search *would* measure against, and a second
+    selection written for the report could name different work than the search
+    then measures — which is the one thing a dry run must not do.
 
     Drawn once, before the walk, and deterministically — highest issue number
     first. Determinism is what makes two runs of the same search measure the same

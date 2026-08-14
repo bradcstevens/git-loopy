@@ -25,6 +25,7 @@ from git_loopy.proving_set import (
     ProvingExclusion,
     closed_issues,
     is_test_path,
+    labelling_candidates,
     mine_proving_set,
 )
 from tests.fakes import FakeGitHubClient
@@ -624,3 +625,115 @@ def test_the_body_reasons_are_the_pool_exclusion_vocabulary() -> None:
             ExclusionReason.MISSING_BOTH_SECTIONS,
         )
     } == set(EXCLUSION_REASONS)
+
+
+# --------------------------------------------------------------------------- #
+# Labelling candidates — what `calibrate --status` asks the operator to grow    #
+# --------------------------------------------------------------------------- #
+
+
+def test_an_issue_that_only_lacks_a_label_is_offered_as_a_labelling_candidate(
+    tmp_path: Path,
+) -> None:
+    """The corpus-growth question: what would qualify if somebody labelled it?
+
+    ``NO_TASK_TYPE`` is the *first* rule mining applies, so an exclusion carrying
+    it says only that the label was absent — nothing about whether the issue
+    would have survived the four rules after it. This is the pass that answers
+    the rest of the question.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(
+        tmp_path,
+        "fix(x): the fix\n\nCloses #7",
+        {"src.py": "value = 2\n", "tests/test_x.py": "assert True\n"},
+    )
+
+    offered = labelling_candidates(
+        [_issue(7)], SubprocessGitClient(tmp_path), default_branch="main"
+    )
+
+    assert offered == (7,)
+
+
+def test_an_unlabelled_issue_that_fails_a_later_rule_is_not_offered(
+    tmp_path: Path,
+) -> None:
+    """Labelling it would change nothing, so offering it would waste the operator.
+
+    This issue's fix touched no test path, so it has no oracle and can never be
+    replayed. Reporting it as *"needs only a label"* would send someone to apply
+    one and get the same count back.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(tmp_path, "fix(x): the fix\n\nCloses #7", {"src.py": "value = 2\n"})
+
+    offered = labelling_candidates(
+        [_issue(7)], SubprocessGitClient(tmp_path), default_branch="main"
+    )
+
+    assert offered == ()
+
+
+def test_an_issue_that_already_carries_a_label_is_not_offered(
+    tmp_path: Path,
+) -> None:
+    """It is already in the corpus; there is nothing for anyone to do to it."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(
+        tmp_path,
+        "fix(x): the fix\n\nCloses #7",
+        {"tests/test_x.py": "assert True\n"},
+    )
+
+    offered = labelling_candidates(
+        [_issue(7, labels=["task-type:bugfix"])],
+        SubprocessGitClient(tmp_path),
+        default_branch="main",
+    )
+
+    assert offered == ()
+
+
+def test_labelling_candidates_are_reported_lowest_number_first(
+    tmp_path: Path,
+) -> None:
+    """A stable order, so two reads of an unchanged repository read the same."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(
+        tmp_path,
+        "fix(a): one\n\nCloses #9",
+        {"tests/test_a.py": "assert True\n"},
+    )
+    _commit(
+        tmp_path,
+        "fix(b): two\n\nCloses #4",
+        {"tests/test_b.py": "assert True\n"},
+    )
+
+    offered = labelling_candidates(
+        [_issue(9), _issue(4)], SubprocessGitClient(tmp_path), default_branch="main"
+    )
+
+    assert offered == (4, 9)
+
+
+def test_an_open_issue_is_never_a_labelling_candidate(tmp_path: Path) -> None:
+    """An open issue was never a candidate, exactly as mining reads it."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(
+        tmp_path,
+        "fix(x): the fix\n\nCloses #7",
+        {"tests/test_x.py": "assert True\n"},
+    )
+
+    offered = labelling_candidates(
+        [_issue(7, state="OPEN")], SubprocessGitClient(tmp_path), default_branch="main"
+    )
+
+    assert offered == ()

@@ -24,12 +24,14 @@ import pytest
 
 from git_loopy import calibration_search
 from git_loopy.calibration_search import (
+    DEFAULT_SEARCH_BUDGET,
     PROMOTION_TRIALS,
     SearchBudget,
     SearchResult,
     SearchStop,
     TrialResult,
     TrialRunner,
+    maximum_trials,
     search_price_staircase,
 )
 from git_loopy.measured_routing import ProvingTask
@@ -626,3 +628,62 @@ def test_the_last_rung_of_the_staircase_reports_an_exhausted_walk_not_a_ceiling(
     assert result.stop is SearchStop.STAIRCASE_EXHAUSTED
     assert result.stopped_at_rung == result.rungs_available == 2
     assert result.credits == Decimal("10.0")
+
+
+# --------------------------------------------------------------------------- #
+# The declared ceilings and the plan arithmetic (#367)                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_default_budget_bounds_a_search_on_both_axes() -> None:
+    """Both ceilings are real bounds, not placeholders a search would ignore.
+
+    A zero ceiling refuses before the first Trial and an infinite one is no
+    ceiling at all; either would make ``calibrate --dry-run`` print a number
+    that misdescribes what the search would actually do.
+    """
+    assert DEFAULT_SEARCH_BUDGET.credit_ceiling > 0
+    assert DEFAULT_SEARCH_BUDGET.wall_clock_ceiling_seconds > 0
+    assert DEFAULT_SEARCH_BUDGET.credit_ceiling < Decimal("Infinity")
+    assert DEFAULT_SEARCH_BUDGET.wall_clock_ceiling_seconds != float("inf")
+
+
+def test_the_default_credit_ceiling_is_decimal_money() -> None:
+    """**AI Credits** are Decimal everywhere (ADR-0026); a float ceiling would drift."""
+    assert isinstance(DEFAULT_SEARCH_BUDGET.credit_ceiling, Decimal)
+
+
+def test_the_default_budget_is_the_budget_the_search_actually_takes() -> None:
+    """Declared where it is *used*, so the printed plan and the walk cannot differ.
+
+    ``calibrate --dry-run`` promises an operator two numbers before they spend.
+    A default that the search would not accept is a promise about a different
+    search.
+    """
+    cheap = _candidate("synth-cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("synth-cheap-1", "medium"): [_passed()] * 5})
+
+    result = search_price_staircase(
+        candidates=[cheap],
+        proving_set=_proving_set(),
+        budget=DEFAULT_SEARCH_BUDGET,
+        runner=runner,
+    )
+
+    assert result.stop is SearchStop.WINNER
+
+
+def test_the_maximum_trial_count_is_every_rung_walked_unanimously() -> None:
+    """The number ``--dry-run`` prints: the worst case, never an estimate.
+
+    A search that finds no winner walks every rung, and a rung that goes five of
+    five runs five Trials — so the ceiling on Trials is the staircase's height
+    times :data:`PROMOTION_TRIALS`. Anything smaller would be a guess about
+    where the walk stops, which is the thing the search exists to discover.
+    """
+    assert maximum_trials(rungs_available=8) == 8 * PROMOTION_TRIALS
+
+
+def test_a_staircase_with_no_rungs_plans_no_trials() -> None:
+    """A refused staircase costs nothing, and the plan says so as a number."""
+    assert maximum_trials(rungs_available=0) == 0

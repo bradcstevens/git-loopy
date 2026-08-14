@@ -516,6 +516,65 @@ run.
 
 ---
 
+## Inspecting a Calibration (`git-loopy calibrate`)
+
+A **Calibration** measures which model + reasoning-effort pair a **Task type**
+should route to, by replaying **Proving tasks** — issues this repository has
+already closed — against a price staircase. It spends **AI Credits** to do it.
+
+`calibrate` has two modes that spend nothing, and they are the whole of this
+subcommand today. Neither one runs a **Trial**, spawns a session, creates a
+worktree, writes a `task-type:` label, invokes the **Task-type classifier**, or
+consumes a credit. The spending path is deliberately a separate command.
+
+```bash
+# What does this repository's corpus support, and what is routing today?
+git-loopy calibrate --status
+
+# What would a Calibration measure, and what would it cost?
+git-loopy calibrate --dry-run
+```
+
+Both modes are **repository-scoped** and refuse outside a git repository — the
+**Proving set** *is* this repository's closed history and the **Measured
+routing** artifact is a tracked file in it, so off-repo there is nothing to
+report. A mode is required: there is no default because both candidates are
+wrong, one guessing which question you asked and the other guessing that you
+meant to spend.
+
+- **`--status`** answers *what does my corpus support?* Per Task type it prints
+  the current **Routed pair** and the tier that produced it — read through the
+  same precedence chain `git-loopy config get` walks, not a second one that
+  could disagree — the count of replayable **Proving tasks**, and, for a
+  measured pair, whether the live roster now offers a **cheaper unmeasured
+  pair** than the measured winner. That last line is the only fact here that can
+  change an answer: a staircase is walked cheapest-first, so every rung *below*
+  the winner was already measured and rejected; a cheaper pair that is not among
+  the walked rungs is one the measurement never saw, and the artifact is stale
+  rather than wrong.
+- **`--dry-run`** answers *what would this cost?* It prints the candidate
+  staircase, the specific Proving tasks each rung would replay, the per-Task-type
+  **AI-Credit** and wall-clock ceilings, and the maximum **Trial** count those
+  ceilings and that staircase imply.
+
+Three properties are worth knowing:
+
+- **A thin corpus is refused, not measured.** A Task type with fewer than five
+  replayable Proving tasks cannot support a Calibration, and `--status` says so
+  naming exactly what is missing rather than reporting a number and leaving you
+  to compare it against a threshold you would have to know. Measuring against
+  three tasks would produce an artifact indistinguishable from one measured
+  against fifty.
+- **Every count says what it counts.** A **mined candidate** is a closed issue
+  that passes the replay rules; an **admitted task** is one a human accepted into
+  the Proving set. These are different numbers and the reports never print one
+  where the other belongs.
+- **Costs are in AI Credits, never dollars.** A credit is the unit the platform
+  bills in and the unit the run log already records; converting to currency would
+  invent a rate that changes without notice.
+
+---
+
 ## Prompt resolution
 
 The prompt loaded each iteration resolves like the model/effort config —

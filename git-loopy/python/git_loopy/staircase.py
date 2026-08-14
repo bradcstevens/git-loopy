@@ -53,6 +53,7 @@ __all__ = [
     "StaircaseRefusal",
     "PriceStaircase",
     "build_price_staircase",
+    "render_pair",
     "resolve_price_staircase",
 ]
 
@@ -165,6 +166,16 @@ class PriceStaircase:
             f"{list(self.unpriced_models)}, so those pairs cannot be placed; a "
             "partial ordering would put an unpriced pair at an arbitrary rung"
         )
+
+
+def render_pair(model: str, effort: str | None) -> str:
+    """A candidate pair as an operator reads it, in one spelling.
+
+    The *empty effort* — what a reasoning-incapable model's rung carries — is
+    named rather than left blank, because ``model @`` with nothing after it reads
+    as a truncation rather than as the fact it is.
+    """
+    return f"{model} @ {effort}" if effort else f"{model} (no reasoning effort)"
 
 
 def build_price_staircase(
