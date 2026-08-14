@@ -557,6 +557,38 @@ meant to spend.
   **AI-Credit** and wall-clock ceilings, and the maximum **Trial** count those
   ceilings and that staircase imply.
 
+`--status` also reports whether the **Task-type classifier**'s pinned pair has
+moved since the artifact was written. The classifier runs on the cheapest rung of
+the live roster, so it moves when the roster does — and a **Proving set**
+stratified by one pin but compared against work labelled by another is comparing
+across a taxonomy that shifted underneath it, so a pin change recommends a
+Proving set refresh.
+
+### A Run tells you when re-calibrating could change an answer
+
+At **Run** preflight — every Run, before any work starts — git-loopy holds the
+live roster against the artifact and warns on stderr in exactly three cases: a
+**cheaper unmeasured pair** below a measured winner, a measured winner the roster
+no longer offers, and a moved classifier pin. Anything else is silent, and that
+silence is the point: a warning that fires on routine vendor churn trains you to
+ignore it, and under *cheapest that clears the bar* a **dearer** new model is
+structurally incapable of winning while the incumbent still passes. A vendor
+shipping a flagship model on a Tuesday therefore produces nothing.
+
+Four things it deliberately does not do:
+
+- **It never starts a Calibration.** A vendor's release schedule must never
+  become a trigger for your spend. The notification names
+  `git-loopy calibrate --status` and `git-loopy calibrate`; you decide.
+- **It never stops a Run.** An unreachable roster, an absent **Rate card**, an
+  absent artifact and a malformed one all end in silence or one warning.
+  Observability is not a precondition for doing work.
+- **It costs no extra round trip.** The comparison reads the same live listing
+  the Rate card already resolved, and a repository with no artifact never touches
+  the roster at all.
+- **It says nothing in serial mode.** Routing is scoped to Parallel mode, so at
+  `--parallel 1` a re-calibration would change nothing you could observe.
+
 Three properties are worth knowing:
 
 - **A thin corpus is refused, not measured.** A Task type with fewer than five

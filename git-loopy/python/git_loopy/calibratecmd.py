@@ -56,7 +56,7 @@ from git_loopy.calibration_search import (
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.measured_routing import MeasuredRouting, MeasuredStatus, ProvingTask
 from git_loopy.proving_set import MinedProvingSet
-from git_loopy.roster_drift import compare_roster_to_measured
+from git_loopy.roster_drift import compare_classifier_pin, compare_roster_to_measured
 from git_loopy.staircase import PriceStaircase, render_pair
 from git_loopy.task_type_classifier import ClassifierPair, resolve_classifier_pair
 
@@ -250,6 +250,12 @@ def _report_classifier(found: CalibrationSurvey, out: Callable[[str], None]) -> 
         f"cheapest rung of the live roster. A change here is a Proving set "
         f"refresh trigger."
     )
+    # Through the same comparison Run preflight warns on (#370), so the report
+    # an operator is sent to cannot say the taxonomy held while the Run that
+    # sent them there said it moved.
+    pin = compare_classifier_pin(found.artifact.provenance, found.classifier)
+    if pin.diverged:
+        out(f"  Pin: {pin.reason()}.")
 
 
 def _report_corpus(

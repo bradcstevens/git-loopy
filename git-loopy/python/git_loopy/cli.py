@@ -112,6 +112,7 @@ from git_loopy.skill_policy import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
     from git_loopy.labels import LabelBootstrapClient
+    from git_loopy.rate_card import RateCard
 
 __all__ = [
     "main",
@@ -2226,6 +2227,47 @@ def _make_model_listing() -> LiveModelListing:
     return LiveModelListing()
 
 
+async def _notify_roster_drift(
+    config: RunConfig, listing: LiveModelListing, rate_card: "RateCard | None"
+) -> None:
+    """Tell the operator, at **Run** preflight, if re-calibrating could change an answer.
+
+    Asked here rather than inside :func:`git_loopy.loop.run` because this is
+    where the Run's one live model listing is read: the comparison is the live
+    roster against the roster stamped on the **Measured routing** artifact it
+    justifies (ADR-0028), and it must cost no second round trip. Staying outside
+    the loop is also what makes *"nothing here starts a Calibration"* structural
+    rather than a promise — this path never reaches a session, a worktree or a
+    credit, and :mod:`git_loopy.roster_preflight`'s import guard keeps it so.
+
+    Every failure is swallowed. The notification is an observability surface, and
+    observability is never a precondition for doing work — the same terms the
+    Rate card's own resolution already sets for this listing.
+    """
+    from git_loopy import roster_preflight
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        # Off-repo the artifact — a tracked file — cannot exist, so there is
+        # nothing to compare. Passed through as ``None`` rather than skipped, so
+        # the decision stays in one place.
+        repo_root = None
+    try:
+        await roster_preflight.notify_roster_drift(
+            repo_root=repo_root,
+            parallel=config.parallel,
+            listing=listing,
+            rate_card=rate_card,
+            warn=_warn,
+        )
+    except Exception as exc:
+        _warn(
+            "the measured-routing roster comparison could not run "
+            f"({type(exc).__name__}: {exc}); the Run is unaffected."
+        )
+
+
 async def _drive_line_printer(config: RunConfig) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
@@ -2241,6 +2283,7 @@ async def _drive_line_printer(config: RunConfig) -> int:
 
     listing = _make_model_listing()
     rate_card = await resolve_rate_card(listing, warn=_warn)
+    await _notify_roster_drift(config, listing, rate_card)
     return await _loop.run(config, rate_card=rate_card)
 
 
@@ -2281,6 +2324,7 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
         )
 
     rate_card = await resolve_rate_card(listing, warn=_warn)
+    await _notify_roster_drift(config, listing, rate_card)
 
     # The Dashboard's own module is the earliest thing that can fail on the way
     # up (#326). The [tui] gate probed Textual with ``find_spec``, which does

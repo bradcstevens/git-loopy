@@ -614,6 +614,11 @@ def test_the_module_imports_nothing_that_could_spend_label_or_classify() -> None
             assert node.level == 0, "calibratecmd must use absolute imports only"
             assert node.module is not None
             seen.add(node.module)
+            # `from git_loopy import loop` names the module in the *alias*, not
+            # in `node.module` — which is the spelling this module already uses
+            # for its lazy imports, so recording only the latter would let the
+            # one form it actually reaches for slip past the guard.
+            seen.update(f"{node.module}.{alias.name}" for alias in node.names)
     forbidden = {
         "copilot",
         "git_loopy.copilot_client",
@@ -709,3 +714,68 @@ def test_the_subcommand_parser_stays_free_of_the_sdk() -> None:
     source = Path(cli.__file__).read_text(encoding="utf-8")
     _before, _sep, after = source.partition("def _run_calibrate(")
     assert "from git_loopy import calibratecmd" in after
+
+
+# --------------------------------------------------------------------------- #
+# The pinned classifier pair, now that the artifact stamps it (#370)            #
+# --------------------------------------------------------------------------- #
+
+
+def _artifact_pinned_to(tmp_path: Path, model: str | None, effort: str | None) -> None:
+    """An artifact whose provenance stamps (or does not stamp) a classifier pin."""
+    write_measured_routing(
+        tmp_path,
+        MeasuredRouting(
+            entries={},
+            provenance=Provenance(
+                cli_version="9.9.9",
+                calibrated_at="2026-01-02T03:04:05Z",
+                candidate_count=6,
+                gate_loops=("python",),
+                classifier_model=model,
+                classifier_effort=effort,
+            ),
+        ),
+    )
+
+
+def test_status_reports_a_moved_classifier_pin_as_a_refresh_recommendation(
+    tmp_path: Path,
+) -> None:
+    """``--status`` already called the pin a refresh trigger; now it can say it fired.
+
+    The **Run** warns about the same fact through the same comparison
+    (:func:`git_loopy.roster_drift.compare_classifier_pin`), so the two surfaces
+    cannot disagree about whether the taxonomy has shifted underneath the corpus.
+    """
+    github = _five_bugfixes(tmp_path)
+    _artifact_pinned_to(tmp_path, "synth-retired-1", "low")
+
+    _code, out, _err = _status(tmp_path, github)
+
+    assert "Proving set refresh is recommended" in out.text
+    assert "synth-retired-1" in out.text
+
+
+def test_status_stays_silent_when_the_classifier_pin_has_not_moved(
+    tmp_path: Path,
+) -> None:
+    """Most reports must say nothing at all, or the recommendation stops meaning anything."""
+    github = _five_bugfixes(tmp_path)
+    _artifact_pinned_to(tmp_path, "synth-cheap-1", "low")
+
+    _code, out, _err = _status(tmp_path, github)
+
+    assert "refresh is recommended" not in out.text
+
+
+def test_status_stays_silent_on_an_artifact_that_stamped_no_pin(
+    tmp_path: Path,
+) -> None:
+    """Unanswerable is not drifted: a schema-1 artifact predates the stamp."""
+    github = _five_bugfixes(tmp_path)
+    _artifact_pinned_to(tmp_path, None, None)
+
+    _code, out, _err = _status(tmp_path, github)
+
+    assert "refresh is recommended" not in out.text
