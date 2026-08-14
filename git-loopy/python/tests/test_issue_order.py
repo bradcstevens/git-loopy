@@ -19,6 +19,7 @@ from git_loopy.issue_order import (
     issue_order_key,
     order_issues,
     priority_rank,
+    promote_pinned,
 )
 
 
@@ -381,3 +382,99 @@ def test_ordering_accepts_a_one_shot_iterable() -> None:
     result = order_issues(issues)
 
     assert _numbers(result.order) == [30, 10]
+
+
+# --------------------------------------------------------------------------- #
+# The invocation-scoped pin (#396)                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_pin_promotes_its_issue_to_the_head_of_the_order() -> None:
+    """`--issue N` skips the queue: N is the head however old the rest are."""
+    ordered = order_issues(
+        (
+            _issue(10, "2024-01-01T00:00:00Z"),
+            _issue(20, "2025-01-01T00:00:00Z"),
+            _issue(30, "2026-01-01T00:00:00Z"),
+        )
+    ).order
+
+    assert _numbers(promote_pinned(ordered, 30)) == [30, 10, 20]
+
+
+def test_a_pin_outranks_a_priority_issue() -> None:
+    """The pin is *above* the order, so it beats the top of it.
+
+    Priority is a standing human assertion about the backlog; a pin is an
+    operator naming one issue for one invocation. The narrower, more recent
+    instruction wins, or `--issue N` would silently not work on a repository
+    that uses Priority at all.
+    """
+    ordered = order_issues(
+        (
+            _issue(10, "2024-01-01T00:00:00Z", LABEL_PRIORITY),
+            _issue(20, "2025-01-01T00:00:00Z"),
+        )
+    ).order
+
+    assert _numbers(promote_pinned(ordered, 20)) == [20, 10]
+
+
+def test_a_pin_preserves_the_relative_order_of_everything_else() -> None:
+    """Promotion is a stable move, not a re-sort.
+
+    The pin bypasses order *and nothing else* (ADR-0032): once the named issue
+    is out of the way, what follows is exactly the order §3.2 produced. A
+    promotion that reshuffled the tail would be a second ordering decision.
+    """
+    ordered = order_issues(
+        (
+            _issue(10, "2024-01-01T00:00:00Z"),
+            _issue(20, "2025-01-01T00:00:00Z", LABEL_PRIORITY),
+            _issue(30, "2026-01-01T00:00:00Z"),
+            _issue(40, None),
+        )
+    ).order
+    assert _numbers(ordered) == [20, 10, 30, 40]
+
+    assert _numbers(promote_pinned(ordered, 30)) == [30, 20, 10, 40]
+
+
+def test_no_pin_leaves_the_order_exactly_as_given() -> None:
+    """The unpinned invocation pays nothing for the flag existing."""
+    ordered = order_issues(
+        (_issue(10, "2024-01-01T00:00:00Z"), _issue(20, "2025-01-01T00:00:00Z"))
+    ).order
+
+    assert promote_pinned(ordered, None) == ordered
+
+
+def test_a_pin_naming_an_issue_outside_the_order_changes_nothing() -> None:
+    """Promotion cannot conjure a member.
+
+    Eligibility is settled before this seam sees anything, so a pin whose issue
+    is not in the order is not a selection this function can make. Refusing the
+    invocation is `git_loopy.issue_pin`'s job, at preflight, where the tracker
+    can be asked *why* — here it is simply a no-op rather than an exception,
+    because an ordering seam that could raise is one a Run could die inside.
+    """
+    ordered = order_issues(
+        (_issue(10, "2024-01-01T00:00:00Z"), _issue(20, "2025-01-01T00:00:00Z"))
+    ).order
+
+    assert promote_pinned(ordered, 99) == ordered
+
+
+def test_promoting_twice_is_the_same_as_promoting_once() -> None:
+    """Idempotent, because a pinned head is already at the head."""
+    ordered = order_issues(
+        (
+            _issue(10, "2024-01-01T00:00:00Z"),
+            _issue(20, "2025-01-01T00:00:00Z"),
+            _issue(30, "2026-01-01T00:00:00Z"),
+        )
+    ).order
+
+    once = promote_pinned(ordered, 30)
+
+    assert promote_pinned(once, 30) == once

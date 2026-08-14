@@ -485,6 +485,15 @@ class RunConfig:
             :mod:`git_loopy.cli` resolves it from ``--parallel N`` /
             ``GIT_LOOPY_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
             mode is requested without an explicit cap). Must be ≥ 1.
+        issue_pin: The invocation-scoped **Pin** (#396, ADR-0032): the single
+            issue ``--issue N`` named, or ``None``. It bypasses the §3.2
+            selection **order** and nothing else — an issue pinned here still
+            has to be eligible, and one that is not fails the invocation at
+            preflight rather than falling back to the head of the order.
+            Deliberately not expressible as a label or an env var: both are
+            globally scoped, and would point every concurrent Run at the same
+            issue. Exactly one issue may be pinned; :mod:`git_loopy.cli`
+            rejects a second ``--issue`` as a usage error.
         send_timeout_seconds: SDK ``send_and_wait`` timeout in seconds. A
             persisted knob (issue #51) resolved through the precedence chain
             (``GIT_LOOPY_SEND_TIMEOUT_SECONDS`` env > project Config > global
@@ -546,6 +555,7 @@ class RunConfig:
     continuation: ContinuationInputs = field(default_factory=ContinuationInputs)
     classifier_model: str | None = None
     classifier_effort: str | None = None
+    issue_pin: int | None = None
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):
@@ -569,6 +579,10 @@ class RunConfig:
         if self.parallel < 1:
             raise ValueError(
                 f"parallel must be ≥ 1 (1 = serial), got {self.parallel}"
+            )
+        if self.issue_pin is not None and self.issue_pin < 1:
+            raise ValueError(
+                f"issue_pin must be a positive issue number, got {self.issue_pin}"
             )
         if self.send_timeout_seconds <= 0:
             raise ValueError(

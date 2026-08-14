@@ -57,7 +57,7 @@ __all__ = [
     "PICKUP_REASON_PRIORITY",
     "PICKUP_REASONS",
     "Admit",
-    "reason_for_labels",
+    "reason_for",
     "SerialSkip",
     "SerialPickup",
     "pick_serial",
@@ -72,13 +72,12 @@ PICKUP_REASON_ORDER: Final[str] = "order"
 #: "did my Priority label do anything?".
 PICKUP_REASON_PRIORITY: Final[str] = "priority"
 
-#: This candidate was taken because an operator named it for this invocation.
-#: Declared here and nowhere else, but **not produced here**: #396 owns
-#: ``--issue N`` and is its only future emitter. It is declared ahead of its
-#: producer because the vocabulary is what the Event schema and the Dashboard
-#: reader are pinned against, and a reason those two learn only when it first
-#: appears in a stream is a reason that renders as an unknown string the first
-#: time an operator uses the flag.
+#: This candidate was taken because an operator named it for this invocation
+#: with ``--issue N`` (#396). Deliberately *not* a label: a label is globally
+#: scoped and would point every concurrent Run at the same issue, which is the
+#: opposite of what pinning is for (ADR-0032). It outranks
+#: :data:`PICKUP_REASON_PRIORITY` because a pinned issue reached the head
+#: whatever its labels said.
 PICKUP_REASON_PIN: Final[str] = "pin"
 
 #: Every reason a **Pickup** may give, in precedence order. Closed, and the
@@ -154,20 +153,37 @@ class SerialPickup:
         return self.item is not None
 
 
-def reason_for_labels(labels: Sequence[str]) -> str:
-    """Why a candidate carrying ``labels`` was taken.
+def reason_for(
+    ref: int | str, labels: Sequence[str], *, pin: int | None = None
+) -> str:
+    """Why the candidate ``ref`` carrying ``labels`` was taken.
 
     The one place the question is answered, for every kind of **Pickup**:
     ADR-0032 gave a serial **Iteration** and a **Lane** the same instant, so a
     second implementation would let a Parallel Run and a serial Run disagree
     about whether a human's **Priority** label did anything.
 
-    Read off the *bound* candidate's own labels rather than the Pool's, so a
-    skipped Priority issue never lends its reason to the successor that
-    replaced it. Matching is exact, for :func:`git_loopy.issue_order.
-    priority_rank`'s reason: a prefixed neighbour like ``priority:high`` is a
-    vocabulary nobody decided.
+    Read off the *bound* candidate's own labels and ref rather than the Pool's,
+    so a skipped Priority issue never lends its reason to the successor that
+    replaced it — and so a **Pin** that was itself skipped does not either.
+    Label matching is exact, for :func:`git_loopy.issue_order.priority_rank`'s
+    reason: a prefixed neighbour like ``priority:high`` is a vocabulary nobody
+    decided.
+
+    **The pin outranks Priority**, mirroring
+    :func:`git_loopy.issue_order.promote_pinned`. A pinned issue reached the
+    head because an operator named it, whatever its labels said; crediting the
+    label would make "did my Priority label do anything?" unanswerable on
+    exactly the Runs where someone overrode it.
+
+    Args:
+        ref: The bound candidate's ref. A ``str`` ref — the local-markdown
+            backend's — can never equal a pin, which is a GitHub issue number.
+        labels: That candidate's labels.
+        pin: This invocation's ``--issue N``, or ``None``.
     """
+    if pin is not None and ref == pin:
+        return PICKUP_REASON_PIN
     if LABEL_PRIORITY in labels:
         return PICKUP_REASON_PRIORITY
     return PICKUP_REASON_ORDER
@@ -177,16 +193,23 @@ def pick_serial(
     pool: Iterable[AfkReadyItem],
     *,
     admit: Admit = _admit_everything,
+    pin: int | None = None,
 ) -> SerialPickup:
     """Bind the first candidate in ``pool`` that ``admit`` accepts.
 
     Args:
         pool: The **Pool**, already in Wrapper contract §3.2 **selection
-            order**. This function does not sort it — see the module docstring.
+            order** — and already carrying any **Pin** at its head, for the
+            same reason: sequence is decided at the read. This function does
+            not sort and does not promote; see the module docstring.
         admit: Asked once per candidate, front to back, until one is accepted.
             Returns the reason a candidate may not be bound, or ``None`` to
             accept it. The default accepts everything, so a caller with no
             admission policy simply gets the head of the order.
+        pin: This invocation's ``--issue N`` (#396), used only to *name* the
+            reason. It is deliberately not used to select: a pin that selected
+            here as well as at the read would be a second promotion, and the
+            two could disagree about a candidate the read had already dropped.
 
     Returns:
         The binding, its position and reason, and every candidate passed over.
@@ -199,7 +222,7 @@ def pick_serial(
             return SerialPickup(
                 item=item,
                 position=position,
-                reason=reason_for_labels(item.labels),
+                reason=reason_for(item.ref, item.labels, pin=pin),
                 skipped=tuple(skipped),
                 considered=tuple(considered),
             )

@@ -55,7 +55,9 @@ from git_loopy.issue_order import (
     OrderableIssue,
     UndatedIssue,
     order_issues,
+    promote_pinned,
 )
+from git_loopy.issue_pin import PinnedIssue, refuse_pin
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -206,6 +208,8 @@ def is_pr_afk_ready(pr: gh_module.PullRequest) -> bool:
 
 def in_selection_order(
     issues: Sequence[gh_module.Issue],
+    *,
+    pin: int | None = None,
 ) -> tuple[tuple[gh_module.Issue, ...], tuple[UndatedIssue, ...]]:
     """Put eligible issues into the Wrapper contract §3.2 order.
 
@@ -233,6 +237,12 @@ def in_selection_order(
 
     Args:
         issues: The eligible issues, in whatever order the source listed them.
+        pin: The invocation's pinned issue number (#396), or ``None``. Applied
+            *after* the order as a stable promotion — see
+            :func:`git_loopy.issue_order.promote_pinned` for why the pin is not
+            a fourth component of the sort key. A pin naming an issue that is
+            not here changes nothing; refusing that invocation is
+            :meth:`GitHubIssueSource.preflight`'s job, and it has already run.
 
     Returns:
         The same issues in §3.2 order, and every issue whose ``created_at``
@@ -249,7 +259,9 @@ def in_selection_order(
         for issue in issues
     )
     return (
-        tuple(by_number[entry.number] for entry in ordered.order),
+        promote_pinned(
+            tuple(by_number[entry.number] for entry in ordered.order), pin
+        ),
         ordered.undated,
     )
 
@@ -596,6 +608,8 @@ class GitHubIssueSource:
         *,
         gh: gh_module.GitHubClient,
         include_prs: bool = False,
+        pin: int | None = None,
+        pin_requires_parallel_safe: bool = False,
     ) -> None:
         """Construct a backend that logs diagnostics via ``diag``.
 
@@ -612,10 +626,23 @@ class GitHubIssueSource:
                 an agent brief join the AFK-ready pool and get head-SHA
                 progress detection. Defaults to ``False`` so the default
                 GitHub-issues behaviour is byte-for-byte unchanged.
+            pin: The invocation's ``--issue N`` **Pin** (#396), or ``None``.
+                Two things follow from it, and they are deliberately separate:
+                :meth:`preflight` refuses the whole invocation when the pinned
+                issue is not eligible, and every read that decides sequence
+                promotes it to the head. The second is only ever reached once
+                the first has passed.
+            pin_requires_parallel_safe: ``True`` when the resolved run is
+                **Parallel mode**, where a **Lane** Pool additionally requires
+                ``parallel-safe``. The source is told rather than asked because
+                it holds no Config, and it is the same object that serves both
+                modes.
         """
         self._diag = diag
         self._gh = gh
         self._include_prs = include_prs
+        self._pin = pin
+        self._pin_requires_parallel_safe = pin_requires_parallel_safe
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
         # does not heal between refreshes, so without this the one line an
@@ -670,7 +697,58 @@ class GitHubIssueSource:
             )
             return exit_code_for("preflight_failed")
         self._diag.info("preflight ok: %s", repo.nwo)
-        return None
+        return self._preflight_pin()
+
+    def _preflight_pin(self) -> int | None:
+        """Refuse the invocation when ``--issue N`` names an unworkable issue.
+
+        The pin's fatal half (#396, ADR-0032). §3.3 makes a candidate the runner
+        cannot take a **skip** so a serial Run does not end over one mislabelled
+        issue it merely walked past — but a pin is an operator naming an issue,
+        and there is no next candidate that honours what they asked for. Silently
+        working a different issue than the one named is worse than stopping, so
+        this is the one selection-time refusal that ends the invocation.
+
+        It runs *here*, at preflight, for two reasons. It is before the Pool, so
+        an ineligible pin costs one ``issue view`` rather than a full collection
+        that would then be indistinguishable from a backlog which simply did not
+        contain the issue. And it runs once per invocation rather than once per
+        Iteration, because the pin names an invocation's intent: re-asking each
+        Iteration would kill a healthy Run the moment it legitimately closed the
+        issue it was pinned to.
+
+        Returns:
+            ``None`` when there is no pin or the pin stands, else the Wrapper
+            contract's ``preflight_failed`` exit code.
+        """
+        if self._pin is None:
+            return None
+        try:
+            issue = self._gh.issue_view(self._pin)
+        except gh_module.GhError as exc:
+            # Missing and unreadable are one refusal: `gh` reports them the same
+            # way, and an operator acts on them the same way.
+            self._diag.debug("gh issue view #%s failed: %s", self._pin, exc)
+            issue = None
+        refusal = refuse_pin(
+            None
+            if issue is None
+            else PinnedIssue(
+                number=issue.number,
+                state=issue.state,
+                labels=tuple(issue.labels),
+            ),
+            afk_exclusion=(
+                None if issue is None else afk_ready_exclusion(issue.body or "")
+            ),
+            number=self._pin,
+            require_parallel_safe=self._pin_requires_parallel_safe,
+        )
+        if refusal is None:
+            self._diag.info("pinned issue #%s accepted for this invocation", self._pin)
+            return None
+        self._diag.error("%s", refusal.message)
+        return exit_code_for("preflight_failed")
 
     def collect_pool(self) -> PoolCollection:
         """Fetch the AFK-ready GitHub-issue **Pool** with comment enrichment.
@@ -726,7 +804,7 @@ class GitHubIssueSource:
         # rather than an arbitrary subset of it; and every later consumer — the
         # prompt, the serial Pickup, the completion whitelist — reads one
         # sequence it did not have to re-derive.
-        ordered, undated = in_selection_order(ready_candidates)
+        ordered, undated = in_selection_order(ready_candidates, pin=self._pin)
         self._report_undated(undated)
 
         items: list[AfkReadyItem] = []
@@ -806,7 +884,8 @@ class GitHubIssueSource:
             return MembershipSnapshot(candidates=(), complete=False)
 
         ordered, undated = in_selection_order(
-            [issue for issue in page.issues if is_afk_ready(issue.body or "")]
+            [issue for issue in page.issues if is_afk_ready(issue.body or "")],
+            pin=self._pin,
         )
         self._report_undated(undated)
         candidates = tuple(

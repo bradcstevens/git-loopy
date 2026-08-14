@@ -215,6 +215,21 @@ def _parse_parallel(raw: str) -> int:
     return value
 
 
+def _parse_issue_pin(raw: str) -> int:
+    """Validate ``--issue N`` as a positive GitHub issue number."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--issue must be an issue number, got {raw!r}"
+        ) from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"--issue must be a positive issue number, got {value}"
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for the ``git-loopy`` console script."""
     parser = argparse.ArgumentParser(
@@ -349,6 +364,24 @@ def build_parser() -> argparse.ArgumentParser:
             "issues concurrently, each in its own git worktree + branch. "
             "Bare --parallel uses N=%d. Omitted = serial. Overrides "
             "GIT_LOOPY_MAX_PARALLEL." % _DEFAULT_MAX_PARALLEL
+        ),
+    )
+    parser.add_argument(
+        "--issue",
+        dest="issue_pin",
+        action="append",
+        type=_parse_issue_pin,
+        default=None,
+        metavar="N",
+        help=(
+            "Pin issue N for this invocation (ADR-0032): the runner works N "
+            "instead of the head of the selection order. Invocation-scoped and "
+            "deliberately not a label or an env var, both of which would point "
+            "every concurrent run at the same issue. It bypasses order and "
+            "nothing else -- a pinned issue that is closed, unreadable, lacks "
+            "ready-for-agent, or fails the AFK-ready body discriminator fails "
+            "the invocation rather than falling back to normal order. May be "
+            "given at most once."
         ),
     )
     parser.add_argument(
@@ -984,6 +1017,25 @@ def _validate_max_nmt_strikes(value: int, *, source: str) -> int:
             f"git-loopy: error: {source} must be ≥ 1, got {value}"
         )
     return value
+
+
+def _resolve_issue_pin(args: argparse.Namespace) -> int | None:
+    """The invocation's ``--issue N`` **Pin** (#396), or ``None``.
+
+    Deliberately reads no env var and no persisted Config, unlike every other
+    knob resolved here. The pin is *invocation*-scoped: an env var is inherited
+    by every Run launched from that shell and a Config key by every Run in that
+    checkout, which is the same globally-scoped hazard that rules out
+    expressing the pin as a label (ADR-0032). A flag is the only surface whose
+    lifetime matches the thing being expressed.
+
+    Arrives as a list because :func:`build_parser` accumulates the flag in order
+    to reject a second one; ``main`` has already refused anything longer than
+    one by the time this runs.
+    """
+    if not args.issue_pin:
+        return None
+    return int(args.issue_pin[0])
 
 
 def _resolve_parallel(args: argparse.Namespace, env: Mapping[str, str]) -> int:
@@ -1761,6 +1813,7 @@ def resolve_config(
         skill_policy=skill_policy,
         classifier_model=classifier_model,
         classifier_effort=classifier_effort,
+        issue_pin=_resolve_issue_pin(args),
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(
@@ -1944,6 +1997,19 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Exactly one issue may be pinned per invocation (#396). ``--issue``
+    # accumulates rather than overwrites so this can be *rejected*: argparse's
+    # default for a repeated ``store`` is "last one wins", and quietly working
+    # one of two issues an operator named is the silent substitution the pin
+    # exists to prevent. It is a usage error rather than a preflight failure —
+    # the invocation is malformed, not merely unworkable — which is exit 2 here
+    # and in both native ports.
+    if args.issue_pin is not None and len(args.issue_pin) > 1:
+        parser.error(
+            "--issue may be given at most once; exactly one issue may be "
+            f"pinned per invocation (got {len(args.issue_pin)})"
+        )
 
     if args.version:
         try:

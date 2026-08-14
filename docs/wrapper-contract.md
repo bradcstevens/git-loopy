@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.13 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.14 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -180,6 +180,55 @@ carries. Eligibility is deliberately **absent** from that fixture: it is `discri
 decision and the `ready-for-agent` label's, and restating it beside the order would give one
 rule two homes that could disagree.
 
+#### The Pin (contract 1.14, MUST)
+
+An Orchestrator MUST accept `--issue N`, which **pins** issue `N` for one invocation: the
+Orchestrator works `N` instead of the head of the order above. Order is a policy, and an operator
+sometimes has to override it for a single Run without weakening it for everyone.
+
+The pin **bypasses the order and nothing else** (ADR-0032), which is four separate obligations:
+
+1. **It is applied to the finished order, not folded into the comparison.** The pinned issue is
+   moved to the head and every other issue keeps its §3.2 sequence behind it. The sort key stays
+   what §3.2 requires — a pure function of the fetched issue fields — because a pin is one
+   operator's instruction for one invocation and is not a property of any issue. A Run therefore
+   resumes oldest-first the moment its pinned issue leaves the **Pool**.
+2. **It outranks Priority.** A pinned issue reached the head because an operator named it,
+   whatever its labels said. Were **Priority** to win, `--issue N` would work on most
+   repositories and silently do nothing on exactly the ones that use the label. `wrapper.pickup.
+   bound` MUST report `reason: pin` for that binding, and `order`/`priority` for every other
+   binding in the same Run — the pin explains one binding, not the whole Run.
+3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
+   that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
+   discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
+   wrong — and for a discriminator failure, naming the **specific missing section**, so the
+   operator can fix the issue rather than guess. It MUST NOT fall back to the head of the order:
+   §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
+   walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
+   that honours what they asked for. Silently working a different issue than the one named is
+   worse than stopping. In **Parallel mode** the pin MUST additionally carry `parallel-safe`,
+   because a **Lane** Pool requires it and a pinned issue that never enters the Pool would leave
+   the Run working the head of the order — the same silent substitution, arrived at by omission.
+4. **It weakens nothing for any other issue.** The pin promotes; it does not restrict the Pool.
+   Every other candidate remains eligible on exactly the terms §3.1 and §3.2 already set.
+
+Exactly **one** issue may be pinned per invocation; a second `--issue` MUST be rejected as a
+**usage error** (§10's `usage_error`, not `preflight_failed`) rather than resolved by taking
+either value. The invocation is malformed, and "the last one wins" is the silent substitution
+this section exists to prevent, arrived at by a CLI parsing default.
+
+The pin MUST be invocation-scoped, and therefore MUST NOT be expressible as a label, an
+environment variable, or a persisted Config key. All three outlive the invocation: a label is
+global to the tracker and would point every concurrent Run at the same issue, an environment
+variable is inherited by every Run launched from that shell, and a Config key by every Run in
+that checkout. A flag is the only surface whose lifetime matches the thing being expressed.
+
+Validation MUST happen **once, at preflight**, before the Pool is read. Once per Iteration would
+end a healthy Run the moment it legitimately closed the issue it was pinned to, and validating
+after the Pool would make an ineligible pin indistinguishable from a backlog that simply did not
+contain it. `issue-ordering.json` carries the pin as a per-case `pin` field and pins that it
+outranks Priority; the *refusal* is not in that fixture, for the same reason eligibility is not.
+
 ### 3.3 Serial Pickup (contract 1.12, MUST)
 
 A serial **Iteration** MUST bind its **Active issue** *before* the agent session starts, from the
@@ -218,8 +267,9 @@ An Orchestrator running serially MUST:
   eligibility — the `ready-for-agent` label and the AFK-ready discriminator settle that at
   collection (§3.1), and a second opinion at Pickup would be a second place for it to disagree.
 - **Record the binding (contract 1.13).** A **Pickup** that binds MUST emit
-  `wrapper.pickup.bound` (§12) carrying the issue, the selection reason, and where the candidate
-  sat in the order. Selection is the runner's decision as of contract 1.12, and a decision nobody
+  `wrapper.pickup.bound` (§12) carrying the issue, the selection reason — `pin` when §3.2's
+  **Pin** named this candidate, else `priority` or `order` — and where the candidate sat in the
+  order. Selection is the runner's decision as of contract 1.12, and a decision nobody
   can see is a decision nobody can audit: the starvation §3.2 exists to end was invisible
   precisely because being passed over left no trace. The record is emitted *after* the
   `wrapper.issue.activated` that publishes the binding, so it never describes a binding the rest
@@ -555,8 +605,9 @@ Orchestrator rollout tickets own enabling those producers.
   order was. Both are **Run-scoped**: they carry no `contribution_id` and no `lane_id`, because a
   Lane's contribution identity is minted when its session starts and a Pickup happens before
   that — an Event that demanded the identity triple could never be emitted at the moment it
-  describes. `reason` on a binding is one of `order`, `priority`, or `pin`; on a skip it is the
-  free-text reason the candidate was passed over. `considered` is required rather than derivable:
+  describes. `reason` on a binding is one of `order`, `priority`, or `pin` — `pin` exactly when
+  §3.2's **Pin** named the bound candidate, which outranks a `priority` label on the same issue;
+  on a skip it is the free-text reason the candidate was passed over. `considered` is required rather than derivable:
   *the runner took the oldest* and *the runner took the only one left* are different facts about
   a backlog, and `position: 1` alone cannot tell them apart. Every skip that ended in a binding
   MUST precede that binding, which is the same ordering `wrapper.pool.excluded` already keeps

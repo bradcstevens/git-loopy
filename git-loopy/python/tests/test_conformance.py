@@ -45,6 +45,7 @@ from git_loopy.issue_order import (
     OrderableIssue,
     TimestampDefect,
     order_issues,
+    promote_pinned,
 )
 from git_loopy.measured_routing import ProvingTask
 from git_loopy import measured_routing as measured_routing_module
@@ -133,10 +134,15 @@ def test_issue_ordering_fixture(case: dict[str, Any]) -> None:
     nothing in the Event stream would say why.
     """
     result = order_issues(_orderable(candidate) for candidate in case["issues"])
+    # The **Pin** (#396) is applied to the finished order rather than folded
+    # into the sort key, so the fixture composes the two seams exactly as a
+    # Pool read does. `pin` is absent on every pre-1.14 case, which is what
+    # keeps them a regression test for the unpinned path.
+    order = promote_pinned(result.order, case.get("pin"))
 
-    assert [issue.number for issue in result.order] == case["expected"]["order"]
+    assert [issue.number for issue in order] == case["expected"]["order"]
     assert (
-        result.head.number if result.head is not None else None
+        order[0].number if order else None
     ) == case["expected"]["selected"]
     assert [
         {"issue": undated.number, "defect": undated.defect.value}
@@ -181,6 +187,32 @@ def test_every_timestamp_defect_is_covered_by_an_ordering_case() -> None:
         for undated in case["expected"]["undated"]
     }
     assert covered == declared
+
+
+def test_issue_ordering_fixture_pins_that_the_pin_outranks_priority() -> None:
+    """Two overrides of the order meet, and the fixture says which wins.
+
+    Declared rather than left to be inferred from one case: a port that ranked
+    **Priority** above a **Pin** would honour ``--issue N`` on most repositories
+    and silently ignore it on exactly the ones that use the label.
+    """
+    assert _ISSUE_ORDERING["pin_outranks_priority"] is True
+
+    ordered = order_issues(
+        (
+            OrderableIssue(
+                number=1, created_at="2024-01-01T00:00:00Z", labels=(LABEL_PRIORITY,)
+            ),
+            OrderableIssue(number=2, created_at="2025-01-01T00:00:00Z", labels=()),
+        )
+    ).order
+
+    assert [issue.number for issue in promote_pinned(ordered, 2)] == [2, 1]
+
+
+def test_the_pin_is_exercised_by_an_ordering_case() -> None:
+    """A dimension the fixture declares and no case drives pins nothing."""
+    assert any(case.get("pin") is not None for case in _ISSUE_ORDERING["cases"])
 
 
 def test_ordering_cases_are_named_uniquely() -> None:

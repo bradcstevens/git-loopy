@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "contract_version": "1.10",
+  "contract_version": "1.14",
   "priority_label": "priority",
+  "pin_outranks_priority": true,
   "accepted_year_range": {"min": 1970, "max": 9999},
   "timestamp_defects": ["absent", "malformed"],
   "cases": [
@@ -349,6 +350,86 @@
           {"issue": 102, "defect": "absent"}
         ]
       }
+    },
+    {
+      "id": "a-pin-promotes-its-issue-to-the-head-of-the-order",
+      "pin": 30,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": []},
+        {"number": 30, "created_at": "2026-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [30, 10, 20], "selected": 30, "undated": []}
+    },
+    {
+      "id": "a-pin-outranks-a-priority-issue",
+      "pin": 20,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": ["priority"]},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [20, 10], "selected": 20, "undated": []}
+    },
+    {
+      "id": "a-pin-preserves-the-order-of-everything-behind-it",
+      "pin": 30,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": ["priority"]},
+        {"number": 30, "created_at": "2026-01-01T00:00:00Z", "labels": []},
+        {"number": 40, "created_at": null, "labels": []}
+      ],
+      "expected": {
+        "order": [30, 20, 10, 40],
+        "selected": 30,
+        "undated": [{"issue": 40, "defect": "absent"}]
+      }
+    },
+    {
+      "id": "a-pin-naming-an-issue-outside-the-pool-changes-nothing",
+      "pin": 99,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
+    },
+    {
+      "id": "a-pin-on-the-head-of-the-order-changes-nothing",
+      "pin": 10,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
+    },
+    {
+      "id": "a-pin-promotes-an-undated-issue-out-of-last-place",
+      "pin": 40,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 40, "created_at": "not-a-timestamp", "labels": []}
+      ],
+      "expected": {
+        "order": [40, 10],
+        "selected": 40,
+        "undated": [{"issue": 40, "defect": "malformed"}]
+      }
+    },
+    {
+      "id": "a-pinned-empty-pool-still-orders-to-nothing",
+      "pin": 10,
+      "issues": [],
+      "expected": {"order": [], "selected": null, "undated": []}
+    },
+    {
+      "id": "an-unpinned-case-is-the-order-untouched",
+      "pin": null,
+      "issues": [
+        {"number": 10, "created_at": "2024-01-01T00:00:00Z", "labels": []},
+        {"number": 20, "created_at": "2025-01-01T00:00:00Z", "labels": []}
+      ],
+      "expected": {"order": [10, 20], "selected": 10, "undated": []}
     }
   ]
 }

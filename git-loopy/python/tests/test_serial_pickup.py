@@ -6,10 +6,12 @@ import pytest
 
 from git_loopy.serial_pickup import (
     PICKUP_REASON_ORDER,
+    PICKUP_REASON_PIN,
     PICKUP_REASON_PRIORITY,
     SerialPickup,
     SerialSkip,
     pick_serial,
+    reason_for,
 )
 from git_loopy.sources import AfkReadyItem
 
@@ -237,8 +239,14 @@ class TestReasonVocabulary:
         for pool in ([_item(7)], [_item(7, labels=("priority",))]):
             assert pick_serial(pool).reason in PICKUP_REASONS
 
-    def test_pin_has_no_producer_yet(self) -> None:
-        """#396 is the only thing that may ever emit it; nothing here does."""
+    def test_a_pin_label_is_not_a_pin(self) -> None:
+        """The **Pin** is invocation-scoped and deliberately *not* a label.
+
+        A label is globally scoped and would point every concurrent Run at the
+        same issue, which is the opposite of what pinning is for (ADR-0032). So
+        an issue that happens to carry a literal ``pin`` label is an ordinary
+        candidate; only ``--issue N`` produces the reason.
+        """
         from git_loopy.serial_pickup import PICKUP_REASON_PIN
 
         assert PICKUP_REASON_PIN == "pin"
@@ -254,21 +262,77 @@ class TestReasonIsOneDecision:
     whether a **Priority** label did anything.
     """
 
-    def test_the_labels_alone_decide_the_reason(self) -> None:
-        from git_loopy.serial_pickup import reason_for_labels
-
-        assert reason_for_labels(()) == "order"
-        assert reason_for_labels(("ready-for-agent",)) == "order"
-        assert reason_for_labels(("priority",)) == "priority"
+    def test_the_labels_alone_decide_an_unpinned_reason(self) -> None:
+        assert reason_for(7, ()) == "order"
+        assert reason_for(7, ("ready-for-agent",)) == "order"
+        assert reason_for(7, ("priority",)) == "priority"
 
     def test_a_prefixed_neighbour_is_not_the_priority_label(self) -> None:
         """``priority:high`` is a vocabulary nobody decided (issue_order.py)."""
-        from git_loopy.serial_pickup import reason_for_labels
-
-        assert reason_for_labels(("priority:high",)) == "order"
+        assert reason_for(7, ("priority:high",)) == "order"
 
     def test_the_walk_reports_what_the_labels_decide(self) -> None:
-        from git_loopy.serial_pickup import reason_for_labels
-
         item = _item(7, labels=("priority",))
-        assert pick_serial([item]).reason == reason_for_labels(item.labels)
+        assert pick_serial([item]).reason == reason_for(item.ref, item.labels)
+
+
+class TestThePinIsAReason:
+    """`--issue N` is why the runner took N, and the record has to say so (#396)."""
+
+    def test_the_pinned_candidate_reports_pin(self) -> None:
+        assert pick_serial([_item(7)], pin=7).reason == PICKUP_REASON_PIN
+
+    def test_the_pin_outranks_priority_as_a_reason(self) -> None:
+        """It is *why* the issue was taken.
+
+        A pinned issue would have been promoted to the head whatever its
+        labels said, so reporting ``priority`` would credit the label for a
+        decision the flag made — and would make "did my Priority label do
+        anything?" unanswerable on exactly the runs where someone overrode it.
+        """
+        item = _item(7, labels=("priority",))
+
+        assert pick_serial([item], pin=7).reason == PICKUP_REASON_PIN
+
+    def test_an_unpinned_candidate_in_a_pinned_invocation_reports_its_labels(
+        self,
+    ) -> None:
+        """The pin explains one binding, not every binding in the Run.
+
+        A pinned issue leaves the **Pool** when it closes, and the Iterations
+        after that are ordinary §3.2 selections. Reporting them as ``pin``
+        would make an audit of a pinned Run unreadable.
+        """
+        pool = [_item(7, labels=("priority",)), _item(8)]
+
+        assert pick_serial(pool, pin=99).reason == PICKUP_REASON_PRIORITY
+
+    def test_the_reason_follows_the_bound_candidate_not_the_pin(self) -> None:
+        """A skipped pin does not lend its reason to whatever replaced it."""
+        pool = [_item(7), _item(8)]
+
+        pickup = pick_serial(
+            pool, pin=7, admit=lambda item: "refused" if item.ref == 7 else None
+        )
+
+        assert pickup.item is not None
+        assert pickup.item.ref == 8
+        assert pickup.reason == PICKUP_REASON_ORDER
+
+    def test_a_pin_is_matched_by_ref_not_by_position(self) -> None:
+        """A pinned issue the ordering seam did not promote is still the pin.
+
+        The two are wired together in production, but binding the reason to
+        "position 1" would make this module quietly wrong the first time a
+        caller composed them differently.
+        """
+        pool = [_item(7), _item(8)]
+
+        assert pick_serial(pool, pin=8, admit=lambda i: None).reason != PICKUP_REASON_PIN
+        assert pick_serial([_item(8), _item(7)], pin=8).reason == PICKUP_REASON_PIN
+
+    def test_a_string_ref_never_matches_a_pin(self) -> None:
+        """The local-markdown backend has no issue numbers to pin."""
+        assert pick_serial([_item("prds/a/001-x.md")], pin=1).reason == (
+            PICKUP_REASON_ORDER
+        )

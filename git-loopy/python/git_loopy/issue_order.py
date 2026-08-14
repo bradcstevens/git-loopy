@@ -52,10 +52,25 @@ Design notes:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final
+from typing import Final, Protocol, TypeVar
+
+
+class _Numbered(Protocol):
+    """Anything with an issue number — all :func:`promote_pinned` needs to read.
+
+    Structural rather than :class:`OrderableIssue`, so a caller holding richer
+    records (``gh.Issue``, an ``AfkReadyItem``) promotes the records it already
+    has instead of mapping to this module's view and back again.
+    """
+
+    @property
+    def number(self) -> int: ...
+
+
+_OrderedT = TypeVar("_OrderedT", bound=_Numbered)
 
 __all__ = [
     "LABEL_PRIORITY",
@@ -71,6 +86,7 @@ __all__ = [
     "issue_order_key",
     "order_issues",
     "head_of_order",
+    "promote_pinned",
 ]
 
 #: The label that carries **Priority**. A human assertion, exactly like
@@ -340,3 +356,50 @@ def head_of_order(issues: Iterable[OrderableIssue]) -> OrderableIssue | None:
     ``IndexError``.
     """
     return order_issues(issues).head
+
+
+def promote_pinned(
+    order: Sequence[_OrderedT], pin: int | None
+) -> tuple[_OrderedT, ...]:
+    """Move the pinned issue to the head, leaving everything else where it sat.
+
+    The **Pin** (#396): ``--issue N`` bypasses the order *and nothing else*
+    (ADR-0032). That last clause is why this is a separate step applied to a
+    finished order rather than a fourth component of :func:`issue_order_key`.
+    The key stays what §3.2 requires — a pure function of the *fetched issue
+    fields*, identical on every host from identical input — while the pin stays
+    what it is: one operator's instruction for one invocation, which is not a
+    property of any issue and would be a lie if it were sorted like one.
+
+    Design notes:
+
+    * **It outranks Priority.** A **Priority** label is a standing assertion
+      about the backlog; a pin is an operator naming one issue right now. If
+      Priority won, ``--issue N`` would silently do nothing on exactly the
+      repositories that use the label — the flag would work until it mattered.
+    * **Stable.** The tail keeps §3.2's sequence, so a pinned Run resumes the
+      oldest-first order the moment its named issue leaves the **Pool**. A
+      promotion that re-sorted the remainder would be a second ordering
+      decision competing with the one this module exists to be.
+    * **A pin naming a non-member is a no-op, not an error.** Eligibility is
+      settled long before sequence (§3.2), and an ordering seam that could
+      raise is one a Run could die inside. Refusing the *invocation* over an
+      ineligible pin belongs to :mod:`git_loopy.issue_pin` at preflight, where
+      the tracker can still be asked why.
+    * **Idempotent**, because an issue already at the head is promoted to where
+      it is.
+
+    Args:
+        order: Issues already in §3.2 order. Any record carrying a ``number``.
+        pin: The pinned issue number, or ``None`` for an unpinned invocation.
+
+    Returns:
+        The same members, with the pinned one first when it is present.
+    """
+    ordered = tuple(order)
+    if pin is None:
+        return ordered
+    pinned = tuple(issue for issue in ordered if issue.number == pin)
+    if not pinned:
+        return ordered
+    return pinned + tuple(issue for issue in ordered if issue.number != pin)

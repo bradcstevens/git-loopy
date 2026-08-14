@@ -1253,7 +1253,7 @@ class TestModuleStructure:
         assert isinstance(IssueSource, _ProtocolMeta)
 
     def test_imports_are_constrained(self) -> None:
-        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,wrapper}.
+        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,issue_pin,wrapper}.
 
         Forbidden: copilot SDK, rich, git_loopy.{loop,cli,config,session,
         ui,persist,events,pricing,telemetry} — keeps the Protocol seam
@@ -1267,13 +1267,24 @@ class TestModuleStructure:
         It costs the seam nothing —
         :meth:`test_the_ordering_seam_stays_stdlib_only` is what keeps that
         true.
+
+        ``issue_pin`` joined it with #396 on identical terms and for the same
+        reason: refusing an ineligible ``--issue N`` is one decision three
+        Orchestrators share, and a source that decided it inline would be a
+        second copy of it. It is held to the same purity guard.
         """
         import ast
 
         source_path = Path(sources_module.__file__)
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         allowed_third_party_prefixes: set[str] = set()  # no third-party allowed
-        allowed_git_loopy_submodules = {"gh", "git", "issue_order", "wrapper"}
+        allowed_git_loopy_submodules = {
+            "gh",
+            "git",
+            "issue_order",
+            "issue_pin",
+            "wrapper",
+        }
 
         offenders: list[str] = []
         for node in ast.walk(tree):
@@ -1317,23 +1328,26 @@ class TestModuleStructure:
             + "\n  ".join(offenders)
         )
 
-    def test_the_ordering_seam_stays_stdlib_only(self) -> None:
+    @pytest.mark.parametrize("module_name", ["issue_order", "issue_pin"])
+    def test_the_selection_seams_stay_stdlib_only(self, module_name: str) -> None:
         """Widening the allowlist above must not smuggle a dependency in.
 
-        ``sources.py`` may import ``issue_order`` because ordering is one
-        decision that belongs in one place. That stays cheap only while
-        ``issue_order`` itself imports nothing from ``git_loopy`` — the moment
-        it reached for ``config`` or ``events``, the Protocol seam would have
-        acquired the weight this class exists to keep off it, transitively and
-        invisibly.
+        ``sources.py`` may import ``issue_order`` and ``issue_pin`` because
+        ordering and refusing a **Pin** are each one decision that belongs in
+        one place. That stays cheap only while those modules themselves import
+        nothing from ``git_loopy`` — the moment either reached for ``config``
+        or ``events``, the Protocol seam would have acquired the weight this
+        class exists to keep off it, transitively and invisibly.
+
+        It is also what forces ``issue_pin`` to be *told* the AFK-ready verdict
+        rather than computing it: importing ``sources`` for the discriminator
+        would fail here, and would make the pair cyclic besides.
         """
         import ast
+        import importlib
 
-        from git_loopy import issue_order as issue_order_module
-
-        tree = ast.parse(
-            Path(issue_order_module.__file__).read_text(encoding="utf-8")
-        )
+        module = importlib.import_module(f"git_loopy.{module_name}")
+        tree = ast.parse(Path(module.__file__ or "").read_text(encoding="utf-8"))
         offenders = [
             f"line {node.lineno}: {name}"
             for node in ast.walk(tree)
@@ -1348,7 +1362,7 @@ class TestModuleStructure:
         ]
 
         assert not offenders, (
-            "git-loopy/issue_order.py must stay pure:\n  " + "\n  ".join(offenders)
+            f"git-loopy/{module_name}.py must stay pure:\n  " + "\n  ".join(offenders)
         )
 
 
@@ -2157,3 +2171,188 @@ class TestRateLimitReporting:
         )
 
         assert source.rate_limited_reads() is None
+
+
+# --------------------------------------------------------------------------- #
+# The invocation-scoped pin (#396)                                            #
+# --------------------------------------------------------------------------- #
+
+
+class TestThePinReachesSelection:
+    """`--issue N` promotes N to the head of the Pool the runner selects from."""
+
+    def test_a_pinned_issue_heads_the_pool_ahead_of_older_issues(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(10, created_at="2024-01-01T00:00:00Z"),
+                _make_issue(20, created_at="2025-01-01T00:00:00Z"),
+                _make_issue(30, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh, pin=30)
+
+        refs = [item.ref for item in source.collect_pool().items]
+
+        assert refs == [30, 10, 20]
+
+    def test_an_unpinned_pool_is_still_oldest_first(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(10, created_at="2024-01-01T00:00:00Z"),
+                _make_issue(30, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        refs = [item.ref for item in source.collect_pool().items]
+
+        assert refs == [10, 30]
+
+    def test_the_pin_reaches_rolling_membership_too(self) -> None:
+        """A **Lane** takes the head of the same order a serial Pickup does.
+
+        ``RollingPool`` walks its cache front to back, so promoting in the
+        membership read is the whole of what a pin has to do in Parallel mode —
+        the scheduler needs no notion of one.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    10,
+                    created_at="2024-01-01T00:00:00Z",
+                    labels=["ready-for-agent", "parallel-safe"],
+                ),
+                _make_issue(
+                    30,
+                    created_at="2026-01-01T00:00:00Z",
+                    labels=["ready-for-agent", "parallel-safe"],
+                ),
+            ]
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh, pin=30)
+
+        refs = [c.ref for c in source.shallow_membership().candidates]
+
+        assert refs == [30, 10]
+
+    def test_the_pin_does_not_remove_any_other_issue_from_the_pool(self) -> None:
+        """A pin bypasses order and *nothing else* (ADR-0032).
+
+        Restricting the Pool to the pinned issue would be the same runner
+        working a smaller backlog, and would silently end the Run the moment
+        the pin closed. The remainder is still there, still eligible, and
+        resumes §3.2 order behind the pin.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(10, created_at="2024-01-01T00:00:00Z"),
+                _make_issue(20, created_at="2025-01-01T00:00:00Z"),
+            ]
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh, pin=20)
+
+        assert {item.ref for item in source.collect_pool().items} == {10, 20}
+
+
+class TestThePinIsValidatedAtPreflight:
+    """An ineligible pin fails the invocation. It never falls back to order."""
+
+    def _preflight(self, gh: FakeGitHubClient, **kwargs: Any) -> tuple[int | None, str]:
+        logger = _silent_logger()
+        source = GitHubIssueSource(logger, gh=gh, **kwargs)
+        with _capture(logger) as records:
+            rc = source.preflight()
+        return rc, "\n".join(r.getMessage() for r in records)
+
+    def test_an_eligible_pin_passes_preflight(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+
+        rc, _ = self._preflight(gh, pin=7)
+
+        assert rc is None
+
+    def test_an_unpinned_invocation_never_asks_the_tracker(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+
+        rc, _ = self._preflight(gh)
+
+        assert rc is None
+        assert gh.issue_view_calls == []
+
+    def test_a_pin_lacking_ready_for_agent_fails_the_invocation(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7, labels=[])])
+
+        rc, logged = self._preflight(gh, pin=7)
+
+        assert rc == 1
+        assert "ready-for-agent" in logged
+
+    def test_a_pin_failing_the_discriminator_names_the_missing_section(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, body="## What to build\nthing, but no criteria")]
+        )
+
+        rc, logged = self._preflight(gh, pin=7)
+
+        assert rc == 1
+        assert "## Acceptance criteria" in logged
+
+    def test_a_closed_pin_fails_the_invocation(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7, state="CLOSED")])
+
+        rc, logged = self._preflight(gh, pin=7)
+
+        assert rc == 1
+        assert "closed" in logged
+
+    def test_a_missing_pin_fails_the_invocation(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+
+        rc, logged = self._preflight(gh, pin=404)
+
+        assert rc == 1
+        assert "#404" in logged
+
+    def test_an_unreadable_pin_fails_the_invocation(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7)],
+            issue_view_errors={
+                7: gh_module.GhError("boom", returncode=1, stderr_tail="boom")
+            },
+        )
+
+        rc, logged = self._preflight(gh, pin=7)
+
+        assert rc == 1
+        assert "#7" in logged
+
+    def test_a_parallel_invocation_refuses_a_pin_that_is_not_parallel_safe(
+        self,
+    ) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7, labels=["ready-for-agent"])])
+
+        rc, logged = self._preflight(gh, pin=7, pin_requires_parallel_safe=True)
+
+        assert rc == 1
+        assert "parallel-safe" in logged
+
+    def test_a_serial_invocation_does_not_require_parallel_safe(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7, labels=["ready-for-agent"])])
+
+        rc, _ = self._preflight(gh, pin=7)
+
+        assert rc is None
+
+    def test_an_ineligible_pin_is_refused_before_any_pool_is_read(self) -> None:
+        """The refusal must land at preflight, not as an empty-looking Pool.
+
+        A pin that failed later would have already been indistinguishable from
+        a backlog that simply did not contain it — which is the fall back to
+        normal order this ticket exists to prevent.
+        """
+        gh = FakeGitHubClient(issues=[_make_issue(7, labels=[]), _make_issue(8)])
+
+        rc, _ = self._preflight(gh, pin=7)
+
+        assert rc == 1
+        assert gh.issue_list_calls == []

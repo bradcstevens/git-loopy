@@ -169,7 +169,7 @@ from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.serial_pickup import (
     SerialPickup,
     pick_serial,
-    reason_for_labels,
+    reason_for,
 )
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
@@ -644,7 +644,16 @@ def _make_issue_source(
     """
     if config.issue_source == "github":
         return GitHubIssueSource(
-            diag, gh=_make_github_client(), include_prs=include_prs
+            diag,
+            gh=_make_github_client(),
+            include_prs=include_prs,
+            pin=config.issue_pin,
+            # A **Lane** Pool is `ready-for-agent` *and* `parallel-safe`, so a
+            # Parallel invocation must refuse a pin lacking the second — else
+            # the pinned issue never enters the Pool, the promotion finds
+            # nothing to promote, and the Run silently works the head of the
+            # order instead (#396).
+            pin_requires_parallel_safe=config.parallel > 1,
         )
     if config.issue_source == "prds":
         return PrdsIssueSource(repo_root, diag)
@@ -1542,7 +1551,7 @@ class _Loop:
             self._routes[item.ref] = resolved if in_force else run_wide
             return None
 
-        pickup = pick_serial(pool, admit=admit)
+        pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
         considered = len(pickup.considered)
         for skip in pickup.skipped:
             self._emit_pickup_skipped(
@@ -2912,7 +2921,7 @@ class _ParallelLoop:
         self._serial._emit_pickup_bound(
             iter_num=None,
             issue=ref,
-            reason=reason_for_labels(item.labels),
+            reason=reason_for(item.ref, item.labels, pin=self._config.issue_pin),
             position=reservation.position,
             considered=reservation.considered,
         )
