@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy import configcmd, measured_routing, settings
+from git_loopy import configcmd, measured_routing, routing_scope, settings
 from git_loopy.config import RECOMMENDED_ROUTING
 
 
@@ -1142,6 +1142,51 @@ def test_no_inert_note_when_the_run_is_parallel(tmp_path: Path) -> None:
 
     assert rc == 0
     assert "inert" not in err.text
+
+
+@pytest.mark.parametrize("surface", ["get", "list", "routing_list"])
+def test_every_reporting_surface_notes_inertness_in_the_shared_words(
+    tmp_path: Path, surface: str
+) -> None:
+    """One rule, one wording, three surfaces (#379).
+
+    ``config get``, ``config list`` and ``config routing list`` each print a
+    **Measured routing** value that has no effect in serial, and each says so
+    from :mod:`git_loopy.routing_scope` rather than restating ``parallel == 1``
+    itself — so the note cannot drift from the refusal ``git-loopy calibrate``
+    (#372) will print for the same reason.
+    """
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    err = _Sink()
+    kwargs: dict[str, object] = {
+        "repo_root": tmp_path,
+        "env": env,
+        "out": _Sink(),
+        "err": err,
+    }
+    if surface == "get":
+        kwargs["key"] = "task-type:docs"
+
+    rc = getattr(configcmd, f"run_{surface}")(**kwargs)
+
+    assert rc == 0
+    assert routing_scope.SERIAL_INERT_NOTE in err.text
+
+
+def test_the_inert_note_says_how_to_enable_parallel_mode(tmp_path: Path) -> None:
+    """Naming a value as inert without naming the switch leaves it inert.
+
+    The measured tier is the case that matters: it is machine-written, so an
+    operator who did not type it has no other place to learn what turns it on.
+    """
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    err = _Sink()
+
+    configcmd.run_get("task-type:docs", repo_root=tmp_path, env=env, out=_Sink(), err=err)
+
+    assert "--parallel" in err.text and "GIT_LOOPY_MAX_PARALLEL" in err.text
 
 
 def test_list_reports_suppression_rather_than_dropping_the_routing_map(

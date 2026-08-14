@@ -418,6 +418,18 @@ git-loopy config edit --global
   the report says so rather than naming a tier whose value is not in force. A
   hand-written `[routing]` entry beats a provisional one exactly as it beats a
   measured one — the fourth status changes what is *reported*, never the chain.
+- **Routing is a Parallel-mode feature, and the report says so.** A **Routed
+  pair** is resolved *per issue*, and only a Parallel **Lane** works one issue
+  per session — the serial loop hands the whole Pool to a single Iteration that
+  runs on the run-wide pair. At `parallel = 1` (the default) the whole chain,
+  the `measured` tier included, is therefore **inert**, and `get` / `list` say
+  so on **stderr** beside the value rather than reporting a pair that has no
+  effect. The value is still printed — an absence would answer "why is this
+  model set?" with silence — and stdout stays scriptable. Enable Parallel mode
+  with `--parallel N` (or `GIT_LOOPY_MAX_PARALLEL=N`) and the same table takes
+  effect unchanged. A **Calibration** is scoped the same way, for the same
+  reason: measuring a pair that nothing resolves would spend AI Credits for no
+  change.
 - **The Task-type taxonomy is closed** to `planning`, `review`,
   `implementation`, `test`, `docs`, `chore`, and `bugfix`. Anything else is
   **refused**, naming the value and the permitted keys — never warned about and
