@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import importlib
 import re
+from pathlib import Path
 
 import pytest
 
 from git_loopy import continuation
+from git_loopy.skill_source import ACQUIRE_COMMAND, read_skill_source_pin
 from tests.skill_templates import (
     CONTRACT_SKILLS_DIR,
+    acquired_skills_root,
     skill_text,
     template,
     templates,
@@ -128,6 +131,80 @@ def test_the_contract_fixture_holds_only_contract_carrying_prompts() -> None:
         "the fixture and the coverage claim disagree about who carries the "
         f"contract: fixture {present}, claim "
         f"{sorted(OWNER_SKILLS | set(READ_ONLY_CONSUMERS))}"
+    )
+
+
+def _pinned_skills_root() -> Path:
+    """The acquired pinned catalog's Skill root, or a skip.
+
+    Acquisition reaches the network, so this can never acquire for itself: an
+    unreachable upstream would make the gate red for a reason no change here
+    caused. It reads a checkout and skips without one, the shape
+    ``test_prompt_metadata`` already uses for the Required-Skill guard. A
+    checkout that is present is validated against the pin first -- a mirror held
+    to the revision before the bump would pass while proving the opposite.
+    """
+    skills = acquired_skills_root()
+    if skills is None:
+        pytest.skip(
+            f"the pinned catalog is not acquired; run `{ACQUIRE_COMMAND}`"
+        )
+    return skills
+
+
+@pytest.mark.parametrize("skill", _catalog_skills())
+def test_every_contract_carrying_prompt_is_the_pinned_revision_s_own(
+    skill: str,
+) -> None:
+    """A contract git-loopy states and nobody installs is not a contract (#341).
+
+    ADR-0025 made the installed catalog a Run's only Skill source, so a prompt
+    that publishes through git-loopy's own native command reaches an adopter
+    exactly when the pinned external revision carries it. It did not: the
+    publication sections lived here and nowhere else, which meant these suites
+    proved the contract coherent *as git-loopy states it* while an adopter's
+    session was told to publish nothing.
+
+    So the fixture is a mirror and this is the mirror test. Absence and drift
+    fail identically, because they are the same failure -- the requests executed
+    here are not the requests an adopter's session was handed -- and the mirror
+    is byte-for-byte so that a reworded instruction cannot pass as one.
+    """
+    pinned = _pinned_skills_root() / skill / "SKILL.md"
+    assert pinned.is_file(), (
+        f"{skill} carries a git-loopy contract but the pinned revision "
+        f"{read_skill_source_pin().short_revision} does not carry it, so no "
+        "installed catalog can hand it to a session"
+    )
+    assert pinned.read_bytes() == (CONTRACT_SKILLS_DIR / skill / "SKILL.md").read_bytes(), (
+        f"{skill} differs from the pinned revision. The prompt is authored "
+        "upstream and mirrored here (ADR-0034): publish the change to the "
+        "external catalog, bump the pin, and refresh this fixture from the "
+        "acquired revision -- never the other way round"
+    )
+
+
+def test_the_pinned_revision_carries_no_contract_this_fixture_has_not_mirrored() -> None:
+    """Divergence has two directions, and only one of them is obvious.
+
+    A prompt that grows a `git-loopy continuation` request upstream is a contract
+    carrier that no suite here executes -- guidance an adopter is told to publish
+    against templates this project never ran. It fails here, at the pin bump that
+    introduced it, rather than in the first Run that hits a rejected request.
+    """
+    skills_root = _pinned_skills_root()
+    carriers = {
+        child.name
+        for child in skills_root.iterdir()
+        if (child / "SKILL.md").is_file()
+        and "git-loopy continuation"
+        in (child / "SKILL.md").read_text(encoding="utf-8")
+    }
+
+    assert carriers == set(_catalog_skills()), (
+        "the pinned revision and this fixture disagree about who carries the "
+        f"contract: unmirrored upstream {sorted(carriers - set(_catalog_skills()))}, "
+        f"absent upstream {sorted(set(_catalog_skills()) - carriers)}"
     )
 
 
@@ -376,22 +453,20 @@ def test_a_read_only_consumer_publishes_nothing(skill: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# What this suite does and does not prove about an adopter
+# What this suite proves about an adopter
 #
-# Every guard above reads the Continuation contract fixture, which is git-loopy's
-# own contract surface rather than a catalog: #340 removed the root
-# `.copilot/skills/` tree these guards used to read, because under ADR-0025 an
-# adopter runs the catalog installed from the pinned external repository and no
-# Run consults a tracked tree here. So these guards prove the contract is
-# coherent *as git-loopy states it*; they say nothing about what an adopter's
-# session is told to publish, because the pinned revision does not carry these
-# requests yet.
+# Every guard above reads the Continuation contract fixture, which is a byte-for-
+# byte mirror of the contract-carrying prompts at the pinned revision of the
+# external catalog -- the one Skill source a Run reads under ADR-0025. Under #340
+# it was only that: git-loopy's own contract surface, with the pinned revision
+# carrying none of these requests, so the guards proved the contract coherent *as
+# git-loopy states it* and said nothing about what an adopter's session is told to
+# publish.
 #
-# #341 is the work that closes that: publish the contract-carrying Skills
-# upstream, and replace this fixture with a guard over the acquired revision
-# (see `test_prompt_metadata` for the offline-safe shape). Until it lands, this
-# fixture is also the only surviving copy of those requests, which is why #340
-# moved them rather than deleting them with the rest of the tree.
+# #341 closed that. The prompts are published upstream, the pin names the revision
+# carrying them, and `test_every_contract_carrying_prompt_is_the_pinned_revision_s_own`
+# holds the mirror to it in both directions. The prompt is authored upstream and
+# mirrored here, never the other way round (ADR-0034).
 # ---------------------------------------------------------------------------
 
 

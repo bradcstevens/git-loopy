@@ -126,10 +126,13 @@ registry and all three dispositions, each hard-HITL kind behind an explicit huma
 
 Two properties make that checkable rather than asserted. Each Skill carries its completion request
 as a fenced JSON template behind a `<!-- continuation-request: NAME -->` marker, so what a prompt
-tells a session to publish is executable against the real native command. And the packaged
-distribution mirrors the project sources byte for byte, so the requests an adopter's session
-publishes are the ones the coverage suites executed. The Python distribution enforces both, together
-with the report-mode interlock, in `tests/test_continuation_owner_coverage.py`.
+tells a session to publish is executable against the real native command. And the contract-carrying
+Skills are authored in the external catalog and mirrored into this repository byte for byte
+([ADR-0034](adr/0034-contract-carrying-skills-are-authored-upstream.md)), so the requests an
+adopter's session publishes — resolved from the **installed catalog** at the pinned revision, which
+under [ADR-0025](adr/0025-installed-skill-catalog.md) is the only Skill source a Run reads — are the
+ones the coverage suites executed. The Python distribution enforces both, together with the
+report-mode interlock, in `tests/test_continuation_owner_coverage.py`.
 
 Contract 1.3 is the revision that satisfies this precondition and advertises
 `continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
