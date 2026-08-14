@@ -285,41 +285,44 @@ def test_the_threaded_dispatcher_actually_overlaps_its_trials() -> None:
         _Rendezvous(), [_request(issue=100 + index, slot=index) for index in range(width)]
     )
 
-    assert len(results) == width
+    # A serial dispatcher would leave every Trial waiting on siblings that never
+    # arrive, break the barrier on its timeout, and answer red through the same
+    # isolation that catches a genuine fault — so the outcome, not the count, is
+    # what says they overlapped.
+    assert [result.passed for result in results] == [True] * width
 
 
 def test_the_threaded_dispatcher_never_exceeds_its_width() -> None:
     """The operator's bound is a bound on Trials *in flight*, not on total work.
 
-    Negative-tested by construction: with five requests through a width of two,
-    a dispatcher that ignored its width would put five Trials in flight and the
-    high-water mark below would read five.
+    Pinned by a rendezvous one wider than the bound: if a ``width + 1``-th Trial
+    could ever be inside ``run`` at the same time as the others, that barrier
+    would complete and the breach would be recorded. Under a correct bound it
+    can only time out, which is what a broken barrier here means. A high-water
+    counter would not do — with five Trials queued behind two workers it can
+    race to the right answer while the dispatcher is wrong.
     """
     width = 2
-    lock = threading.Lock()
-    in_flight = 0
-    high_water = 0
-    release = threading.Event()
+    over_width = threading.Barrier(width + 1, timeout=1.0)
+    breached: list[TrialRequest] = []
+    guard = threading.Lock()
 
-    class _Counting(_RecordingRunner):
+    class _Rendezvous(_RecordingRunner):
         def run(self, request: TrialRequest) -> TrialResult:
-            nonlocal in_flight, high_water
-            with lock:
-                in_flight += 1
-                high_water = max(high_water, in_flight)
-                at_width = in_flight >= width
-            if at_width:
-                release.set()
-            release.wait(timeout=10)
-            with lock:
-                in_flight -= 1
+            try:
+                over_width.wait()
+            except threading.BrokenBarrierError:
+                return super().run(request)
+            with guard:
+                breached.append(request)
             return super().run(request)
 
-    ThreadedTrialDispatcher(width).dispatch(
-        _Counting(), [_request(issue=100 + index, slot=index % width) for index in range(5)]
+    results = ThreadedTrialDispatcher(width).dispatch(
+        _Rendezvous(), [_request(issue=100 + index, slot=index % width) for index in range(5)]
     )
 
-    assert high_water == width
+    assert breached == []
+    assert len(results) == 5
 
 
 # ---------------------------------------------------------------------------

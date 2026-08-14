@@ -45,6 +45,7 @@ from git_loopy.gh import (
     LIST_MAX_LIMIT,
     LIST_PAGE_LIMIT,
     ReadOutcome,
+    ReadStep,
     next_read_step,
 )
 from git_loopy.issue_order import (
