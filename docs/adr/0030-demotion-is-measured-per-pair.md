@@ -112,6 +112,14 @@ implicit trigger converts an unattended Run into a benchmark suite.
   entry in `CONTEXT.md`, where **Demotion** is still only a decision. What has *not* shipped is
   the writer: nothing puts a **Provisional** record into the artifact until this entry's
   mechanism exists.
+- **The shipped `demoted` state is left without a writer.** Nothing in this decision produces
+  one. Demotion writes `provisional`, because `demoted` *clears* the pair and so falls through
+  to the hand-authored bootstrap this entry rejects by name above; and its
+  `demoted_after_strikes` field encodes the consecutive-**Strike** rule *"Why the stated rule
+  cannot work"* disproves outright. The state is therefore **superseded**, not pending. It stays
+  in the schema because it has shipped and a loader must still read a hand-placed one — retiring
+  the field set is an artifact schema change and belongs to the mechanism (#366). `CONTEXT.md`
+  records the same, so the glossary does not send that implementer at the wrong record.
 - **The tier can now hold unmeasured values.** "Measured routing" becomes a slight misnomer;
   the name is kept because the status field carries the distinction precisely.
 - **Demotion needs a threshold nobody has chosen.** This entry establishes *what is counted*

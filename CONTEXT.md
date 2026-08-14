@@ -1378,12 +1378,16 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   a **Strike**. Four of the five terms those two decisions fixed have since shipped and now
   have their own **Language** entries: **Calibration**, **Proving set** (with **Proving task**
   beside it), **Trial** and **Measured routing**. **Demotion** is the fifth and is still owed —
-  [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settles it and the **Measured
-  routing** artifact already carries the `demoted` and `provisional` states it would write, but
-  nothing demotes yet, so the glossary does not claim it. That `provisional` state is the one
-  part of the mechanism that *has* shipped, and it enters **Language** on its own as
-  **Provisional**: it is **reachable** — such a record loads, routes, round-trips and is reported
-  apart from a measured one — where Demotion is still only a decision, and the two together are
+  [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settles it, and the state it writes
+  is `provisional`, not `demoted`. That decision needed a *fourth* status precisely because the
+  older `demoted` one **clears the pair** and falls through to the hand-authored bootstrap, an
+  option it lists and rejects by name; `demoted` is therefore **superseded and has no writer**,
+  its `demoted_after_strikes` field set encoding the consecutive-**Strike** rule ADR-0030 shows
+  cannot be read per-pair at all. Reading it as the record Demotion produces would send whoever
+  implements the mechanism at the wrong state. What *has* shipped is `provisional`, and it enters
+  **Language** on its own as **Provisional**: it is **reachable** — such a record loads, routes,
+  round-trips and is reported apart from a measured one — where Demotion is still only a
+  decision, and nothing demotes yet, so the glossary does not claim it. The two together are
   where the glossary draws the line between a shipped state and its missing writer. One further
   consequence outlives these entries: the **Proving set**'s refresh policy is stated — re-base
   when the pinned **Task-type classifier** pair moves, or on an interval, whichever comes first —

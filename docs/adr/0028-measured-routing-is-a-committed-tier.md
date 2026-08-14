@@ -237,7 +237,8 @@ when it found a roster that named no version at all.
   there as fact. **Discharged by amendment:** four of the five terms have now shipped and are
   `## Language` entries — **Calibration**, **Proving set** (with **Proving task** beside it),
   **Trial** and **Measured routing**. **Demotion** waits, because
-  [ADR-0030](0030-demotion-is-measured-per-pair.md)'s mechanism has not shipped: the artifact
-  already carries the `demoted` and `provisional` states that mechanism would write, and
-  nothing writes them. A term entered ahead of its code is the precise failure ADR-0019's
+  [ADR-0030](0030-demotion-is-measured-per-pair.md)'s mechanism has not shipped. That mechanism
+  writes `provisional` — the one state of the two that has shipped — and never the older
+  `demoted`, which ADR-0030 supersedes and leaves without a writer; nothing writes either today.
+  A term entered ahead of its code is the precise failure ADR-0019's
   precedent exists to prevent, so the glossary records four and names the fifth as owed.

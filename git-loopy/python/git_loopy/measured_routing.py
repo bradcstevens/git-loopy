@@ -30,12 +30,13 @@ Design notes:
 * **Four states, each honest about itself.** ``measured`` carries a winning
   pair; ``incomplete`` carries where the search stopped and **no pair at all**,
   because an unfinished search publishes no winner; ``demoted`` carries the pair
-  that failed and the **Strike** count that removed it, so a later Calibration
-  knows it was tried in production; ``provisional`` carries a pair that is **in
-  force and was never measured** (#376, ADR-0030) — what **Demotion** produces
-  when it steps *up* the price staircase, since cheapest-first stops at the first
-  pass and so nothing above the winner was ever trialled. ``measured`` and
-  ``provisional`` supply a Routed pair; only ``measured`` is evidence.
+  that failed and the Strike count that removed it, and is **superseded by
+  ADR-0030** with no writer anywhere (see :attr:`MeasuredStatus.DEMOTED`);
+  ``provisional`` carries a pair that is **in force and was never measured**
+  (#376, ADR-0030) — what **Demotion** produces when it steps *up* the price
+  staircase, since cheapest-first stops at the first pass and so nothing above
+  the winner was ever trialled. ``measured`` and ``provisional`` supply a Routed
+  pair; only ``measured`` is evidence.
 * **I/O confined to the load/write functions**, mirroring
   :mod:`git_loopy.settings`. Everything else is pure.
 * **Evidence never pools across repositories.** The artifact is per-repository
@@ -141,6 +142,17 @@ class MeasuredStatus(Enum):
     INCOMPLETE = "incomplete"
     #: A measured pair removed after consecutive **Strikes** on real work. The
     #: pair is cleared; which pair failed, and after how many Strikes, is kept.
+    #:
+    #: **Superseded by ADR-0030, and has no writer.** The rule this state
+    #: encodes is ADR-0027's, and it cannot be read: the Strike counter is one
+    #: shared per-Run machine that any Lane's progress resets, so there is no
+    #: per-pair Strike signal in the system to count. **Demotion** counts
+    #: per-pair no-progress from the persisted run record instead and writes
+    #: :attr:`PROVISIONAL`, because this state *clears* the pair and so falls
+    #: through to the hand-authored bootstrap — the one outcome ADR-0030
+    #: rejects by name. It stays because it ships and a loader must still read
+    #: a hand-placed one; retiring the field set is an artifact schema change
+    #: and belongs to the mechanism (#366).
     DEMOTED = "demoted"
     #: A pair that is **in force and was never measured** (#376, ADR-0030): what
     #: **Demotion** installs when it steps up the price staircase into a rung
