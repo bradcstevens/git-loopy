@@ -635,19 +635,26 @@ def test_the_provisional_entry_records_what_makes_it_look_unmeasured() -> None:
     assert "reason" in entry
 
 
-def test_the_provisional_entry_records_that_nothing_writes_one_yet() -> None:
-    """The state shipped; its only writer did not.
+def test_the_provisional_entry_names_the_writer_that_has_now_shipped() -> None:
+    """The state's only writer shipped, so the entry stops saying it has not.
 
-    #376 was schema, loader, precedence and reporting work, and said so:
-    *"Nothing writes the new state until Demotion ships."* An entry that stopped
-    at *what a provisional row is* would read as though rows appeared on their
-    own, and would quietly bury the same gap ``test_the_open_consequences_are_
-    recorded_rather_than_dropped`` keeps open for the **Proving set**'s refresh.
+    This assertion is the inverse of the one it replaces. That one pinned
+    *"nothing writes one yet"*, which was true while #376 had delivered schema,
+    loader, precedence and reporting and said so — *"Nothing writes the new state
+    until Demotion ships."* It has now shipped:
+    :func:`~git_loopy.demotion.apply_demotions` builds exactly this record and
+    :func:`git_loopy.loop.run` reaches it at Run end.
+
+    Left as it was, the glossary would deny the existence of the one mechanism
+    that produces the state it describes — the same class of error as an entry
+    written *ahead* of its code, pointing the other way, and the harder one to
+    notice because the sentence was true when written.
     """
     entry = _entry("Provisional")
 
     assert "**Demotion**" in entry
-    assert "nothing writes one yet" in entry
+    assert "nothing writes one yet" not in entry, "its writer has shipped"
+    assert "end of a **Run**" in entry, "and the entry says when one appears"
 
 
 #: Each term this ticket adds, and the shipped code that implements it. The
@@ -681,6 +688,11 @@ SHIPPED_TERMS: tuple[tuple[str, str, str], ...] = (
         "git-loopy/python/git_loopy/measured_routing.py",
         'PROVISIONAL = "provisional"',
     ),
+    (
+        "Demotion",
+        "git-loopy/python/git_loopy/demotion.py",
+        "def demote_after_run",
+    ),
 )
 
 
@@ -701,6 +713,7 @@ TERM_DECISIONS: tuple[tuple[str, str], ...] = (
     ("Trial", ADR_0027),
     ("Measured routing", ADR_0028),
     ("Provisional", ADR_0030),
+    ("Demotion", ADR_0030),
 )
 
 
@@ -717,59 +730,170 @@ def test_each_term_and_its_deciding_adr_agree(term: str, adr: str) -> None:
     assert f"**{term}**" in _prose(adr), f"ADR-{number} does not use **{term}**"
 
 
-def test_demotion_is_not_written_into_language_ahead_of_its_code() -> None:
-    """The fifth term stays out, because nothing demotes yet.
+def test_demotions_glossary_entry_is_no_longer_held_back_by_its_code() -> None:
+    """The guard that kept **Demotion** out of Language has expired (#366).
 
-    ADR-0030 fixes **Demotion** and the **Measured routing** artifact already
-    carries the ``provisional`` state it would write, but no code counts a pair's
-    no-progress contributions or replaces an entry. Writing the entry now would
-    state as shipped reality a mechanism a reader cannot invoke — the precise
-    failure ADR-0019's precedent exists to prevent, and the one
+    It read *"the fifth term stays out, because nothing demotes yet"* and
+    asserted ``_find_entry("Demotion") is None``. That was right for as long as
+    it was true: writing the entry then would have stated as shipped reality a
+    mechanism a reader could not invoke — ADR-0019's precedent, and the failure
     ``test_every_new_term_is_implemented_by_shipped_code`` pins for the other
-    four.
+    four terms.
 
-    The state named here is ``provisional`` alone. The older ``demoted`` one is
-    superseded and has no writer (``test_the_demoted_state_is_documented_as_
-    superseded_not_as_the_live_rule``), so naming it beside ``provisional`` was
-    the same error c0d85ea corrected in three other voices — surviving here, in
-    the guard for the very claim.
+    It is no longer true. :mod:`git_loopy.demotion` counts a pair's no-progress
+    contributions, replaces the entry and commits the artifact, and
+    :func:`git_loopy.loop.run` calls it. So the assertion is replaced rather than
+    kept: left as it was it would have **forbidden** the very entry it was
+    waiting for, and the next Run to write it — #373, whose one open criterion
+    this is — would have gone red on a guard whose own docstring promised the
+    opposite.
+
+    Deliberately silent on whether the entry *exists*. Writing it belongs to
+    #373; what belongs here is the fact that nothing structural stands in its way
+    any more, asserted so that this claim breaks if the mechanism is ever
+    removed.
     """
-    assert _find_entry("Demotion") is None, (
-        "**Demotion** has a glossary entry but no implementation; "
-        "it enters Language when its mechanism ships"
+    module = _doc("git-loopy/python/git_loopy/demotion.py")
+
+    assert "def demote_after_run(" in module, "the mechanism exists"
+    assert "def plan_demotions(" in module, "and decides per pair"
+    assert "MeasuredStatus.PROVISIONAL" in module, "writing the state it owns"
+    assert "demote_after_run(" in _doc("git-loopy/python/git_loopy/loop.py"), (
+        "and a Run reaches it, so a reader of the entry could invoke it"
     )
 
 
-def test_the_pending_terms_list_is_retired_and_the_owed_term_is_named() -> None:
-    """The flagged ambiguity stops promising terms the glossary now holds.
+def test_the_demotion_entry_counts_per_pair_and_not_the_strike_counter() -> None:
+    """The fifth term enters **Language**, on the signal it actually reads.
 
-    A list of five terms *"still to enter Language"* is wrong in both directions
-    once four of them are entries: it under-reports what shipped and hides which
-    single term is actually still owed. Asserted against the bullet rather than
-    the document, because **Demotion** is now bolded inside the **Provisional**
-    entry too, and a whole-document search would let the bullet drop it.
+    The claim pinned here is the one ADR-0030 exists for. ADR-0027 originally
+    specified consecutive **Strikes**, and that is unimplementable: the Strike
+    counter is a single Run-scoped counter every **Lane** shares and *any* Lane's
+    progress resets, so a good pair's commit erases what a bad pair accumulated.
+    An entry saying *"consecutive Strikes"* would send its reader at the very
+    counter :func:`~git_loopy.demotion.tally_no_progress` refuses to read, and
+    would describe a rule the shipped code declines to implement.
+    """
+    entry = _entry("Demotion")
+
+    assert "**Strike**" in entry, "the entry names the counter it is *not*"
+    assert "per **Routed pair**" in entry
+    assert "no-progress" in entry
+
+
+def test_the_demotion_entry_records_that_it_lands_after_the_run() -> None:
+    """*When* it applies is what dissolved both of its blocking problems.
+
+    ADR-0030 moved Demotion out of the Run rather than solving the mid-Run race:
+    with no **Lane** running there is nothing to race over the one shared tracked
+    file, and no mid-Run mechanism for committing an arbitrary tracked file has to
+    be invented. A reader who takes Demotion for a mid-Run act inherits both
+    problems back — and it is also what closed the **Checkpoint** interaction
+    ADR-0028 left open, by removing it rather than resolving it.
+    """
+    entry = _entry("Demotion")
+
+    assert "after the **Run**" in entry
+    assert "never mid-Run" in entry
+    assert "commit" in entry, "the reviewable, revertible commit is the point"
+
+
+def test_the_demotion_entry_records_that_it_steps_up_into_the_unmeasured() -> None:
+    """The replacement is unmeasured, and the entry may not round that off.
+
+    The obvious fallback — the next-cheapest pair the **Calibration** already
+    measured — does not exist: cheapest-first stops at the first pass, so every
+    measured rung sits *below* the winner and failed, and nothing above it was
+    ever trialled. Demotion therefore steps **up** into a pair nobody has
+    measured, which is exactly why the result is recorded **Provisional**. An
+    entry that said only *"replaced"* would let the replacement read as another
+    measured pair — the confusion the fourth status was added to prevent.
+    """
+    entry = _entry("Demotion")
+
+    assert "**Provisional**" in entry
+    assert "staircase" in entry
+    assert "never as measured" in entry
+    assert "count" in entry, "the evidence that moved it is recorded beside it"
+
+
+def test_the_demotion_entry_records_that_it_notifies_and_never_searches() -> None:
+    """ADR-0028's notify-don't-act rule, applied unchanged and for its reason.
+
+    An implicit trigger would convert an unattended **Run** into a benchmark
+    suite — the tolerance ``test_no_unattended_path_can_start_a_calibration``
+    protects structurally. Demotion runs at the end of *every* Parallel Run, so
+    if it could start a search then every Run could, and the **Calibration**
+    entry's *"never starts itself"* would be false by this back door.
+    """
+    entry = _entry("Demotion")
+
+    assert "re-calibrat" in entry, "it notifies that the Task type needs measuring"
+    assert "starts no search" in entry
+
+
+def test_the_demotion_entry_records_the_two_entries_it_will_not_touch() -> None:
+    """A hand-written entry, and a mode where nothing routes, are both immune.
+
+    :func:`~git_loopy.demotion.plan_demotions` acts on the **measured** tier
+    only: a hand-written ``[routing]`` entry is the operator's decision and this
+    system does not overrule those, and at ``parallel == 1`` nothing routes so
+    nothing can demote. Both are refusals an operator has to be able to rely on
+    before leaving a Run unattended over their own routing table — and a Run
+    rewrites that table without being asked, so the entry owes them plainly.
+
+    Spelled **Parallel mode** and ``parallel == 1`` to match the **Measured
+    routing** entry making the same claim; *"serial mode"* is on the **Serial
+    fallback** entry's own avoid-list, and the tier it would name here is the
+    one that does not route rather than a degraded Lane.
+    """
+    entry = _entry("Demotion")
+
+    assert "hand-written" in entry
+    assert "never demoted" in entry
+    assert "**Parallel mode**" in entry
+    assert "`parallel == 1`" in entry
+    assert "Serial mode" not in entry
+
+
+def test_the_flagged_ambiguity_is_retired_into_the_glossary_it_produced() -> None:
+    """All five terms have entries, so the bullet stops promising any.
+
+    This ticket's rule is that the flagged ambiguity recording the resolution is
+    *retired, since the resolution is now the glossary*. The bullet has carried,
+    in turn, a list of five terms *"still to enter Language when this ships"* and
+    then a single one *"still owed"*. Both are promises, and a promise that has
+    been kept while still being made is how a glossary re-acquires the ambiguity
+    it closed: the next reader cannot tell whether **Demotion** is a term they
+    may use or one they must wait for.
     """
     bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
 
     assert "Terms still to enter **Language** when this ships" not in bullet
-    assert "**Demotion**" in bullet, "the one term still owed is still named"
-    assert "ADR-0030" in bullet, "and the decision that will supply it is cited"
+    assert "still owed" not in bullet
+    assert "All five" in bullet, "the bullet records that the resolution landed"
+    assert "**Demotion**" in bullet, "and still names the term it resolved last"
+    assert "ADR-0030" in bullet
 
 
-def test_the_flagged_ambiguity_separates_a_shipped_state_from_its_writer() -> None:
-    """Why **Provisional** entered Language and **Demotion** did not.
+def test_the_flagged_ambiguity_records_that_the_missing_writer_arrived() -> None:
+    """What separated **Provisional** from **Demotion** no longer separates them.
 
-    Both belong to ADR-0030 and the artifact carries the states either would
-    write, so without the distinction the next reader concludes that one of the
-    two calls broke the rule. What separates them is reachability: a
-    ``provisional`` record loads, routes, round-trips and reports itself apart
-    today, while no code demotes anything at all.
+    The bullet drew the glossary's line between a shipped state and its missing
+    writer: ``provisional`` was **reachable** — such a record loaded, routed,
+    round-tripped and reported itself apart — where Demotion was still only a
+    decision, so the glossary claimed the first and not the second. Demotion has
+    since shipped, so a bullet still saying *"nothing demotes yet"* would be
+    explaining the absence of an entry that now sits a few lines above it.
+
+    Reachability itself is kept, because it is the *test* both terms were
+    admitted by and the next term will be admitted by too — what changed is which
+    side of it Demotion falls on, not the rule.
     """
     bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
 
-    assert "**Provisional**" in bullet
-    assert "reachable" in bullet
-    assert "nothing demotes yet" in bullet
+    assert "nothing demotes yet" not in bullet
+    assert "reachable" in bullet, "the admission test itself survives the retirement"
 
 
 def _enum_member_note(module: str, member: str) -> str:
@@ -871,17 +995,30 @@ def test_adr_0030_records_that_the_shipped_demoted_state_is_left_orphaned() -> N
 
 
 def test_the_open_consequences_are_recorded_rather_than_dropped() -> None:
-    """Two live consequences outlive the entries that ship (#373).
+    """The one live consequence outlives the entries, and the closed one says so.
 
-    The **Proving set** refresh has a stated policy and no implementation, and
-    **Demotion** has a decision and no code. Both are the kind of gap that
-    disappears silently once the terms around them read as finished.
+    This ticket asks for two things to stay written down rather than being
+    quietly dropped: the **Proving set**'s refresh gap, and the **Demotion** /
+    **Checkpoint** interaction. They have since diverged, and recording them
+    identically would now be wrong in one direction or the other.
+
+    The refresh gap is **still open** — the policy is stated and nothing
+    implements it — so the bullet keeps carrying it. The Checkpoint interaction
+    is **closed**, and ADR-0030 closed it *by removing it*: applying Demotion
+    after the Run means no Lane is running to race the artifact and no mid-Run
+    commit mechanism has to exist. Asserting *"nothing demotes yet"* here would
+    keep an answered question open, which is the same disappearing act pointed
+    the other way — so the closure is asserted on the **Demotion** entry, where a
+    reader meets the mechanism, rather than left implicit.
     """
     bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
 
     assert "refresh policy" in bullet
     assert "nothing refreshes it yet" in bullet
-    assert "nothing demotes yet" in bullet
+    assert "nothing demotes yet" not in bullet, "that consequence closed"
+    assert "**Checkpoint**" in _entry("Demotion"), (
+        "and the interaction it closed is recorded where the mechanism is defined"
+    )
 
 
 @pytest.mark.parametrize(("adr", "number"), ((ADR_0027, "0027"), (ADR_0028, "0028")))

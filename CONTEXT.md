@@ -938,11 +938,35 @@ exactly as a measured one does, on the same rung rather than a new one, so a han
 status alone, so it is attributed to its own reporting tier — `provisional (unmeasured)` — and
 carries the pair it replaced and a closed-vocabulary `reason`, with no rung and no **Proving
 task** beside it at all: nothing trialled this pair, and evidence next to it would be the
-replaced pair's, read as its own. The state itself has shipped — such a record loads, routes,
-round-trips and is reported apart, and the **Wrapper contract** lists it — but **nothing writes
-one yet**, because the only thing that would is **Demotion**, whose mechanism (ADR-0030) has not
-shipped.
+replaced pair's, read as its own. **Demotion** is what writes one, at the end of a **Run**
+(ADR-0030); such a record loads, routes, round-trips and is reported apart, and the **Wrapper
+contract** lists it.
 _Avoid_: fallback, temporary, pending, unverified (that is an **Observation** classification).
+
+**Demotion**:
+The Run-end replacement of a **Measured routing** entry whose **Routed pair** stopped making
+progress on real work. Its signal is counted per **Routed pair** from the Run's finalized
+**Lane contributions** — a contribution that reached a terminal disposition without publishing is
+a **no-progress** one — and deliberately *not* from the **Strike** counter, which is a single
+Run-scoped counter every **Lane** shares and any Lane's progress resets, so it can never carry a
+per-pair meaning; the Strike counter's own job, ending a Run that is going nowhere, is unchanged
+(ADR-0030). The threshold is **Config**, and it is an absolute bar rather than a comparison:
+nothing is claimed about which pair would have done better, only that this one is failing. It is
+evaluated and applied after the **Run** ends and never mid-Run, at the one quiescent point where
+every Lane has finalized and nothing is in flight to race it over the single tracked file — which
+is also how the **Checkpoint** interaction ADR-0028 left open was closed, by removal rather than
+resolution — and it lands as one reviewable, revertible commit. A demoted **Task type** steps
+*up* the price staircase, into the next rung — which nobody has measured, cheapest-first having
+stopped at the first pass so every measured rung sits *below* the winner and failed — so the
+replacement is recorded **Provisional** and never as measured, carrying the pair it replaced and
+the count of no-progress contributions that moved it. It **notifies** that the Task type now needs
+re-calibrating and **starts no search** itself, ADR-0028's notify-don't-act rule applying
+unchanged and for the same reason: an implicit trigger would turn an unattended Run into a
+benchmark suite. It reaches the measured tier only — a hand-written `[routing]` entry is **never
+demoted**, however badly its pair performs, because it is the operator's decision and this system
+does not overrule those — and being part of **Routing** it is a **Parallel mode** feature, so at
+`parallel == 1` nothing routes and nothing demotes.
+_Avoid_: rollback, regression.
 
 ### The runner family
 
@@ -1388,20 +1412,20 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   so the target is the *cheapest* pair that reliably clears it, never the most capable one.
   A **Trial** is one candidate pair working one Proving task and is deliberately **not** an
   **Iteration** — it is attributed to a Calibration rather than a **Run**, and never ticks
-  a **Strike**. Four of the five terms those two decisions fixed have since shipped and now
-  have their own **Language** entries: **Calibration**, **Proving set** (with **Proving task**
-  beside it), **Trial** and **Measured routing**. **Demotion** is the fifth and is still owed —
-  [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settles it, and the state it writes
-  is `provisional`, not `demoted`. That decision needed a *fourth* status precisely because the
-  older `demoted` one **clears the pair** and falls through to the hand-authored bootstrap, an
-  option it lists and rejects by name; `demoted` is therefore **superseded and has no writer**,
-  its `demoted_after_strikes` field set encoding the consecutive-**Strike** rule ADR-0030 shows
-  cannot be read per-pair at all. Reading it as the record Demotion produces would send whoever
-  implements the mechanism at the wrong state. What *has* shipped is `provisional`, and it enters
-  **Language** on its own as **Provisional**: it is **reachable** — such a record loads, routes,
-  round-trips and is reported apart from a measured one — where Demotion is still only a
-  decision, and nothing demotes yet, so the glossary does not claim it. The two together are
-  where the glossary draws the line between a shipped state and its missing writer. One further
-  consequence outlives these entries: the **Proving set**'s refresh policy is stated — re-base
-  when the pinned **Task-type classifier** pair moves, or on an interval, whichever comes first —
-  and nothing refreshes it yet, so a set left alone silently measures the project you used to be.
+  a **Strike**. All five terms those two decisions fixed have now shipped and hold their own
+  **Language** entries: **Calibration**, **Proving set** (with **Proving task** beside it),
+  **Trial**, **Measured routing** and — last to arrive, with
+  [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settling it — **Demotion**, so this
+  resolution now *is* the glossary and promises no further term. One distinction the entries rest
+  on is kept here, because it is a trap rather than a definition: the state Demotion writes is
+  `provisional`, not `demoted`. ADR-0030 needed a *fourth* status precisely because the older
+  `demoted` one **clears the pair** and falls through to the hand-authored bootstrap, an option it
+  lists and rejects by name; `demoted` is therefore **superseded and has no writer**, its
+  `demoted_after_strikes` field set encoding the consecutive-**Strike** rule ADR-0030 shows cannot
+  be read per-pair at all. Both terms were admitted to Language by the same test — being
+  **reachable**, so that a reader can invoke what the entry describes — which `provisional` met
+  first, as a record that loads, routes, round-trips and is reported apart, and which Demotion met
+  when its mechanism shipped. One further consequence outlives these entries: the **Proving
+  set**'s refresh policy is stated — re-base when the pinned **Task-type classifier** pair moves,
+  or on an interval, whichever comes first — and nothing refreshes it yet, so a set left alone
+  silently measures the project you used to be.
