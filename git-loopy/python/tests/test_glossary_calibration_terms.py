@@ -157,6 +157,76 @@ def test_calibration_publishes_no_prose_conclusion() -> None:
     assert "no written analysis" in entry
 
 
+#: The three seams a **Calibration** has to reach to actually happen: the walk
+#: that decides which **Trials** to buy, the Trial runner that spends, and the
+#: writer that publishes the result. Written as *call sites*, because all three
+#: definitions ship — it is the calling of them that does not.
+_SPENDING_SEAMS: tuple[str, ...] = (
+    "search_price_staircase(",
+    "ReplayTrialRunner(",
+    "write_measured_routing(",
+)
+
+
+def _package_call_sites(seam: str) -> list[str]:
+    """Every line in the shipped package that *calls* ``seam``.
+
+    Definitions are skipped, so ``def search_price_staircase(`` does not count as
+    a caller of itself, and tests are out of scope by construction: a seam
+    exercised only from ``tests/`` is exactly the state this asserts.
+    """
+    root = _repo_root()
+    if root is None:  # pragma: no cover - installed wheel, no source checkout
+        pytest.skip("no source checkout to read the package from")
+    calls: list[str] = []
+    for module in sorted((root / "git-loopy" / "python" / "git_loopy").rglob("*.py")):
+        for line in module.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("def ", "class ", "async def ")):
+                continue
+            if seam in stripped:
+                calls.append(f"{module.name}: {stripped}")
+    return calls
+
+
+@pytest.mark.parametrize("seam", _SPENDING_SEAMS)
+def test_no_shipped_path_runs_a_calibration(seam: str) -> None:
+    """The entry's *"nothing runs one yet"* is pinned to the code, not asserted.
+
+    ``git-loopy calibrate`` requires ``--status`` or ``--dry-run`` and both are
+    structurally incapable of spending, so the walk, the **Trial** runner and the
+    artifact writer are reachable from the test suite and from nothing else. This
+    is the guard that makes the claim expire on its own: whichever commit wires
+    the spending path (#372) fails here, and the entry has to be corrected in the
+    same breath rather than quietly becoming false.
+    """
+    assert _package_call_sites(seam) == [], (
+        f"{seam!r} now has a caller, so a Calibration can be run — "
+        "the **Calibration** entry's 'nothing runs one yet' is stale"
+    )
+
+
+def test_the_calibration_entry_records_that_nothing_runs_one_yet() -> None:
+    """The term names an act, and no operator can perform it (ADR-0019's rule).
+
+    Every clause above this one describes ``search_price_staircase``, which no
+    shipped path calls — so an entry that stopped at *"always an explicit
+    operator act"* would read as though the act were available, which is the
+    same claim-ahead-of-code failure **Demotion** is held out of Language for.
+    The line is drawn where the operator documentation already draws it: two
+    modes that report, and no mode that buys.
+    """
+    entry = _entry("Calibration")
+
+    assert "nothing runs one yet" in entry
+    assert "no command surface reaches them" in entry
+    assert "hand-placed" in entry, (
+        "an artifact present today was written by a human, "
+        "which is what the Measured routing entry's `git blame` property "
+        "cannot say for itself"
+    )
+
+
 def test_the_glossary_separates_a_mined_candidate_from_an_admitted_task() -> None:
     """Mining yields candidates; only admission yields **Proving tasks**.
 
