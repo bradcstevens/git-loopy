@@ -1,6 +1,6 @@
 # The runner picks the oldest eligible issue, and the agent no longer chooses
 
-**Status:** proposed
+**Status:** accepted
 
 Implemented by [#389](https://github.com/bradcstevens/git-loopy/issues/389).
 
