@@ -13,11 +13,14 @@ GitHub's own creation timestamp, and the issue number breaks every remaining tie
 
 Design notes:
 
-* **Nothing calls this yet.** #391 is the decision and its fixture; #393 feeds it
-  to **Parallel mode** and #394 gives a serial **Iteration** a **Pickup** that
-  consumes it. Landing a seam ahead of its consumer is the same deliberate cost
-  #361 and #379 paid, and it is what lets the three ports be pinned against one
-  another before any behaviour moves.
+* **#393 is the first consumer.** ``GitHubIssueSource.shallow_membership`` hands
+  its candidates back in this order, so **Parallel mode** works its backlog
+  oldest-first — the scheduler already walked its cache front to back, and only
+  its input was wrong. A serial **Iteration** still self-selects; #394 gives it
+  a **Pickup** that consumes this seam, #396 pins one issue past it. Landing the
+  decision one slice ahead of its consumers is the same deliberate cost #361 and
+  #379 paid, and it is what lets the three ports be pinned against one another
+  before any behaviour moves.
 * **Total, or it is not an order.** Two issues can share a **Priority** rank and
   an instant; they can never share an issue number. Without that last component
   "the head of the order" would be a set, and a Run would pick differently on

@@ -347,10 +347,17 @@ class RollingPool:
         """Fold one complete snapshot into the cache without moving survivors.
 
         #219 §2.9: remove missing or ineligible candidates, update survivors in
-        place, append newcomers in source order, retain quarantined candidates'
-        FIFO positions. Order is the **Queue**'s order — a candidate that keeps
-        its place keeps its place, whatever order the source listed it in this
-        time.
+        place, append newcomers in the order the snapshot gave them, retain
+        quarantined candidates' FIFO positions. Order is the **Queue**'s order —
+        a candidate that keeps its place keeps its place.
+
+        That snapshot order is now the Wrapper contract §3.2 **selection
+        order**, which is the whole of #393: the first refresh seeds an ordered
+        cache and :meth:`take` was already walking it front to back. Nothing
+        re-sorts here, deliberately. A later refresh appends a newcomer behind
+        the candidates already queued even when it is older or carries
+        **Priority**, because reordering a cache that Lanes are walking would
+        break the position guarantee this method exists to hold.
         """
         observed = {
             c.ref: c for c in snapshot.candidates if self.eligible(c)

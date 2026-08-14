@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,31 @@ def _silent_logger() -> logging.Logger:
     logger.addHandler(logging.NullHandler())
     logger.propagate = False
     return logger
+
+
+@contextlib.contextmanager
+def _capture(logger: logging.Logger) -> Iterator[list[logging.LogRecord]]:
+    """Collect what ``logger`` emitted inside the block.
+
+    ``caplog`` cannot see these: :func:`_silent_logger` sets
+    ``propagate = False``, which is what keeps a source's diagnostics out of
+    the test run's own output.
+    """
+    records: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Collector()
+    previous_level = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
 
 
 @dataclass(frozen=True)
@@ -1137,6 +1164,7 @@ class TestModuleStructure:
             "PoolCollection",
             "PoolExclusion",
             "afk_ready_exclusion",
+            "in_selection_order",
             "is_afk_ready",
             "is_pr_afk_ready",
         }
@@ -1152,18 +1180,27 @@ class TestModuleStructure:
         assert isinstance(IssueSource, _ProtocolMeta)
 
     def test_imports_are_constrained(self) -> None:
-        """sources.py may only import stdlib + git_loopy.{gh,git,wrapper}.
+        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,wrapper}.
 
         Forbidden: copilot SDK, rich, git_loopy.{loop,cli,config,session,
         ui,persist,events,pricing,telemetry} — keeps the Protocol seam
         light and the unit-test surface fast.
+
+        ``issue_order`` joined the allowlist with #393, when a **Pool** read
+        started deciding sequence. It is the one module that may: §3.2's order
+        is a Wrapper-contract decision pinned across three Orchestrators by
+        ``issue-ordering.json``, so a source that sorted for itself would be a
+        second implementation of a decision the fixture exists to keep single.
+        It costs the seam nothing —
+        :meth:`test_the_ordering_seam_stays_stdlib_only` is what keeps that
+        true.
         """
         import ast
 
         source_path = Path(sources_module.__file__)
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         allowed_third_party_prefixes: set[str] = set()  # no third-party allowed
-        allowed_git_loopy_submodules = {"gh", "git", "wrapper"}
+        allowed_git_loopy_submodules = {"gh", "git", "issue_order", "wrapper"}
 
         offenders: list[str] = []
         for node in ast.walk(tree):
@@ -1205,6 +1242,40 @@ class TestModuleStructure:
         assert not offenders, (
             "git-loopy/sources.py has forbidden imports:\n  "
             + "\n  ".join(offenders)
+        )
+
+    def test_the_ordering_seam_stays_stdlib_only(self) -> None:
+        """Widening the allowlist above must not smuggle a dependency in.
+
+        ``sources.py`` may import ``issue_order`` because ordering is one
+        decision that belongs in one place. That stays cheap only while
+        ``issue_order`` itself imports nothing from ``git_loopy`` — the moment
+        it reached for ``config`` or ``events``, the Protocol seam would have
+        acquired the weight this class exists to keep off it, transitively and
+        invisibly.
+        """
+        import ast
+
+        from git_loopy import issue_order as issue_order_module
+
+        tree = ast.parse(
+            Path(issue_order_module.__file__).read_text(encoding="utf-8")
+        )
+        offenders = [
+            f"line {node.lineno}: {name}"
+            for node in ast.walk(tree)
+            for name in (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom) and node.level == 0
+                else []
+            )
+            if name.split(".")[0] in {"git_loopy", "copilot", "rich"}
+        ]
+
+        assert not offenders, (
+            "git-loopy/issue_order.py must stay pure:\n  " + "\n  ".join(offenders)
         )
 
 
@@ -1424,7 +1495,7 @@ class TestGitHubMixedPoolBackstop:
 class TestShallowMembership:
     """The cheap membership read Rolling dispatch reconciles its cache from."""
 
-    def test_returns_afk_shaped_open_issues_in_source_order(self) -> None:
+    def test_returns_afk_shaped_open_issues_in_selection_order(self) -> None:
         gh = FakeGitHubClient(
             issues=[
                 _make_issue(31, labels=["ready-for-agent", "parallel-safe"]),
@@ -1436,9 +1507,11 @@ class TestShallowMembership:
         snapshot = impl.shallow_membership()
 
         assert snapshot.complete is True
-        assert [c.ref for c in snapshot.candidates] == [31, 7]
-        assert snapshot.candidates[0].labels == ("ready-for-agent", "parallel-safe")
-        assert snapshot.candidates[0].title == "Test issue 31"
+        # Neither carries a timestamp, so §3.2's tiebreak — the issue number —
+        # decides, and `gh`'s newest-first listing stops being the answer.
+        assert [c.ref for c in snapshot.candidates] == [7, 31]
+        assert snapshot.candidates[1].labels == ("ready-for-agent", "parallel-safe")
+        assert snapshot.candidates[1].title == "Test issue 31"
 
     def test_drops_issues_that_fail_the_afk_shape_discriminator(self) -> None:
         gh = FakeGitHubClient(
@@ -1502,6 +1575,159 @@ class TestShallowMembership:
         [candidate] = impl.shallow_membership().candidates
 
         assert candidate.created_at == ""
+
+
+class TestShallowMembershipSelectionOrder:
+    """§3.2 reaches **Rolling dispatch**: the cheap read hands back a Pool in order.
+
+    #219 §2 already walks the candidate cache front to back, so **Parallel
+    mode** works whatever order this read produced. Until #393 that was
+    ``gh``'s unstated ``sort=created&direction=desc`` — FIFO over a
+    newest-first list, which is LIFO.
+    """
+
+    def test_candidates_come_back_oldest_first(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="2026-05-01T00:00:00Z"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(12, created_at="2026-03-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = impl.shallow_membership()
+
+        assert [c.ref for c in snapshot.candidates] == [7, 12, 31]
+
+    def test_a_priority_candidate_heads_the_order_over_older_ones(self) -> None:
+        """**Priority** is a jump to the front of the queue, not out of it."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(
+                    31,
+                    created_at="2026-05-01T00:00:00Z",
+                    labels=["ready-for-agent", "priority"],
+                ),
+                _make_issue(12, created_at="2026-03-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [31, 7, 12]
+
+    def test_the_order_does_not_depend_on_the_order_the_source_listed(self) -> None:
+        """§3.2: ordering the same Pool twice yields the same sequence.
+
+        The two clients differ only in the order ``gh`` happened to return, so
+        an implementation that leaned on source position at all would show it
+        here rather than in a Run three weeks from now.
+        """
+        oldest = _make_issue(7, created_at="2026-01-01T00:00:00Z")
+        newest = _make_issue(31, created_at="2026-05-01T00:00:00Z")
+        as_listed = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[oldest, newest])
+        )
+        reversed_listing = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[newest, oldest])
+        )
+
+        assert [c.ref for c in as_listed.shallow_membership().candidates] == [7, 31]
+        assert [
+            c.ref for c in reversed_listing.shallow_membership().candidates
+        ] == [7, 31]
+
+    def test_identical_timestamps_are_broken_by_issue_number(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [7, 31]
+
+    def test_an_undated_candidate_sorts_last_within_its_rank_and_stays(self) -> None:
+        """A broken field is not a retracted eligibility assertion."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="not-a-timestamp"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(12, created_at=""),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [7, 12, 31]
+
+    def test_an_undated_priority_candidate_still_outranks_a_dated_one(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(31, created_at="", labels=["ready-for-agent", "priority"]),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [c.ref for c in impl.shallow_membership().candidates] == [31, 7]
+
+    def test_an_undated_candidate_is_reported_with_its_defect(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="not-a-timestamp"),
+                _make_issue(12, created_at=""),
+            ]
+        )
+        diag = _silent_logger()
+        impl = GitHubIssueSource(diag, gh=gh)
+
+        with _capture(diag) as records:
+            impl.shallow_membership()
+
+        reported = " ".join(r.getMessage() for r in records)
+        assert "31" in reported and "malformed" in reported
+        assert "12" in reported and "absent" in reported
+
+    def test_a_persistent_defect_is_reported_once_not_every_refresh(self) -> None:
+        """A membership refresh repeats on a backoff; the defect does not move.
+
+        Warning on every refresh would bury the one line that matters under
+        the same line, which is how an operator learns to skip it.
+        """
+        gh = FakeGitHubClient(issues=[_make_issue(31, created_at="")])
+        diag = _silent_logger()
+        impl = GitHubIssueSource(diag, gh=gh)
+
+        with _capture(diag) as records:
+            impl.shallow_membership()
+            impl.shallow_membership()
+            impl.shallow_membership()
+
+        assert len([r for r in records if "31" in r.getMessage()]) == 1
+
+    def test_an_incomplete_read_is_still_ordered(self) -> None:
+        """Ordering is the read's job and does not wait on completeness.
+
+        Whether **Rolling dispatch** then *admits* a partial snapshot is
+        #219 §2.12's separate decision — it retains its last complete one — so
+        this pins the source's half only: a truncated read is partial, not
+        unsorted, and it carries the flag that says which.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="2026-05-01T00:00:00Z"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+            ],
+            issue_list_complete=False,
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = impl.shallow_membership()
+
+        assert [c.ref for c in snapshot.candidates] == [7, 31]
+        assert snapshot.complete is False
 
 
 class TestPoolFetchCompleteness:

@@ -530,6 +530,16 @@ class FakeGitHubClient:
         """How many injected failures were GitHub throttling this Run."""
         return self._rate_limited()
 
+    def seed_issue(self, issue: Issue) -> None:
+        """Add or replace one issue in the store, as a mid-Run filing would.
+
+        Constructor seeding models the tracker a Run *starts* against; this
+        models one that changes underneath it, which is the whole subject of
+        **Rolling dispatch**'s membership refresh (#219 §2.9). Public because a
+        test asserting a refresh has to move the store the refresh reads.
+        """
+        self._issues[issue.number] = issue
+
     def _fail(self, error: GhError) -> NoReturn:
         """Count ``error`` if it is a throttle, then raise it either way.
 

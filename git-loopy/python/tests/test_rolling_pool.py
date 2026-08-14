@@ -12,6 +12,7 @@ an injected clock — no sleeping, no monkeypatching, no reaching inside.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from git_loopy.sources import (
     AfkReadyItem,
@@ -638,3 +639,223 @@ class TestDispatchabilityCounts:
         assert pool.candidate_refs == (31,)
         assert pool.available_count == 0
         assert pool.unavailable_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# Selection order reaches the Lane (#393, Wrapper contract §3.2, ADR-0032)      #
+# --------------------------------------------------------------------------- #
+
+
+def _ordering_pool(issues, **kw):
+    """A :class:`RollingPool` over the *real* GitHub source and a fake ``gh``.
+
+    The scripted source above cannot show this: ordering is the source's
+    decision and the scheduler's inheritance of it, so a test that scripts the
+    snapshot asserts only that lists keep their order. Wiring the production
+    :class:`~git_loopy.sources.GitHubIssueSource` in is what pins the seam to
+    the cache — the connection #393 is.
+    """
+    from git_loopy.sources import GitHubIssueSource
+    from tests.fakes import FakeGitHubClient
+
+    return _pool(
+        GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=issues)), **kw
+    )
+
+
+def _issue(number: int, created_at: str, *, priority: bool = False):
+    from git_loopy import gh as gh_module
+
+    labels = ["ready-for-agent", "parallel-safe"] + (["priority"] if priority else [])
+    return gh_module.Issue(
+        number=number,
+        title=f"issue {number}",
+        body="## What to build\nthing\n\n## Acceptance criteria\n- done",
+        labels=labels,
+        state="OPEN",
+        url=f"https://github.com/x/y/issues/{number}",
+        created_at=created_at,
+    )
+
+
+class TestLanesWorkOldestFirst:
+    """**Parallel mode** inherits §3.2 through its input, not through a new sort.
+
+    :meth:`RollingPool.take` already walked the cache front to back and
+    :meth:`_reconcile` already held a candidate's position across refreshes.
+    Both were correct over a list ``gh`` had sorted newest-first, which is why
+    the scheduler is untouched here and the cache is not re-sorted.
+    """
+
+    def test_the_cache_is_seeded_oldest_first(self) -> None:
+        pool = _ordering_pool(
+            [
+                _issue(31, "2026-05-01T00:00:00Z"),
+                _issue(7, "2026-01-01T00:00:00Z"),
+                _issue(19, "2026-03-01T00:00:00Z"),
+            ]
+        )
+
+        pool.start()
+
+        assert pool.candidate_refs == (7, 19, 31)
+
+    def test_a_lane_takes_the_oldest_eligible_issue(self) -> None:
+        """The behaviour ADR-0032 exists for: January is worked before today."""
+        pool = _ordering_pool(
+            [
+                _issue(31, "2026-05-16T00:00:00Z"),
+                _issue(7, "2026-01-04T00:00:00Z"),
+            ]
+        )
+        pool.start()
+
+        item = pool.take()
+
+        assert item is not None
+        assert item.ref == 7
+
+    def test_a_priority_candidate_is_taken_ahead_of_older_ones(self) -> None:
+        pool = _ordering_pool(
+            [
+                _issue(7, "2026-01-01T00:00:00Z"),
+                _issue(31, "2026-05-01T00:00:00Z", priority=True),
+            ]
+        )
+        pool.start()
+
+        item = pool.take()
+
+        assert item is not None
+        assert item.ref == 31
+
+    def test_a_stale_candidate_yields_to_the_next_in_order(self) -> None:
+        """#219 §2.11 is unchanged; it now walks an ordered cache.
+
+        The head of the order closed between the membership refresh and the
+        reservation, so its pickup comes back **stale** — dropped outright,
+        with no full refresh. The **Lane** must take the next issue *in order*,
+        not the next one the source listed.
+        """
+        from git_loopy.sources import GitHubIssueSource
+        from tests.fakes import FakeGitHubClient
+
+        oldest = _issue(7, "2026-01-01T00:00:00Z")
+        gh = FakeGitHubClient(
+            issues=[
+                _issue(31, "2026-05-01T00:00:00Z"),
+                oldest,
+                _issue(19, "2026-03-01T00:00:00Z"),
+            ],
+            # Listed open, closed by the time the Lane reserves it.
+            issue_views={7: replace(oldest, state="CLOSED")},
+        )
+        pool = _pool(GitHubIssueSource(_silent_logger(), gh=gh))
+        pool.start()
+        assert pool.candidate_refs == (7, 19, 31)
+
+        item = pool.take()
+
+        assert item is not None
+        assert item.ref == 19
+        assert pool.candidate_refs == (31,)
+
+    def test_an_unavailable_candidate_keeps_its_place_in_the_order(self) -> None:
+        """#219 §2.11's other half: quarantine holds a position, order and all.
+
+        An unreadable candidate is not gone, so dropping it would lose the
+        oldest issue in the backlog to one failed read. It keeps its place at
+        the head and the Lane takes the next in order behind it.
+        """
+        from git_loopy.gh import GhError
+        from git_loopy.sources import GitHubIssueSource
+        from tests.fakes import FakeGitHubClient
+
+        gh = FakeGitHubClient(
+            issues=[
+                _issue(31, "2026-05-01T00:00:00Z"),
+                _issue(7, "2026-01-01T00:00:00Z"),
+                _issue(19, "2026-03-01T00:00:00Z"),
+            ],
+            issue_view_errors={7: GhError(["gh"], 1, "boom")},
+        )
+        pool = _pool(GitHubIssueSource(_silent_logger(), gh=gh))
+        pool.start()
+
+        item = pool.take()
+
+        assert item is not None
+        assert item.ref == 19
+        assert pool.candidate_refs == (7, 31)
+        assert pool.unavailable_count == 1
+
+    def test_a_refresh_does_not_reshuffle_candidates_already_ordered(self) -> None:
+        """#219 §2.9 survives §3.2: a survivor's place is the **Queue**'s place.
+
+        The newcomer is older than everything cached, so a cache that re-sorted
+        on every refresh would move it to the head and reorder Lanes mid-Run.
+        It appends instead — position is preserved, which is the criterion.
+        """
+        from git_loopy.sources import GitHubIssueSource
+        from tests.fakes import FakeGitHubClient
+
+        gh = FakeGitHubClient(
+            issues=[
+                _issue(31, "2026-05-01T00:00:00Z"),
+                _issue(19, "2026-03-01T00:00:00Z"),
+            ]
+        )
+        pool = _pool(GitHubIssueSource(_silent_logger(), gh=gh))
+        pool.start()
+        assert pool.candidate_refs == (19, 31)
+
+        gh.seed_issue(_issue(7, "2026-01-01T00:00:00Z"))
+        pool.confirm_empty()
+
+        assert pool.candidate_refs == (19, 31, 7)
+
+    def test_an_undated_candidate_is_dispatchable_and_sorts_last(self) -> None:
+        """A broken timestamp costs an issue its place, never its eligibility."""
+        pool = _ordering_pool(
+            [
+                _issue(31, ""),
+                _issue(7, "2026-01-01T00:00:00Z"),
+            ]
+        )
+        pool.start()
+
+        assert pool.candidate_refs == (7, 31)
+        assert pool.available_count == 2
+
+    def test_a_worked_issue_is_still_never_taken_twice(self) -> None:
+        """The Run-scoped worked guard composes into ``eligible`` and is order-blind.
+
+        The second half is what matters: issue 7 is still open, so the *next*
+        membership refresh still lists it, and ``_reconcile`` must decline to
+        re-admit it. Asserting only that the emptied cache hands back ``None``
+        would pass without the guard existing at all.
+        """
+        from git_loopy.sources import GitHubIssueSource
+        from tests.fakes import FakeGitHubClient
+
+        worked: set[int | str] = set()
+        gh = FakeGitHubClient(
+            issues=[
+                _issue(7, "2026-01-01T00:00:00Z"),
+                _issue(19, "2026-03-01T00:00:00Z"),
+            ]
+        )
+        pool = _pool(
+            GitHubIssueSource(_silent_logger(), gh=gh),
+            eligible=lambda c: "parallel-safe" in c.labels and c.ref not in worked,
+        )
+        pool.start()
+
+        first = pool.take()
+        assert first is not None and first.ref == 7
+        worked.add(first.ref)
+
+        pool.confirm_empty()  # an authoritative refresh that still lists #7
+
+        assert 7 not in pool.candidate_refs
+        assert pool.candidate_refs == (19,)

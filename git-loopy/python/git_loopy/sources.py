@@ -44,12 +44,18 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from git_loopy import gh as gh_module
 from git_loopy.git import Commit
+from git_loopy.issue_order import (
+    OrderableIssue,
+    UndatedIssue,
+    order_issues,
+)
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -78,6 +84,7 @@ __all__ = [
     "PoolCollection",
     "PoolExclusion",
     "afk_ready_exclusion",
+    "in_selection_order",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
@@ -195,6 +202,56 @@ def is_pr_afk_ready(pr: gh_module.PullRequest) -> bool:
     if _RE_AGENT_BRIEF.search(pr.body or ""):
         return True
     return any(_RE_AGENT_BRIEF.search(c.body or "") for c in pr.comments)
+
+
+def in_selection_order(
+    issues: Sequence[gh_module.Issue],
+) -> tuple[tuple[gh_module.Issue, ...], tuple[UndatedIssue, ...]]:
+    """Put eligible issues into the Wrapper contract §3.2 order.
+
+    The adapter between the fetched record and the pure ordering seam, and the
+    only place a **Pool** read is allowed to decide sequence. It maps each issue
+    onto the three fields :mod:`git_loopy.issue_order` reads, calls
+    :func:`~git_loopy.issue_order.order_issues` once, and maps the answer back —
+    so the *decision* stays in one module that three Orchestrators are pinned
+    against, while the *record* stays whatever the source produced.
+
+    It orders :class:`git_loopy.gh.Issue` rather than :class:`PoolCandidate` or
+    :class:`AfkReadyItem` deliberately. Those two carry a ``ref`` that is
+    ``int | str``, and §3.2's tiebreak is the issue *number*: ordering above the
+    mapping means no policy has to be invented for a ref that is a file path,
+    which is what the local-markdown backend's would be. That backend never
+    reaches here — it has no ``created_at`` and no **Parallel-safe** assertion —
+    and the GitHub reads that do hold ``Issue`` records at the point sequence is
+    decided. :meth:`GitHubIssueSource.shallow_membership` is the one caller
+    today; :meth:`GitHubIssueSource.collect_pool` holds the same records and
+    picks this up when a serial **Iteration** gains its own **Pickup** (#394).
+
+    Eligibility is *not* re-decided here. Which issues arrive is
+    :func:`afk_ready_exclusion`'s decision and the ``ready-for-agent`` label's;
+    this only sequences what it is given.
+
+    Args:
+        issues: The eligible issues, in whatever order the source listed them.
+
+    Returns:
+        The same issues in §3.2 order, and every issue whose ``created_at``
+        could not be read paired with its **timestamp defect**. Both come out of
+        one pass, so the order and its diagnostics cannot disagree.
+    """
+    by_number = {issue.number: issue for issue in issues}
+    ordered = order_issues(
+        OrderableIssue(
+            number=issue.number,
+            created_at=issue.created_at,
+            labels=tuple(issue.labels),
+        )
+        for issue in issues
+    )
+    return (
+        tuple(by_number[entry.number] for entry in ordered.order),
+        ordered.undated,
+    )
 
 
 @dataclass(frozen=True)
@@ -371,7 +428,11 @@ class MembershipSnapshot:
     """One shallow membership read plus whether it is authoritative.
 
     Attributes:
-        candidates: The AFK-shaped candidates read, in source order.
+        candidates: The AFK-shaped candidates read, in the Wrapper contract
+            §3.2 **selection order** — oldest first within priority rank, not
+            the order the source happened to list them in. The read is where
+            the order is decided, so a scheduler consuming a snapshot inherits
+            it without sorting (ADR-0032).
         complete: ``True`` only when the read paginated to completion and did
             not fail. An incomplete snapshot is still usable for *reconciling*
             survivors, but per #219 §2.13 it may never establish that the
@@ -424,6 +485,11 @@ class RollingIssueSource(Protocol):
 
     def shallow_membership(self) -> MembershipSnapshot:
         """Read current candidate membership without per-issue enrichment.
+
+        The candidates MUST come back in the Wrapper contract §3.2 **selection
+        order**: a scheduler walks them in the order it is given (#219 §2.9),
+        so a source that returned its own sort would decide which issue a
+        **Lane** works and nothing in the Event stream would say so.
 
         Never raises for a source failure — a failure is reported as an
         incomplete snapshot so the caller retains its last complete one.
@@ -550,6 +616,12 @@ class GitHubIssueSource:
         self._diag = diag
         self._gh = gh
         self._include_prs = include_prs
+        # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
+        # A membership refresh repeats on a backoff and a broken `created_at`
+        # does not heal between refreshes, so without this the one line an
+        # operator needs would be re-emitted every few seconds until it reads as
+        # background noise. Run-scoped because the source is.
+        self._undated_reported: set[tuple[int, str]] = set()
 
     def rate_limited_reads(self) -> int | None:
         """How many reads GitHub throttled this Run, or ``None`` if unknown.
@@ -686,16 +758,25 @@ class GitHubIssueSource:
         )
 
     def shallow_membership(self) -> MembershipSnapshot:
-        """Read AFK-shaped ``ready-for-agent`` membership with no enrichment.
+        """Read AFK-shaped ``ready-for-agent`` membership, in §3.2 order.
 
         One paginated list call. Nothing is viewed per-issue, so a **Rolling
         dispatch** refresh costs a single round-trip however large the **Pool**
         is; the authoritative read is deferred to :meth:`pickup`.
 
+        The candidates come back in the Wrapper contract §3.2 **selection
+        order**, which is what makes **Parallel mode** work its backlog
+        oldest-first: :class:`~git_loopy.rolling_pool.RollingPool` already walks
+        its cache front to back and already preserves a candidate's position
+        across refreshes (#219 §2.9), so it was FIFO over a newest-first list.
+        The scheduler needed no change; its *input* did (ADR-0032).
+
         A list failure returns an *incomplete empty* snapshot rather than
         raising or returning a clean empty one — #219 §2.12-2.13 require the
         caller to retain its last complete snapshot and forbid a failed refresh
-        from establishing emptiness.
+        from establishing emptiness. A read that was merely *truncated* is
+        ordered like any other: §2.1 forbids treating it as the whole backlog,
+        and #219 §2.12 leaves it to the caller whether to admit one at all.
         """
         try:
             page = self._gh.issue_list(LABEL_READY_FOR_AGENT)
@@ -707,6 +788,10 @@ class GitHubIssueSource:
             )
             return MembershipSnapshot(candidates=(), complete=False)
 
+        ordered, undated = in_selection_order(
+            [issue for issue in page.issues if is_afk_ready(issue.body or "")]
+        )
+        self._report_undated(undated)
         candidates = tuple(
             PoolCandidate(
                 ref=issue.number,
@@ -714,10 +799,34 @@ class GitHubIssueSource:
                 labels=tuple(issue.labels),
                 created_at=issue.created_at,
             )
-            for issue in page.issues
-            if is_afk_ready(issue.body or "")
+            for issue in ordered
         )
         return MembershipSnapshot(candidates=candidates, complete=page.complete)
+
+    def _report_undated(self, undated: Sequence[UndatedIssue]) -> None:
+        """Name each issue §3.2 could not date, once per Run.
+
+        Wrapper contract §3.2: the Run must not fail over an unusable
+        ``created_at``. Selection is unattended, so an undated issue is warned
+        about and worked around — it keeps its **Priority** rank and sorts last
+        within it. What the operator needs is *which* issue and *which* defect,
+        because the two send them to different places: ``absent`` means nothing
+        was fetched, ``malformed`` means something unreadable arrived.
+
+        #397 makes this a skip/pickup Event; until then stderr is the whole
+        audience, which is exactly the invisibility that ticket is fixing.
+        """
+        for entry in undated:
+            key = (entry.number, entry.defect.value)
+            if key in self._undated_reported:
+                continue
+            self._undated_reported.add(key)
+            self._diag.warning(
+                "issue #%s has an unusable created_at (%s); it sorts last "
+                "within its priority rank",
+                entry.number,
+                entry.defect.value,
+            )
 
     def pickup(self, ref: int | str) -> Pickup:
         """Re-read ``ref`` authoritatively and render it for dispatch.
