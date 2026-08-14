@@ -1842,6 +1842,14 @@ _git_loopy_publish_active_binding() {
 # renders) and `_GIT_LOOPY_PICKUP_REF`; both are empty when the Pool is empty,
 # which the caller has already turned into `empty_pool`.
 #
+# **Selecting and publishing are two steps, and only the first decides what the
+# agent sees.** A sink that refuses the activation leaves the Iteration
+# *unbound* — degraded, and the marker and close-keyword fallbacks' territory —
+# but the prompt still carries the one issue that was selected. Putting the whole
+# Pool back would restore the menu ADR-0032 removed, on the path least able to
+# cope with it: the runner's own bookkeeping already named a head, so the agent
+# would be choosing from a list the runner had privately picked out of.
+#
 # It does not sort. Order is decided at the read (§3.2), and re-deciding it here
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
@@ -1864,19 +1872,28 @@ git_loopy_pick_serial() {
   [[ -n "$ref" ]] || return 1
 
   GIT_LOOPY_PICKUP_JSON="$(jq -c '[.]' <<<"$head")" || return 1
-  _GIT_LOOPY_PICKUP_REF="$ref"
   observed_at="$(git_loopy_iso_timestamp)" || return 1
-  _GIT_LOOPY_PICKUP_AT="$observed_at"
 
-  _git_loopy_publish_active_binding \
-    "$iteration" "$ref" "serial_pickup" "$observed_at" || return 1
   local label="$ref"
   [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+  if ! _git_loopy_publish_active_binding \
+    "$iteration" "$ref" "serial_pickup" "$observed_at"; then
+    # The selection stands; the binding does not. Leaving the ref set would seed
+    # the turn with a binding no Event ever announced, so the Iteration goes in
+    # honestly unbound and `_git_loopy_bind_active_issue` may still bind it from
+    # the agent's own Working marker.
+    printf 'git-loopy: serial Pickup selected %s but could not publish its binding; the Iteration works that issue unbound.\n' \
+      "$label" >&2
+    return 1
+  fi
+  _GIT_LOOPY_PICKUP_REF="$ref"
+  _GIT_LOOPY_PICKUP_AT="$observed_at"
   printf 'git-loopy: serial Pickup bound %s (position 1 of %s)\n' \
     "$label" "$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" >&2
 }
 
-_git_loopy_bind_active_issue() {  local iteration="$1"
+_git_loopy_bind_active_issue() {
+  local iteration="$1"
   local ref="$2"
   local source="$3"
   local observed_at="$4"
@@ -2172,11 +2189,20 @@ _git_loopy_record_active_binding() {
   local source="$2"
   local observed_at="$3"
   local activated_monotonic
-  if [[ "$source" == "working_marker" || "$source" == "serial_pickup" ]]; then
-    activated_monotonic="$(git_loopy_monotonic_seconds)" || return 1
-  else
+  # The closed retroactive set the family shares
+  # (`git_loopy.interactive.state.RETROACTIVE_BINDING_SOURCES`, and
+  # `is_retroactive_binding` in the Rust reader). Stated as the set rather than
+  # as its complement so a binding source added later is *prospective* by
+  # default: a Pickup or a marker names the issue as work on it begins, and only
+  # an after-the-fact fallback owes the pre-binding work back to the issue.
+  case "$source" in
+  closure | commit | single_member_pool)
     activated_monotonic="$_GIT_LOOPY_ITERATION_STARTED_MONOTONIC"
-  fi
+    ;;
+  *)
+    activated_monotonic="$(git_loopy_monotonic_seconds)" || return 1
+    ;;
+  esac
   _GIT_LOOPY_ACTIVE_STARTED_AT="$observed_at"
   _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$activated_monotonic"
   _git_loopy_remember_issue_start
@@ -3230,8 +3256,14 @@ git_loopy_run_discovery() {
     # session starts, takes the head of the §3.2 order, and hands the agent
     # exactly that issue. The prompt is one issue, not a menu.
     git_loopy_pick_serial "$iteration" || {
-      printf 'git-loopy: serial Pickup bound nothing; skipping this Iteration.\n' >&2
-      GIT_LOOPY_PICKUP_JSON="$GIT_LOOPY_POOL_JSON"
+      printf 'git-loopy: serial Pickup did not bind an Active issue; the Iteration runs unbound.\n' >&2
+      # The prompt keeps whatever the Pickup selected, which is one issue
+      # whenever it got as far as reading a head. Restoring the whole Pool here
+      # would put back the menu ADR-0032 removed, so it is reserved for the one
+      # case that leaves nothing selected at all — a Pool whose head has no
+      # usable ref, which the empty-Pool branch above cannot catch.
+      [[ "$(jq -r 'length' <<<"$GIT_LOOPY_PICKUP_JSON")" != "0" ]] ||
+        GIT_LOOPY_PICKUP_JSON="$GIT_LOOPY_POOL_JSON"
     }
 
     # Assemble the same minimum context as the Python reference (last-5

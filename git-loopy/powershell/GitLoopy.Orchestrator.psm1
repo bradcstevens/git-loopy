@@ -2396,17 +2396,25 @@ function Update-GitLoopyIterationLifecycle {
             $Ref = [string]$Issue
             $script:GitLoopyActiveRef = $Ref
             $script:GitLoopyActiveStartedAt = $ActivatedAt
-            # A Working marker declares the issue as the agent starts on it, so
-            # its Active time begins at the marker. Every fallback binding is
-            # recognized only after the fact, so it is attributed retroactively
-            # to the Iteration start and keeps the pre-marker work visible.
+            # A **Pickup** and a Working marker both name the issue as the work
+            # on it begins, so Active time starts there. Every *fallback*
+            # binding is recognized only after the fact, so it is attributed
+            # retroactively to the Iteration start and keeps the pre-binding
+            # work visible. The retroactive set is the closed one the family
+            # shares (`git_loopy.interactive.state.RETROACTIVE_BINDING_SOURCES`,
+            # `is_retroactive_binding` in the Rust reader), and it is tested
+            # here as a set rather than as "not working_marker" so a binding
+            # source added later is prospective by default — which is what
+            # `serial_pickup` needed to be and, phrased the other way round,
+            # silently was not.
             $script:GitLoopyActiveStartedMonotonic = if (
-                [string]$LifecycleEvent["binding_source"] -ceq "working_marker"
+                @("closure", "commit", "single_member_pool") -ccontains
+                    [string]$LifecycleEvent["binding_source"]
             ) {
-                $ObservedMonotonic
+                $script:GitLoopyIterationStartedMonotonic
             }
             else {
-                $script:GitLoopyIterationStartedMonotonic
+                $ObservedMonotonic
             }
             if (-not $script:GitLoopyIssueFirstStartedAt.ContainsKey($Ref)) {
                 $script:GitLoopyIssueFirstStartedAt[$Ref] = (
@@ -2623,6 +2631,10 @@ function Get-GitLoopyCurrentIterationRollup {
 # there is nothing to bind — which the caller has already turned into
 # `empty_pool`.
 #
+# **Selecting and publishing are two steps, and only the first decides what the
+# agent sees.** A refused activation leaves the Iteration bound to whatever
+# bound it first; the prompt still carries the one issue that was selected.
+#
 # It does not sort. Order is decided at the read (§3.2), and re-deciding it here
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
@@ -2659,7 +2671,16 @@ function Select-GitLoopySerialPickup {
         -Source "serial_pickup" `
         -ObservedAt ([DateTimeOffset]::UtcNow)
     if (-not $Bound) {
-        return $Items
+        # The selection stands even though the binding did not. An activation is
+        # refused exactly when the Iteration is already bound, so the prompt
+        # keeps the one issue rather than reverting to the whole Pool: putting
+        # the menu back would ask the agent to rank a list whose answer the
+        # runner had already decided without it.
+        [Console]::Error.WriteLine(
+            "git-loopy: serial Pickup selected $Ref but its activation was " +
+            "refused; the Iteration works that issue on the standing binding."
+        )
+        return @($Head)
     }
     $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
     [Console]::Error.WriteLine(

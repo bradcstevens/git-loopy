@@ -2769,6 +2769,93 @@ Start-Sleep -Seconds $Sleep
     }
     Reset-GitLoopyIterationLifecycleState
 
+    # A serial **Pickup** is *prospective*: it binds before the agent session
+    # starts, so its Active time begins at the binding and not at the Iteration
+    # start. Only the three after-the-fact fallbacks -- `closure`, `commit` and
+    # `single_member_pool` -- are recognized late enough to owe the pre-binding
+    # work back to the issue, which is what retroactive attribution is for.
+    # Getting this wrong is invisible in this port alone but charges every
+    # serial contribution for Pool collection, which happens between the
+    # Iteration start and the Pickup, and would put PowerShell's
+    # `active_seconds` above Python's and the shell's for the same Run.
+    foreach ($Prospective in @("serial_pickup", "working_marker", "lane_pickup")) {
+        Reset-GitLoopyIterationLifecycleState
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{ type = "wrapper.iteration.start" }) `
+            -ObservedMonotonic 30
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{
+                type = "wrapper.issue.activated"
+                issue = 394
+                activated_at = "2026-05-16T00:00:40.000Z"
+                binding_source = $Prospective
+            }) `
+            -ObservedMonotonic 40
+        $Prospectively = Get-GitLoopyCurrentIterationRollup `
+            -FinishedMonotonic 42 `
+            -Strikes 1
+        Assert-Equal 2 $Prospectively["issues"][0]["active_seconds"] (
+            "$Prospective attributes Active time from the binding, not the " +
+            "Iteration start"
+        )
+    }
+    foreach ($Retroactive in @("closure", "commit", "single_member_pool")) {
+        Reset-GitLoopyIterationLifecycleState
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{ type = "wrapper.iteration.start" }) `
+            -ObservedMonotonic 30
+        Update-GitLoopyIterationLifecycle `
+            -LifecycleEvent ([ordered]@{
+                type = "wrapper.issue.activated"
+                issue = 394
+                activated_at = "2026-05-16T00:00:40.000Z"
+                binding_source = $Retroactive
+            }) `
+            -ObservedMonotonic 40
+        $Retroactively = Get-GitLoopyCurrentIterationRollup `
+            -FinishedMonotonic 42 `
+            -Strikes 1
+        Assert-Equal 12 $Retroactively["issues"][0]["active_seconds"] (
+            "$Retroactive keeps the pre-binding work visible on the issue"
+        )
+    }
+    Reset-GitLoopyIterationLifecycleState
+
+    # Selecting and publishing are two steps, and only the first decides what
+    # the agent sees. When the activation is refused -- which happens exactly
+    # when the Iteration is already bound -- the Pickup must still hand the
+    # prompt the one issue it selected. Returning the whole Pool would restore
+    # the menu ADR-0032 removed, on the path least able to cope with it: the
+    # runner has already bound an issue, so the agent would be ranking a list
+    # whose answer was decided without it.
+    Update-GitLoopyIterationLifecycle `
+        -LifecycleEvent ([ordered]@{ type = "wrapper.iteration.start" }) `
+        -ObservedMonotonic 30
+    Update-GitLoopyIterationLifecycle `
+        -LifecycleEvent ([ordered]@{
+            type = "wrapper.issue.activated"
+            issue = 9
+            activated_at = "2026-05-16T00:00:40.000Z"
+            binding_source = "serial_pickup"
+        }) `
+        -ObservedMonotonic 40
+    $RefusedPickup = @(Select-GitLoopySerialPickup `
+        -Context ([pscustomobject]@{}) `
+        -EventTypes @{ WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated" } `
+        -Iteration 1 `
+        -Pool @(
+            [ordered]@{ number = 9 },
+            [ordered]@{ number = 7 },
+            [ordered]@{ number = 5 }
+        ))
+    Assert-Equal 1 $RefusedPickup.Count (
+        "a refused activation still renders exactly the selected issue"
+    )
+    Assert-Equal 9 $RefusedPickup[0]["number"] (
+        "a refused activation renders the head of the order"
+    )
+    Reset-GitLoopyIterationLifecycleState
+
     # --- Closed-world Skill policy fails closed (contract §17.6) ---------------
     # This port has no `config.toml` tier yet, so it cannot honour a configured
     # policy — and running an Iteration on a *wider* capability set than the

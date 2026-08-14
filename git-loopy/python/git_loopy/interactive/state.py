@@ -162,8 +162,16 @@ _LANE_EVENTS = frozenset(
 
 #: Binding sources that name work an Orchestrator recognized *after* the fact.
 #: The Iteration was already running when the evidence appeared, so the issue's
-#: Active stint opens at the Iteration start rather than at the marker, and the
-#: pre-marker output is attributed to the issue that produced it.
+#: Active stint opens at the Iteration start rather than at the binding, and the
+#: pre-binding output is attributed to the issue that produced it.
+#:
+#: :data:`git_loopy.rollup.RETROACTIVE_BINDING_SOURCES` is the same set, and the
+#: two are deliberately *not* one import: this module is import-constrained to
+#: stdlib plus :mod:`git_loopy.usage` (ADR-0001), and reaching into the reducer
+#: for a three-element frozenset would buy a shared constant with the guard that
+#: keeps the Dashboard's state pure. They are held together the way the family
+#: holds every other shared vocabulary — both are pinned against
+#: ``conformance/dashboard-insights.json``, which is the one declaration.
 RETROACTIVE_BINDING_SOURCES = frozenset({"closure", "commit", "single_member_pool"})
 
 #: Status shown before the first ``wrapper.run.start`` is observed.

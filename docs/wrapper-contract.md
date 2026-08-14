@@ -206,6 +206,22 @@ An Orchestrator running serially MUST:
   candidate tried. A serial Run has no second Lane to leave the candidate for, so a refusal that
   ended the Run would end it over one mislabelled issue. Each skip MUST be reported with the
   issue and the reason.
+
+  **The admissible set is the member's own, and today only one member has a refusal to make.**
+  Admission is whatever an Orchestrator must resolve at Pickup in order to start the session on
+  the bound issue, and the only such resolution the contract names is §14's Routed pair — which
+  §14 records as *"future phase-3 work"* for the native ports. A member that resolves no Routed
+  pair therefore admits every candidate and binds the head of the order, which satisfies this
+  rule rather than skipping it: it has nothing it can refuse. When a native port implements §14
+  it acquires the refusal and this bullet with it, and its skips and its all-skipped Strike MUST
+  then match the reference member's. Admission MUST NOT be widened past that into re-deciding
+  eligibility — the `ready-for-agent` label and the AFK-ready discriminator settle that at
+  collection (§3.1), and a second opinion at Pickup would be a second place for it to disagree.
+- **Select and publish are two steps.** The prompt renders the candidate the Pickup *selected*,
+  even when publishing its activation fails. An Orchestrator MUST NOT fall back to rendering the
+  whole Pool on a failed activation: that restores the menu this section removes, on the one path
+  where the runner has already privately chosen a head. The Iteration proceeds unbound — §12's
+  fallbacks are exactly what that case is for — and MUST say so.
 - **Distinguish "all skipped" from "empty".** A Pool that is empty ends the Run cleanly (§10). A
   non-empty Pool in which *every* candidate was skipped is an Iteration that did no work: it MUST
   count a **Strike** and the Run MUST continue, because the condition is a labelling mistake an
@@ -684,16 +700,20 @@ or semantic meaning.
 The fixture's `semantic_contract` is the single declaration of what a Dashboard *is*. Its
 `projection_fields` inventory names every field of every band, its `queue_columns` and
 `iteration_breakdown_columns` carry a `fields` mapping from each rendered column onto that
-inventory, and `binding_sources` groups the activation vocabulary into `marker`, `retroactive`, and
-`lane`. A renderer or Orchestrator MUST NOT keep a second copy of any of these lists.
+inventory, and `binding_sources` groups the activation vocabulary into `marker`, `serial`,
+`retroactive`, and `lane`. A renderer or Orchestrator MUST NOT keep a second copy of any of these
+lists.
 
 Every Orchestrator MUST:
 
 - Emit `wrapper.issue.activated` with a `binding_source` drawn from the declared vocabulary. A
   `retroactive` source (`closure`, `commit`, `single_member_pool`) means the Iteration was already
   running when the evidence appeared, so the issue's Active stint opens at the *Iteration* start and
-  the pre-marker output belongs to that issue. A `lane_pickup` binding never becomes the single
-  serial Active issue.
+  the pre-marker output belongs to that issue. **Every other source opens the stint at the binding
+  itself**, and an implementation MUST decide that by testing membership of the closed `retroactive`
+  group rather than by naming the prospective ones — the complement is open, so a source added later
+  is prospective by default, which is what a **Pickup** and a marker both are. A `lane_pickup`
+  binding never becomes the single serial Active issue.
 - Treat the first authoritative binding in an Iteration as final. A later `wrapper.issue.activated`
   naming a different issue is ignored, not a rebinding.
 - Declare each Insight capability once at Run start and stay consistent with it: a capability
