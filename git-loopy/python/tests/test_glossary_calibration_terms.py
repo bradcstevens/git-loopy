@@ -31,6 +31,7 @@ ADR_0028 = "docs/adr/0028-measured-routing-is-a-committed-tier.md"
 ADR_0030 = "docs/adr/0030-demotion-is-measured-per-pair.md"
 MEASURED_ROUTING = "git-loopy/python/git_loopy/measured_routing.py"
 CALIBRATION_SEARCH = "git-loopy/python/git_loopy/calibration_search.py"
+CALIBRATION_RUN = "git-loopy/python/git_loopy/calibration_run.py"
 
 
 def _repo_root() -> Path | None:
@@ -156,6 +157,109 @@ def test_calibration_publishes_no_prose_conclusion() -> None:
 
     assert "argmax" in entry or "measurement table" in entry
     assert "no written analysis" in entry
+
+
+def test_the_calibration_entry_names_the_act_and_not_only_one_search() -> None:
+    """One Calibration is one invocation, over every **Task type** it was asked for.
+
+    The entry opened *"the measured search that fixes one **Task type**'s **Routed
+    pair**"*, which describes the shipped *search* and not the shipped
+    *Calibration*. A bare ``git-loopy calibrate`` measures every eligible Task type
+    under a **single** ``calibration_id`` — the identity every **Trial**'s record
+    carries (contract 1.16) and the namespace its working branches are cut in —
+    and ``calibrate <task-type>`` measures exactly one. A reader who takes the
+    singular literally expects one identity per Task type, and buckets seven
+    searches' Trials as one Task type's.
+    """
+    entry = _entry("Calibration")
+
+    assert "The measured search that fixes one **Task type**'s" not in entry, (
+        "the singular names a search, not the act the shipped `calibration_id` "
+        "identifies"
+    )
+    assert "`calibration_id`" in entry
+    assert "every eligible" in entry
+
+
+def test_the_calibration_entry_records_that_the_ceilings_bound_one_search() -> None:
+    """The ceilings are applied **per Task type**, not across the invocation.
+
+    This is the sharpest consequence of reading the term at the wrong
+    granularity: an operator who sizes the **AI Credits** ceiling for *"a
+    Calibration"* and then runs the bare form buys up to seven times what they
+    authorised. ``calibrate``'s own ``budget`` argument says why the ceilings are
+    not shared — *"a shared budget would let an expensive walk exhaust the credits
+    the next Task type was going to be measured with."*
+    """
+    entry = _entry("Calibration")
+
+    assert "ceiling" in entry
+    assert "per **Task type**" in entry
+
+
+def _dataclass_fields(relative: str, name: str) -> dict[str, str]:
+    """The annotated field names of one dataclass, mapped to their annotations.
+
+    Read from the source rather than by importing, so this module stays a
+    documentation test with no runtime dependency on the package it describes.
+    """
+    for node in ast.walk(ast.parse(_doc(relative))):
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return {
+                statement.target.id: ast.unparse(statement.annotation)
+                for statement in node.body
+                if isinstance(statement, ast.AnnAssign)
+                and isinstance(statement.target, ast.Name)
+            }
+    raise AssertionError(f"{relative} declares no class {name}")
+
+
+def test_one_calibration_identity_spans_every_task_type_it_measured() -> None:
+    """The entry's granularity, asserted against the record the command returns.
+
+    ``CalibrationOutcome`` carries **one** ``calibration_id`` beside a tuple of
+    per-**Task type** results, and ``TaskTypeCalibration`` carries no identity of
+    its own — which is what makes the identity the *act*'s rather than the Task
+    type's. Structural, so a later change that moves the id down onto each Task
+    type fails here rather than silently re-splitting the term.
+    """
+    outcome = _dataclass_fields(CALIBRATION_RUN, "CalibrationOutcome")
+    per_task_type = _dataclass_fields(CALIBRATION_RUN, "TaskTypeCalibration")
+
+    assert "calibration_id" in outcome
+    assert "TaskTypeCalibration" in outcome.get("calibrated", "")
+    assert "task_type" in per_task_type
+    assert "calibration_id" not in per_task_type, (
+        "a per-Task-type identity would make the glossary's older singular right "
+        "and every Trial record's `calibration_id` ambiguous"
+    )
+
+
+def test_each_task_types_search_is_bought_with_its_own_budget() -> None:
+    """The ceilings bound a search because the walk sits inside the loop.
+
+    ``calibrate`` iterates the eligible **Task types** and calls
+    :func:`~git_loopy.calibration_search.search_price_staircase` once per
+    iteration, so each search gets the ceilings whole. Hoisting that call out of
+    the loop — the fault this exists for — is exactly what would make the entry's
+    older, act-wide reading true.
+    """
+    for node in ast.walk(ast.parse(_doc(CALIBRATION_RUN))):
+        if isinstance(node, ast.FunctionDef) and node.name == "calibrate":
+            searches = [
+                call
+                for loop in node.body
+                if isinstance(loop, ast.For)
+                for call in ast.walk(loop)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "search_price_staircase"
+            ]
+            assert searches, (
+                "no per-Task-type search: the ceilings no longer bound one search"
+            )
+            return
+    raise AssertionError(f"{CALIBRATION_RUN} declares no `calibrate`")
 
 
 #: The modules that drive **unattended** work: the run loop and the session it

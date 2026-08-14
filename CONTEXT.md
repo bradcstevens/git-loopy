@@ -874,11 +874,17 @@ inert rather than as a value that quietly has no effect (ADR-0028).
 _Avoid_: auto-routing, learned routing, routing cache.
 
 **Calibration**:
-The measured search that fixes one **Task type**'s **Routed pair**. It walks a price-ordered
-candidate staircase from its cheapest rung and stops at the first pair whose five **Trials**
-against the gate all come back green — unanimity over a deliberately thin sample, never a
-reliability estimate — bounded by an **AI Credits** ceiling and an elapsed wall-clock one; a
-search that exhausts either keeps the incumbent and publishes no winner at all. Its objective
+The measured search that fixes a **Task type**'s **Routed pair**, and the operator act that buys
+it: one invocation is one Calibration under one `calibration_id` — the identity every **Trial**'s
+record carries and the namespace its working branches are cut in — running one search per Task
+type it was asked for. `git-loopy calibrate` measures every eligible one and `git-loopy calibrate
+<task-type>` exactly one, and a Task type short of admitted **Proving tasks** is skipped with its
+shortfall rather than measured. Each search walks a price-ordered candidate staircase from its
+cheapest rung and stops at the first pair whose five **Trials** against the gate all come back
+green — unanimity over a deliberately thin sample, never a reliability estimate — bounded by an
+**AI Credits** ceiling and an elapsed wall-clock one, both applied per **Task type** so an
+expensive walk cannot spend the credits the next one was to be measured with; a search that
+exhausts either keeps the incumbent and publishes no winner at all. Its objective
 is inverted from the obvious reading — the gate is a bar, not a gradient, so the target is the
 *cheapest* pair that reliably clears it, never the most capable one. Its output is a
 measurement table and an argmax, with no written analysis and no prose conclusion anywhere in
