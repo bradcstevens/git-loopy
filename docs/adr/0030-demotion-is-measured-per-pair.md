@@ -104,7 +104,14 @@ implicit trigger converts an unattended Run into a benchmark suite.
 
 - **A fourth status is a schema change** to a tier that has already shipped
   (`measured_routing.py`), including its loader invariants, its tests, and the conformance
-  fixture ADR-0028 requires.
+  fixture ADR-0028 requires. **Discharged by amendment:** it shipped as `provisional` (#376) —
+  schema, loader field set, round-trip, the precedence contribution, the
+  `provisional (unmeasured)` reporting tier, the Wrapper contract's status table and a
+  `routing-resolution` conformance case. Its term is **Provisional**, and because that state is
+  reachable — such a record loads, routes and reports itself apart — the term is a `## Language`
+  entry in `CONTEXT.md`, where **Demotion** is still only a decision. What has *not* shipped is
+  the writer: nothing puts a **Provisional** record into the artifact until this entry's
+  mechanism exists.
 - **The tier can now hold unmeasured values.** "Measured routing" becomes a slight misnomer;
   the name is kept because the status field carries the distinction precisely.
 - **Demotion needs a threshold nobody has chosen.** This entry establishes *what is counted*

@@ -915,6 +915,22 @@ and there is deliberately no fourth field for a judge or a weighted composite to
 **Strike**, earns no **Queue** entry, and leaves neither worktree nor branch behind (ADR-0027).
 _Avoid_: run, experiment, sample.
 
+**Provisional**:
+The **Measured routing** record state carrying a **Routed pair** that is *in force and was
+never measured* (ADR-0030) — what **Demotion** installs when it steps up the price staircase
+into a rung nobody trialled, cheapest-first having stopped at the first pass so every measured
+rung sits *below* the winner and failed. It routes: the pair reaches the precedence chain
+exactly as a measured one does, on the same rung rather than a new one, so a hand-written
+`[routing]` entry beats it by the unchanged rule. What separates it from a measured row is the
+status alone, so it is attributed to its own reporting tier — `provisional (unmeasured)` — and
+carries the pair it replaced and a closed-vocabulary `reason`, with no rung and no **Proving
+task** beside it at all: nothing trialled this pair, and evidence next to it would be the
+replaced pair's, read as its own. The state itself has shipped — such a record loads, routes,
+round-trips and is reported apart, and the **Wrapper contract** lists it — but **nothing writes
+one yet**, because the only thing that would is **Demotion**, whose mechanism (ADR-0030) has not
+shipped.
+_Avoid_: fallback, temporary, pending, unverified (that is an **Observation** classification).
+
 ### The runner family
 
 **Runner family**:

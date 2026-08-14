@@ -25,6 +25,7 @@ import pytest
 
 ADR_0027 = "docs/adr/0027-routing-is-calibrated-by-measurement.md"
 ADR_0028 = "docs/adr/0028-measured-routing-is-a-committed-tier.md"
+ADR_0030 = "docs/adr/0030-demotion-is-measured-per-pair.md"
 
 
 def _repo_root() -> Path | None:
@@ -75,6 +76,30 @@ def _entry(term: str) -> str:
     if body is None:
         raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
     return body
+
+
+def _flagged_ambiguity(anchor: str) -> str:
+    """The one ``## Flagged ambiguities`` bullet containing ``anchor``, reflowed.
+
+    Read as a bullet for the same reason :func:`_find_entry` reads one entry:
+    the section is a list of independent resolutions, and a claim satisfied by
+    a neighbouring bullet is not the claim.
+    """
+    lines = _doc("CONTEXT.md").splitlines()
+    section = lines[lines.index("## Flagged ambiguities") + 1 :]
+    bullets: list[list[str]] = []
+    for line in section:
+        if line.startswith("## "):
+            break
+        if line.startswith("- "):
+            bullets.append([line[2:]])
+        elif bullets and line.strip():
+            bullets[-1].append(line.strip())
+    for bullet in bullets:
+        text = " ".join(" ".join(bullet).split())
+        if anchor in text:
+            return text
+    raise AssertionError(f"no flagged ambiguity mentions {anchor!r}")
 
 
 def test_the_glossary_names_calibration_as_a_measured_search() -> None:
@@ -245,6 +270,74 @@ def test_measured_routing_records_that_it_is_inert_in_serial_mode() -> None:
     assert "**Parallel mode**" in entry
 
 
+def test_the_glossary_names_provisional_as_a_pair_in_force_and_unmeasured() -> None:
+    """#373's amendment: the fourth status kept the name, so the term enters.
+
+    *"plus **Provisional** if the fourth status (#376) keeps that name"* — it
+    did. Unlike **Demotion**, this one is reachable operator-facing reality
+    rather than a decision: ``config get`` prints ``provisional (unmeasured)``
+    as a tier of its own, the **Wrapper contract** lists the status, and a
+    **Conformance** case pins that such a record routes. A reader meeting the
+    word needs somewhere to look it up.
+    """
+    entry = _entry("Provisional")
+
+    assert "in force" in entry
+    assert "never measured" in entry
+    assert "_Avoid_:" in entry
+
+
+def test_the_provisional_entry_records_that_it_routes_and_is_not_a_new_rung() -> None:
+    """A provisional pair genuinely routes — otherwise **Demotion** is an outage.
+
+    ``RoutingTier.PROVISIONAL`` is *"the same rung as MEASURED — the artifact —
+    named apart"*, so the entry has to say both halves: the pair reaches the
+    precedence chain exactly as a measured one does, and a hand-written
+    ``[routing]`` entry still beats it. An entry that only said *unmeasured*
+    would read as though the row were inert, which is the opposite of what
+    ``_PAIR_SUPPLYING_STATES`` does.
+    """
+    entry = _entry("Provisional")
+
+    assert "precedence" in entry
+    assert "hand-written" in entry
+
+
+def test_the_provisional_entry_records_what_makes_it_look_unmeasured() -> None:
+    """*An unmeasured pair must look unmeasured* — the state's whole reason.
+
+    Two shipped invariants beyond the key set, both in
+    ``MeasuredEntry._check_it_looks_unmeasured``: the record carries **no**
+    ``rung`` and no ``proving_task`` at all, because the rungs of the
+    **Calibration** that chose the pair it *replaced* would be another pair's
+    evidence read as its own; and ``reason`` is the closed ``ProvisionalReason``
+    vocabulary rather than prose, ADR-0028's no-free-text rule holding on the way
+    in. Beside them sits the reporting obligation the tier exists for — the row
+    is named apart from ``measured`` rather than folded into it.
+    """
+    entry = _entry("Provisional")
+
+    assert "evidence" in entry
+    assert "**Proving task**" in entry
+    assert "replaced" in entry
+    assert "reason" in entry
+
+
+def test_the_provisional_entry_records_that_nothing_writes_one_yet() -> None:
+    """The state shipped; its only writer did not.
+
+    #376 was schema, loader, precedence and reporting work, and said so:
+    *"Nothing writes the new state until Demotion ships."* An entry that stopped
+    at *what a provisional row is* would read as though rows appeared on their
+    own, and would quietly bury the same gap ``test_the_open_consequences_are_
+    recorded_rather_than_dropped`` keeps open for the **Proving set**'s refresh.
+    """
+    entry = _entry("Provisional")
+
+    assert "**Demotion**" in entry
+    assert "nothing writes one yet" in entry
+
+
 #: Each term this ticket adds, and the shipped code that implements it. The
 #: glossary records shipped reality, so a term written ahead of its code is the
 #: failure mode this pins — the same failure ADR-0026 avoided by leaving
@@ -271,6 +364,11 @@ SHIPPED_TERMS: tuple[tuple[str, str, str], ...] = (
         "git-loopy/python/git_loopy/measured_routing.py",
         "class MeasuredRouting",
     ),
+    (
+        "Provisional",
+        "git-loopy/python/git_loopy/measured_routing.py",
+        'PROVISIONAL = "provisional"',
+    ),
 )
 
 
@@ -290,6 +388,7 @@ TERM_DECISIONS: tuple[tuple[str, str], ...] = (
     ("Proving task", ADR_0027),
     ("Trial", ADR_0027),
     ("Measured routing", ADR_0028),
+    ("Provisional", ADR_0030),
 )
 
 
@@ -328,13 +427,31 @@ def test_the_pending_terms_list_is_retired_and_the_owed_term_is_named() -> None:
 
     A list of five terms *"still to enter Language"* is wrong in both directions
     once four of them are entries: it under-reports what shipped and hides which
-    single term is actually still owed.
+    single term is actually still owed. Asserted against the bullet rather than
+    the document, because **Demotion** is now bolded inside the **Provisional**
+    entry too, and a whole-document search would let the bullet drop it.
     """
-    glossary = _prose("CONTEXT.md")
+    bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
 
-    assert "Terms still to enter **Language** when this ships" not in glossary
-    assert "**Demotion**" in glossary, "the one term still owed is still named"
-    assert "ADR-0030" in glossary, "and the decision that will supply it is cited"
+    assert "Terms still to enter **Language** when this ships" not in bullet
+    assert "**Demotion**" in bullet, "the one term still owed is still named"
+    assert "ADR-0030" in bullet, "and the decision that will supply it is cited"
+
+
+def test_the_flagged_ambiguity_separates_a_shipped_state_from_its_writer() -> None:
+    """Why **Provisional** entered Language and **Demotion** did not.
+
+    Both belong to ADR-0030 and the artifact carries the states either would
+    write, so without the distinction the next reader concludes that one of the
+    two calls broke the rule. What separates them is reachability: a
+    ``provisional`` record loads, routes, round-trips and reports itself apart
+    today, while no code demotes anything at all.
+    """
+    bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
+
+    assert "**Provisional**" in bullet
+    assert "reachable" in bullet
+    assert "nothing demotes yet" in bullet
 
 
 def test_the_open_consequences_are_recorded_rather_than_dropped() -> None:
@@ -344,11 +461,11 @@ def test_the_open_consequences_are_recorded_rather_than_dropped() -> None:
     **Demotion** has a decision and no code. Both are the kind of gap that
     disappears silently once the terms around them read as finished.
     """
-    glossary = _prose("CONTEXT.md")
+    bullet = _flagged_ambiguity("`assessment` / `analysis` / `conclusions`")
 
-    assert "refresh policy" in glossary
-    assert "nothing refreshes it yet" in glossary
-    assert "nothing demotes yet" in glossary
+    assert "refresh policy" in bullet
+    assert "nothing refreshes it yet" in bullet
+    assert "nothing demotes yet" in bullet
 
 
 @pytest.mark.parametrize(("adr", "number"), ((ADR_0027, "0027"), (ADR_0028, "0028")))
