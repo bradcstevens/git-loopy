@@ -860,6 +860,61 @@ does not accept is dropped so the backend chooses. Resolved once at **Pickup** a
 switched mid-session; the same pair carries the unit's follow-on work.
 _Avoid_: model override, effective model.
 
+**Measured routing**:
+The **Calibration**-authored precedence tier — one rung between global **Config** and the
+built-in default, so it supplies a **Routed pair** only where the operator is silent and a
+hand-written `[routing]` entry beats it forever, with no override flag and no special case. It
+is a single committed artifact, `routing.measured.toml` beside the project `config.toml`,
+carrying the table and its evidence in the same file and no free-text key for an opinion to
+occupy. Only current state is stored, because git is the ledger: a change arrives as a
+reviewable pull-request diff rather than a cache refresh, `git blame` names the **Calibration**
+that set a **Task type**'s pair, and deleting the file is the entire opt-out. Like all
+**Routing** it is a **Parallel mode** feature, so at `parallel == 1` it is inert — reported as
+inert rather than as a value that quietly has no effect (ADR-0028).
+_Avoid_: auto-routing, learned routing, routing cache.
+
+**Calibration**:
+The measured search that fixes one **Task type**'s **Routed pair**. It walks a price-ordered
+candidate staircase from its cheapest rung and stops at the first pair whose five **Trials**
+against the gate all come back green — unanimity over a deliberately thin sample, never a
+reliability estimate — bounded by an **AI Credits** ceiling and an elapsed wall-clock one; a
+search that exhausts either keeps the incumbent and publishes no winner at all. Its objective
+is inverted from the obvious reading — the gate is a bar, not a gradient, so the target is the
+*cheapest* pair that reliably clears it, never the most capable one. Its output is a
+measurement table and an argmax, with no written analysis and no prose conclusion anywhere in
+it. Always an explicit operator act: it never starts itself, not on a first **Run**, not at
+preflight, not when the roster moves (ADR-0027, ADR-0028).
+_Avoid_: assessment, analysis, evaluation.
+
+**Proving set**:
+The frozen corpus of replayed closed issues a **Calibration** measures against, mined from this
+repository's own history and stratified by **Task type** so a search can draw the tasks its own
+task type is judged on. Mining reads tracker and git metadata only and yields *candidates*; a
+candidate becomes a member solely by being **admitted** — replayed with its real historical fix
+and shown to fail before it and pass after — so the mined count and the admitted count are
+different numbers and only the second is measurable. Being frozen, it expires: it measures the
+project you *were*, so a stronger AGENTS.md table propagates through a refresh policy and never
+by editing the set (ADR-0027).
+_Avoid_: benchmark, replay corpus (**replay** is taken by the event log), test set.
+
+**Proving task**:
+One admitted member of the **Proving set**: a closed issue pinned to the commit *before* its
+fix, carrying that fix's own changed test paths as the oracle and the issue body as the work.
+The pin is an issue number and two commits, which a **Trial** resolves against the admitted set
+it was handed — so measuring reaches the tracker exactly never (ADR-0027).
+_Avoid_: benchmark case, sample, fixture.
+
+**Trial**:
+One candidate pair working one **Proving task** in its own worktree at that task's base commit.
+It is scored **fail-to-pass** on the task's oracle — the base commit's own feedback loops,
+narrowed to the fix's test paths — with the whole AGENTS.md gate beside it as a **pass-to-pass**
+regression guard, so a pair cannot satisfy its own tests while breaking a neighbouring suite. A
+Trial records exactly three things: whether it cleared, its **AI Credits** and its wall clock,
+and there is deliberately no fourth field for a judge or a weighted composite to occupy. It is
+**not** an **Iteration**: it belongs to a **Calibration** rather than a **Run**, ticks no
+**Strike**, earns no **Queue** entry, and leaves neither worktree nor branch behind (ADR-0027).
+_Avoid_: run, experiment, sample.
+
 ### The runner family
 
 **Runner family**:
@@ -1304,5 +1359,12 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   so the target is the *cheapest* pair that reliably clears it, never the most capable one.
   A **Trial** is one candidate pair working one Proving task and is deliberately **not** an
   **Iteration** — it is attributed to a Calibration rather than a **Run**, and never ticks
-  a **Strike**. Terms still to enter **Language** when this ships: **Calibration**,
-  **Proving set**, **Trial**, **Measured routing**, **Demotion**.
+  a **Strike**. Four of the five terms those two decisions fixed have since shipped and now
+  have their own **Language** entries: **Calibration**, **Proving set** (with **Proving task**
+  beside it), **Trial** and **Measured routing**. **Demotion** is the fifth and is still owed —
+  [ADR-0030](docs/adr/0030-demotion-is-measured-per-pair.md) settles it and the **Measured
+  routing** artifact already carries the `demoted` and `provisional` states it would write, but
+  nothing demotes yet, so the glossary does not claim it. One further consequence outlives
+  these entries: the **Proving set**'s refresh policy is stated — re-base when the pinned
+  **Task-type classifier** pair moves, or on an interval, whichever comes first — and nothing
+  refreshes it yet, so a set left alone silently measures the project you used to be.

@@ -1,6 +1,6 @@
 # Routing is calibrated by measurement against the project's own history
 
-**Status:** proposed
+**Status:** accepted
 
 `[routing]` is hand-authored from `RECOMMENDED_ROUTING` (`config.py:131-166`), seven task
 types pointing at seven models nobody measured. The proposal was that git-loopy conduct

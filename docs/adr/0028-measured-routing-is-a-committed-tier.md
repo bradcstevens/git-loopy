@@ -1,6 +1,6 @@
 # Measured routing is a committed precedence tier, calibrated only on request
 
-**Status:** proposed
+**Status:** accepted
 
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a
 better **Routed pair**, something has to own it. The proposal was that git-loopy write the
@@ -234,4 +234,10 @@ when it found a roster that named no version at all.
   glossary when they ship. **Partially departed from by amendment:** `CONTEXT.md`'s **Task
   type** entry is rewritten *now*, ahead of the code, because
   [ADR-0029](0029-agents-infer-the-task-type.md) reverses two clauses that are currently stated
-  there as fact. The five terms above still wait for ship; only the reversed claims move early.
+  there as fact. **Discharged by amendment:** four of the five terms have now shipped and are
+  `## Language` entries — **Calibration**, **Proving set** (with **Proving task** beside it),
+  **Trial** and **Measured routing**. **Demotion** waits, because
+  [ADR-0030](0030-demotion-is-measured-per-pair.md)'s mechanism has not shipped: the artifact
+  already carries the `demoted` and `provisional` states that mechanism would write, and
+  nothing writes them. A term entered ahead of its code is the precise failure ADR-0019's
+  precedent exists to prevent, so the glossary records four and names the fifth as owed.
