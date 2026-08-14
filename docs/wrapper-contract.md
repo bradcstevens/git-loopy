@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.11 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.12 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -180,11 +180,52 @@ carries. Eligibility is deliberately **absent** from that fixture: it is `discri
 decision and the `ready-for-agent` label's, and restating it beside the order would give one
 rule two homes that could disagree.
 
+### 3.3 Serial Pickup (contract 1.12, MUST)
+
+A serial **Iteration** MUST bind its **Active issue** *before* the agent session starts, from the
+head of the §3.2 order. Selection is the runner's decision; the agent's is task type and nothing
+else.
+
+Until contract 1.12 the serial loop handed the agent the whole Pool with an instruction to rank
+it, and learned which issue had been chosen from a **Working marker** the agent wrote mid-session
+(§12, `binding_source: working_marker`), with `closure`, `commit`, and `single_member_pool` as
+after-the-fact fallbacks when no marker arrived. That made §3.2 unobservable in serial mode — the
+runner ordered a Pool whose order nothing consumed — and made the binding retroactive: everything
+the agent produced before the marker had to be re-attributed once it landed.
+
+An Orchestrator running serially MUST:
+
+- **Pick before the session.** Walk the ordered Pool front to back and bind the first candidate it
+  admits, emitting `wrapper.issue.activated` with `binding_source: serial_pickup` and the Pickup's
+  own UTC instant. The binding is **prospective**: it precedes the first `agent.output` of the
+  Iteration, so no output is ever attributed retroactively.
+- **Render exactly the bound issue.** The prompt's issue set MUST carry that one issue (§4), not
+  the Pool. An Orchestrator MUST NOT instruct the agent to select from a set.
+- **Skip and advance, never fail.** A candidate the Orchestrator cannot admit — today, one whose
+  `task-type:` label refuses to resolve a **Routed pair** (§14) — MUST be passed over and the next
+  candidate tried. A serial Run has no second Lane to leave the candidate for, so a refusal that
+  ended the Run would end it over one mislabelled issue. Each skip MUST be reported with the
+  issue and the reason.
+- **Distinguish "all skipped" from "empty".** A Pool that is empty ends the Run cleanly (§10). A
+  non-empty Pool in which *every* candidate was skipped is an Iteration that did no work: it MUST
+  count a **Strike** and the Run MUST continue, because the condition is a labelling mistake an
+  operator can fix while the Run is still alive.
+
+A **Working marker** remains part of `PROMPT.md`, but its meaning changes with the binding: it is
+**attribution, not selection**. A marker naming the bound issue is confirmation. A marker naming a
+different issue MUST NOT rebind — the Pickup stands, the disagreement is warned about, and the
+marker is recorded rather than obeyed. This is the same immutability §12 already requires of the
+first activation; contract 1.12 only moves which event is first.
+
+Serial Pickup does not change **Rolling dispatch**: a **Lane** already binds one issue at pickup
+(`binding_source: lane_pickup`) and keeps doing so.
+
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
 Each Iteration MUST feed a single `copilot --yolo -p` invocation with, at minimum:
 
-- the filtered Pool (rendered as the issue set),
+- the issue set — for a serial Iteration, the **one** issue bound by §3.3; for a Lane, its own
+  reserved issue,
 - the last **five** commits, and
 - the resolved **`PROMPT.md`**.
 
@@ -216,7 +257,10 @@ The close-keyword match MUST be equivalent to the reference regex
   separators — POSIX `grep` semantics).
 - Referenced issue numbers deduplicated in **first-encounter order**.
 - **Pool-whitelisted:** a `Closes #N` for an `N` not in this Iteration's Pool MUST be ignored, so
-  a stale or mis-numbered reference cannot act on an unrelated issue.
+  a stale or mis-numbered reference cannot act on an unrelated issue. The whitelist is the
+  **Pool**, not the §3.3 bound issue: an agent that finishes a neighbouring issue on the way
+  through should still close it, and narrowing the whitelist to the binding would silently drop
+  those closures.
 - **Issues only:** the backstop MUST NOT close a PR. PRs are *advanced*, never closed, by the
   Orchestrator.
 
@@ -472,9 +516,11 @@ Orchestrator rollout tickets own enabling those producers.
 
 - `wrapper.issue.activated`: `issue`, UTC RFC3339 `activated_at`, and `binding_source`. Once
   produced, one event authoritatively and immutably binds an Iteration to its Active issue.
-  Python serial bindings use `working_marker`, `closure`, `commit`, or `single_member_pool`;
-  Parallel Lane pickup uses `lane_pickup`. A later marker or fallback never replaces the first
-  binding. Output and Consumption observed before the event remain pending and are attributed
+  A serial Iteration binds at **Pickup** with `serial_pickup` (§3.3); `working_marker`,
+  `closure`, `commit`, and `single_member_pool` remain in the vocabulary because a stream
+  recorded before contract 1.12 carries them and MUST still replay. Parallel Lane pickup uses
+  `lane_pickup`. A later marker or fallback never replaces the first binding. Output and
+  Consumption observed before the event remain pending and are attributed
   when the event arrives. A record whose `activated_at` is absent or is not a resolvable instant
   is not a valid activation: it MUST NOT bind, because binding it would republish a
   non-RFC3339 `first_started_at` on every later Iteration end. The Iteration reports no issue
@@ -712,8 +758,7 @@ conformance fixture change is the canonical way to evolve the contract.
 
 ## 14. Per-issue model routing (phase 3, MUST)
 
-Wherever an Orchestrator binds an Iteration to a **single Active issue at pickup** — the
-Parallel-mode **Lane** (one issue per Lane) is the only such structural pickup seam — it MUST
+Wherever an Orchestrator binds an Iteration to a **single Active issue at pickup** it MUST
 resolve the model and reasoning effort **from that issue's labels**, not from the frozen
 run-wide default:
 
@@ -743,10 +788,14 @@ run-wide default:
 - **Resolve once.** Resolve **once** per issue at pickup; the Orchestrator MUST NOT switch model
   or effort mid-session.
 
-The **serial (single-Lane) loop** hands the whole AFK-ready Pool to one Iteration and the agent
-picks the Active issue mid-session, so there is no runner-side single-issue pickup to route on:
-the serial loop keeps resolving to the global default (`claude-opus-4.8 @ max`) — zero-regression.
-Serial per-issue routing is out of scope.
+Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), so the premise
+that scoped this section to the **Lane** — that a serial Iteration is handed the whole Pool and
+the agent picks mid-session — is no longer true. The scope has deliberately **not** moved with
+it: a serial Iteration resolves its Routed pair at Pickup, so an unknown `task-type:` key is
+refused there and the candidate is skipped (§3.3), but the Iteration then runs on the run-wide
+pair (`claude-opus-4.8 @ max`) — zero-regression. Applying the resolved pair in serial mode is a
+separate decision about ADR-0027's scope, not a consequence of moving the pickup, and it owes the
+calibration question its own answer.
 
 This decision is pinned by three language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md):

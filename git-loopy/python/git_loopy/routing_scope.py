@@ -1,15 +1,28 @@
 """``git_loopy.routing_scope`` — Routing is a Parallel-mode feature (#379, ADR-0027).
 
 One rule lives here, and everything built on **Routing** reads it from this one
-place: a **Routed pair** is resolved *per issue*, and only a **Lane** works one
-issue per session — so at ``parallel == 1`` the whole precedence chain, the
-**Measured routing** tier included, is *inert*.
+place: **Routing is scoped to Parallel mode**, so at ``parallel == 1`` the whole
+precedence chain, the **Measured routing** tier included, is *inert*.
 
-It is not merely unimplemented in serial but incoherent there: the serial loop
-folds the whole **Pool** into a single prompt on the run-wide pair, so there is
-no per-issue pair for any tier to supply. Making it route would abandon
-ADR-0008's promise that serial runs byte-for-byte unchanged, which is not on the
-table.
+.. warning::
+
+   **#394 falsified the reason below, and deliberately did not flip the rule.**
+   ADR-0032's serial **Pickup** binds one **Active issue** before the session
+   starts and resolves its pair there, so "only a **Lane** works one issue per
+   session" is no longer true — the design note further down predicted this
+   fact would *survive* ADR-0032 and it did not. The obstacle is therefore
+   gone: :func:`git_loopy.loop._Loop._pick_active_issue` already resolves a
+   per-issue pair in serial, and only :func:`routing_in_force` stops it
+   reaching the session. Flipping this is a one-line change and a real
+   reversal — of ADR-0027 §*"Calibration only affects Parallel mode"*, of
+   #372's refusal, and of what ``config get`` tells an operator — so it wants
+   its own ticket rather than a ride on #394's. Until then every statement
+   here is still true of what the runner *does*; only its stated *reason* is
+   stale, and this warning is the record of that.
+
+It was not merely unimplemented in serial but incoherent there, because until
+#394 the serial loop folded the whole **Pool** into a single prompt on the
+run-wide pair, so there was no per-issue pair for any tier to supply.
 
 Design notes:
 
@@ -24,8 +37,10 @@ Design notes:
 * **The reason is not "serial has no Pickup".** That was true when #364 wrote
   it and is not any more: ADR-0032 gave a serial **Iteration** a pickup of its
   own, and ``CONTEXT.md`` now says every unit of work has one. The narrower
-  fact — one session, many issues, one pair — is what actually scopes routing,
-  and it survives ADR-0032 landing.
+  fact this note used to fall back on — one session, many issues, one pair —
+  was expected to survive ADR-0032 and did not: #394 made a serial session work
+  exactly one issue. Nothing here scopes routing on its merits any more; see
+  the warning above.
 * **Pure over an ``int``.** Nothing here reads Config, the artifact or the
   environment, so a caller resolves its own ``parallel`` and this stays pinnable
   without a repository. It spends no **AI Credit** and starts no Calibration.
@@ -65,12 +80,14 @@ PARALLEL_MODE_HINT: Final[str] = (
 #:
 #: It is deliberately *not* phrased as "serial has no **Pickup**". ADR-0032 gave
 #: a serial **Iteration** a pickup of its own, so that reading — true when #364
-#: wrote it — is now false in the glossary's own vocabulary. What actually scopes
-#: routing is narrower and survives ADR-0032: a **Routed pair** is per issue, and
-#: only a **Lane** runs one issue per session.
+#: wrote it — is now false in the glossary's own vocabulary. Nor is it phrased as
+#: "one session, many issues, one pair" any more: #394 made that false too. What
+#: is left is the scope itself, stated as a scope — routing is a Parallel-mode
+#: feature, and the tier that feeds it measures a Lane. See the module warning
+#: for why the scope outlived the argument that produced it.
 ROUTING_SCOPE_REASON: Final[str] = (
-    "a Routed pair is resolved per issue, and only a Parallel-mode Lane works "
-    "one issue per session"
+    "routing is scoped to Parallel mode, where a Routed pair is measured and "
+    "applied per Lane"
 )
 
 #: What a reporting surface says beside a **Routed pair** it has just printed.
@@ -78,8 +95,8 @@ ROUTING_SCOPE_REASON: Final[str] = (
 #: set?" with an absence — but it is reported as having no effect.
 SERIAL_INERT_NOTE: Final[str] = (
     f"{ROUTING_SCOPE_REASON}. In serial mode "
-    f"(parallel = {SERIAL_PARALLELISM}) one Iteration is handed the whole Pool "
-    f"and runs on the run-wide pair, so every tier is inert. "
+    f"(parallel = {SERIAL_PARALLELISM}) an Iteration runs on the run-wide "
+    f"pair, so every tier is inert. "
     f"{PARALLEL_MODE_HINT}"
 )
 
@@ -87,11 +104,13 @@ SERIAL_INERT_NOTE: Final[str] = (
 def routing_in_force(parallel: int) -> bool:
     """Whether a **Routed pair** resolved at this parallelism takes effect.
 
-    ``False`` in serial, where one **Iteration** is handed the whole **Pool** and
-    runs on the run-wide pair, so there is no per-issue pair for the chain to
-    supply. This is the predicate a feature built on Routing asks before doing
-    anything an inert chain would waste — spending on a **Calibration** (#372),
-    or writing a **Demotion** into the committed artifact (#366).
+    ``False`` in serial. Since #394 a serial **Iteration** does resolve a pair
+    per issue at its **Pickup** — this predicate is what stops that pair
+    reaching the session, and is now the *whole* of why routing is a
+    Parallel-mode feature. It is the one comparison every feature built on
+    Routing asks before doing anything an inert chain would waste: spending on
+    a **Calibration** (#372), or writing a **Demotion** into the committed
+    artifact (#366).
     """
     return parallel > SERIAL_PARALLELISM
 

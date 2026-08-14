@@ -135,6 +135,7 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
+from git_loopy import routing_scope
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, TaskTypeError, resolve_iteration_model
@@ -165,6 +166,7 @@ from git_loopy.skill_install import (
 )
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.serial_pickup import SerialPickup, pick_serial
 from git_loopy.session import IterationSession
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
@@ -894,6 +896,12 @@ class _Loop:
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
         )
+        # The **Routed pair** each candidate resolved to at the last serial
+        # **Pickup** (#394). Refreshed per Iteration by ``_pick_active_issue``:
+        # a pair is a fact about one Pool's admission pass, and carrying one
+        # across Iterations would run a session on a pair resolved from labels
+        # the issue may no longer have.
+        self._routes: dict[int | str, tuple[str | None, str | None]] = {}
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
         # write the replay JSONL + fan out to the sinks. Built here so ``_emit``
         # is a one-line delegator and the sinks receive the *scrubbed* envelope
@@ -1120,18 +1128,54 @@ class _Loop:
                 # consistent even on the empty-pool path.
                 self._finish_iteration(iter_num, outcome="empty_pool")
                 return ("empty_pool", 0, 0)
+
+            # 2a) Serial **Pickup** (#394, ADR-0032). The runner binds one
+            #     issue *before* any session exists, taking the head of the
+            #     §3.2 order `collect_pool` already put the Pool in. Until this
+            #     slice the whole Pool went into one prompt and `PROMPT.md` told
+            #     the agent to self-select, so list position was a rendering
+            #     hint competing with an instruction to ignore it — an issue
+            #     could be passed over indefinitely and nothing noticed.
+            pickup = self._pick_active_issue(pool, iter_num=iter_num)
+            if pickup.item is None:
+                # Not the empty-Pool outcome, and it must not be reported as
+                # one: there *was* work and none of it could be taken, which is
+                # a Run going nowhere rather than a Run that is finished.
+                self._diag.error(
+                    "serial Pickup bound nothing: all %d candidate(s) in the "
+                    "Pool were skipped; this Iteration worked no issue",
+                    len(pool),
+                )
+                return self._finish_unworked_iteration(iter_num)
+            active = pickup.item
+            model, reasoning_effort = self._routes[active.ref]
+            iteration_span.set_attribute("issue", active.ref)
             issue_binding = self._new_active_issue_binding(
                 iter_num, allowed_refs=(item.ref for item in pool)
             )
+            issue_binding.bind(
+                active.ref,
+                source="serial_pickup",
+                at=datetime.now(timezone.utc),
+            )
+            self._diag.info(
+                "serial Pickup bound #%s (%s, position %d of %d)",
+                active.ref,
+                pickup.reason,
+                pickup.position,
+                len(pool),
+            )
 
-            # 3) Build prompt (last-5 commits + AFK-ready item blocks + prompt body).
+            # 3) Build prompt (last-5 commits + the bound issue's block +
+            #    prompt body). Exactly one issue: the agent is told which issue
+            #    it is working and is not offered a menu.
             try:
                 recent = self._git.recent_commits(5)
             except git_module.GitError as exc:
                 self._diag.warning("recent_commits failed: %s; using empty prefix", exc)
                 recent = []
             commits_block = _format_recent_commits(recent)
-            issues_block = "\n\n".join(item.rendered_block for item in pool)
+            issues_block = active.rendered_block
             prompt = (
                 f"Previous commits: {commits_block} "
                 f"Issues: {issues_block} {self._prompt_text}"
@@ -1158,8 +1202,8 @@ class _Loop:
                         sinks=self._sinks,
                         run_id=self._writers.run_id,
                         iter_num=iter_num,
-                        model=self._config.model,
-                        reasoning_effort=self._config.reasoning_effort,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         event_observer=self._session_observer,
@@ -1377,13 +1421,127 @@ class _Loop:
         )
         return sha
 
+    # -- serial Pickup -----------------------------------------------------
+
+    def _pick_active_issue(
+        self, pool: list[AfkReadyItem], *, iter_num: int
+    ) -> SerialPickup:
+        """Bind one **Active issue** out of the ordered **Pool** (#394).
+
+        The **Pickup** a serial **Iteration** did not have until ADR-0032. The
+        Pool arrives in Wrapper contract §3.2 order — sequence is decided at the
+        read (:func:`git_loopy.sources.in_selection_order`), never here — so
+        this walks it front to back and takes the first candidate it can admit.
+
+        **Admission is where the Routed pair resolves**, which is the only place
+        it can: the pair is what the session below is constructed with, and a
+        pair resolved after the session started would be a pair the session did
+        not run on. It is also what makes a routing refusal a *skip* rather than
+        a raise. A **Lane** may raise on one, because releasing its reservation
+        leaves the candidate for another Lane to pick up; a serial Iteration has
+        no other Lane, so raising would end a whole Run over a single
+        mistyped ``task-type:`` label while other work sat eligible behind it.
+        §7 settles it: selection is unattended and never blocks, so a candidate
+        it cannot take, it passes over.
+
+        The resolved pairs land in :attr:`_routes` rather than in the return
+        value because :func:`~git_loopy.serial_pickup.pick_serial` is pinned
+        pure — it decides *which* issue, and what that issue costs to run is the
+        loop's business.
+
+        **What the pair is allowed to be is still ADR-0027's decision.** The
+        resolution happens unconditionally, because that is what validates the
+        candidate's ``task-type:`` labels and what turns a bad one into a skip.
+        Whether the *result* displaces the run-wide pair is
+        :func:`~git_loopy.routing_scope.routing_in_force`'s call, and in serial
+        it is still ``False`` — see that module for why this slice falsified its
+        stated reason without flipping it.
+        """
+        self._routes = {}
+        in_force = routing_scope.routing_in_force(self._config.parallel)
+        run_wide = (self._config.model, self._config.reasoning_effort)
+
+        def admit(item: AfkReadyItem) -> str | None:
+            try:
+                resolved = resolve_iteration_model(
+                    self._config,
+                    item.labels,
+                    warn=lambda message, _ref=item.ref: self._diag.warning(
+                        "issue #%s routing: %s", _ref, message
+                    ),
+                )
+            except TaskTypeError as exc:
+                return f"routing refused: {exc}"
+            self._routes[item.ref] = resolved if in_force else run_wide
+            return None
+
+        pickup = pick_serial(pool, admit=admit)
+        for skip in pickup.skipped:
+            # #397 makes this a skip Event. Until then stderr is the whole
+            # audience, which is the invisibility that ticket exists to fix:
+            # an issue passed over fifty times leaves fifty log lines and
+            # nothing a replay or the Dashboard can show.
+            self._diag.warning(
+                "serial Pickup skipped #%s at position %d of %d: %s",
+                skip.ref,
+                skip.position,
+                len(pool),
+                skip.reason,
+            )
+        return pickup
+
+    def _finish_unworked_iteration(self, iter_num: int) -> tuple[str, int, int]:
+        """Close an Iteration whose **Pickup** bound nothing, as a **Strike**.
+
+        Reached only when a non-empty Pool's every candidate was skipped. It is
+        deliberately not the ``empty_pool`` outcome: that one exits the Run 0
+        because there is no work, and reporting "I could not take any of it" the
+        same way would end a Run cleanly over a repairable tracker state. A
+        Strike is the right instrument — an Iteration that worked no issue is
+        exactly what the strike machine exists to notice, and the ceiling stops
+        a Run that can never make progress instead of spinning on it.
+        """
+        outcome = self._strike_machine.tick(
+            commits_in_iter=0,
+            auto_closures_in_iter=0,
+            checkpoints_in_iter=0,
+            pr_advances_in_iter=0,
+        )
+        self._emit(
+            events_module.WRAPPER_STRIKE,
+            iter_num=iter_num,
+            strikes=self._strike_machine.strikes,
+            max_strikes=self._config.max_nmt_strikes,
+            outcome=("abort" if outcome == "aborted" else "warn"),
+        )
+        self._finish_iteration(
+            iter_num, outcome="aborted" if outcome == "aborted" else "no_progress"
+        )
+        return ("aborted" if outcome == "aborted" else "continue", 0, 0)
+
     def _infer_active_binding(
         self,
         pool: list[AfkReadyItem],
         completions: list[Any],
         new_commits: list[git_module.Commit],
     ) -> tuple[int | str, str] | None:
-        """Select the strongest post-session Active-issue fallback."""
+        """Select the strongest post-session Active-issue fallback.
+
+        A *degraded* path since #394, and only that. A serial **Pickup** binds
+        before the session starts, so on the normal path
+        :attr:`ActiveIssueBinding.active_ref` is already set by the time this
+        could be reached and it is never called. What is left for it is the case
+        Pickup itself could not bind — a Pool the runner never got to, or a
+        binding that did not publish — where a closure or a close-keyword is
+        still better attribution than none.
+
+        Its ``single_member_pool`` branch is unreachable on the normal path for
+        the same reason, and is kept rather than deleted because it is the only
+        thing that would still attribute a **Checkpoint** correctly if Pickup
+        ever stopped binding. It is deliberately *not* promoted into Pickup:
+        inferring the Active issue from the Pool having one member is a guess
+        that happens to be right, and Pickup does not have to guess.
+        """
         if completions:
             return completions[0].ref, "closure"
         pool_ints = {item.ref for item in pool if isinstance(item.ref, int)}

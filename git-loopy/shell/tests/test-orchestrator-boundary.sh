@@ -724,14 +724,27 @@ jq -se '
   and ([.[] | select(.type == "wrapper.issue.activated")]
     | all(
       .issue == 41
-      and .binding_source == "working_marker"
+      and .binding_source == "serial_pickup"
       and .activated_at == .ts
     ))
 ' "$temp_dir/github-cap.stdout" >/dev/null ||
-  fail "shell output Events or immutable Working-marker binding drifted"
+  fail "shell output Events or immutable serial-Pickup binding drifted"
+
+# ADR-0032: the **Pickup** binds before the session starts, so the activation
+# is ahead of the agent's first byte — not, as before #394, behind whichever
+# line of its output happened to carry a marker.
+jq -se '
+  [.[] | select(.type == "wrapper.issue.activated" or .type == "agent.output")
+   | .type]
+  | index("wrapper.issue.activated") < index("agent.output")
+' "$temp_dir/github-cap.stdout" >/dev/null ||
+  fail "serial Pickup did not precede the agent turn"
+
+# The prompt is one issue, and the Working marker naming another one is a
+# disagreement the runner records rather than a reassignment it obeys.
 assert_contains "$(<"$temp_dir/github-cap.stderr")" \
-  "conflicting Active-issue marker for #42 ignored; Iteration is already bound to #41" \
-  "conflicting marker diagnostic"
+  "Working marker disagreement: the agent named #42 but this Iteration is bound to #41" \
+  "a marker naming another issue is recorded as a disagreement"
 mapfile -t cap_replay < <(find "$repo/.git-loopy/logs" -type f -name '*.jsonl')
 assert_equal "1" "${#cap_replay[@]}" "turn Run replay file count"
 cmp -s "$temp_dir/github-cap.stdout" "${cap_replay[0]}" ||
@@ -784,10 +797,10 @@ expected_commit_seq="$(
     "wrapper.iteration.start",
     "wrapper.pool.excluded",
     "wrapper.afk_ready.collected",
+    "wrapper.issue.activated",
     "agent.output",
     "wrapper.commit.recorded",
     "wrapper.commit.recorded",
-    "wrapper.issue.activated",
     "wrapper.iteration.end",
     "wrapper.run.end"
   ]'
@@ -807,7 +820,7 @@ jq -se '
   and ([.[] | select(.type == "wrapper.issue.activated")]
     | length == 1
       and .[0].issue == 41
-      and .[0].binding_source == "single_member_pool")
+      and .[0].binding_source == "serial_pickup")
   and (([.[] | select(.type == "wrapper.issue.activated")][0]) as $activation
     | ([.[] | select(.type == "wrapper.iteration.end")][0]
       | .outcome == "advanced"
@@ -1049,11 +1062,22 @@ jq -se '
   fail "local-PRD collection or CLI precedence drifted"
 [[ ! -e "$FAKE_GH_LOG" ]] || fail "PRDs mode invoked gh"
 # The oversized `prds/large` body is collected through `$(<path)` / --rawfile,
-# never argv, so the Pool builds; the assembled prompt then exceeds the argv
-# limit and the turn degrades to a warning without failing the Run.
+# never argv, so the Pool builds. Since #394 it is no longer *rendered*: the
+# serial **Pickup** binds the head of the Pool and the prompt carries that one
+# issue, so the argv ceiling the whole-Pool prompt used to hit is simply not
+# reached. The oversized-prompt degradation itself is still covered, by the
+# single-issue GitHub case above. What matters here is that a Pool holding an
+# unrenderable member still runs its Iteration.
 assert_contains "$(<"$temp_dir/prds.stderr")" \
-  "copilot turn exited with status" \
-  "PRDs turn degrades gracefully on an oversized prompt"
+  "serial Pickup bound prds/alpha-beta/001-ready.md" \
+  "the PRDs Pickup binds the head of the Pool"
+jq -se '
+  ([.[] | select(.type == "wrapper.issue.activated")]
+    | length == 1
+      and .[0].issue == "prds/alpha-beta/001-ready.md"
+      and .[0].binding_source == "serial_pickup")
+' "$temp_dir/prds.stdout" >/dev/null ||
+  fail "PRDs serial Pickup did not bind the head of the Pool"
 
 repo="$temp_dir/prds-root-link"
 fake_bin="$temp_dir/prds-root-link-bin"
@@ -1379,7 +1403,7 @@ jq -se '
   and ([.[] | select(.type == "wrapper.issue.activated")]
     | length == 1
       and .[0].issue == 41
-      and .[0].binding_source == "closure")
+      and .[0].binding_source == "serial_pickup")
   and (
     ([.[] | .type] | index("wrapper.issue.activated"))
     < ([.[] | .type] | index("wrapper.auto_close"))
@@ -1656,7 +1680,7 @@ jq -se '
   and ([.[] | select(.type == "wrapper.issue.activated")]
     | length == 1
       and .[0].issue == 41
-      and .[0].binding_source == "commit")
+      and .[0].binding_source == "serial_pickup")
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-commit-push.stdout" >/dev/null ||
   fail "a clean agent commit did not push without a Checkpoint"
@@ -1943,6 +1967,59 @@ jq -se '
     "did not paginate to completion" \
     "a truncated candidate fetch says so"
 ) || fail "the shell candidate fetch does not paginate to completion"
+
+# The serial **Pickup** (#394), driven in process: the read decides the order,
+# the Pickup takes its head, and the prompt carries that one issue. Driven here
+# rather than at the process boundary because what is under test is the *shape*
+# of the selection — which candidate, out of how many — and that is invisible
+# once a single-issue fixture comes back.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  fetch_log="$temp_dir/pickup-fetch.log"
+  : >"$fetch_log"
+
+  gh() {
+    if [[ "${1-}" == "issue" && "${2-}" == "list" ]]; then
+      printf '%s\n' "$*" >>"$fetch_log"
+      jq -cn '[
+        {number: 5, title: "newest", body: "## What to build\nx\n\n## Acceptance criteria\n- y", labels: [{name: "ready-for-agent"}], state: "OPEN", url: "u", createdAt: "2026-03-01T00:00:00Z"},
+        {number: 9, title: "oldest", body: "## What to build\nx\n\n## Acceptance criteria\n- y", labels: [{name: "ready-for-agent"}], state: "OPEN", url: "u", createdAt: "2026-01-01T00:00:00Z"},
+        {number: 7, title: "middle", body: "## What to build\nx\n\n## Acceptance criteria\n- y", labels: [{name: "ready-for-agent"}], state: "OPEN", url: "u", createdAt: "2026-02-01T00:00:00Z"}
+      ]'
+      return 0
+    fi
+    if [[ "${1-}" == "issue" && "${2-}" == "view" ]]; then
+      jq -cn --argjson number "${3}" \
+        '{number: $number,
+          title: ("issue " + ($number | tostring)),
+          body: "## What to build\nx\n\n## Acceptance criteria\n- y",
+          labels: [{name: "ready-for-agent"}],
+          state: "OPEN",
+          url: "u",
+          createdAt: "2026-01-01T00:00:00Z",
+          comments: []}'
+      return 0
+    fi
+    return 92
+  }
+
+  git_loopy_collect_github_pool
+  [[ "$(jq -c '[.[].number]' <<<"$GIT_LOOPY_POOL_JSON")" == "[9,7,5]" ]] ||
+    fail "the read did not hand back §3.2 order: $(jq -c '[.[].number]' <<<"$GIT_LOOPY_POOL_JSON")"
+
+  # `git_loopy_pick_serial` publishes an Event, which needs a Run context this
+  # in-process case does not have; the rendering half is what is asserted here.
+  pickup_json="$(jq -c '[.[0]]' <<<"$GIT_LOOPY_POOL_JSON")"
+  blocks="$(git_loopy_render_pool_blocks "$pickup_json")"
+  [[ "$(grep -c '^=== Issue #' <<<"$blocks")" == "1" ]] ||
+    fail "the Pickup rendered more than one issue block"
+  assert_contains "$blocks" "=== Issue #9:" "the Pickup renders the head of the order"
+  if grep -q '=== Issue #5:' <<<"$blocks"; then
+    fail "the prompt still carries an issue the Pickup did not bind"
+  fi
+) || fail "the shell serial Pickup does not hand the agent the head of the order"
 
 # The shared TUI helper (PRD #173). Every case below drives the real entrypoint
 # against a fake `git-loopy-tui` that records what it was asked to do, so

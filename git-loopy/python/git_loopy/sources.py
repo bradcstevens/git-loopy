@@ -682,6 +682,13 @@ class GitHubIssueSource:
         :class:`PoolExclusion` rather than dropped silently (#303), which
         costs nothing extra: the reason comes from the same discriminator
         pass that already had to run.
+
+        The surviving candidates are put into the Wrapper contract §3.2
+        **selection order** before the enrichment, so :attr:`PoolCollection.items`
+        arrives oldest-first within priority rank and a serial **Pickup** takes
+        ``items[0]`` without sorting (#394, ADR-0032). Any pull requests
+        ``include_prs`` adds follow at the tail: §3.2 orders *issues*, and a PR
+        carries neither a **Priority** assertion nor a place in that order.
         """
         try:
             page = self._gh.issue_list(LABEL_READY_FOR_AGENT)
@@ -712,9 +719,19 @@ class GitHubIssueSource:
                     PoolExclusion(ref=issue.number, title=issue.title, reason=reason)
                 )
 
+        # §3.2 order, decided here rather than at the **Pickup** that consumes
+        # it (#394). Two things follow from ordering *before* the N+1 read
+        # rather than after it: the expensive per-issue view walks oldest-first,
+        # so a read that gives out part-way through leaves a prefix of the order
+        # rather than an arbitrary subset of it; and every later consumer — the
+        # prompt, the serial Pickup, the completion whitelist — reads one
+        # sequence it did not have to re-derive.
+        ordered, undated = in_selection_order(ready_candidates)
+        self._report_undated(undated)
+
         items: list[AfkReadyItem] = []
         unread = False
-        for issue in ready_candidates:
+        for issue in ordered:
             try:
                 full = self._gh.issue_view(issue.number)
             except gh_module.GhError as exc:

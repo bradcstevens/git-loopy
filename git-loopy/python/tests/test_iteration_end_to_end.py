@@ -67,6 +67,7 @@ from git_loopy import events as events_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
+from git_loopy import routing_scope
 from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy import sources as sources_module
@@ -449,14 +450,20 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         if event["type"] == "wrapper.issue.activated"
     )
     assert activation["issue"] == 42
-    assert activation["binding_source"] == "closure"
+    # Bound at the serial **Pickup**, before the session — not inferred from
+    # the closure afterwards (#394). The retroactive fallbacks survive for the
+    # case Pickup could not bind; they are no longer the normal path.
+    assert activation["binding_source"] == "serial_pickup"
     assert activation["activated_at"] == activation["ts"]
     iteration_start = next(
         event
         for event in events_seen
         if event["type"] == "wrapper.iteration.start"
     )
-    assert activation["activated_at"] == iteration_start["ts"]
+    # A **Pickup** binds at the instant it selects, which is inside the
+    # Iteration and after the Pool read — not retroactively at the Iteration's
+    # own start, which is what a fallback binding had to claim.
+    assert activation["activated_at"] >= iteration_start["ts"]
     assert types_seen.index("wrapper.issue.activated") < types_seen.index(
         "wrapper.commit.recorded"
     )
@@ -917,7 +924,7 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
         if json.loads(raw)["type"] == "wrapper.issue.activated"
     )
     assert activation["issue"] == 42
-    assert activation["binding_source"] == "single_member_pool"
+    assert activation["binding_source"] == "serial_pickup"
 
     # The persisted iteration counts no agent commits for the Checkpoint.
     runs_dir = tmp_path / ".git-loopy" / "runs"
@@ -1483,7 +1490,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
         if event["type"] == "wrapper.issue.activated"
     )
     assert activation["issue"] == 42
-    assert activation["binding_source"] == "commit"
+    assert activation["binding_source"] == "serial_pickup"
 
 
 def test_loop_make_client_failure_returns_exit_one(tmp_path, monkeypatch) -> None:
@@ -1857,14 +1864,19 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
     assert pr_advanced_payloads[0].get("pr") == 7
     assert len(activations) == 1
     assert activations[0]["issue"] == 7
-    assert activations[0]["binding_source"] == "working_marker"
-    assert activations[0]["ts"] == "2026-05-16T00:00:00.000Z"
+    assert activations[0]["binding_source"] == "serial_pickup"
+    assert activations[0]["activated_at"] == activations[0]["ts"]
+    # §8: the Pickup is in the stream *before* the session it bound for. The
+    # marker that used to establish this binding now only disagrees with it.
+    assert types_seen.index("wrapper.issue.activated") < types_seen.index(
+        "assistant.message"
+    ), types_seen
     diagnostics = next(
         (tmp_path / ".git-loopy" / "logs").glob("*.log")
     ).read_text(encoding="utf-8")
     assert (
-        "conflicting Active-issue marker for #8 ignored; "
-        "Iteration is already bound to #7"
+        "Working marker disagreement: the agent named #8 but this "
+        "Iteration is bound to #7"
     ) in diagnostics
 
     # Run-summary: the advance is progress, but not an issue auto-closure.
@@ -2305,3 +2317,291 @@ def test_persisted_skill_policy_bounds_the_replay_output(
     assert set(payload["skill_adoption"]["skills"]) <= set(boundary)
     assert "team-deploy" not in boundary
     assert "team-deploy" not in payload["skill_adoption"]["skills"]
+
+
+# --------------------------------------------------------------------------- #
+# Serial Pickup (#394, ADR-0032)                                              #
+# --------------------------------------------------------------------------- #
+
+
+def _wire_multi_issue_github(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    issues: list[gh_module.Issue],
+) -> tuple[FakeCopilotClient, FakeGitHubClient]:
+    """Wire a Run whose Pool holds several candidates, so selection is visible."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    monkeypatch.setattr(
+        loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
+    )
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=issues,
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    return fake_client, fake_gh
+
+
+def _dated(number: int, created_at: str, *, labels: list[str] | None = None):
+    issue = _make_issue(number)
+    return gh_module.Issue(
+        number=issue.number,
+        title=issue.title,
+        body=issue.body,
+        labels=labels if labels is not None else list(issue.labels),
+        state=issue.state,
+        url=issue.url,
+        created_at=created_at,
+        comments=(),
+    )
+
+
+def test_serial_pickup_binds_the_oldest_eligible_issue(tmp_path, monkeypatch) -> None:
+    """The runner selects; the agent is told. This is the whole ticket (#394)."""
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(31, "2026-05-01T00:00:00Z"),
+            _dated(7, "2026-01-01T00:00:00Z"),
+        ],
+    )
+
+    assert asyncio.run(loop_module.run(RunConfig(issue_source="github",
+                                                 max_iterations=1))) == 0
+
+    activation = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.issue.activated"
+    )
+    assert activation["issue"] == 7
+    assert activation["binding_source"] == "serial_pickup"
+
+
+def test_the_prompt_carries_exactly_the_bound_issue(tmp_path, monkeypatch) -> None:
+    """Not a menu. The self-selection the whole Pool used to invite is gone."""
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(31, "2026-05-01T00:00:00Z"),
+            _dated(7, "2026-01-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "=== Issue #7:" in prompt
+    assert "=== Issue #31:" not in prompt
+
+
+def test_a_priority_issue_is_bound_ahead_of_older_ones(tmp_path, monkeypatch) -> None:
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(
+                31,
+                "2026-05-01T00:00:00Z",
+                labels=["ready-for-agent", "priority"],
+            ),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "=== Issue #31:" in prompt
+    assert "=== Issue #7:" not in prompt
+
+
+def test_the_pickup_precedes_the_session_it_bound_for(tmp_path, monkeypatch) -> None:
+    """§8: an operator replaying the stream sees the binding, then the work."""
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    types_seen = _logged_types(tmp_path)
+    assert types_seen.index("wrapper.afk_ready.collected") < types_seen.index(
+        "wrapper.issue.activated"
+    )
+    assert types_seen.index("wrapper.issue.activated") < types_seen.index(
+        "wrapper.iteration.end"
+    )
+
+
+def test_a_candidate_whose_routing_is_refused_is_skipped_not_fatal(
+    tmp_path, monkeypatch
+) -> None:
+    """§7: selection is unattended, so a candidate it cannot take it passes over.
+
+    An unknown ``task-type:`` key is the one refusal a serial **Pickup** can
+    actually hit, and a **Lane** *raises* on it — releasing its reservation
+    leaves the candidate for another Lane. A serial Iteration has no other Lane,
+    so raising would end the Run over one bad label while eligible work sat
+    behind it.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    assert asyncio.run(loop_module.run(RunConfig(issue_source="github",
+                                                 max_iterations=1))) == 0
+
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "=== Issue #31:" in prompt
+    diagnostics = next(
+        (tmp_path / ".git-loopy" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8")
+    assert "serial Pickup skipped #7 at position 1 of 2" in diagnostics
+
+
+def test_a_pool_whose_every_candidate_is_skipped_strikes_rather_than_exits(
+    tmp_path, monkeypatch
+) -> None:
+    """"I could not take any of it" must not be reported as "there is no work"."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:nope"],
+            )
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    types_seen = _logged_types(tmp_path)
+    assert "wrapper.strike" in types_seen
+    assert "wrapper.issue.activated" not in types_seen
+    run_end = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.run.end"
+    )
+    assert run_end["outcome"] != "empty_pool"
+
+
+def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
+    """The pair the session is built with comes from the Pickup, not the config.
+
+    ``CONTEXT.md``: *"Because the issue is known first, pickup is where its
+    Routed pair resolves."* Until #394 a serial Iteration had no per-issue pair
+    to resolve, because it had no per-issue anything.
+
+    What the pair is *allowed* to be is still ADR-0027's call, and in serial it
+    is the run-wide one — see :mod:`git_loopy.routing_scope`. So this pins the
+    seam, not a reversal of #379: the ``[routing]`` entry is present, the
+    Pickup resolves through it, and the gate hands the session the run-wide
+    pair anyway. The day :func:`routing_scope.routing_in_force` stops scoping
+    routing to Parallel mode, this expectation flips to ``gpt-5-mini`` and
+    nothing else in the loop has to move.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:docs"],
+            )
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                model="gpt-5.4",
+                routing={"docs": ("gpt-5-mini", None)},
+            )
+        )
+    )
+
+    assert fake_client.create_calls[0]["model"] == "gpt-5.4"
+    assert not routing_scope.routing_in_force(1)
+
+
+def test_a_working_marker_naming_another_issue_does_not_rebind(
+    tmp_path, monkeypatch
+) -> None:
+    """The marker confirms a binding it no longer creates (ADR-0032)."""
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(content="<working issue=31>", message_id="m1"),
+        )
+    ]
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    activations = [
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.issue.activated"
+    ]
+    assert [a["issue"] for a in activations] == [7]
+    diagnostics = next(
+        (tmp_path / ".git-loopy" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8")
+    assert "Working marker disagreement: the agent named #31" in diagnostics
+
+
+def test_the_retained_fallback_still_binds_when_pickup_did_not(
+    tmp_path, monkeypatch
+) -> None:
+    """``_infer_active_binding`` survives as a *degraded* path, and is tested as one.
+
+    Its three branches used to be reached by the normal serial flow, so the
+    end-to-end suite covered them incidentally. Pickup binds first now, which
+    would have retired that coverage silently — leaving a fallback nothing
+    exercises until the day it is the only thing standing between a Checkpoint
+    and an unattributed commit.
+    """
+    loop_obj = object.__new__(loop_module._Loop)
+    pool = [
+        sources_module.AfkReadyItem(ref=7, title="a", rendered_block="", labels=()),
+        sources_module.AfkReadyItem(ref=31, title="b", rendered_block="", labels=()),
+    ]
+    completion = sources_module.Completion(ref=31, sha="deadbeef")
+
+    assert loop_obj._infer_active_binding(pool, [completion], []) == (31, "closure")
+    assert loop_obj._infer_active_binding(
+        pool, [], [git_module.Commit(sha="s", subject="x", body="Closes #7",
+                                    date="2026-01-01")]
+    ) == (7, "commit")
+    assert loop_obj._infer_active_binding(pool[:1], [], []) == (
+        7,
+        "single_member_pool",
+    )
+    assert loop_obj._infer_active_binding(pool, [], []) is None

@@ -24,7 +24,9 @@ def test_first_working_marker_binds_immutably_and_reports_conflict() -> None:
     assert binding.active_ref == 42
     assert published == [(42, "working_marker", _AT)]
     assert warnings == [
-        "conflicting Active-issue marker for #43 ignored; Iteration is already bound to #42"
+        "Working marker disagreement: the agent named #43 but this "
+        "Iteration is bound to #42; the binding stands and the marker is "
+        "recorded, not obeyed"
     ]
 
 

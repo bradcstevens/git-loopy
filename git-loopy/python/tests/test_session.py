@@ -1143,7 +1143,9 @@ def test_serial_session_observes_streamed_and_final_working_markers(
 
     assert published == [(42, "working_marker", observed_at)]
     assert warnings == [
-        "conflicting Active-issue marker for #43 ignored; Iteration is already bound to #42"
+        "Working marker disagreement: the agent named #43 but this "
+        "Iteration is bound to #42; the binding stands and the marker is "
+        "recorded, not obeyed"
     ]
 
 

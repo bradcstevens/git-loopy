@@ -7,43 +7,41 @@ required-skills:
   - resolving-merge-conflicts
   - code-review
 ---
-# ISSUES
+# YOUR ISSUE
 
-Issues for this iteration are provided at the start of context. They come from one of these sources, distinguishable by the delimiter used in each block:
+The runner has already selected your work. Exactly one issue is provided at the start of context, and it is the issue you work this iteration — you do not choose it and you do not weigh it against other work. It comes from one of these sources, distinguishable by the delimiter used in its block:
 
-- **GitHub Issues** (default — see `docs/agents/issue-tracker.md`): each block is headed `=== Issue #N: <title> [labels: ...] ===` and may include a `--- Recent comments (newest first, up to 5) ---` section. The `gh` CLI is the contract for reading/commenting/closing — never edit issues by URL or web UI.
-- **GitHub pull requests** (only when `docs/agents/issue-tracker.md` sets `PRs as a request surface: yes`): each block is headed `=== PR #N: <title> [labels: ...] (branch: <head-branch>) ===`. These are existing PRs that a human (or `/triage`) marked `ready-for-agent` for you to push forward — see **Pull-request mode** below. Same `gh` contract; never merge or close them.
-- **Local markdown** (legacy `ISSUE_SOURCE=prds`): each block is headed `=== <path> ===` where the path is `prds/<feature>/NNN-*.md`, sibling to a `prd.md`. Archived issues live in `prds/<feature>/done/`.
+- **GitHub Issues** (default — see `docs/agents/issue-tracker.md`): the block is headed `=== Issue #N: <title> [labels: ...] ===` and may include a `--- Recent comments (newest first, up to 5) ---` section. The `gh` CLI is the contract for reading/commenting/closing — never edit issues by URL or web UI.
+- **GitHub pull requests** (only when `docs/agents/issue-tracker.md` sets `PRs as a request surface: yes`): the block is headed `=== PR #N: <title> [labels: ...] (branch: <head-branch>) ===`. This is an existing PR that a human (or `/triage`) marked `ready-for-agent` for you to push forward — see **Pull-request mode** below. Same `gh` contract; never merge or close it.
+- **Local markdown** (legacy `ISSUE_SOURCE=prds`): the block is headed `=== <path> ===` where the path is `prds/<feature>/NNN-*.md`, sibling to a `prd.md`. Archived issues live in `prds/<feature>/done/`.
 
-Every issue you receive is **AFK-ready** — the wrapper script has already filtered to issues that carry the `ready-for-agent` label and have a `## What to build` plus `## Acceptance criteria` section (a `## Parent` section is optional). Do not pick up anything else. Do not work on the parent PRD itself. PR blocks are AFK-ready by a different test — they carry an `## Agent Brief` (in the PR body or a comment); follow that brief.
+Your issue is already **AFK-ready** — the runner filtered to issues that carry the `ready-for-agent` label and have a `## What to build` plus `## Acceptance criteria` section (a `## Parent` section is optional), put them in order, and bound the head of that order to this iteration. Do not pick up anything else. Do not work on the parent PRD itself. A PR block is AFK-ready by a different test — it carries an `## Agent Brief` (in the PR body or a comment); follow that brief.
 
 You've also been passed the last few commits. Read them to understand what work has been done in prior iterations and avoid redoing it.
-
-If after filtering AFK-ready issues you genuinely have no work, output `<promise>NO MORE TASKS</promise>` and stop.
 
 # DOMAIN AWARENESS
 
 Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. If `CONTEXT.md` (root) exists, treat it as the glossary; if `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
 
-# TASK SELECTION
+# TASK TYPE
 
-Pick exactly one task. Prioritise in this order. When the selected task type names a skill, invoke that mapped skill before implementing rather than treating it as optional guidance. Development infrastructure intentionally has no mapped skill and may proceed without invoking one.
+Your issue is your task. Read it and classify it by type — the type decides which skill you invoke, never which work you do. When your task type names a skill, invoke that mapped skill before implementing rather than treating it as optional guidance. Development infrastructure intentionally has no mapped skill and may proceed without invoking one.
 
-1. **Critical bugfixes** — use `/diagnosing-bugs` to build a feedback loop, reproduce, hypothesise, instrument, and only then fix. Never patch a hard bug without a reproducing signal.
-2. **Development infrastructure** (tests, types, dev scripts, CI) — no specific skill; just get the loop healthy. This unblocks every later task, so it outranks features.
-3. **Tracer bullets for new features** — for non-trivial state/data-model or UI decisions, sketch with `/prototype` first (LOGIC branch for state, UI branch for visuals), then implement the slice with `/tdd`. A tracer bullet is a thin, end-to-end vertical slice through every layer.
-4. **Polish and quick wins** — implement with `/tdd`.
-5. **Refactors** — use `/codebase-design` to find deepening opportunities (a lot of behaviour behind a small interface at a clean seam) first, then implement the agreed change with `/tdd`.
+- **Critical bugfix** — use `/diagnosing-bugs` to build a feedback loop, reproduce, hypothesise, instrument, and only then fix. Never patch a hard bug without a reproducing signal.
+- **Development infrastructure** (tests, types, dev scripts, CI) — no specific skill; just get the loop healthy.
+- **Tracer bullet for a new feature** — for non-trivial state/data-model or UI decisions, sketch with `/prototype` first (LOGIC branch for state, UI branch for visuals), then implement the slice with `/tdd`. A tracer bullet is a thin, end-to-end vertical slice through every layer.
+- **Polish or quick win** — implement with `/tdd`.
+- **Refactor** — use `/codebase-design` to find deepening opportunities (a lot of behaviour behind a small interface at a clean seam) first, then implement the agreed change with `/tdd`.
 
 If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against the domain docs (`docs/agents/domain.md`, `CONTEXT.md`, and any ADRs under `docs/adr/`) before you start — does it fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
 
-# DECLARE YOUR ACTIVE ISSUE (working marker)
+# CONFIRM YOUR ACTIVE ISSUE (working marker)
 
-Once you've picked your single task — and **before** you start exploring — declare it up front by emitting a **working marker** on its own line, exactly: `<working issue=N>`, where `N` is the number of the issue you selected (for `prds` mode, the number from its filename).
+**Before** you start exploring, confirm your issue by emitting a **working marker** on its own line, exactly: `<working issue=N>`, where `N` is the number of the issue in your block (for `prds` mode, the number from its filename).
 
-This is an **additive** live-attribution signal: on the interactive path the runner taps it to light up the **active issue** and start its live timer the moment you declare it, and the per-run **queue** uses it to attribute this iteration's work to that issue. It is silently ignored on the non-interactive path.
+The runner bound that issue as this iteration's **active issue** before your session started, so the marker is attribution and not selection: it confirms the binding, lights the active issue up on the interactive path, and the per-run **queue** uses it to attribute this iteration's work. A marker naming any other issue rebinds nothing — the runner records the disagreement and keeps the issue it bound.
 
-The marker changes nothing else: you still **pick exactly one task** by the priority order above, and you still close the issue with a `Closes #N` close-keyword exactly as described under **COMMIT** / **THE ISSUE** below. If you omit the marker, the runner infers the active issue from your commit-time `Closes #N` backstop. Emit it once per iteration, for the single issue you chose.
+The marker changes nothing else: you still close the issue with a `Closes #N` close-keyword exactly as described under **COMMIT** / **THE ISSUE** below. Emit it once per iteration, for the issue you were handed.
 
 # SKILLS NOT TO INVOKE
 
@@ -71,7 +69,7 @@ The guidance the excluded and now-removed skills used to carry still holds and i
 
 # EXPLORATION
 
-Explore the repo for the task you've selected. Stay within the area the issue touches; don't grand-tour the codebase. If you're unfamiliar with an area, go up a layer first and map its modules and callers before drilling in.
+Explore the repo for your issue. Stay within the area the issue touches; don't grand-tour the codebase. If you're unfamiliar with an area, go up a layer first and map its modules and callers before drilling in.
 
 # IMPLEMENTATION
 
@@ -150,6 +148,6 @@ If issues were passed in `=== <path> ===` form:
 
 # FINAL RULES
 
-- ONLY WORK ON A SINGLE TASK per iteration.
+- ONLY WORK ON THE SINGLE ISSUE YOU WERE HANDED, per iteration.
 - After completing a task, do **not** emit `<promise>NO MORE TASKS</promise>`. Just end the turn — the wrapper's next iteration will re-collect the AFK-ready pool and decide whether anything is left. Emitting NMT in an iteration where you did work is treated by the wrapper as a signal that you're confused, not as a clean termination.
-- If after triaging the provided issues you genuinely have nothing actionable (e.g., every issue is blocked on a dependency you can't satisfy without picking another one first), output `<promise>NO MORE TASKS</promise>` and stop. The wrapper tolerates this only if no work was done; if you repeatedly emit NMT while AFK-ready issues remain, the wrapper will abort with a non-zero exit so a human can investigate.
+- If your issue turns out to be unworkable end to end (already done, or blocked on something you cannot satisfy from here), say so in a `gh issue comment` on that issue, then output `<promise>NO MORE TASKS</promise>` and stop. Never substitute a different issue — the runner decides what comes next. The wrapper tolerates NMT only if no work was done; if you repeatedly emit it while AFK-ready issues remain, the wrapper will abort with a non-zero exit so a human can investigate.

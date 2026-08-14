@@ -1110,9 +1110,10 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   its serial **Iterations** and parallel **Lane contributions**, keyed by issue.
 - An **Active issue** is the **Pool** member bound by the Orchestrator's authoritative
   activation record.
-- A serial **Iteration** binds to at most one **Active issue**; its first valid
-  **Working marker** wins, with closure, commit, then single-member-**Pool** as
-  ordered fallbacks only when no marker bound it. A parallel **Lane** binds at pickup.
+- A serial **Iteration** binds to at most one **Active issue**, at **Pickup**, before its
+  agent session starts — as a parallel **Lane** does. The **Working marker**, closure,
+  commit and single-member-**Pool** paths that once bound it are retained only to replay
+  streams recorded before that reversal (ADR-0032).
 - The **Dashboard** shows the **Queue**; selecting a row opens that issue's **Log**.
   Each issue has its own **Log**, which accumulates across every serial **Iteration**
   and parallel **Lane contribution** that worked it.
@@ -1175,8 +1176,8 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   of issues — resolved: the per-iteration input is the **Pool**; the whole-run,
   status-bearing list is the **Queue**.
 - `current task` / `current issue` was used loosely for whatever the agent was doing —
-  resolved: the agent's in-flight selection is the **Active issue**, declared via its
-  **Working marker**.
+  resolved: the issue a unit of work is bound to is the **Active issue**, bound by the
+  runner at **Pickup** and confirmed by the agent's **Working marker**.
 - `log` vs `transcript` were both used for the live per-issue output (the code's
   drill-in called it a "transcript"; the early UI also had a whole-run "Log" tab) —
   resolved: the single per-issue, timestamped, auto-scrolling record is the **Log**;

@@ -936,12 +936,20 @@ git_loopy_order_issues() {
   local -a keyed=()
   local candidate
 
-  while IFS= read -r candidate; do
-    local number created_at labels_json rank dated seconds nanoseconds
-    local defect instant
-    number="$(jq -r '.number' <<<"$candidate")"
-    created_at="$(jq -r '.created_at // ""' <<<"$candidate")"
-    labels_json="$(jq -c '.labels // []' <<<"$candidate")"
+  # One jq pass for the whole array rather than three per candidate: a backlog
+  # that paginates to 1600 would otherwise pay ~4800 process spawns to be
+  # sorted. `@tsv` escapes any tab or newline *inside* a value, so splitting on
+  # real tabs is unambiguous — and it is split by hand because `read`'s IFS
+  # treats a tab as whitespace and would collapse the empty `created_at` that
+  # the `absent` defect is made of.
+  local line rest
+  while IFS= read -r line; do
+    local number created_at labels_json
+    local rank dated seconds nanoseconds defect instant
+    number="${line%%$'\t'*}"
+    rest="${line#*$'\t'}"
+    created_at="${rest%%$'\t'*}"
+    labels_json="${rest#*$'\t'}"
     rank="$(git_loopy_priority_rank "$labels_json")"
     dated=1
     seconds=0
@@ -954,10 +962,15 @@ git_loopy_order_issues() {
       nanoseconds="${instant##* }"
     fi
     defect="$(git_loopy_timestamp_defect "$created_at")"
-    keyed+=("$(printf '%d%d%014d%09d%010d\t%s\t%s' \
+    printf -v candidate '%d%d%014d%09d%010d\t%s\t%s' \
       "$rank" "$dated" "$seconds" "$nanoseconds" "$number" \
-      "$number" "$defect")")
-  done < <(jq -c '.[]?' <<<"$issues_json")
+      "$number" "$defect"
+    keyed+=("$candidate")
+  done < <(jq -r '
+    .[]?
+    | [(.number | tostring), (.created_at // ""), ((.labels // []) | tojson)]
+    | @tsv
+  ' <<<"$issues_json")
 
   local -a ordered=() undated=()
   if ((${#keyed[@]} > 0)); then
@@ -1375,6 +1388,64 @@ _git_loopy_gh_issue_list_to_completion() {
   done
 }
 
+# Reorders a shallow candidate array into Wrapper contract §3.2 order and
+# reports every timestamp the order could not use, once per `(issue, defect)`
+# per Run. The ordering itself is `git_loopy_order_issues` — the Conformance
+# seam — so this only maps its answer back onto the records, and a candidate
+# the order somehow did not name is appended rather than dropped.
+_GIT_LOOPY_ORDERED_CANDIDATES_JSON='[]'
+declare -A _GIT_LOOPY_REPORTED_UNDATED=()
+
+_git_loopy_order_candidates() {
+  local candidates="$1"
+  local normalized ordering order_json undated_json entry issue defect
+  # `git_loopy_order_issues` is the Conformance seam and reads the normalized
+  # `{number, created_at, labels}` the fixture feeds it. A raw `gh issue list`
+  # row is not that shape — it carries `createdAt` and label *objects* — so the
+  # projection happens here, once, rather than by widening the seam to accept
+  # both and letting the two ports disagree about which spellings count.
+  normalized="$(
+    jq -c '[
+      .[]?
+      | {
+          number: .number,
+          created_at: ((.createdAt // .created_at // "") | tostring),
+          labels: [
+            (.labels // [])[]
+            | if type == "object" then (.name // "") else tostring end
+          ]
+        }
+    ]' <<<"$candidates"
+  )" || return 1
+  ordering="$(git_loopy_order_issues "$normalized")" || return 1
+  order_json="$(jq -c '.order' <<<"$ordering")" || return 1
+  undated_json="$(jq -c '.undated' <<<"$ordering")" || return 1
+
+  _GIT_LOOPY_ORDERED_CANDIDATES_JSON="$(
+    jq -c --argjson order "$order_json" '
+      . as $rows
+      | ($rows | map({key: (.number | tostring), value: .}) | from_entries)
+        as $by
+      | ([$order[] | $by[(. | tostring)] // empty])
+        as $ordered
+      | ($ordered | map(.number)) as $seen
+      | $ordered
+        + ($rows | map(select(.number as $n | ($seen | index($n)) == null)))
+    ' <<<"$candidates"
+  )" || return 1
+
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    issue="$(jq -r '.issue' <<<"$entry")" || return 1
+    defect="$(jq -r '.defect' <<<"$entry")" || return 1
+    [[ -z "${_GIT_LOOPY_REPORTED_UNDATED["$issue/$defect"]+present}" ]] ||
+      continue
+    _GIT_LOOPY_REPORTED_UNDATED["$issue/$defect"]=1
+    printf 'git-loopy: issue #%s has an unusable created_at (%s); it sorts last within its priority rank.\n' \
+      "$issue" "$defect" >&2
+  done < <(jq -c '.[]?' <<<"$undated_json")
+}
+
 git_loopy_collect_github_pool() {
   local candidates status=0
   GIT_LOOPY_POOL_COMPLETE=1
@@ -1394,6 +1465,12 @@ git_loopy_collect_github_pool() {
   if ((GIT_LOOPY_POOL_COMPLETE == 0)); then
     printf 'git-loopy: gh issue list did not paginate to completion; this Pool is partial and may not be treated as the whole backlog.\n' >&2
   fi
+  # Wrapper contract §3.2 — the order is decided at the read, before the
+  # per-issue view loop, so a Pool truncated by a failing view is a *prefix* of
+  # the order rather than an arbitrary subset of it. No consumer sorts: the
+  # serial Pickup below takes element 0 and trusts it.
+  _git_loopy_order_candidates "$candidates" || return 1
+  candidates="$_GIT_LOOPY_ORDERED_CANDIDATES_JSON"
 
   local -a pool_items=()
   local -a exclusion_items=()
@@ -1683,6 +1760,11 @@ git_loopy_recent_commits_block() {
 }
 
 git_loopy_render_pool_blocks() {
+  # Renders the blocks the prompt shows. The argument is the *rendered* Pool,
+  # which since #394 is not the collected Pool: a serial Iteration renders the
+  # single issue its Pickup bound. It defaults to the whole Pool so every
+  # non-prompt caller is unchanged.
+  local pool_json="${1:-$GIT_LOOPY_POOL_JSON}"
   jq -r '
     def render_issue:
       "=== Issue #\(.number): \(.title) [labels: \((.labels // []) | join(", "))] ==="
@@ -1698,13 +1780,14 @@ git_loopy_render_pool_blocks() {
       "=== \(.ref) ===\n\(.body // "")";
     [ .[] | if has("number") then render_issue else render_prds end ]
     | join("\n\n")
-  ' <<<"$GIT_LOOPY_POOL_JSON"
+  ' <<<"$pool_json"
 }
 
 git_loopy_build_prompt() {
+  local pool_json="${1:-$GIT_LOOPY_POOL_JSON}"
   local commits_block issues_block prompt_text
   commits_block="$(git_loopy_recent_commits_block "$GIT_LOOPY_REPO_ROOT")" || return 1
-  issues_block="$(git_loopy_render_pool_blocks)" || return 1
+  issues_block="$(git_loopy_render_pool_blocks "$pool_json")" || return 1
   prompt_text="$(<"$GIT_LOOPY_PROMPT_PATH")" || return 1
   printf 'Previous commits: %s Issues: %s %s' \
     "$commits_block" "$issues_block" "$prompt_text"
@@ -1752,8 +1835,48 @@ _git_loopy_publish_active_binding() {
     "$observed_at"
 }
 
-_git_loopy_bind_active_issue() {
+# The serial **Pickup** (ADR-0032, #394). Binds the head of the ordered Pool as
+# the Active issue *before* the agent turn and publishes it, so the prompt below
+# carries one issue and the Working marker confirms a binding it no longer
+# creates. Sets `GIT_LOOPY_PICKUP_JSON` (the single-member Pool the prompt
+# renders) and `_GIT_LOOPY_PICKUP_REF`; both are empty when the Pool is empty,
+# which the caller has already turned into `empty_pool`.
+#
+# It does not sort. Order is decided at the read (§3.2), and re-deciding it here
+# would be a second implementation of the one decision
+# `conformance/issue-ordering.json` exists to keep single.
+GIT_LOOPY_PICKUP_JSON='[]'
+_GIT_LOOPY_PICKUP_REF=""
+_GIT_LOOPY_PICKUP_AT=""
+
+git_loopy_pick_serial() {
   local iteration="$1"
+  local head ref observed_at
+  GIT_LOOPY_PICKUP_JSON='[]'
+  _GIT_LOOPY_PICKUP_REF=""
+  _GIT_LOOPY_PICKUP_AT=""
+
+  head="$(jq -c '.[0] // empty' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
+  [[ -n "$head" ]] || return 1
+  ref="$(
+    jq -r 'if has("number") then .number else .ref end' <<<"$head"
+  )" || return 1
+  [[ -n "$ref" ]] || return 1
+
+  GIT_LOOPY_PICKUP_JSON="$(jq -c '[.]' <<<"$head")" || return 1
+  _GIT_LOOPY_PICKUP_REF="$ref"
+  observed_at="$(git_loopy_iso_timestamp)" || return 1
+  _GIT_LOOPY_PICKUP_AT="$observed_at"
+
+  _git_loopy_publish_active_binding \
+    "$iteration" "$ref" "serial_pickup" "$observed_at" || return 1
+  local label="$ref"
+  [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+  printf 'git-loopy: serial Pickup bound %s (position 1 of %s)\n' \
+    "$label" "$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" >&2
+}
+
+_git_loopy_bind_active_issue() {  local iteration="$1"
   local ref="$2"
   local source="$3"
   local observed_at="$4"
@@ -1767,7 +1890,7 @@ _git_loopy_bind_active_issue() {
     if [[ "$source" == "working_marker" && "$active_ref" != "$ref" ]] &&
       ! grep -Fxq "$ref" "$warned_path" 2>/dev/null; then
       printf '%s\n' "$ref" >>"$warned_path"
-      printf 'git-loopy: conflicting Active-issue marker for #%s ignored; Iteration is already bound to #%s\n' \
+      printf 'git-loopy: Working marker disagreement: the agent named #%s but this Iteration is bound to #%s; the binding stands and the marker is recorded, not obeyed\n' \
         "$ref" "$active_ref" >&2
     fi
     return 1
@@ -1858,6 +1981,18 @@ git_loopy_run_bounded_turn() {
   flag_dir="$(mktemp -d)" || return 1
   local timed_out_flag="$flag_dir/timed_out"
   local output_pid=""
+  if [[ -n "$iteration" && -n "$_GIT_LOOPY_PICKUP_REF" ]]; then
+    # Seed the turn's binding state from the serial **Pickup** (#394). The
+    # marker scanner below runs in a subshell over this directory, so this is
+    # what makes a Working marker naming another issue land on the
+    # already-bound branch — a disagreement to record rather than a rebind —
+    # and what makes the parent's read-back after the turn find the Pickup's
+    # instant rather than nothing.
+    printf '%s' "$_GIT_LOOPY_PICKUP_REF" >"$flag_dir/active-ref" || return 1
+    printf '%s' "$_GIT_LOOPY_PICKUP_AT" >"$flag_dir/active-at" || return 1
+    printf '%s' "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC" \
+      >"$flag_dir/active-monotonic" || return 1
+  fi
   if [[ -n "$iteration" ]]; then
     local output_fifo="$flag_dir/agent-output"
     mkfifo "$output_fifo" || {
@@ -2037,7 +2172,7 @@ _git_loopy_record_active_binding() {
   local source="$2"
   local observed_at="$3"
   local activated_monotonic
-  if [[ "$source" == "working_marker" ]]; then
+  if [[ "$source" == "working_marker" || "$source" == "serial_pickup" ]]; then
     activated_monotonic="$(git_loopy_monotonic_seconds)" || return 1
   else
     activated_monotonic="$_GIT_LOOPY_ITERATION_STARTED_MONOTONIC"
@@ -3091,13 +3226,21 @@ git_loopy_run_discovery() {
       break
     fi
 
+    # ADR-0032 §**Pickup**: the runner binds the Active issue *before* the
+    # session starts, takes the head of the §3.2 order, and hands the agent
+    # exactly that issue. The prompt is one issue, not a menu.
+    git_loopy_pick_serial "$iteration" || {
+      printf 'git-loopy: serial Pickup bound nothing; skipping this Iteration.\n' >&2
+      GIT_LOOPY_PICKUP_JSON="$GIT_LOOPY_POOL_JSON"
+    }
+
     # Assemble the same minimum context as the Python reference (last-5
-    # commits + the AFK-ready Pool blocks + the resolved shared prompt) and
+    # commits + the bound issue's block + the resolved shared prompt) and
     # run exactly one streamed Copilot turn. The agent's own output goes to
     # stderr so stdout stays the JSONL Event stream; the turn's real exit
     # status is preserved and a non-zero turn warns without failing the Run.
     local prompt
-    prompt="$(git_loopy_build_prompt)" || return 1
+    prompt="$(git_loopy_build_prompt "$GIT_LOOPY_PICKUP_JSON")" || return 1
 
     local pre_sha
     pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1

@@ -134,8 +134,8 @@ def test_packaged_prompt_is_present_and_nonempty() -> None:
 @pytest.mark.parametrize(
     "marker",
     [
-        "# ISSUES",  # the pool/source contract header
-        "TASK SELECTION",  # single-task priority order
+        "# YOUR ISSUE",  # the one-issue contract header (#394)
+        "TASK TYPE",  # the type -> mapped-skill contract
         "<working issue=N>",  # the working marker
         "FINAL SEQUENCE",  # the issue-closure contract
         "Closes #",  # the close-keyword backstop
@@ -206,3 +206,53 @@ def test_prompt_md_is_packaged_into_the_built_wheel(tmp_path: Path) -> None:
     assert "git_loopy/PROMPT.md" in names, (
         f"PROMPT.md missing from the built wheel; members were:\n{names}"
     )
+
+
+def test_packaged_prompt_hands_the_agent_one_issue_and_no_menu() -> None:
+    """The self-selection instruction is gone, and nothing replaced it (#394).
+
+    Until ADR-0032 the prompt rendered the whole **Pool** and told the agent to
+    rank it — *"Pick exactly one task. Prioritise in this order..."* — so list
+    position was a rendering hint competing against an explicit instruction to
+    ignore it, and an issue could be passed over indefinitely with nothing to
+    show for it. The runner now performs a **Pickup** and hands the session one
+    issue, which is only true end to end if the prompt stops inviting a choice.
+
+    Pinned as *absence plus presence*, because deleting the ranked list is easy
+    to do and easy to undo by accident: the phrases that made selection the
+    agent's job must not come back, and the sentence that makes it the runner's
+    must be there.
+    """
+    prompt = _packaged_prompt_text()
+
+    for banned in (
+        "Pick exactly one task",
+        "Prioritise in this order",
+        "pick exactly one task",
+        "the single issue you chose",
+        "for the single issue you chose",
+    ):
+        assert banned not in prompt, (
+            f"packaged PROMPT.md still invites the agent to select its own "
+            f"work: {banned!r}"
+        )
+
+    assert "The runner has already selected your work." in prompt
+    assert "it is the issue you work this iteration" in prompt
+
+
+def test_packaged_prompt_makes_the_working_marker_a_confirmation() -> None:
+    """The marker confirms a binding it no longer creates (#394).
+
+    A **Working marker** used to be the first thing that bound an Iteration to
+    an issue, with the commit-time ``Closes #N`` as the backstop. Now the
+    binding exists before the session does, so a marker naming something else
+    is a disagreement to record rather than a reassignment — and the prompt has
+    to say so, or the agent has no way to know its marker is not a steering
+    wheel.
+    """
+    prompt = _packaged_prompt_text()
+
+    assert "CONFIRM YOUR ACTIVE ISSUE" in prompt
+    assert "rebinds nothing" in prompt
+    assert "attribution and not selection" in prompt

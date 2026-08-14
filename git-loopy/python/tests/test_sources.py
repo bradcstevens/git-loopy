@@ -328,6 +328,79 @@ class TestGitHubCollectPool:
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
         assert impl.collect_pool().complete is False
 
+    def test_returns_the_pool_in_selection_order(self) -> None:
+        """A serial **Pickup** takes ``items[0]``, so the read decides sequence.
+
+        The same rule ``shallow_membership`` already obeys, applied to the
+        collection a serial **Iteration** works from (#394). Ordering here rather
+        than at the Pickup keeps "which issue is next" a property of the
+        snapshot, so the prompt, the completion whitelist and the binding all
+        read one sequence.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="2026-05-01T00:00:00Z"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [i.ref for i in impl.collect_pool().items] == [7, 31]
+
+    def test_a_priority_item_heads_the_collected_pool(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(
+                    31,
+                    created_at="2026-05-01T00:00:00Z",
+                    labels=["ready-for-agent", "priority"],
+                ),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert [i.ref for i in impl.collect_pool().items] == [31, 7]
+
+    def test_an_undated_item_is_reported_and_sorts_last(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="not-a-timestamp"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+            ]
+        )
+        logger = _silent_logger()
+        impl = GitHubIssueSource(logger, gh=gh)
+
+        with _capture(logger) as records:
+            assert [i.ref for i in impl.collect_pool().items] == [7, 31]
+
+        assert any(
+            "#31" in record.getMessage() and "malformed" in record.getMessage()
+            for record in records
+        ), [r.getMessage() for r in records]
+
+    def test_the_order_is_decided_before_the_authoritative_read(self) -> None:
+        """The N+1 view loop walks §3.2 order, so a truncated pass is a prefix.
+
+        An implementation that viewed in ``gh``'s listing order and sorted the
+        results afterwards would look identical here — until a view failed, at
+        which point it would have paid for the newest issues and dropped an
+        older one it had never read.
+        """
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(31, created_at="2026-05-01T00:00:00Z"),
+                _make_issue(7, created_at="2026-01-01T00:00:00Z"),
+                _make_issue(12, created_at="2026-03-01T00:00:00Z"),
+            ]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        impl.collect_pool()
+
+        assert gh.issue_view_calls == [7, 12, 31]
+
     def test_filters_out_issues_lacking_discriminator(self) -> None:
         good = _make_issue(42)
         bad = _make_issue(43, body="just words, no sections")
@@ -1791,9 +1864,9 @@ class TestPoolFetchCompleteness:
     """
 
     def test_a_backlog_larger_than_one_page_reaches_the_pool_intact(self) -> None:
-        """The true oldest eligible issue is present, not cut off at row 100."""
+        """The true oldest eligible issue is present, and it is the head."""
         issues = [
-            _make_issue(n, created_at=f"2026-01-01T00:00:{n % 60:02d}Z")
+            _make_issue(n, created_at=f"2026-01-01T00:{n // 60:02d}:{n % 60:02d}Z")
             for n in range(1, 151)
         ]
         gh = FakeGitHubClient(issues=issues)
@@ -2019,10 +2092,12 @@ class TestRollingSourceSplit:
         pool = list(impl.collect_pool().items)
 
         # Both issues, enriched — the rolling seam never narrows serial collection
-        # to Parallel-safe work or drops the comment enrichment.
-        assert [i.ref for i in pool] == [31, 7]
-        assert "serial note" in pool[0].rendered_block
-        assert gh.issue_view_calls == [31, 7]
+        # to Parallel-safe work or drops the comment enrichment. The sequence is
+        # §3.2's (#394), which is a property of the read and not of the seam
+        # under test: neither issue is dated, so the issue number decides.
+        assert [i.ref for i in pool] == [7, 31]
+        assert "serial note" in pool[1].rendered_block
+        assert gh.issue_view_calls == [7, 31]
 
 
 # --------------------------------------------------------------------------- #

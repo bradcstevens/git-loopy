@@ -3248,13 +3248,25 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
             f"got {live}"
         )
 
-    # --- It rendered its OWN authoritative Pool and chose from it: #44 was
-    #     still eligible and undispatched, so a serial Run would have offered
-    #     it, and this one does too.
+    # --- It collected its OWN authoritative Pool and performed a serial
+    #     **Pickup** over it (#394): #44 was still eligible and undispatched, so
+    #     it was in the Pool the runner ordered — but the prompt carries exactly
+    #     the one issue the runner bound, not the menu it chose from.
     serial_prompt, _timeout = fake_client.created[2].send_and_wait_calls[0]
     assert "=== Issue #41:" in serial_prompt
-    assert "=== Issue #44:" in serial_prompt
+    assert "=== Issue #44:" not in serial_prompt, (
+        "a serial Iteration is handed one issue, not the whole Pool"
+    )
     assert "=== Issue #42:" not in serial_prompt, "#42 was closed by its Lane"
+    collected = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.afk_ready.collected" and 41 in e["issues"]
+    ]
+    assert collected, "the serial Iteration collected a Pool of its own"
+    assert 44 in collected[-1]["issues"], (
+        "#44 was still eligible: it is in the Pool, behind the bound head"
+    )
 
     # --- Nothing stranded, and the Run ended on a drained Pool.
     assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [41, 42, 43, 44]

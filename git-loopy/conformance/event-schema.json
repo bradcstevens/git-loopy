@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.11",
+  "contract_version": "1.12",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [

@@ -1,4 +1,12 @@
-"""Immutable Active-issue binding for one Iteration or Lane."""
+"""Immutable Active-issue binding for one Iteration or Lane.
+
+Since #394 (ADR-0032) every unit of work binds at its **Pickup**, before its
+agent session starts — so the **Working marker** confirms a binding it no longer
+creates. A marker naming a different issue is therefore a *disagreement to
+record*, not a reassignment: the runner chose the issue, the agent restated it
+wrongly, and the operator needs to see both. The marker path survives unchanged
+for the degraded case where a Pickup could not bind at all.
+"""
 
 from __future__ import annotations
 
@@ -43,8 +51,9 @@ class ActiveIssueBinding:
             ):
                 self._warned_marker_refs.add(ref)
                 self._warn(
-                    f"conflicting Active-issue marker for #{ref} ignored; "
-                    f"Iteration is already bound to #{self.active_ref}"
+                    f"Working marker disagreement: the agent named #{ref} but "
+                    f"this Iteration is bound to #{self.active_ref}; the "
+                    "binding stands and the marker is recorded, not obeyed"
                 )
             return False
         if (

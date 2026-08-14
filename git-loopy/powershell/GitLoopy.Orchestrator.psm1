@@ -1668,6 +1668,88 @@ function Add-GitLoopyPoolExclusion {
     })
 }
 
+# Reorders a shallow candidate array into Wrapper contract §3.2 order and
+# reports every timestamp the order could not use, once per `(issue, defect)`
+# per Run. `Get-GitLoopyIssueOrder` — the Conformance seam — decides the order;
+# this only maps its answer back onto the records, and a candidate the order
+# somehow did not name is appended rather than dropped.
+$script:GitLoopyReportedUndated = [System.Collections.Generic.HashSet[string]]::new()
+
+function Get-GitLoopyOrderedCandidates {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Candidates
+    )
+
+    $Rows = @($Candidates)
+    if ($Rows.Count -eq 0) {
+        return @()
+    }
+
+    # `Get-GitLoopyIssueOrder` is the Conformance seam and reads the normalized
+    # `{number, created_at, labels}` the fixture feeds it. A raw `gh issue list`
+    # row is not that shape — it carries `createdAt` and label *objects* — so
+    # the projection happens here, once, rather than by widening the seam to
+    # accept both and letting the two ports disagree about which spellings
+    # count.
+    $Projected = foreach ($Row in $Rows) {
+        $CreatedAt = if ($null -ne $Row["createdAt"]) {
+            [string]$Row["createdAt"]
+        }
+        elseif ($null -ne $Row["created_at"]) {
+            [string]$Row["created_at"]
+        }
+        else {
+            ""
+        }
+        $Labels = foreach ($Label in @($Row["labels"])) {
+            if ($Label -is [Collections.IDictionary]) {
+                [string]$Label["name"]
+            }
+            else {
+                [string]$Label
+            }
+        }
+        @{
+            number = $Row["number"]
+            created_at = $CreatedAt
+            labels = @($Labels)
+        }
+    }
+    $Ordering = Get-GitLoopyIssueOrder -Candidates @($Projected)
+    foreach ($Entry in @($Ordering["undated"])) {
+        $Key = "$($Entry["issue"])/$($Entry["defect"])"
+        if (-not $script:GitLoopyReportedUndated.Add($Key)) {
+            continue
+        }
+        [Console]::Error.WriteLine(
+            "git-loopy: issue #$($Entry["issue"]) has an unusable created_at " +
+            "($($Entry["defect"])); it sorts last within its priority rank."
+        )
+    }
+
+    $ByNumber = @{}
+    foreach ($Row in $Rows) {
+        $ByNumber["$([string]$Row["number"])"] = $Row
+    }
+    $Ordered = [System.Collections.Generic.List[object]]::new()
+    $Seen = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($Number in @($Ordering["order"])) {
+        $Key = "$([string]$Number)"
+        if ($ByNumber.ContainsKey($Key) -and $Seen.Add($Key)) {
+            $Ordered.Add($ByNumber[$Key])
+        }
+    }
+    foreach ($Row in $Rows) {
+        if ($Seen.Add("$([string]$Row["number"])")) {
+            $Ordered.Add($Row)
+        }
+    }
+    return $Ordered.ToArray()
+}
+
 function Get-GitLoopyGitHubPool {
     [CmdletBinding()]
     param()
@@ -1689,6 +1771,11 @@ function Get-GitLoopyGitHubPool {
             "Pool is partial and may not be treated as the whole backlog."
         )
     }
+    # Wrapper contract §3.2 — the order is decided at the read, before the
+    # per-issue view loop, so a Pool truncated by a failing view is a *prefix*
+    # of the order rather than an arbitrary subset of it. No consumer sorts:
+    # the serial Pickup takes element 0 and trusts it.
+    $Candidates = Get-GitLoopyOrderedCandidates -Candidates $Candidates
 
     foreach ($Candidate in $Candidates) {
         $Body = if ($null -eq $Candidate["body"]) {
@@ -2529,6 +2616,58 @@ function Get-GitLoopyCurrentIterationRollup {
     return $Rollup
 }
 
+# The serial **Pickup** (ADR-0032, #394). Binds the head of the ordered Pool as
+# the Active issue *before* the agent turn and publishes it, so the prompt
+# carries one issue and the Working marker confirms a binding it no longer
+# creates. Returns the single-member Pool the prompt renders, or `@()` when
+# there is nothing to bind — which the caller has already turned into
+# `empty_pool`.
+#
+# It does not sort. Order is decided at the read (§3.2), and re-deciding it here
+# would be a second implementation of the one decision
+# `conformance/issue-ordering.json` exists to keep single.
+function Select-GitLoopySerialPickup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [AllowEmptyCollection()]
+        [object[]]$Pool
+    )
+
+    $Items = @($Pool)
+    if ($Items.Count -eq 0) {
+        return @()
+    }
+    $Head = $Items[0]
+    $Ref = if ($Head.Contains("number")) {
+        [string]$Head["number"]
+    }
+    else {
+        [string]$Head["ref"]
+    }
+
+    $Bound = Publish-GitLoopyActiveBinding `
+        -Context $Context `
+        -EventTypes $EventTypes `
+        -Iteration $Iteration `
+        -Ref $Ref `
+        -Source "serial_pickup" `
+        -ObservedAt ([DateTimeOffset]::UtcNow)
+    if (-not $Bound) {
+        return $Items
+    }
+    $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+    [Console]::Error.WriteLine(
+        "git-loopy: serial Pickup bound $Label (position 1 of $($Items.Count))"
+    )
+    return @($Head)
+}
+
 function Set-GitLoopyActiveBinding {
     param(
         [Parameter(Mandatory)]
@@ -2554,8 +2693,10 @@ function Set-GitLoopyActiveBinding {
             $script:GitLoopyWarnedMarkerRefs.Add($Ref)
         ) {
             [Console]::Error.WriteLine(
-                "git-loopy: conflicting Active-issue marker for #$Ref ignored; " +
-                "Iteration is already bound to #$($script:GitLoopyActiveRef)"
+                "git-loopy: Working marker disagreement: the agent named " +
+                "#$Ref but this Iteration is bound to " +
+                "#$($script:GitLoopyActiveRef); the binding stands and the " +
+                "marker is recorded, not obeyed"
             )
         }
         return $false
@@ -3416,14 +3557,23 @@ function Invoke-GitLoopyDiscoveryLoop {
             break
         }
 
+        # ADR-0032 §**Pickup**: the runner binds the Active issue *before* the
+        # session starts, takes the head of the §3.2 order, and hands the agent
+        # exactly that issue. The prompt is one issue, not a menu.
+        $PickedPool = @(Select-GitLoopySerialPickup `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Pool $Pool)
+
         # Assemble the same minimum context as the Python reference (last-5
-        # commits + the AFK-ready Pool blocks + the resolved shared prompt) and
+        # commits + the bound issue's block + the resolved shared prompt) and
         # run exactly one streamed Copilot turn. The agent's own output goes to
         # stderr so stdout stays the JSONL Event stream; the turn's real exit
         # status is preserved and a non-zero turn warns without failing the Run.
         $Prompt = Build-GitLoopyPrompt `
             -RepoRoot $Preflight.RepoRoot `
-            -Pool $Pool `
+            -Pool $PickedPool `
             -PromptPath $Preflight.PromptPath
         $PreSha = Get-GitLoopyHeadSha -RepoRoot $Preflight.RepoRoot
         $AgentStatus = Invoke-GitLoopyAgentTurn `
@@ -3709,6 +3859,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueInstant",
     "Get-GitLoopyTimestampDefect",
     "Get-GitLoopyIssueOrder",
+    "Get-GitLoopyOrderedCandidates",
+    "Select-GitLoopySerialPickup",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",
@@ -3729,6 +3881,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyGitHubPool",
     "Get-GitLoopyPrdsPool",
     "Get-GitLoopyPool",
+    "Format-GitLoopyPoolBlocks",
     "Invoke-GitLoopyDiscovery",
     "Invoke-GitLoopyBoundedTurn",
     "Get-GitLoopyUsage",

@@ -1343,25 +1343,32 @@ exit 97
     Assert-Equal 2 $ActivationEvents.Count "one Active-issue binding per Iteration"
     foreach ($Event in $ActivationEvents) {
         Assert-Equal 41 $Event["issue"] "Working marker Active issue"
-        Assert-Equal "working_marker" $Event["binding_source"] (
-            "Working marker binding source"
+        Assert-Equal "serial_pickup" $Event["binding_source"] (
+            "serial Pickup binding source"
         )
         Assert-Equal $Event["ts"] $Event["activated_at"] (
             "activation observation timestamp"
         )
     }
+    # A marker for an issue outside the Pool used to get its own diagnostic.
+    # Since #394 the Iteration is already bound when the first marker arrives,
+    # so every later marker — in-Pool or not — lands on the disagreement branch
+    # ahead of it, and the out-of-Pool branch is unreachable on the normal path.
     Assert-Contains (
         [IO.File]::ReadAllText($CapStderr)
     ) (
-        "Active-issue marker for #99 ignored; " +
-        "issue is not in the current Pool"
-    ) "out-of-Pool marker diagnostic"
+        "Working marker disagreement: the agent named #99 but this " +
+        "Iteration is bound to #41"
+    ) "an out-of-Pool marker is a disagreement too"
+    # ADR-0032: the Working marker confirms a binding it no longer creates,
+    # so a marker naming another issue is a disagreement to record rather than
+    # a reassignment to obey.
     Assert-Contains (
         [IO.File]::ReadAllText($CapStderr)
     ) (
-        "conflicting Active-issue marker for #42 ignored; " +
-        "Iteration is already bound to #41"
-    ) "conflicting marker diagnostic"
+        "Working marker disagreement: the agent named #42 but this " +
+        "Iteration is bound to #41"
+    ) "Working marker disagreement diagnostic"
     $CapReplay = @(
         Get-ChildItem `
             -LiteralPath (Join-Path $CapRepo ".git-loopy/logs") `
@@ -1440,8 +1447,8 @@ exit 97
     $CommitsEvents = Read-Events -Path $CommitsStdout
     Assert-Equal (
         "wrapper.run.start,wrapper.iteration.start,wrapper.pool.excluded," +
-        "wrapper.afk_ready.collected,agent.output,wrapper.commit.recorded," +
-        "wrapper.commit.recorded,wrapper.issue.activated," +
+        "wrapper.afk_ready.collected,wrapper.issue.activated,agent.output," +
+        "wrapper.commit.recorded,wrapper.commit.recorded," +
         "wrapper.iteration.end,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
         "commit events precede the Iteration end that closes their Iteration"
@@ -1476,8 +1483,8 @@ exit 97
     Assert-Equal 41 $SingleMemberBindings[0]["issue"] (
         "single-member Pool Active issue"
     )
-    Assert-Equal "single_member_pool" $SingleMemberBindings[0]["binding_source"] (
-        "single-member Pool binding source"
+    Assert-Equal "serial_pickup" $SingleMemberBindings[0]["binding_source"] (
+        "single-member Pool binding source is now the Pickup that bound it"
     )
     $CommitsIterationEnd = @(
         $CommitsEvents |
@@ -1932,8 +1939,8 @@ Read outside the worktree.
     )
     Assert-Equal 1 $AutoBindings.Count "closure produces one Active-issue binding"
     Assert-Equal 41 $AutoBindings[0]["issue"] "closure Active issue"
-    Assert-Equal "closure" $AutoBindings[0]["binding_source"] (
-        "closure binding source"
+    Assert-Equal "serial_pickup" $AutoBindings[0]["binding_source"] (
+        "the Pickup bound the issue before the closure could infer it"
     )
     Assert-True (
         [Array]::IndexOf(
@@ -2449,8 +2456,8 @@ Read outside the worktree.
     )
     Assert-Equal 1 $CommitBindings.Count "commit produces one Active-issue binding"
     Assert-Equal 41 $CommitBindings[0]["issue"] "commit Active issue"
-    Assert-Equal "commit" $CommitBindings[0]["binding_source"] (
-        "commit binding source"
+    Assert-Equal "serial_pickup" $CommitBindings[0]["binding_source"] (
+        "the Pickup bound the issue before the commit could infer it"
     )
     Assert-Equal "iteration_cap" $PushEvents[-1]["outcome"] "agent-commit-push Run outcome"
     Assert-True (
@@ -3743,6 +3750,65 @@ Start-Sleep -Seconds $Sleep
         $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
         Assert-Equal "2026-01-01T00:00:00" ([string]$Pool[0]["created_at"]) (
             "the candidate reader coerced a timestamp §3.2 refuses"
+        )
+
+        # The serial **Pickup** (#394): the read decides the order, the Pickup
+        # takes its head, and the prompt carries that one issue. Driven in
+        # process because what is under test is the *shape* of the selection —
+        # which candidate, out of how many — and that is invisible from outside
+        # once a single-issue fixture comes back.
+        $script:FetchBacklog = 0
+        $script:FetchCreatedAt = "2026-01-01T00:00:00Z"
+        function global:gh {
+            $script:FetchRequests.Add([string]::Join(" ", $args)) | Out-Null
+            if ($args[0] -ceq "issue" -and $args[1] -ceq "list") {
+                $global:LASTEXITCODE = 0
+                return (@(
+                    @{ number = 5; created = "2026-03-01T00:00:00Z" },
+                    @{ number = 9; created = "2026-01-01T00:00:00Z" },
+                    @{ number = 7; created = "2026-02-01T00:00:00Z" }
+                ) | ForEach-Object {
+                    [ordered]@{
+                        number = $_.number
+                        title = "issue $($_.number)"
+                        body = $script:FetchBody
+                        labels = @([ordered]@{ name = "ready-for-agent" })
+                        state = "OPEN"
+                        url = "u"
+                        createdAt = $_.created
+                    }
+                } | ConvertTo-Json -Depth 10 -AsArray)
+            }
+            $global:LASTEXITCODE = 0
+            $Number = [int]$args[2]
+            return ([ordered]@{
+                number = $Number
+                title = "issue $Number"
+                body = $script:FetchBody
+                labels = @([ordered]@{ name = "ready-for-agent" })
+                state = "OPEN"
+                url = "u"
+                createdAt = "2026-01-01T00:00:00Z"
+                comments = @()
+            } | ConvertTo-Json -Depth 10)
+        }
+        $Pool = Invoke-CandidateFetch -Stderr ([ref]$FetchStderr)
+        Assert-Equal "9,7,5" (
+            [string]::Join(",", @($Pool | ForEach-Object { $_["number"] }))
+        ) "the read did not hand back §3.2 order"
+
+        # `Select-GitLoopySerialPickup` publishes an Event, which needs a Run
+        # context this in-process case does not have; the rendering half is
+        # what is asserted here.
+        $Blocks = Format-GitLoopyPoolBlocks -Pool @($Pool[0])
+        Assert-Equal 1 (
+            @([regex]::Matches($Blocks, "(?m)^=== Issue #")).Count
+        ) "the Pickup rendered more than one issue block"
+        Assert-Contains $Blocks "=== Issue #9:" (
+            "the Pickup renders the head of the order"
+        )
+        Assert-True (-not $Blocks.Contains("=== Issue #5:")) (
+            "the prompt still carries an issue the Pickup did not bind"
         )
     }
     finally {
