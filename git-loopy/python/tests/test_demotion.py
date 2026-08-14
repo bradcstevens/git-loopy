@@ -83,9 +83,15 @@ def test_only_unpublished_contributions_count_against_their_pair() -> None:
     tally = demotion.tally_no_progress(
         [
             _contribution(1, model="cheap", effort="low", reason=REASON_PUBLISHED),
-            _contribution(2, model="cheap", effort="low", reason=REASON_UNCHANGED_BRANCH),
-            _contribution(3, model="cheap", effort="low", reason=REASON_CHECKPOINT_FAILED),
-            _contribution(4, model="cheap", effort="low", reason=REASON_SERIAL_FALLBACK),
+            _contribution(
+                2, model="cheap", effort="low", reason=REASON_UNCHANGED_BRANCH
+            ),
+            _contribution(
+                3, model="cheap", effort="low", reason=REASON_CHECKPOINT_FAILED
+            ),
+            _contribution(
+                4, model="cheap", effort="low", reason=REASON_SERIAL_FALLBACK
+            ),
             _contribution(5, model="fancy", effort="high", reason=REASON_PUBLISHED),
         ]
     )
@@ -111,8 +117,12 @@ def test_effort_is_half_of_the_key() -> None:
     """
     tally = demotion.tally_no_progress(
         [
-            _contribution(1, model="cheap", effort="low", reason=REASON_SERIAL_FALLBACK),
-            _contribution(2, model="cheap", effort="high", reason=REASON_SERIAL_FALLBACK),
+            _contribution(
+                1, model="cheap", effort="low", reason=REASON_SERIAL_FALLBACK
+            ),
+            _contribution(
+                2, model="cheap", effort="high", reason=REASON_SERIAL_FALLBACK
+            ),
         ]
     )
 
@@ -136,7 +146,10 @@ def test_an_open_contribution_is_not_counted() -> None:
     was still running.
     """
     still_open = Contribution(
-        contribution_id="c1", ref=1, lane_id="lane-0", model="cheap",
+        contribution_id="c1",
+        ref=1,
+        lane_id="lane-0",
+        model="cheap",
         reasoning_effort="low",
     )
 
@@ -170,7 +183,9 @@ def _measured(model: str, effort: str) -> MeasuredEntry:
         credits=1.0,
         wall_clock_seconds=60,
         rungs=(Rung(model=model, effort=effort, passed=5, total=5, credits=1.0),),
-        proving_tasks=(ProvingTask(issue=1, base_commit="a" * 40, oracle_commit="b" * 40),),
+        proving_tasks=(
+            ProvingTask(issue=1, base_commit="a" * 40, oracle_commit="b" * 40),
+        ),
     )
 
 
@@ -527,7 +542,6 @@ def test_a_threshold_below_one_is_refused() -> None:
         RunConfig(demotion_threshold=0)
 
 
-
 # ---------------------------------------------------------------------------
 # `demote_after_run` — the one seam that touches disk, at the quiescent point.
 # ---------------------------------------------------------------------------
@@ -609,9 +623,7 @@ def test_a_demotion_rewrites_and_commits_the_artifact_once(tmp_path: Path) -> No
     _seed_artifact(tmp_path, {"bugfix": _measured("cheap", "low")})
     git = _RecordingGit(tmp_path)
 
-    plan = _run_demotion(
-        tmp_path, contributions=_failing(("cheap", "low"), 3), git=git
-    )
+    plan = _run_demotion(tmp_path, contributions=_failing(("cheap", "low"), 3), git=git)
 
     assert len(plan.demotions) == 1
     entry = load_measured_routing(measured_routing_path(tmp_path)).entries["bugfix"]
@@ -653,9 +665,7 @@ def test_a_run_that_demotes_nothing_writes_nothing(tmp_path: Path) -> None:
     before = measured_routing_path(tmp_path).read_text(encoding="utf-8")
     git = _RecordingGit(tmp_path)
 
-    plan = _run_demotion(
-        tmp_path, contributions=_failing(("cheap", "low"), 1), git=git
-    )
+    plan = _run_demotion(tmp_path, contributions=_failing(("cheap", "low"), 1), git=git)
 
     assert plan == demotion.DemotionPlan()
     assert measured_routing_path(tmp_path).read_text(encoding="utf-8") == before
@@ -1005,8 +1015,8 @@ def test_demotion_touches_no_strike_machine() -> None:
     assert "git_loopy.wrapper.NMTStrikeStateMachine" not in _imported_modules(source)
 
     tree = ast.parse(source.read_text(encoding="utf-8"))
-    referenced = {
-        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
-    } | {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    referenced = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
     assert "NMTStrikeStateMachine" not in referenced
     assert "record_strike" not in referenced

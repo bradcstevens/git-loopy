@@ -63,7 +63,9 @@ class _FakeModel:
     billing: Any = None
 
 
-def _staircase(declared: Mapping[str, Sequence[str]], prices: Mapping[str, float]) -> PriceStaircase:
+def _staircase(
+    declared: Mapping[str, Sequence[str]], prices: Mapping[str, float]
+) -> PriceStaircase:
     return build_price_staircase(
         [
             _FakeModel(id=model, supported_reasoning_efforts=tuple(efforts))
@@ -116,7 +118,10 @@ def _commit(path: Path, message: str, files: dict[str, str]) -> str:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
     subprocess.run(
-        ["git", "-C", str(path), "add", "-A"], check=True, capture_output=True, text=True
+        ["git", "-C", str(path), "add", "-A"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     subprocess.run(
         ["git", "-C", str(path), "commit", "-q", "-m", message],
@@ -329,7 +334,10 @@ def test_status_refuses_a_task_type_that_cannot_reach_five_proving_tasks(
 
     _code, out, _err = _status(tmp_path, github)
 
-    assert f"needs {PROMOTION_TRIALS} replayable Proving tasks and has 2 — 3 short" in out.text
+    assert (
+        f"needs {PROMOTION_TRIALS} replayable Proving tasks and has 2 — 3 short"
+        in out.text
+    )
 
 
 def test_status_reports_every_exclusion_with_the_rule_it_failed(
@@ -411,7 +419,9 @@ def test_status_reports_a_cheaper_unmeasured_pair_against_a_measured_winner(
                         ),
                     ),
                     proving_tasks=(
-                        ProvingTask(issue=10, base_commit="a" * 7, oracle_commit="b" * 7),
+                        ProvingTask(
+                            issue=10, base_commit="a" * 7, oracle_commit="b" * 7
+                        ),
                     ),
                 )
             },
@@ -445,6 +455,7 @@ def test_status_says_a_pair_in_force_was_never_measured(tmp_path: Path) -> None:
                     replaced_model="synth-cheap-1",
                     replaced_effort="low",
                     reason=ProvisionalReason.DEMOTION,
+                    replaced_after_no_progress=3,
                 )
             },
             provenance=Provenance(
@@ -624,7 +635,10 @@ def test_dry_run_names_the_proving_tasks_the_search_would_actually_draw(
 
     _code, out, _err = _dry_run(tmp_path, github)
 
-    assert "task-type:bugfix: would measure 5 Proving tasks — #14, #13, #12, #11, #10" in out.text
+    assert (
+        "task-type:bugfix: would measure 5 Proving tasks — #14, #13, #12, #11, #10"
+        in out.text
+    )
 
 
 def test_dry_run_refuses_a_task_type_it_could_not_measure(tmp_path: Path) -> None:

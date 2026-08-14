@@ -115,6 +115,7 @@ from git_loopy.skill_policy import (
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
+    from git_loopy.staircase import PriceStaircase
 
 __all__ = [
     "main",

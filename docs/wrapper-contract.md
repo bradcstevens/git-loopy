@@ -985,7 +985,7 @@ Each Task type's record carries one of four states, and only two of them supply 
 | `measured` | yes | A completed Calibration with a winning pair. The only state that is *evidence*. |
 | `incomplete` | no | A search that hit a ceiling or was interrupted. Carries where it stopped and **no pair at all** — a stopped search publishes no winner. |
 | `demoted` | no | A pair removed after it stopped making progress on real work. The pair is cleared; which pair failed, and after how many, is kept. |
-| `provisional` | yes | A pair **in force that was never measured** (ADR-0030) — what **Demotion** installs when it steps up the price staircase into a rung nobody trialled. Carries no evidence, and MUST NOT be reported as measured. |
+| `provisional` | yes | A pair **in force that was never measured** (ADR-0030) — what **Demotion** installs when it steps up the price staircase into a rung nobody trialled. Carries no evidence, and MUST NOT be reported as measured. It records the pair it replaced, a closed-vocabulary `reason`, and `replaced_after_no_progress` — the count of that pair's no-progress contributions that met the threshold, required because **Demotion** is the only thing that writes this state and a record of a failure that names no count is not evidence of one. |
 
 An Orchestrator MUST NOT treat an unrecognised status as either of the two that route: a row it
 cannot classify supplies nothing and falls through to the built-in default.

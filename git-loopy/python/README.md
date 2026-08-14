@@ -347,6 +347,7 @@ classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
 max_nmt_strikes = 5
+demotion_threshold = 3
 include_prs = true
 otel_enabled = false
 interactive = false
@@ -358,7 +359,7 @@ deny_skills = []   # deprecated final guard — prefer omitting from enabled_ski
 
 The **persisted** knobs are `model`, `reasoning_effort`, `classifier_model`,
 `classifier_effort`, `issue_source`,
-`include_prs`, `max_nmt_strikes`, `otel_enabled`, `interactive`,
+`include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`, `interactive`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
@@ -475,7 +476,7 @@ git-loopy config edit --global
 
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
 above (`model`, `reasoning_effort`, `classifier_model`, `classifier_effort`,
-`issue_source`, `max_nmt_strikes`,
+`issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `interactive`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
@@ -668,6 +669,48 @@ Three properties are worth knowing:
 - **Costs are in AI Credits, never dollars.** A credit is the unit the platform
   bills in and the unit the run log already records; converting to currency would
   invent a rate that changes without notice.
+
+### A pair that stops making progress is demoted
+
+A **Calibration** measures five **Trials**. That is a deliberately thin sample,
+and it is affordable only because production catches what it gets wrong: the
+search does not have to be right, it has to be cheap and **reversible**.
+**Demotion** is the reversal.
+
+At the end of every Parallel **Run**, git-loopy counts each **Routed pair**'s
+**Lane contributions** that finished without publishing anything. A pair that
+reaches `demotion_threshold` such contributions in one Run (default **3**) loses
+its **Measured routing** entry, and the Task type is assigned **the next pair up
+the price staircase**.
+
+Up, not down, and into a rung nobody measured. Cheapest-first stops at the first
+rung that passes, so every measured rung sits *below* the winner and failed — the
+set of measured pairs above it is empty by construction. The replacement is
+therefore written under the `provisional` status carrying the pair it replaced
+and the count that triggered it, so an unmeasured pair can never be read as
+evidence, and `config get routing` attributes it to its own
+`provisional (unmeasured)` tier.
+
+It is deliberately narrow:
+
+- **It is not the Strike counter.** Strikes are one Run-scoped counter every Lane
+  shares, and any Lane's progress resets it, so a good pair's commit erases the
+  strikes a bad one was accumulating. Demotion counts per pair; the Strike limit
+  keeps its own unchanged job of ending a Run that is going nowhere.
+- **It never demotes a hand-written entry.** A `[routing]` entry you typed is your
+  decision, however badly its pair performs, and this system does not overrule
+  those — the artifact is only consulted where the entry actually in force is the
+  one it wrote.
+- **It notifies; it starts no search.** A demoted Task type prints that it needs
+  re-calibrating and names `git-loopy calibrate <task-type>`. An implicit trigger
+  would turn an unattended overnight Run into a benchmark suite.
+- **It steps once.** A pair already `provisional` is reported, not stepped again,
+  so a bad streak cannot walk a Task type to the top of the staircase unattended
+  while its re-calibrate notification goes unanswered.
+- **It writes and commits once**, naming only `routing.measured.toml`, after the
+  Run has ended and no Lane is running. The commit is the review: read it, and
+  `git revert` it if you disagree.
+- **Nothing demotes in serial mode**, where nothing routes.
 
 ---
 

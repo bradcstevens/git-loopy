@@ -70,7 +70,10 @@ def _card(multipliers: Mapping[str, float | None]) -> RateCard:
         }
     )
 
-def _measured(model: str, effort: str, walked: Sequence[tuple[str, str]]) -> MeasuredEntry:
+
+def _measured(
+    model: str, effort: str, walked: Sequence[tuple[str, str]]
+) -> MeasuredEntry:
     """A ``measured`` record whose winner is ``model @ effort``, over ``walked``."""
     return MeasuredEntry(
         status=MeasuredStatus.MEASURED,
@@ -85,7 +88,9 @@ def _measured(model: str, effort: str, walked: Sequence[tuple[str, str]]) -> Mea
             Rung(model=rung_model, effort=rung_effort, passed=5, total=5, credits=0.5)
             for rung_model, rung_effort in walked
         ),
-        proving_tasks=(ProvingTask(issue=1, base_commit="a" * 40, oracle_commit="b" * 40),),
+        proving_tasks=(
+            ProvingTask(issue=1, base_commit="a" * 40, oracle_commit="b" * 40),
+        ),
     )
 
 
@@ -156,7 +161,9 @@ def test_a_cheaper_rung_the_search_already_walked_is_not_unmeasured() -> None:
     assert comparison.drift is None
 
 
-def test_a_roster_that_no_longer_offers_the_winner_says_so_rather_than_nothing() -> None:
+def test_a_roster_that_no_longer_offers_the_winner_says_so_rather_than_nothing() -> (
+    None
+):
     """A vanished winner is not the absence of news; it is different news.
 
     "Cheaper than the winner" cannot be computed against a pair the roster no
@@ -191,6 +198,7 @@ def test_a_record_that_measured_nothing_contributes_no_comparison() -> None:
             replaced_model="synth-cheap-1",
             replaced_effort="low",
             reason=ProvisionalReason.DEMOTION,
+            replaced_after_no_progress=3,
         ),
         staircase,
     )
@@ -226,7 +234,9 @@ def test_the_cheapest_unwalked_rung_is_the_one_reported() -> None:
 def test_a_comparison_may_not_name_a_pair_without_the_drift_that_explains_it() -> None:
     """The record cannot be assembled into a shape that would misreport itself."""
     with pytest.raises(ValueError):
-        RosterComparison(cheaper=Candidate(model="synth-a-1", effort="low", multiplier=0.1))
+        RosterComparison(
+            cheaper=Candidate(model="synth-a-1", effort="low", multiplier=0.1)
+        )
     with pytest.raises(ValueError):
         RosterComparison(drift=RosterDrift.CHEAPER_UNMEASURED_PAIR)
 
@@ -343,6 +353,7 @@ def test_a_task_type_with_no_measured_entry_contributes_nothing() -> None:
         replaced_model="synth-cheap-1",
         replaced_effort="low",
         reason=ProvisionalReason.DEMOTION,
+        replaced_after_no_progress=3,
     )
 
     assert (
@@ -356,7 +367,11 @@ def test_a_task_type_with_no_measured_entry_contributes_nothing() -> None:
 def test_each_notification_names_the_task_type_and_the_pair() -> None:
     found = roster_notifications(
         _artifact(
-            {"docs": _measured("synth-cheap-1", "high", walked=[("synth-cheap-1", "high")])}
+            {
+                "docs": _measured(
+                    "synth-cheap-1", "high", walked=[("synth-cheap-1", "high")]
+                )
+            }
         ),
         _three_rung_staircase(),
         classifier_pin=None,
@@ -373,7 +388,11 @@ def test_the_pin_notification_leads_and_names_no_task_type() -> None:
     """It invalidates the whole corpus rather than one record, so it is reported first."""
     found = roster_notifications(
         _artifact(
-            {"docs": _measured("synth-cheap-1", "high", walked=[("synth-cheap-1", "high")])},
+            {
+                "docs": _measured(
+                    "synth-cheap-1", "high", walked=[("synth-cheap-1", "high")]
+                )
+            },
             classifier_model="synth-old-1",
             classifier_effort="low",
         ),
