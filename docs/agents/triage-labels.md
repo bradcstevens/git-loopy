@@ -39,3 +39,22 @@ Task type is a closed routing taxonomy. The only valid labels are
 `task-type:planning`, `task-type:review`, `task-type:implementation`,
 `task-type:test`, `task-type:docs`, `task-type:chore`, and
 `task-type:bugfix`. Do not create other `task-type:` labels.
+
+Unlike `parallel-safe`, a `task-type:` label **may be machine-set**: the
+**Task-type classifier** reads an unlabelled issue's own content and proposes its
+key (ADR-0029), because zero closed issues carried one and routing could not
+otherwise apply to anything. Three consequences follow, and none of them is an
+oversight:
+
+- **Provenance is gone.** A human-set and a classifier-set label are the same
+  string on the same issue, and nothing afterwards distinguishes them.
+- **A label already present is never replaced.** Whoever put it there — including
+  a human who put a wrong or legacy key there — is not overruled by inference.
+  Correcting a task type means editing the label.
+- **The taxonomy stays closed for exactly this reason.** An unattended writer
+  plus `gh label create --force` would make an invented key permanent, so a
+  proposal outside the seven is refused rather than warned about.
+
+The two labels differ in blast radius, which is why only one of them opened: a
+wrong `parallel-safe` guess lets unsafe work run concurrently, while a wrong
+`task-type:` guess picks a suboptimal model.

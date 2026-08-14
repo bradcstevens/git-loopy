@@ -70,6 +70,8 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
     assert set(configcmd.SETTABLE_KEYS) == {
         "model",
         "reasoning_effort",
+        "classifier_model",
+        "classifier_effort",
         "issue_source",
         "max_nmt_strikes",
         "include_prs",
@@ -1483,3 +1485,34 @@ def test_the_remedy_clears_a_prefixed_routing_key_by_its_literal_spelling(
     remaining = path.read_text(encoding="utf-8")
     assert "task-type:docs" not in remaining
     assert "docs = " in remaining  # the bare route it collided with survives
+
+
+# ---------------------------------------------------------------------------
+# The Task-type classifier's own knob (#377, ADR-0029)
+# ---------------------------------------------------------------------------
+
+
+def test_the_classifier_pair_is_settable_and_readable_as_its_own_keys() -> None:
+    """A named, overridable, visible prior — which is the whole knob (ADR-0029).
+
+    The prior cannot be removed: something has to classify. What the knob buys is
+    that it is *named* rather than inherited from the run-wide default, and it is
+    only genuinely overridable if it reaches the surface an operator actually
+    uses.
+    """
+    assert "classifier_model" in configcmd.SETTABLE_KEYS
+    assert "classifier_effort" in configcmd.SETTABLE_KEYS
+
+    assert configcmd.coerce_value("classifier_model", "cheap-model") == "cheap-model"
+    assert configcmd.coerce_value("classifier_effort", " LOW ") == "low"
+
+
+def test_an_unsendable_classifier_effort_is_refused_at_the_set_seam() -> None:
+    """The same effort vocabulary the run-wide knob is held to.
+
+    An effort outside :data:`~git_loopy.config.REASONING_EFFORTS` is not sendable
+    by anyone, so accepting it here would persist a value every classifying
+    session then fails on — once per unlabelled issue, unattended.
+    """
+    with pytest.raises(configcmd.ConfigCommandError):
+        configcmd.coerce_value("classifier_effort", "enthusiastic")

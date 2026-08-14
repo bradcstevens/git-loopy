@@ -192,6 +192,14 @@ _KEYS: dict[str, _Key] = {
     for key in (
         _Key("model", _coerce_str, lambda rc: rc.run.model),
         _Key("reasoning_effort", _coerce_effort, lambda rc: rc.run.reasoning_effort),
+        # The **Task-type classifier**'s own pair (#377, ADR-0029). Two keys of
+        # its own rather than a reuse of the run-wide pair: a classifier that
+        # borrowed `model` would let the run-wide default determine the Task
+        # type, and so the Routed pair, for every issue.
+        _Key("classifier_model", _coerce_str, lambda rc: rc.run.classifier_model),
+        _Key(
+            "classifier_effort", _coerce_effort, lambda rc: rc.run.classifier_effort
+        ),
         _Key("issue_source", _coerce_issue_source, lambda rc: rc.run.issue_source),
         _Key("max_nmt_strikes", _coerce_strikes, lambda rc: rc.run.max_nmt_strikes),
         _Key("include_prs", _coerce_bool, lambda rc: rc.run.include_prs),

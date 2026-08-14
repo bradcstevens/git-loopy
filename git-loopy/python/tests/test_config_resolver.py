@@ -963,3 +963,63 @@ def test_the_suppression_predicate_and_the_reported_tier_are_one_decision() -> N
         assert cli._explicit_model_or_effort_override(args, env) is (
             cli.routing_suppressed_by(args, env) is not None
         )
+
+
+# ---------------------------------------------------------------------------
+# The Task-type classifier's own knob (#377, ADR-0029)
+# ---------------------------------------------------------------------------
+
+
+def test_the_classifier_pair_is_absent_by_default_rather_than_defaulted_here() -> None:
+    """No knob set is the ordinary case, and it is an *absence*, not a default.
+
+    A knob defaulting to some model id at this layer would be exactly the hidden
+    prior ADR-0029 refuses. The default belongs to the **live roster** — the
+    cheapest rung of the price staircase — and only
+    :func:`~git_loopy.task_type_classifier.resolve_classifier_pair` knows it.
+    """
+    resolved = _resolve()
+
+    assert resolved.run.classifier_model is None
+    assert resolved.run.classifier_effort is None
+
+
+def test_the_classifier_knob_resolves_env_over_project_over_global() -> None:
+    """The kit's own precedence chain, unchanged, applied to one more knob."""
+    project = {"classifier_model": "project-model", "classifier_effort": "low"}
+    global_ = {"classifier_model": "global-model", "classifier_effort": "high"}
+
+    from_project = _resolve(project=project, global_=global_)
+    assert from_project.run.classifier_model == "project-model"
+    assert from_project.run.classifier_effort == "low"
+
+    from_global = _resolve(global_=global_)
+    assert from_global.run.classifier_model == "global-model"
+    assert from_global.run.classifier_effort == "high"
+
+    from_env = _resolve(
+        env={
+            "GIT_LOOPY_CLASSIFIER_MODEL": "env-model",
+            "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "medium",
+        },
+        project=project,
+        global_=global_,
+    )
+    assert from_env.run.classifier_model == "env-model"
+    assert from_env.run.classifier_effort == "medium"
+
+
+def test_the_classifier_knob_is_independent_of_the_run_wide_pair() -> None:
+    """Setting the run-wide pair must never move the classifier's (ADR-0029).
+
+    The knob exists precisely so the run-wide default cannot determine a **Task
+    type** — and so a **Routed pair** — for every issue. Sharing a source would
+    reinstate that, silently.
+    """
+    resolved = _resolve(
+        env={"GIT_LOOPY_MODEL": "gpt-5.5", "GIT_LOOPY_REASONING_EFFORT": "high"}
+    )
+
+    assert resolved.run.model == "gpt-5.5"
+    assert resolved.run.classifier_model is None
+    assert resolved.run.classifier_effort is None

@@ -272,6 +272,8 @@ Copilot, network access, or the TUI.
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-4.8`              | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `GIT_LOOPY_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type classifier** runs on — the agent call that reads an *unlabelled* issue's own content and proposes its `task-type:` key so **Routing** has a label to read (ADR-0029). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
+| `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort the classifier runs at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0020): the **Lane cap** — work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch, through continuously refilled reusable **Lanes**. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred, so a tracker with no `parallel-safe` issue works every issue as a serial Iteration. The Run says which: it reports the resolved Lane cap at start and names each **Serial fallback** with its cause. N is a *ceiling*, not a utilization target: each finished Lane branch is verified in a private **Integration stage** before it reaches the base branch, at most two contributions may be in that bounded **Integration backlog** at once, and while it is full no Lane refills — so a Run may deliberately sit below N. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
@@ -323,6 +325,8 @@ lower-cased):
 ```toml
 model = "gpt-5.6-sol"
 reasoning_effort = "max"
+classifier_model = "gpt-5.4-mini"
+classifier_effort = "low"
 issue_source = "github"
 max_nmt_strikes = 5
 include_prs = true
@@ -334,7 +338,8 @@ deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
 ```
 
-The **persisted** knobs are `model`, `reasoning_effort`, `issue_source`,
+The **persisted** knobs are `model`, `reasoning_effort`, `classifier_model`,
+`classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `otel_enabled`, `interactive`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
@@ -451,10 +456,34 @@ git-loopy config edit --global
   set.
 
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
-above (`model`, `reasoning_effort`, `issue_source`, `max_nmt_strikes`,
+above (`model`, `reasoning_effort`, `classifier_model`, `classifier_effort`,
+`issue_source`, `max_nmt_strikes`,
 `include_prs`, `otel_enabled`, `interactive`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
+
+### The Task-type classifier's pair
+
+`classifier_model` / `classifier_effort` (env: `GIT_LOOPY_CLASSIFIER_MODEL`,
+`GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`) name the pair the **Task-type
+classifier** itself runs on — the agent call that reads an *unlabelled* issue's
+own content and proposes its task type, so routing has a `task-type:` label to
+read (ADR-0029).
+
+Two properties are worth knowing before you set it:
+
+- **It is deliberately not the run-wide `model`.** Borrowing that would let your
+  run-wide default decide every issue's task type, and so every routed pair — an
+  unmeasured prior governing every routing decision, and one that would show up
+  nowhere as a routing input. Leaving these keys unset does **not** fall back to
+  `model`; it falls back to the **cheapest pair on the live roster**.
+- **The taxonomy is closed.** A proposal outside the seven `task-type:` keys is
+  refused, not warned about, and the issue keeps routing to the run-wide default.
+
+Classification spends **AI Credits** like any other session, and that spend is
+folded into the run's cost. It never ticks a **Strike** and is never counted as
+an **Iteration**, so a classifier that cannot answer can never end an unattended
+run.
 
 ---
 

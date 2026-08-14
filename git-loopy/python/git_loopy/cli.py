@@ -251,6 +251,15 @@ def build_parser() -> argparse.ArgumentParser:
             "GIT_LOOPY_MODEL suffix\n"
             "                              (e.g. "
             "claude-opus-4.7-xhigh → xhigh) then gated per model.\n"
+            "  GIT_LOOPY_CLASSIFIER_MODEL   Model the Task-type classifier "
+            "runs on. NOT\n"
+            "                              GIT_LOOPY_MODEL: unset falls back "
+            "to the cheapest\n"
+            "                              pair on the live roster, never the "
+            "run-wide default.\n"
+            "  GIT_LOOPY_CLASSIFIER_REASONING_EFFORT\n"
+            "                              Reasoning effort for that same "
+            "classifier pair.\n"
             "  GIT_LOOPY_ISSUE_SOURCE       'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
             "  GIT_LOOPY_MAX_NMT_STRIKES    Strike threshold (default: 3).\n"
@@ -1711,6 +1720,24 @@ def resolve_config(
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
 
+    # The **Task-type classifier**'s own pair (#377, ADR-0029). Resolved from its
+    # own env var and its own Config keys, and deliberately *not* from the flags
+    # or the run-wide keys above: a classifier borrowing the run-wide default
+    # would let that default determine the Task type — and so the Routed pair —
+    # for every issue. Absent here is an absence, not a default; the cheapest
+    # rung of the live price staircase supplies the default, in
+    # `task_type_classifier.resolve_classifier_pair`.
+    classifier_model = _resolve_persisted_str(
+        "GIT_LOOPY_CLASSIFIER_MODEL", "classifier_model", env, project, global_
+    )
+    classifier_effort = _resolve_persisted_str(
+        "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT",
+        "classifier_effort",
+        env,
+        project,
+        global_,
+    )
+
     routing, routing_provenance = _resolve_routing(
         args, env, project, global_, measured, measured_provisional, warn=warn
     )
@@ -1732,6 +1759,8 @@ def resolve_config(
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         skill_policy=skill_policy,
+        classifier_model=classifier_model,
+        classifier_effort=classifier_effort,
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(

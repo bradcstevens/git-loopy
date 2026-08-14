@@ -513,6 +513,19 @@ class RunConfig:
             `git-loopy continuation resolve-authority` answer the same question
             with the same code. Every field absent means mode `off`, which is the
             default and preserves Pool behaviour exactly.
+        classifier_model: The model the **Task-type classifier** runs on
+            (#377, ADR-0029), or ``None`` for "not configured". Deliberately a
+            *separate* knob from :attr:`model`: borrowing the run-wide default
+            would let it determine the **Task type**, and so the **Routed pair**,
+            for every issue — an unmeasured prior governing every routing
+            decision, and one that would appear nowhere as a routing input.
+            ``None`` is an **absence, not a default**; the default is the
+            cheapest pair on the live roster and is resolved from the price
+            staircase by
+            :func:`git_loopy.task_type_classifier.resolve_classifier_pair`, which
+            is the only place that knows it.
+        classifier_effort: The reasoning effort resolved alongside
+            :attr:`classifier_model`, on the same terms.
     """
 
     model: str | None = None
@@ -531,6 +544,8 @@ class RunConfig:
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
     continuation: ContinuationInputs = field(default_factory=ContinuationInputs)
+    classifier_model: str | None = None
+    classifier_effort: str | None = None
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):
