@@ -1021,9 +1021,20 @@ def test_the_open_consequences_are_recorded_rather_than_dropped() -> None:
     )
 
 
-@pytest.mark.parametrize(("adr", "number"), ((ADR_0027, "0027"), (ADR_0028, "0028")))
+@pytest.mark.parametrize(
+    ("adr", "number"),
+    ((ADR_0027, "0027"), (ADR_0028, "0028"), (ADR_0030, "0030")),
+)
 def test_the_calibration_decisions_are_accepted(adr: str, number: str) -> None:
-    """An ADR is not a proposal once the code implements it."""
+    """An ADR is not a proposal once the code implements it.
+
+    ADR-0030 joins the other two with #366. It was the last of the three still
+    reading ``proposed`` while a **Language** entry described its mechanism as
+    shipped — and it is the one an implementer is most likely to open, because it
+    is where the *"count per pair, not from the Strike counter"* argument lives.
+    A decision marked as a proposal invites re-litigation of a rule the code now
+    depends on.
+    """
     status = [line for line in _doc(adr).splitlines() if line.startswith("**Status:**")]
 
     assert status, f"ADR-{number} declares no status"

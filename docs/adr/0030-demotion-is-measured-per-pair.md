@@ -1,6 +1,6 @@
 # Demotion is counted per pair, applied after the Run, and steps up into the unmeasured
 
-**Status:** proposed
+**Status:** accepted
 
 [ADR-0027](0027-routing-is-calibrated-by-measurement.md) rests its whole tolerance for
 five-sample evidence on **Demotion** — *"Search does not have to be right. It has to be cheap
