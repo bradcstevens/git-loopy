@@ -1119,3 +1119,93 @@ def test_integration_branch_name_uses_the_integrate_convention() -> None:
     )
     # Distinct from the Lane breadcrumb branch for the same issue.
     assert integration_branch_name("RUN123", 42) != lane_branch_name("RUN123", 42)
+
+
+# --------------------------------------------------------------------------- #
+# commit_paths — stage and commit exactly one path (#366)                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_commit_paths_commits_only_the_named_path(tmp_path: Path) -> None:
+    """**Demotion** rewrites one tracked file at a quiescent point (ADR-0030).
+
+    ``add_all`` is the wrong instrument for that: it is the **Checkpoint**'s, run
+    inside a Lane worktree the runner owns outright, whereas this runs at the
+    repository root at Run end — where an operator's unrelated edits may be
+    sitting. Sweeping them into a machine-authored routing commit would destroy
+    the reviewability ADR-0028 committed the artifact to obtain.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base")
+    git = SubprocessGitClient(tmp_path)
+    (tmp_path / "routing.measured.toml").write_text("status = 'provisional'\n")
+    (tmp_path / "unrelated.txt").write_text("an operator's work in progress\n")
+
+    sha = git.commit_paths("demote", [tmp_path / "routing.measured.toml"])
+
+    assert sha == git.head_sha()
+    assert _tracked_at_head(tmp_path) == {"file.txt", "routing.measured.toml"}
+    assert (tmp_path / "unrelated.txt").read_text() == (
+        "an operator's work in progress\n"
+    )
+
+
+def test_commit_paths_leaves_a_pre_staged_unrelated_change_uncommitted(
+    tmp_path: Path,
+) -> None:
+    """A dirty *index* is not swept in either, which ``git commit`` alone would do.
+
+    The reason this is one method rather than an ``add`` the caller pairs with the
+    existing :meth:`commit`: plain ``git commit`` commits whatever the index
+    happens to hold, so the pairing would be correct only in a clean tree — and
+    "the Run ended" is not a promise about the index.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base")
+    git = SubprocessGitClient(tmp_path)
+    (tmp_path / "staged.txt").write_text("staged but not ours\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "staged.txt"],
+        check=True, capture_output=True, text=True,
+    )
+    (tmp_path / "routing.measured.toml").write_text("status = 'provisional'\n")
+
+    git.commit_paths("demote", [tmp_path / "routing.measured.toml"])
+
+    assert _tracked_at_head(tmp_path) == {"file.txt", "routing.measured.toml"}
+
+
+def test_commit_paths_accepts_a_path_relative_to_the_repo_root(tmp_path: Path) -> None:
+    """The artifact is named as a repo-relative path by its own module."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base")
+    git = SubprocessGitClient(tmp_path)
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "routing.measured.toml").write_text("x = 1\n")
+
+    git.commit_paths("demote", ["nested/routing.measured.toml"])
+
+    assert _tracked_at_head(tmp_path) == {"file.txt", "nested/routing.measured.toml"}
+
+
+def test_commit_paths_with_nothing_to_commit_raises(tmp_path: Path) -> None:
+    """An unchanged artifact is a Run that demoted nothing, and must not commit.
+
+    Surfaced as :exc:`~git_loopy.git.GitError` exactly as an empty
+    :meth:`commit` is, so the caller's existing non-fatal treatment covers it.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base", file_name="routing.measured.toml")
+    git = SubprocessGitClient(tmp_path)
+
+    with pytest.raises(GitError):
+        git.commit_paths("demote", ["routing.measured.toml"])
+
+
+def _tracked_at_head(path: Path) -> set[str]:
+    """Every path tracked at ``HEAD``."""
+    completed = subprocess.run(
+        ["git", "-C", str(path), "ls-tree", "-r", "--name-only", "HEAD"],
+        check=True, capture_output=True, text=True,
+    )
+    return set(completed.stdout.split())

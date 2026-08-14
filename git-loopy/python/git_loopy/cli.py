@@ -104,6 +104,7 @@ from git_loopy.config import (
     validate_task_type_key,
 )
 from git_loopy.model_listing import LiveModelListing
+from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_policy import (
@@ -125,6 +126,12 @@ __all__ = [
 ]
 
 _DEFAULT_MAX_NMT_STRIKES = 3
+#: How many no-progress **Lane contributions** one **Routed pair** may
+#: accumulate in a Run before **Demotion** steps its **Measured routing** entry
+#: up the price staircase (#366, ADR-0030). Shares a value with the Strike limit
+#: and nothing else: that counter is Run-scoped, shared by every Lane, and ends
+#: the Run — this one is per pair and ends nothing.
+_DEFAULT_DEMOTION_THRESHOLD = 3
 #: Concurrent-Lane cap applied when Parallel mode (ADR-0008) is requested
 #: without an explicit number (bare ``--parallel``). Serial (``parallel=1``)
 #: remains the default when neither ``--parallel`` nor ``GIT_LOOPY_MAX_PARALLEL``
@@ -1154,6 +1161,55 @@ def _validate_max_nmt_strikes(value: int, *, source: str) -> int:
     return value
 
 
+def _resolve_demotion_threshold(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> int:
+    """Resolve the **Demotion** threshold: env > project > global > default (#366).
+
+    Mirrors :func:`_resolve_max_nmt_strikes` deliberately — a knob that rewrites
+    a *committed* file has no business inventing a resolution order of its own.
+    A malformed or sub-1 value aborts rather than degrading: ``0`` would demote
+    every pair that ever failed once, and an unattended Run must not quietly
+    reinterpret the number that decides whether it edits the repository.
+
+    The value is unrelated to ``max_nmt_strikes`` despite sharing its default.
+    That one is a single Run-scoped counter every **Lane** shares and which ends
+    the Run; this one is per **Routed pair** and ends nothing (ADR-0030).
+    """
+    raw = env.get("GIT_LOOPY_DEMOTION_THRESHOLD")
+    if raw is not None and raw.strip():
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise SystemExit(
+                f"git-loopy: error: GIT_LOOPY_DEMOTION_THRESHOLD must be a "
+                f"positive integer, got {raw!r}"
+            ) from exc
+        return _validate_demotion_threshold(
+            value, source="GIT_LOOPY_DEMOTION_THRESHOLD"
+        )
+    pv = settings.table_int(project, "demotion_threshold", scope="project")
+    if pv is not None:
+        return _validate_demotion_threshold(
+            pv, source="project config demotion_threshold"
+        )
+    gv = settings.table_int(global_, "demotion_threshold", scope="global")
+    if gv is not None:
+        return _validate_demotion_threshold(
+            gv, source="global config demotion_threshold"
+        )
+    return _DEFAULT_DEMOTION_THRESHOLD
+
+
+def _validate_demotion_threshold(value: int, *, source: str) -> int:
+    """Reject a sub-1 demotion threshold with a clear, source-attributed error."""
+    if value < 1:
+        raise SystemExit(f"git-loopy: error: {source} must be ≥ 1, got {value}")
+    return value
+
+
 def _resolve_issue_pin(args: argparse.Namespace) -> int | None:
     """The invocation's ``--issue N`` **Pin** (#396), or ``None``.
 
@@ -1892,7 +1948,7 @@ def resolve_config(
     continuation = _resolve_continuation(env, project, global_)
     include_prs = _resolve_include_prs_tiered(env, project, global_)
     max_nmt_strikes = _resolve_max_nmt_strikes(env, project, global_)
-
+    demotion_threshold = _resolve_demotion_threshold(env, project, global_)
     model_raw = _resolve_persisted_str("GIT_LOOPY_MODEL", "model", env, project, global_)
     effort_raw = _resolve_persisted_str(
         "GIT_LOOPY_REASONING_EFFORT", "reasoning_effort", env, project, global_
@@ -1937,6 +1993,7 @@ def resolve_config(
         include_prs=include_prs,
         max_iterations=int(args.max_iterations),
         max_nmt_strikes=max_nmt_strikes,
+        demotion_threshold=demotion_threshold,
         deny_tools=deny_tools,
         deny_skills=deny_skills,
         verbosity=verbosity,
@@ -2362,7 +2419,11 @@ async def _drive_line_printer(config: RunConfig) -> int:
     listing = _make_model_listing()
     rate_card = await resolve_rate_card(listing, warn=_warn)
     await _notify_roster_drift(config, listing, rate_card)
-    return await _loop.run(config, rate_card=rate_card)
+    return await _loop.run(
+        config,
+        rate_card=rate_card,
+        staircase=await _resolve_staircase(config, listing, rate_card),
+    )
 
 
 async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
@@ -2403,6 +2464,7 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
 
     rate_card = await resolve_rate_card(listing, warn=_warn)
     await _notify_roster_drift(config, listing, rate_card)
+    staircase = await _resolve_staircase(config, listing, rate_card)
 
     # The Dashboard's own module is the earliest thing that can fail on the way
     # up (#326). The [tui] gate probed Textual with ``find_spec``, which does
@@ -2418,8 +2480,39 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
             "the live view could not start — the Dashboard failed to load "
             f"({type(exc).__name__}: {exc}); falling back to the line printer."
         )
-        return await _loop.run(config, rate_card=rate_card)
-    return await _loop.run(config, driver=driver, rate_card=rate_card)
+        return await _loop.run(config, rate_card=rate_card, staircase=staircase)
+    return await _loop.run(
+        config, driver=driver, rate_card=rate_card, staircase=staircase
+    )
+
+
+async def _resolve_staircase(
+    config: RunConfig, listing: LiveModelListing, rate_card: "RateCard | None"
+) -> "PriceStaircase | None":
+    """The **price staircase** **Demotion** steps up, or ``None`` (#366).
+
+    Built here, from the listing the **Rate card** already read, for ADR-0019's
+    reason: a staircase the loop went and got for itself would be a second round
+    trip, and would order one listing's rungs by another listing's prices.
+
+    Short-circuited outside Parallel mode, where nothing routes and so nothing
+    demotes — a serial Run pays nothing for a staircase it could not use. Every
+    failure degrades to ``None``, which reads downstream as a refused staircase:
+    Demotion declines to step into an ordering it cannot measure, exactly as a
+    **Calibration** declines to walk one.
+    """
+    if not routing_in_force(config.parallel):
+        return None
+    try:
+        from git_loopy.staircase import resolve_price_staircase
+
+        return await resolve_price_staircase(listing, warn=_warn)
+    except Exception as exc:
+        _warn(
+            f"the price staircase could not be resolved "
+            f"({type(exc).__name__}: {exc}); Demotion will not step this Run."
+        )
+        return None
 
 
 if __name__ == "__main__":  # pragma: no cover - import-as-script convenience

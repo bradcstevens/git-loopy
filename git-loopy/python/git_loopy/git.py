@@ -306,6 +306,10 @@ class GitClient(Protocol):
         """Create a commit with ``message`` and return the new ``HEAD`` SHA."""
         ...
 
+    def commit_paths(self, message: str, paths: "Sequence[Path | str]") -> str:
+        """Stage and commit exactly ``paths``, and return the new ``HEAD`` SHA."""
+        ...
+
     def push(self) -> None:
         """Push the current branch to its configured upstream."""
         ...
@@ -585,6 +589,44 @@ class SubprocessGitClient:
                 otherwise fails (e.g. a pre-commit hook rejected it).
         """
         _run(["commit", "-m", message], cwd=self._root)
+        return self.head_sha()
+
+    def commit_paths(self, message: str, paths: "Sequence[Path | str]") -> str:
+        """Stage and commit exactly ``paths``, and nothing else.
+
+        The instrument **Demotion** (#366) rewrites the **Measured routing**
+        artifact with. :meth:`add_all` is the **Checkpoint**'s and is wrong here:
+        that one runs inside a Lane worktree the runner owns outright, while this
+        runs at the repository *root* once the Run has ended, where an operator's
+        unrelated edits may be sitting. Sweeping those into a machine-authored
+        routing commit would destroy exactly the reviewability ADR-0028 committed
+        the artifact to obtain.
+
+        Staging and committing are one method rather than an ``add`` a caller
+        pairs with :meth:`commit`, because plain ``git commit`` commits whatever
+        the *index* holds — so that pairing would be correct only in a clean
+        tree, and "the Run has ended" is no promise about the index. The trailing
+        pathspec on both commands is what makes the scope a property of the call
+        rather than of the tree it runs in.
+
+        As everywhere else in this module, the user's git config stays the single
+        source of truth: no ``--force``, no ``--no-verify``, no author override.
+
+        Args:
+            message: The full commit message (subject + optional body/trailer).
+            paths: What to commit, absolute or repo-root-relative.
+
+        Returns:
+            The full 40-character SHA of the newly created commit.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, or **none of** ``paths`` differ
+                from ``HEAD`` — an empty commit exits non-zero, which is how a
+                caller learns there was nothing to record.
+        """
+        pathspecs = [str(path) for path in paths]
+        _run(["add", "--", *pathspecs], cwd=self._root)
+        _run(["commit", "-m", message, "--", *pathspecs], cwd=self._root)
         return self.head_sha()
 
     def push(self) -> None:

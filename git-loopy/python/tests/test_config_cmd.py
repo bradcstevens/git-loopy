@@ -74,6 +74,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "classifier_effort",
         "issue_source",
         "max_nmt_strikes",
+        "demotion_threshold",
         "include_prs",
         "otel_enabled",
         "interactive",
@@ -973,6 +974,7 @@ def _write_provisional(repo_root: Path, key: str) -> None:
                     effort="medium",
                     replaced_model="synthetic-cheap-1",
                     replaced_effort="low",
+                    replaced_after_no_progress=3,
                     reason=measured_routing.ProvisionalReason.DEMOTION,
                 )
             },

@@ -136,6 +136,7 @@ from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import routing_scope
+from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import RunConfig, TaskTypeError, resolve_iteration_model
@@ -928,6 +929,24 @@ class _Loop:
             diag=self._diag,
             observer=self._rollup,
         )
+
+    @property
+    def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
+        """Always ``()``: serial finalizes no **Lane contribution** (#366).
+
+        Stated in code rather than left to a ``getattr`` default, so *"serial
+        demotes nothing"* is a property of this class and not an accident of
+        spelling: a later rename of the Parallel property would otherwise switch
+        **Demotion** silently off there too, and the only symptom would be a
+        tally that is always empty.
+
+        Serial has nothing to offer even in principle. The **Routed pair** the
+        rows carry is bound at **Pickup**, and
+        :func:`~git_loopy.routing_scope.routing_in_force` reserves routing for
+        Parallel — so a serial Run's every Iteration ran the operator's single
+        configured pair, which no Calibration chose and no Demotion may replace.
+        """
+        return ()
 
     # -- event fan-out ------------------------------------------------------
 
@@ -2260,7 +2279,6 @@ class _ParallelLoop:
                 concurrency=self._pressure.controller,
             )
         self._rolling_capable = self._scheduler is not None
-
         # Per-Lane-contribution state, keyed by `contribution_id` (never
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
@@ -2586,6 +2604,26 @@ class _ParallelLoop:
                     task.cancel()
                 await asyncio.gather(*self._pending, return_exceptions=True)
                 self._pending.clear()
+
+    @property
+    def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
+        """Every **Lane contribution** this Run closed out, for **Demotion** (#366).
+
+        The per-pair, per-progress record ADR-0030 needs and the Run summary
+        cannot supply. Each row carries the **Routed pair** bound once at
+        **Pickup** (``model`` / ``reasoning_effort``) and the terminal reason set
+        at finalization, where ``published`` is the only progress — which is
+        exactly the two facts Demotion counts, at the one moment they are both
+        known.
+
+        Read at the quiescent point after :meth:`drive` returns, so no Lane is
+        still running and no row can arrive after the count was taken. ``()``
+        when a Parallel Run never built a scheduler, because a Run must not fail
+        at its last step over having had nothing to demote.
+        """
+        if self._scheduler is None:
+            return ()
+        return self._scheduler.finalized
 
     def _report_concurrency_change(self) -> None:
         """Announce an effective-Lane-limit transition, if this turn caused one.
@@ -3746,6 +3784,7 @@ async def run(
     *,
     driver: InteractiveDriver | None = None,
     rate_card: RateCard | None = None,
+    staircase: "PriceStaircase | None" = None,
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -3764,6 +3803,12 @@ async def run(
             trip on the path where the picker already made the first. ``None``
             is not a failure — nothing derives from the card, so an absent one
             only makes the rate-card **Insight capability** declare ``false``.
+        staircase: The **price staircase** built from the same listing and card,
+            or ``None``. Read only at Run end, by **Demotion** (#366), which
+            needs to know which pair sits one rung *above* a failing one.
+            Injected for the same reason the card is: the listing it derives from
+            belongs to the Run, and building a second one here would order one
+            listing's rungs by another listing's prices (ADR-0019).
         driver: Optional interactive driver (ADR-0001 observer model). When
             ``None`` (the default, non-interactive path) the line-printer
             :class:`~git_loopy.ui.renderer.Renderer` is the sole sink and the
@@ -4125,6 +4170,14 @@ async def run(
             )
             exit_code = 1
     finally:
+        # **Demotion** (#366, ADR-0030), at the one genuinely quiescent point a
+        # Run has: `drive()` has returned, every Lane has finalized, the run
+        # summary is flushed, and nothing is in flight to race over the single
+        # tracked artifact. In a `finally` so a crashed or Stop-cancelled Run
+        # still records what its completed contributions established — the rows
+        # are already final, and discarding them would make a Run that ended
+        # badly the one Run whose experience is thrown away.
+        _demote_after_run(config, git, loop, staircase, diag)
         # Always release the SDK subprocess, even on a body-level crash.
         if client is not None:
             try:
@@ -4142,3 +4195,50 @@ async def run(
             diag.warning("telemetry.force_flush() failed: %s", exc)
 
     return exit_code
+
+
+def _demote_after_run(
+    config: RunConfig,
+    git: git_module.Git,
+    loop: "_Loop | _ParallelLoop",
+    staircase: "PriceStaircase | None",
+    diag: logging.Logger,
+) -> None:
+    """Hand this Run's **Lane contributions** to **Demotion** (#366, ADR-0030).
+
+    A thin adapter and nothing more: the rule, the threshold, the write and the
+    commit all live in :mod:`git_loopy.demotion`, which imports no **Trial**, no
+    search and no dispatcher — so *"Demotion notifies and starts no search"*
+    holds by where the code sits rather than by anything this function
+    remembers to do.
+
+    Every failure is swallowed and logged. Rewriting a routing table is never a
+    precondition for the work a Run has already finished, and this runs after the
+    exit code has been decided, so nothing here can change it.
+    """
+    contributions = loop.finalized_contributions
+    if not contributions:
+        return
+    try:
+        from git_loopy import demotion as demotion_module
+
+        demotion_module.demote_after_run(
+            repo_root=git.root,
+            config=config,
+            staircase=(
+                staircase
+                if staircase is not None
+                else PriceStaircase(refusal=StaircaseRefusal.NO_RATE_CARD)
+            ),
+            contributions=contributions,
+            git=git,
+            warn=lambda message: print(
+                f"git-loopy: warning: {message}", file=sys.stderr
+            ),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        diag.warning(
+            "Demotion could not run (%s: %s); the Run is unaffected.",
+            type(exc).__name__,
+            exc,
+        )

@@ -1023,3 +1023,33 @@ def test_the_classifier_knob_is_independent_of_the_run_wide_pair() -> None:
     assert resolved.run.model == "gpt-5.5"
     assert resolved.run.classifier_model is None
     assert resolved.run.classifier_effort is None
+
+
+def test_demotion_threshold_resolves_through_the_persisted_tiers() -> None:
+    """Project **Config** beats global, and both beat the built-in default.
+
+    ADR-0030 leaves the number a free parameter — *"unlike the Strike limit it is
+    not bounded by anything structural"* — so an operator has to be able to move
+    it, through the same tier chain every other persisted knob uses rather than a
+    mechanism of its own.
+    """
+    resolved = _resolve(
+        project={"demotion_threshold": 5}, global_={"demotion_threshold": 9}
+    )
+
+    assert resolved.run.demotion_threshold == 5
+
+
+def test_demotion_threshold_falls_back_to_the_global_tier() -> None:
+    assert _resolve(global_={"demotion_threshold": 9}).run.demotion_threshold == 9
+
+
+def test_a_sub_one_demotion_threshold_aborts_rather_than_degrading() -> None:
+    """``0`` would demote every pair that ever failed once; ``-1`` is nonsense.
+
+    Refused at resolution with the scope named, exactly as ``max_nmt_strikes``
+    is: an unattended Run must not quietly reinterpret a knob that rewrites a
+    committed file.
+    """
+    with pytest.raises(SystemExit, match="demotion_threshold"):
+        _resolve(project={"demotion_threshold": 0})

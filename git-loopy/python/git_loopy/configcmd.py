@@ -147,6 +147,23 @@ def _coerce_strikes(raw: str) -> int:
     return value
 
 
+def _coerce_demotion_threshold(raw: str) -> int:
+    """The **Demotion** threshold (#366): a count, so at least 1.
+
+    ``0`` would demote every **Routed pair** that ever failed once, which is not
+    a lower threshold but a different rule.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"demotion_threshold must be an integer >= 1 (got {raw!r})"
+        ) from None
+    if value < 1:
+        raise ConfigCommandError(f"demotion_threshold must be >= 1 (got {value})")
+    return value
+
+
 def _coerce_timeout(raw: str) -> float:
     try:
         value = float(raw)
@@ -204,6 +221,11 @@ _KEYS: dict[str, _Key] = {
         ),
         _Key("issue_source", _coerce_issue_source, lambda rc: rc.run.issue_source),
         _Key("max_nmt_strikes", _coerce_strikes, lambda rc: rc.run.max_nmt_strikes),
+        _Key(
+            "demotion_threshold",
+            _coerce_demotion_threshold,
+            lambda rc: rc.run.demotion_threshold,
+        ),
         _Key("include_prs", _coerce_bool, lambda rc: rc.run.include_prs),
         _Key("otel_enabled", _coerce_bool, lambda rc: rc.run.otel_enabled),
         _Key("interactive", _coerce_bool, lambda rc: rc.interactive),

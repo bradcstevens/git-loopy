@@ -320,6 +320,7 @@ _PROVISIONAL_TOML = textwrap.dedent(
     effort = "medium"
     replaced_model = "synthetic-cheap-1"
     replaced_effort = "low"
+    replaced_after_no_progress = 3
     reason = "demotion"
     """
 )
@@ -338,7 +339,28 @@ def test_provisional_record_supplies_a_pair_and_says_it_is_unmeasured(
     assert entry.routed_pair == ("synthetic-cheap-2", "medium")
     assert artifact.routing == {"chore": ("synthetic-cheap-2", "medium")}
     assert (entry.replaced_model, entry.replaced_effort) == ("synthetic-cheap-1", "low")
+    assert entry.replaced_after_no_progress == 3
     assert entry.reason is measured_routing.ProvisionalReason.DEMOTION
+
+
+def test_provisional_record_missing_the_count_that_triggered_it_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A **Demotion** that will not say how much evidence it acted on (#366).
+
+    ``provisional`` is the only state that puts an *unmeasured* pair in force, so
+    the count is the whole of what an operator has to judge it by: three
+    no-progress contributions is a signal, one is noise, and a record that omits
+    the number is indistinguishable from either. It is required for the same
+    reason ``measured`` is held to carrying its own tally — a state that will not
+    show its evidence is an assertion, which is the thing this tier replaces.
+    """
+    path = _write(
+        tmp_path,
+        _artifact(_PROVISIONAL_TOML).replace("replaced_after_no_progress = 3\n", ""),
+    )
+    with pytest.raises(SettingsError, match="replaced_after_no_progress"):
+        measured_routing.load_measured_routing(path)
 
 
 def test_provisional_keys_name_the_unmeasured_half_of_the_routing_map(
@@ -425,6 +447,26 @@ def test_provisional_record_replacing_the_same_pair_is_rejected(
         measured_routing.load_measured_routing(path)
 
 
+def test_provisional_record_triggered_by_nothing_at_all_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Zero no-progress contributions is not a threshold being crossed (#366).
+
+    The count is the record's whole justification, so a ``0`` is worse than a
+    missing key: it is a **Demotion** stating, in its own evidence field, that
+    nothing triggered it. Held at construction as well as on load, so the writer
+    cannot emit one its own reader would refuse.
+    """
+    path = _write(
+        tmp_path,
+        _artifact(_PROVISIONAL_TOML).replace(
+            "replaced_after_no_progress = 3", "replaced_after_no_progress = 0"
+        ),
+    )
+    with pytest.raises(SettingsError, match="replaced_after_no_progress"):
+        measured_routing.load_measured_routing(path)
+
+
 def test_a_provisional_entry_cannot_be_constructed_as_a_measured_one() -> None:
     """The in-memory half of the seam holds the same line as the on-disk half."""
     with pytest.raises(ValueError, match="trials_passed"):
@@ -434,6 +476,7 @@ def test_a_provisional_entry_cannot_be_constructed_as_a_measured_one() -> None:
             effort="medium",
             replaced_model="synthetic-cheap-1",
             replaced_effort="low",
+            replaced_after_no_progress=3,
             reason=measured_routing.ProvisionalReason.DEMOTION,
             trials_passed=5,
         )
@@ -454,6 +497,7 @@ def test_a_free_text_reason_cannot_be_constructed_let_alone_written() -> None:
             effort="medium",
             replaced_model="synthetic-cheap-1",
             replaced_effort="low",
+            replaced_after_no_progress=3,
             reason="it seemed best",  # type: ignore[arg-type]
         )
 
@@ -467,6 +511,7 @@ def test_even_a_well_spelled_reason_string_is_refused() -> None:
             effort="medium",
             replaced_model="synthetic-cheap-1",
             replaced_effort="low",
+            replaced_after_no_progress=3,
             reason="demotion",  # type: ignore[arg-type]
         )
 
@@ -593,8 +638,11 @@ def test_artifact_carries_no_free_text_field() -> None:
         # provisional. `reason` is the one key here that could have been prose
         # and deliberately is not: it is read against the closed
         # `ProvisionalReason` vocabulary, so an opinion cannot be written into it.
+        # `replaced_after_no_progress` is the count that triggered the
+        # **Demotion** (#366) — a number, for the same reason.
         "replaced_model",
         "replaced_effort",
+        "replaced_after_no_progress",
         "reason",
         # Rung / Proving task
         "passed",

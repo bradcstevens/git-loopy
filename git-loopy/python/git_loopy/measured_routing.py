@@ -156,8 +156,9 @@ class MeasuredStatus(Enum):
     DEMOTED = "demoted"
     #: A pair that is **in force and was never measured** (#376, ADR-0030): what
     #: **Demotion** installs when it steps up the price staircase into a rung
-    #: nobody trialled. Carries the pair now in force, the pair it replaced and
-    #: why, and — deliberately — no evidence at all.
+    #: nobody trialled. Carries the pair now in force, the pair it replaced, the
+    #: count of no-progress contributions that triggered the step (#366), and —
+    #: deliberately — no evidence at all.
     PROVISIONAL = "provisional"
 
 
@@ -262,6 +263,7 @@ class MeasuredEntry:
     demoted_after_strikes: int | None = None
     replaced_model: str | None = None
     replaced_effort: str | None = None
+    replaced_after_no_progress: int | None = None
     reason: ProvisionalReason | None = None
     rungs: tuple[Rung, ...] = ()
     proving_tasks: tuple[ProvingTask, ...] = ()
@@ -350,6 +352,15 @@ class MeasuredEntry:
                 "a 'provisional' record carries no rung and no proving_task: "
                 "nothing measured this pair, and evidence beside it would read "
                 "as though something had"
+            )
+        if (
+            self.replaced_after_no_progress is not None
+            and self.replaced_after_no_progress < 1
+        ):
+            raise ValueError(
+                "a 'provisional' record's replaced_after_no_progress counts the "
+                "no-progress contributions that triggered the Demotion, so it is "
+                "at least 1; a 0 is a Demotion saying nothing triggered it"
             )
 
     @property
@@ -705,6 +716,7 @@ _SCALAR_READERS: Mapping[str, object] = {
     "demoted_after_strikes": _int,
     "replaced_model": _str,
     "replaced_effort": _str,
+    "replaced_after_no_progress": _int,
     "reason": _reason,
 }
 
@@ -752,6 +764,7 @@ _REQUIRED_KEYS: Mapping[MeasuredStatus, frozenset[str]] = {
             "effort",
             "replaced_model",
             "replaced_effort",
+            "replaced_after_no_progress",
             "reason",
         }
     ),

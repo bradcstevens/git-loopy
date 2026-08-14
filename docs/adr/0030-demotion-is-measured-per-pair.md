@@ -41,6 +41,31 @@ knows which pair worked which issue and whether it made progress.** Demotion rea
 Strike machine — which yields a genuine per-pair signal and sidesteps the shared counter
 entirely.
 
+> **Amendment (#366, on implementation): the record is the Contribution, not the run file.**
+>
+> The second sentence above is false, and false in exactly the mode Demotion applies to. A
+> **Lane** session is constructed with `event_observer=self._cost_meter`, *not* the rollup
+> accumulator, and Lane contributions emit no `wrapper.iteration.start` / `.end` at all
+> (#219/#306, and a standing comment in `loop.py` says so). `IterationRollupAccumulator`
+> discards everything while it holds no open Iteration, so `.git-loopy/runs/*.json` contains
+> **no Lane rows whatsoever** in Rolling mode. "Usage lands in the run record regardless of
+> cost-meter wiring" describes the JSONL event log, which is a different file with a different
+> writer; the run *summary* is not built from it.
+>
+> The two facts Demotion needs are nonetheless recorded together, in one place and at one
+> moment: `RollingScheduler.finalized` — a `tuple[Contribution, ...]`, each row carrying the
+> **Routed pair** bound at Pickup (`model` / `reasoning_effort`) and the terminal `reason` set
+> at finalization, where `published` is the only progress. The decision is unchanged and only
+> its *source* moves: **per-pair, per-progress, from the Run's finalized contributions.**
+>
+> This is strictly better than what was written. The rows are in memory at the quiescent point
+> the next section already required, so Demotion parses nothing and opens no second file; and
+> the pair is the one actually **bound**, not one inferred from a `consumption.model` field that
+> carries no effort and so cannot name a pair at all. The last consequence below is amended with
+> it: the exposure is not "a session type that skips the run record" but a contribution that is
+> never finalized — and a Run that never finalized a contribution has, correctly, nothing to say
+> about any pair.
+
 The Strike counter keeps its existing job unchanged: ending a Run that is going nowhere. It was
 never a per-pair quality measure and is not made into one.
 

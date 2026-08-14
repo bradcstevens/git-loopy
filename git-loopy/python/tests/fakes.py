@@ -118,6 +118,7 @@ class FakeGitClient:
         self.push_error = push_error
         # Write spies.
         self.add_all_calls = 0
+        self.commit_paths_calls: list[tuple[str, tuple[str, ...]]] = []
         self.commit_messages: list[str] = []
         self.push_calls = 0
         self.switch_calls: list[str] = []
@@ -224,6 +225,10 @@ class FakeGitClient:
         )
         self._log.append(commit)
         return commit.sha
+
+    def commit_paths(self, message: str, paths: Sequence[Path | str]) -> str:
+        self.commit_paths_calls.append((message, tuple(str(p) for p in paths)))
+        return self.commit(message)
 
     def push(self) -> None:
         self.push_calls += 1

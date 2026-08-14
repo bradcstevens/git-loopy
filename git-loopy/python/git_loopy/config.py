@@ -468,6 +468,12 @@ class RunConfig:
             unlimited.
         max_nmt_strikes: Consecutive no-progress iterations tolerated
             before the loop aborts non-zero. Must be ≥ 1.
+        demotion_threshold: How many no-progress **Lane contributions** one
+            **Routed pair** may accumulate in a Run before **Demotion** replaces
+            its **Measured routing** entry with the next pair up the price
+            staircase (#366, ADR-0030). Counted per pair, so it is unrelated to
+            ``max_nmt_strikes`` — that one is a single Run-scoped counter every
+            Lane shares, and ends the Run. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
         deny_skills: Skill names (the ``arguments.skill`` value passed
             to the ``skill`` meta-tool) to reject.
@@ -543,6 +549,7 @@ class RunConfig:
     include_prs: bool | None = None
     max_iterations: int = 0
     max_nmt_strikes: int = 3
+    demotion_threshold: int = 3
     deny_tools: frozenset[str] = field(default_factory=frozenset)
     deny_skills: frozenset[str] = field(default_factory=frozenset)
     verbosity: int = 0
@@ -571,6 +578,10 @@ class RunConfig:
         if self.max_nmt_strikes < 1:
             raise ValueError(
                 f"max_nmt_strikes must be ≥ 1, got {self.max_nmt_strikes}"
+            )
+        if self.demotion_threshold < 1:
+            raise ValueError(
+                f"demotion_threshold must be ≥ 1, got {self.demotion_threshold}"
             )
         if self.verbosity < 0 or self.verbosity > 3:
             raise ValueError(
