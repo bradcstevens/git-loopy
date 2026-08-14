@@ -573,6 +573,252 @@
         ],
         "proving_tasks": [1305, 1304, 1303, 1302, 1301]
       }
+    },
+    {
+      "id": "the-first-trial-of-a-rung-is-a-probe-run-alone",
+      "concurrency": 5,
+      "staircase": [
+        { "model": "synth-cheap-a", "effort": "low" },
+        { "model": "synth-mid", "effort": "medium" }
+      ],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 100000.0 },
+      "trials": [
+        [{ "passed": false, "credits": 0.25, "wall_clock_seconds": 600.0, "failure": "gate red" }],
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "winner",
+        "winner": { "model": "synth-mid", "effort": "medium" },
+        "stopped_at_rung": 2,
+        "rungs_available": 2,
+        "trials_run": [1, 5],
+        "dispatches": [1, 1, 4],
+        "credits": 5.25,
+        "wall_clock_seconds": 1800.0,
+        "rungs": [
+          {
+            "model": "synth-cheap-a",
+            "effort": "low",
+            "passed": 0,
+            "total": 1,
+            "credits": 0.25,
+            "wall_clock_seconds": 600.0
+          },
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 5,
+            "total": 5,
+            "credits": 5.0,
+            "wall_clock_seconds": 1200.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
+    },
+    {
+      "id": "the-same-script-promotes-the-same-pair-serially-and-takes-longer",
+      "concurrency": 1,
+      "staircase": [
+        { "model": "synth-cheap-a", "effort": "low" },
+        { "model": "synth-mid", "effort": "medium" }
+      ],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 100000.0 },
+      "trials": [
+        [{ "passed": false, "credits": 0.25, "wall_clock_seconds": 600.0, "failure": "gate red" }],
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "winner",
+        "winner": { "model": "synth-mid", "effort": "medium" },
+        "stopped_at_rung": 2,
+        "rungs_available": 2,
+        "trials_run": [1, 5],
+        "dispatches": [1, 1, 1, 1, 1, 1],
+        "credits": 5.25,
+        "wall_clock_seconds": 3600.0,
+        "rungs": [
+          {
+            "model": "synth-cheap-a",
+            "effort": "low",
+            "passed": 0,
+            "total": 1,
+            "credits": 0.25,
+            "wall_clock_seconds": 600.0
+          },
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 5,
+            "total": 5,
+            "credits": 5.0,
+            "wall_clock_seconds": 3000.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
+    },
+    {
+      "id": "the-post-probe-trials-are-bought-at-the-operators-width",
+      "concurrency": 2,
+      "staircase": [{ "model": "synth-mid", "effort": "medium" }],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 100000.0 },
+      "trials": [
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "winner",
+        "winner": { "model": "synth-mid", "effort": "medium" },
+        "stopped_at_rung": 1,
+        "rungs_available": 1,
+        "trials_run": [5],
+        "dispatches": [1, 2, 2],
+        "credits": 5.0,
+        "wall_clock_seconds": 1800.0,
+        "rungs": [
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 5,
+            "total": 5,
+            "credits": 5.0,
+            "wall_clock_seconds": 1800.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
+    },
+    {
+      "id": "the-wall-clock-ceiling-bounds-elapsed-time-and-not-summed-trial-time",
+      "concurrency": 5,
+      "staircase": [{ "model": "synth-mid", "effort": "medium" }],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 2000.0 },
+      "trials": [
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "winner",
+        "winner": { "model": "synth-mid", "effort": "medium" },
+        "stopped_at_rung": 1,
+        "rungs_available": 1,
+        "trials_run": [5],
+        "dispatches": [1, 4],
+        "credits": 5.0,
+        "wall_clock_seconds": 1200.0,
+        "rungs": [
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 5,
+            "total": 5,
+            "credits": 5.0,
+            "wall_clock_seconds": 1200.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
+    },
+    {
+      "id": "the-same-walk-run-serially-reaches-that-wall-clock-ceiling",
+      "concurrency": 1,
+      "staircase": [{ "model": "synth-mid", "effort": "medium" }],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 2000.0 },
+      "trials": [
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "wall_clock_ceiling",
+        "winner": null,
+        "stopped_at_rung": 1,
+        "rungs_available": 1,
+        "trials_run": [4],
+        "dispatches": [1, 1, 1, 1],
+        "credits": 4.0,
+        "wall_clock_seconds": 2400.0,
+        "rungs": [
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 4,
+            "total": 4,
+            "credits": 4.0,
+            "wall_clock_seconds": 2400.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
+    },
+    {
+      "id": "a-failure-inside-a-dispatch-still-records-the-trials-that-ran-beside-it",
+      "concurrency": 5,
+      "staircase": [{ "model": "synth-mid", "effort": "medium" }],
+      "proving_set": [101, 102, 103, 104, 105],
+      "budget": { "credits": 1000.0, "wall_clock_seconds": 100000.0 },
+      "trials": [
+        [
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": false, "credits": 1.0, "wall_clock_seconds": 300.0, "failure": "gate red" },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 },
+          { "passed": true, "credits": 1.0, "wall_clock_seconds": 600.0 }
+        ]
+      ],
+      "expected": {
+        "stop": "staircase_exhausted",
+        "winner": null,
+        "stopped_at_rung": 1,
+        "rungs_available": 1,
+        "trials_run": [5],
+        "dispatches": [1, 4],
+        "credits": 5.0,
+        "wall_clock_seconds": 1200.0,
+        "rungs": [
+          {
+            "model": "synth-mid",
+            "effort": "medium",
+            "passed": 4,
+            "total": 5,
+            "credits": 5.0,
+            "wall_clock_seconds": 1200.0
+          }
+        ],
+        "proving_tasks": [105, 104, 103, 102, 101]
+      }
     }
   ]
 }

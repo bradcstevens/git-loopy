@@ -121,6 +121,45 @@ Unanimity is chosen because the two errors are not symmetric. A **false pass** m
 work into the repository; a **false fail** overpays. A strict bar biases toward false
 fails — toward stepping *up* the staircase — which is the cheap error.
 
+### Trials run concurrently, and the ceiling they are bounded by is elapsed
+
+**Amendment (#381).** Trials are embarrassingly parallel — each is one pair working one
+Proving task in its own worktree at its own base commit, sharing no state — so they run
+concurrently, **bounded by an operator concurrency setting**, because the useful ceiling is
+the host's and this project cannot pick it. Two decisions the amendment forced, neither of
+which is a detail:
+
+**The wall-clock ceiling bounds elapsed time, not summed Trial time.** The serial search
+folded a walk's wall clock by adding its Trials up, which is the same number only while
+nothing overlaps. Five overlapping ten-minute Trials take ten minutes and sum to fifty, so
+a summing search would trip a four-hour ceiling after forty-eight minutes of real
+time — punishing an operator for the very concurrency that exists to fit the Calibration
+inside the hours they authorised. Trials bought together therefore contribute the longest
+of them. A serial search buys one at a time, whose maximum is its sum, so nothing about the
+serial walk changed.
+
+**A rung's first Trial is a probe, run alone.** Promotion is unanimous, so one red Trial
+kills a rung — which makes a single Trial the cheapest possible evidence that a rung is
+dead, and cheapest-first means most rungs are. Buying all five at once would multiply the
+credits spent on every rung the search *expects* to fail by the operator's width, converting
+a wall-clock saving into a credit bill nobody asked for. Probing first keeps a rung that
+dies at its first Trial costing exactly what it costs serially, while a rung that lives
+still collapses from five Trial-times to two.
+
+The bound is a **dispatcher**, injected: how many Trials run at once is one module's
+(`git_loopy.trial_concurrency`), and *which* Trials are bought stays the search's and is
+identical at every width. A serial Calibration is that dispatcher at width 1 — the same code
+path, which is why "the gate outcome and Consumption for a given Trial are identical to a
+serial run" holds by there being nothing else to run rather than by two paths being
+compared. Isolation is issued rather than assumed: each request carries a **slot**, distinct
+for every Trial in flight, and the Trial runner keys its worktree and working branch off it.
+
+One cost is accepted knowingly: concurrency contends for CPU, so a Trial's measured wall
+clock is noisier than it would be serially. Wall clock is only the third key in the
+ordering, behind clearing the bar and behind credits, so the tie-breaking it does is worth
+the wall clock it buys back — and the record states the width it was measured at, because a
+rung's wall clock is comparable only to another rung measured the same way.
+
 ### Demotion is what buys the right to be cheap
 
 Promotion requires measurement. **Demotion requires only experience**: a **Measured
@@ -270,7 +309,11 @@ run.
   credits and does not bound this. **Resolved by amendment:** a **wall-clock ceiling** is added
   alongside the credit ceiling, both landing on ADR-0028's existing *"incomplete — stopped at
   rung N of M"* path, and Trials run **in parallel across worktrees** reusing ADR-0008's
-  machinery, bounded by an operator concurrency setting. The credit ceiling alone was pointed
+  machinery, bounded by an operator concurrency setting — **shipped by #381**, which also
+  found that the ceiling was being enforced on *summed* Trial time and would therefore have
+  tripped at a fifth of the hours an operator authorised the moment Trials overlapped (see
+  *"Trials run concurrently, and the ceiling they are bounded by is elapsed"*). The credit
+  ceiling alone was pointed
   the wrong way: cheapest-first spends its early rungs on the cheapest pairs, while the gate
   costs the same wall clock on every rung regardless of the model under test — so credits trip
   last in exactly the pathological case the ceiling was written for. The arithmetic: 5 Trials ×

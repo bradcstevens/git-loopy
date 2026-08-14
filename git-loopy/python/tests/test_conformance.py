@@ -17,9 +17,12 @@ from git_loopy.calibration_search import (
     PROMOTION_TRIALS,
     SearchBudget,
     SearchStop,
+    TrialRequest,
     TrialResult,
+    TrialRunner,
     search_price_staircase,
 )
+from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
@@ -3484,7 +3487,8 @@ class _FixtureTrialRunner:
     def index_staircase(self, candidates: Sequence[Candidate]) -> None:
         self._order = [(rung.model, rung.effort) for rung in candidates]
 
-    def run(self, candidate: Candidate, task: ProvingTask) -> TrialResult:
+    def run(self, request: TrialRequest) -> TrialResult:
+        candidate = request.candidate
         rung = self._order.index((candidate.model, candidate.effort))
         scripted = self._script[rung][self.trials_run[rung]]
         self.trials_run[rung] += 1
@@ -3497,6 +3501,29 @@ class _FixtureTrialRunner:
             wall_clock_seconds=scripted["wall_clock_seconds"],
             failure=scripted.get("failure"),
         )
+
+
+class _RecordingDispatcher:
+    """An inline dispatcher that records how many **Trials** were bought at a time.
+
+    The dispatch sizes are the whole of the probe rule (#381) — one Trial alone,
+    then the remainder at the operator's width — and a fixture that could not see
+    them would pin a concurrent search's *totals* while leaving the rule that
+    produced them to convention.
+    """
+
+    def __init__(self, width: int) -> None:
+        self._inner = InlineTrialDispatcher(width)
+        self.width = width
+        self.sizes: list[int] = []
+
+    def dispatch(
+        self, runner: TrialRunner, requests: Sequence[TrialRequest]
+    ) -> tuple[TrialResult, ...]:
+        self.sizes.append(len(requests))
+        assert len({request.slot for request in requests}) == len(requests)
+        assert all(request.slot < self.width for request in requests)
+        return self._inner.dispatch(runner, requests)
 
 
 def _search_staircase(case: Mapping[str, Any]) -> tuple[Candidate, ...]:
@@ -3535,6 +3562,7 @@ def test_calibration_search_fixture(case: dict[str, Any]) -> None:
         credit_ceiling=Decimal(str(case["budget"]["credits"])),
         wall_clock_ceiling_seconds=case["budget"]["wall_clock_seconds"],
     )
+    dispatcher = _RecordingDispatcher(case.get("concurrency", 1))
 
     result = search_price_staircase(
         candidates=candidates,
@@ -3544,6 +3572,7 @@ def test_calibration_search_fixture(case: dict[str, Any]) -> None:
         ),
         budget=budget,
         runner=runner,
+        dispatcher=dispatcher,
     )
 
     expected = case["expected"]
@@ -3575,6 +3604,9 @@ def test_calibration_search_fixture(case: dict[str, Any]) -> None:
         }
         for rung in result.rungs
     ] == expected["rungs"]
+    assert result.concurrency == dispatcher.width
+    if "dispatches" in expected:
+        assert dispatcher.sizes == expected["dispatches"]
 
 
 def test_calibration_search_fixture_declares_the_promotion_rule_it_walks() -> None:

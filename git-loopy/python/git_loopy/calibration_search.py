@@ -29,6 +29,11 @@ Design notes:
   knows nothing of the other Task types, so its ceilings cannot leak from one
   into the next. The Calibration-wide loop over the taxonomy belongs to the
   ``calibrate`` subcommand (#372).
+* **Concurrency is a dispatcher, not a second walk** (#381). How many **Trials**
+  run at once is :mod:`git_loopy.trial_concurrency`'s; *which* Trials are bought
+  and in what order stays here, and is identical at every width. A serial search
+  is ``InlineTrialDispatcher(1)``, which is the same code path — so *"identical
+  to a serial run"* holds by there being nothing else to run.
 """
 
 from __future__ import annotations
@@ -36,14 +41,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Iterator, Sequence
 
 from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
+from git_loopy.trial_concurrency import (
+    InlineTrialDispatcher,
+    TrialDispatcher,
+    TrialInterrupt,
+    TrialRequest,
+    TrialResult,
+    TrialRunner,
+)
 
 __all__ = [
     "DEFAULT_SEARCH_BUDGET",
     "PROMOTION_TRIALS",
+    "TrialRequest",
     "TrialResult",
     "TrialRunner",
     "SearchBudget",
@@ -62,50 +76,6 @@ __all__ = [
 #: pass merges bad work, a false fail merely overpays — so a strict bar biases
 #: toward the cheap error.
 PROMOTION_TRIALS = 5
-
-
-@dataclass(frozen=True)
-class TrialResult:
-    """What one **Trial** returns: the three scoring keys, plus why it went red.
-
-    Attributes:
-        passed: The gate outcome — the *only* thing that decides whether the pair
-            solved the **Proving task**.
-        credits: The **AI Credits** the Trial consumed, read off its
-            **Consumption**, or ``None`` when the harness reported none.
-            ADR-0026's rule holds: unknown is unknown, never zero. Only the
-            credits cross this seam, because credits are the whole of what the
-            search scores on and the whole of what the artifact records
-            (:class:`~git_loopy.measured_routing.Rung`). The tally itself —
-            tokens, premium requests, the cache split — stays with the Trial
-            runner that owns the session (#369), which is also where it is kept
-            out of the **Run**'s accounting (#371).
-        wall_clock_seconds: End-to-end wall clock.
-        failure: The failure detail on a red Trial, so a reader can check the
-            conclusion rather than take it on faith. Nothing branches on it: it
-            is detail, not a fourth scoring key.
-    """
-
-    passed: bool
-    credits: Decimal | None
-    wall_clock_seconds: float
-    failure: str | None = None
-
-
-@runtime_checkable
-class TrialRunner(Protocol):
-    """Run one candidate pair against one **Proving task**, and report the result.
-
-    The single injected seam this search introduces, modelled on
-    :class:`~git_loopy.gate.GateRunner`: one method, a value in, a value out, and
-    ``@runtime_checkable`` so production and scripted fakes satisfy it
-    structurally. Everything expensive — the worktree, the agent session, the
-    gate — lives behind it (#369).
-    """
-
-    def run(self, candidate: Candidate, task: ProvingTask) -> TrialResult:
-        """Trial ``candidate`` against ``task`` and return its :class:`TrialResult`."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -168,6 +138,12 @@ class WalkedRung:
     ``total`` is the number of Trials actually *run*, not
     :data:`PROMOTION_TRIALS`: a rung abandoned on its first failure records the
     two it ran rather than claiming five it did not.
+
+    ``wall_clock_seconds`` is the rung's **elapsed** time and not the sum of its
+    Trials': under concurrency those are different numbers, and only the first is
+    what a Calibration is bounded by. Trials dispatched together contribute the
+    longest of them, so a serial rung — where every dispatch is one Trial — still
+    reports the sum it always did.
     """
 
     candidate: Candidate
@@ -206,6 +182,11 @@ class SearchResult:
     stopped"*: a winner is carried by a :attr:`~SearchStop.WINNER` result and by
     nothing else. Enforced here rather than promised in a docstring, so no caller
     can assemble a result that publishes a pair the search did not promote.
+
+    :attr:`wall_clock_seconds` is **elapsed** time, folded from the rungs, and
+    :attr:`concurrency` is the width it was measured at — both, because a rung's
+    wall clock is only comparable to another rung's measured at the same width,
+    and neither number means anything to a reader without the other.
     """
 
     stop: SearchStop
@@ -215,6 +196,7 @@ class SearchResult:
     credits: Decimal | None = Decimal(0)
     wall_clock_seconds: float = 0.0
     winner: Candidate | None = None
+    concurrency: int = 1
 
     def __post_init__(self) -> None:
         if self.stop is SearchStop.WINNER and self.winner is None:
@@ -242,6 +224,7 @@ def search_price_staircase(
     proving_set: Sequence[ProvingTask],
     budget: SearchBudget,
     runner: TrialRunner,
+    dispatcher: TrialDispatcher | None = None,
 ) -> SearchResult:
     """Walk ``candidates`` cheapest-first and stop at the first unanimous rung.
 
@@ -256,11 +239,16 @@ def search_price_staircase(
         budget: The two ceilings that bound the walk.
         runner: The injected :class:`TrialRunner`. Every credit this search
             spends is spent behind it.
+        dispatcher: How many **Trials** run at once, and what keeps them apart
+            (#381). Defaults to a serial dispatcher, so a caller that says
+            nothing gets the walk this search has always performed.
 
     Returns:
         The :class:`SearchResult`, which carries a winner only when a rung went
         five of five.
     """
+    dispatcher = dispatcher if dispatcher is not None else InlineTrialDispatcher(1)
+    width = dispatcher.width
     tasks = tasks_for_every_rung(proving_set)
     walked: list[_RungTally] = []
     available = len(candidates)
@@ -277,6 +265,7 @@ def search_price_staircase(
             proving_tasks=tasks,
             credits=spend.credits,
             wall_clock_seconds=spend.seconds,
+            concurrency=width,
         )
 
     if len(tasks) < PROMOTION_TRIALS:
@@ -285,18 +274,24 @@ def search_price_staircase(
     try:
         for candidate in candidates:
             in_progress = _RungTally(candidate)
-            for task in tasks:
+            for group in _dispatch_groups(tasks, width):
                 ceiling = _Spend.over(walked + [in_progress]).exceeded(budget)
                 if ceiling is not None:
                     return stopped(ceiling)
-                result = runner.run(candidate, task)
+                results = dispatcher.dispatch(
+                    runner,
+                    tuple(
+                        TrialRequest(candidate=candidate, task=task, slot=slot)
+                        for slot, task in enumerate(group)
+                    ),
+                )
                 # The single place a Trial is written down, and the first thing
                 # done with it. Two accumulators would leave a window in which an
                 # interrupt lands between them and the record disagrees with
                 # itself about what was spent; the search's totals are folded
                 # from the rungs instead (:meth:`_Spend.over`).
-                in_progress.record(result)
-                if not result.passed:
+                in_progress.record(results)
+                if any(not result.passed for result in results):
                     break
             rung, in_progress = in_progress, None
             if rung.total:
@@ -314,16 +309,49 @@ def search_price_staircase(
                     credits=_Spend.over(walked).credits,
                     wall_clock_seconds=_Spend.over(walked).seconds,
                     winner=candidate,
+                    concurrency=width,
                 )
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as interrupted:
         # Every Trial already measured is kept, including the part-walked rung: a
         # Calibration is hours long, and all-or-nothing would make an operator
-        # who interrupts one pay for it twice.
+        # who interrupts one pay for it twice. Under concurrency the Trials that
+        # had already returned when the operator pressed Ctrl-C arrive on the
+        # interrupt itself, which is the only way they reach the record at all.
+        if isinstance(interrupted, TrialInterrupt) and in_progress is not None:
+            in_progress.record(interrupted.measured)
         return stopped(SearchStop.INTERRUPTED)
     # Running out of rungs and out of budget in the same breath is reported as
     # running out of rungs. Both are true and only one is useful: a ceiling would
     # tell an operator to raise a limit that has nothing left to buy.
     return stopped(SearchStop.STAIRCASE_EXHAUSTED)
+
+
+def _dispatch_groups(
+    tasks: Sequence[ProvingTask], width: int
+) -> Iterator[tuple[ProvingTask, ...]]:
+    """The **Trials** of one rung, grouped into what is bought at a time.
+
+    **The first Trial is a probe, run alone.** Promotion is unanimous, so one
+    failure kills a rung — which makes a single Trial the cheapest possible
+    evidence that a rung is dead, and cheapest-first means most rungs are. Buying
+    all five at once would multiply the cost of every rung the search *expects*
+    to fail by the operator's width, turning a wall-clock saving into a credit
+    bill nobody asked for. Probing first keeps a rung that dies at its first
+    Trial costing exactly what it costs serially, while a rung that lives still
+    collapses from five Trial-times to two.
+
+    Everything after the probe is dispatched ``width`` at a time. At ``width``
+    ``1`` that degenerates to one Trial per dispatch, in order — the serial walk,
+    reached by the same code rather than by a second one.
+    """
+    if width <= 1:
+        for task in tasks:
+            yield (task,)
+        return
+    yield (tasks[0],)
+    remainder = tasks[1:]
+    for start in range(0, len(remainder), width):
+        yield tuple(remainder[start : start + width])
 
 
 class _RungTally:
@@ -335,11 +363,18 @@ class _RungTally:
         self.total = 0
         self.spend = _Spend()
 
-    def record(self, result: TrialResult) -> None:
-        self.total += 1
-        self.spend.add(result)
-        if result.passed:
-            self.passed += 1
+    def record(self, results: Sequence[TrialResult]) -> None:
+        """Fold one dispatch's Trials into the rung.
+
+        A whole dispatch at a time rather than a Trial at a time, because the
+        elapsed time of Trials that ran together is not the sum of them
+        (:meth:`_Spend.add`).
+        """
+        if not results:
+            return
+        self.total += len(results)
+        self.spend.add(results)
+        self.passed += sum(1 for result in results if result.passed)
 
     @property
     def unanimous(self) -> bool:
@@ -411,14 +446,30 @@ class _Spend:
             total.seconds += rung.spend.seconds
         return total
 
-    def add(self, result: TrialResult) -> None:
-        if result.credits is None:
-            self.credits = None
-        else:
-            self.known_credits += result.credits
-            if self.credits is not None:
-                self.credits += result.credits
-        self.seconds += result.wall_clock_seconds
+    def add(self, results: Sequence[TrialResult]) -> None:
+        """Fold one dispatch's Trials in: credits sum, wall clock does not.
+
+        Credits are additive because concurrency discounts nothing — five Trials
+        run at once cost what five Trials cost. Wall clock is not: Trials
+        dispatched together overlap, so the dispatch takes the longest of them
+        and summing would report a Calibration as five times slower than the
+        operator watched it be. Summing would also trip the wall-clock ceiling at
+        a fifth of the time an operator asked for, which is the one ceiling
+        concurrency exists to fit inside.
+
+        A dispatch of one — every dispatch of a serial search — has a maximum
+        equal to its sum, so nothing about a serial walk changes.
+        """
+        if not results:
+            return
+        for result in results:
+            if result.credits is None:
+                self.credits = None
+            else:
+                self.known_credits += result.credits
+                if self.credits is not None:
+                    self.credits += result.credits
+        self.seconds += max(result.wall_clock_seconds for result in results)
 
     def exceeded(self, budget: SearchBudget) -> SearchStop | None:
         """Which ceiling this spend has reached, or ``None`` while it is affordable.

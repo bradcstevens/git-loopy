@@ -530,6 +530,88 @@ def test_dry_run_prints_both_ceilings_and_the_maximum_trial_count(
     assert f"Maximum Trials: {2 * PROMOTION_TRIALS}" in out.text
 
 
+def test_dry_run_reports_a_serial_calibration_and_how_to_widen_it(
+    tmp_path: Path,
+) -> None:
+    """Nothing runs concurrently until an operator says the host can take it.
+
+    The default is serial because the useful ceiling is the host's and this
+    project cannot pick it — but silence would leave an operator watching a
+    multi-day search with no idea a knob existed, so the default names the knob.
+    """
+    github = _five_bugfixes(tmp_path)
+
+    _code, out, _err = _dry_run(tmp_path, github)
+
+    assert "1 Trial at a time (serial)." in out.text
+    assert "GIT_LOOPY_CALIBRATE_CONCURRENCY=N" in out.text
+
+
+def test_dry_run_reports_the_concurrency_the_operator_set_and_where_it_came_from(
+    tmp_path: Path,
+) -> None:
+    """The plan says how many Trials run at once, before anything is spent.
+
+    Concurrency changes what a Calibration costs in *hours* without changing
+    what it costs in credits, which is the trade the operator is being asked to
+    make — so it belongs beside the two ceilings rather than in a manual.
+    """
+    github = _five_bugfixes(tmp_path)
+    env = _hermetic_env(tmp_path) | {"GIT_LOOPY_CALIBRATE_CONCURRENCY": "3"}
+
+    _code, out, _err = _dry_run(tmp_path, github, env=env)
+
+    assert "3 Trials at a time, each in its own worktree." in out.text
+    assert "From GIT_LOOPY_CALIBRATE_CONCURRENCY." in out.text
+    assert "probe run alone" in out.text
+
+
+def test_dry_run_falls_back_to_the_lane_cap_and_names_it(tmp_path: Path) -> None:
+    """An operator in Parallel mode has already said what this host can take.
+
+    Calibration is a Parallel-mode feature (#379), so asking a second time by
+    default would be asking twice — and the report names which knob answered so
+    the operator is not left guessing.
+    """
+    github = _five_bugfixes(tmp_path)
+    env = _hermetic_env(tmp_path) | {"GIT_LOOPY_MAX_PARALLEL": "2"}
+
+    _code, out, _err = _dry_run(tmp_path, github, env=env)
+
+    assert "2 Trials at a time" in out.text
+    assert "From GIT_LOOPY_MAX_PARALLEL." in out.text
+
+
+def test_dry_run_says_when_a_width_is_wider_than_a_rung_can_use(
+    tmp_path: Path,
+) -> None:
+    """A rung buys five Trials, so the sixth worker has nothing to run.
+
+    Reported rather than silently honoured: an operator who provisioned twelve
+    worktrees should learn today that seven of them bought nothing.
+    """
+    github = _five_bugfixes(tmp_path)
+    env = _hermetic_env(tmp_path) | {"GIT_LOOPY_CALIBRATE_CONCURRENCY": "12"}
+
+    _code, out, _err = _dry_run(tmp_path, github, env=env)
+
+    assert f"{PROMOTION_TRIALS} Trials at a time" in out.text
+    assert "Capped from 12" in out.text
+
+
+def test_dry_run_says_the_wall_clock_ceiling_is_elapsed_time(tmp_path: Path) -> None:
+    """Because under concurrency it is no longer the sum of the Trials.
+
+    Trials that run together spend the ceiling once, which is the whole reason
+    concurrency helps a Calibration fit inside the hours an operator authorised.
+    """
+    github = _five_bugfixes(tmp_path)
+
+    _code, out, _err = _dry_run(tmp_path, github)
+
+    assert "Wall clock: 4h (elapsed" in out.text
+
+
 def test_dry_run_names_the_proving_tasks_the_search_would_actually_draw(
     tmp_path: Path,
 ) -> None:

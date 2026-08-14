@@ -22,7 +22,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set (§14) |
 | `routing-resolution.json` | The closed **Task type** taxonomy (`task_type_taxonomy`) and the refusals an unknown key meets — suppression does not excuse one, and matching is exact — plus per-issue `task-type:` labels + `[routing]` config → resolved `(model, effort)` and whether it warns, plus the **Measured routing** precedence cases — CLI flag > env > project > global > measured > built-in default — each declaring the synthetic roster it runs against, including a `provisional` measured entry (a pair in force that nobody measured) and the tier it is reported under (§14) |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
-| `calibration-search.json` | The **Calibration** search: its own synthetic roster and the five-of-five promotion rule declared rather than inferred, then the cheapest-first walk, unanimity, early rung abandonment, the equal-price tie-break, both the **AI Credit** and the wall-clock ceiling, an unreported Consumption latching credits to unknown, an interrupted and an exhausted walk, a Proving set too thin to promote anything, and the newest-first Proving-task draw every rung measures |
+| `calibration-search.json` | The **Calibration** search: its own synthetic roster and the five-of-five promotion rule declared rather than inferred, then the cheapest-first walk, unanimity, early rung abandonment, the equal-price tie-break, both the **AI Credit** and the wall-clock ceiling, an unreported Consumption latching credits to unknown, an interrupted and an exhausted walk, a Proving set too thin to promote anything, the newest-first Proving-task draw every rung measures, and — at a declared `concurrency` — the probe run alone, the remainder bought at the operator's width, and a wall-clock ceiling spent once by Trials that overlap rather than once each |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
 | `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
@@ -608,6 +608,17 @@ performs rather than a restatement of ADR-0027's rules. The fixture states
 `promotion_trials` itself rather than leaving a member to count the Trials in a
 winning case, and it declares its own synthetic roster, so neither the bar nor
 the candidate identities depend on a vendor catalogue.
+
+A case may declare a `concurrency`, which is how many **Trials** the search buys
+at a time (#381). The adapter drives the *inline* dispatcher at that width rather
+than the threaded one, so a case pins **what is bought and what it is charged**
+without pinning a thread schedule: the search cannot tell the two dispatchers
+apart, and a fixture that raced would pin nothing at all. `expected.dispatches`
+is the sizes it bought in, which is the whole of the probe rule — one Trial
+alone, then the remainder at the operator's width — and the pair of
+`the-wall-clock-ceiling-bounds-elapsed-time-and-not-summed-trial-time` and
+`the-same-walk-run-serially-reaches-that-wall-clock-ceiling` is the same script
+at two widths, where only the elapsed time and therefore the outcome differ.
 
 The family-level terminal Release adapter
 [`python/tests/test_release_identity_conformance.py`](../python/tests/test_release_identity_conformance.py)

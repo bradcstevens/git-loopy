@@ -19,6 +19,7 @@ import ast
 import dataclasses
 from decimal import Decimal
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -29,6 +30,7 @@ from git_loopy.calibration_search import (
     SearchBudget,
     SearchResult,
     SearchStop,
+    TrialRequest,
     TrialResult,
     TrialRunner,
     maximum_trials,
@@ -36,6 +38,7 @@ from git_loopy.calibration_search import (
 )
 from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
+from git_loopy.trial_concurrency import InlineTrialDispatcher
 
 
 class _ScriptedTrialRunner:
@@ -48,15 +51,16 @@ class _ScriptedTrialRunner:
 
     def __init__(self, script: dict[tuple[str, str | None], list[TrialResult]]) -> None:
         self._script = {key: list(value) for key, value in script.items()}
-        self.calls: list[tuple[Candidate, ProvingTask]] = []
+        self.calls: list[TrialRequest] = []
 
-    def run(self, candidate: Candidate, task: ProvingTask) -> TrialResult:
-        self.calls.append((candidate, task))
+    def run(self, request: TrialRequest) -> TrialResult:
+        self.calls.append(request)
+        candidate = request.candidate
         return self._script[(candidate.model, candidate.effort)].pop(0)
 
     def trials_for(self, candidate: Candidate) -> int:
         """How many Trials this pair was actually sent."""
-        return sum(1 for called, _ in self.calls if called == candidate)
+        return sum(1 for call in self.calls if call.candidate == candidate)
 
 
 def _candidate(model: str, multiplier: float, effort: str | None = "medium") -> Candidate:
@@ -281,11 +285,11 @@ def test_an_interrupted_search_keeps_every_trial_it_measured() -> None:
     dear = _candidate("dear-1", 4.0)
 
     class _InterruptingRunner(_ScriptedTrialRunner):
-        def run(self, candidate: Candidate, task: ProvingTask) -> TrialResult:
-            if candidate == dear and self.trials_for(dear) == 2:
-                self.calls.append((candidate, task))
+        def run(self, request: TrialRequest) -> TrialResult:
+            if request.candidate == dear and self.trials_for(dear) == 2:
+                self.calls.append(request)
                 raise KeyboardInterrupt
-            return super().run(candidate, task)
+            return super().run(request)
 
     runner = _InterruptingRunner(
         {
@@ -391,8 +395,8 @@ def test_every_rung_measures_the_same_five_tasks_and_two_runs_measure_the_same_f
         )
         assert result.stop is SearchStop.WINNER
         return (
-            [task for called, task in runner.calls if called == cheap],
-            [task for called, task in runner.calls if called == dear],
+            [call.task for call in runner.calls if call.candidate == cheap],
+            [call.task for call in runner.calls if call.candidate == dear],
         )
 
     first_cheap, first_dear = _run()
@@ -481,15 +485,19 @@ def test_a_trial_reports_only_the_three_scoring_keys_and_its_failure_detail() ->
 def test_the_search_reaches_no_io_and_no_prior() -> None:
     """The search core is pure over its injected inputs, and its imports say so.
 
-    Two claims a reader cannot check by walking the loop. **Purity**: everything
-    expensive sits behind :class:`TrialRunner`, so a module that imported a
-    worktree, a git client, a subprocess or the harness would have grown a second
-    way to spend — and the search would stop being fixture-testable offline.
-    **No prior**: ``RECOMMENDED_ROUTING`` is a hardcoded human guess, and a search
-    that consulted it would have the inferential prior back as an initial
-    condition (ADR-0027). The same guard :mod:`git_loopy.staircase` carries, for
-    the same reason, and checked the same way — over the names the module
-    actually *reaches*, so prose about the prior is not mistaken for a use of it.
+    Three claims a reader cannot check by walking the loop. **Purity**:
+    everything expensive sits behind :class:`TrialRunner`, so a module that
+    imported a worktree, a git client, a subprocess or the harness would have
+    grown a second way to spend — and the search would stop being
+    fixture-testable offline. **Determinism**: the threads that make **Trials**
+    concurrent live behind the dispatcher seam (#381), so a search that imported
+    one would have made *which Trials are bought* depend on which thread got
+    there first. **No prior**: ``RECOMMENDED_ROUTING`` is a hardcoded human
+    guess, and a search that consulted it would have the inferential prior back
+    as an initial condition (ADR-0027). The same guard
+    :mod:`git_loopy.staircase` carries, for the same reason, and checked the same
+    way — over the names the module actually *reaches*, so prose about the prior
+    is not mistaken for a use of it.
     """
     tree = ast.parse(Path(calibration_search.__file__).read_text(encoding="utf-8"))
     imported_modules: set[str] = set()
@@ -514,6 +522,8 @@ def test_the_search_reaches_no_io_and_no_prior() -> None:
         "httpx",
         "requests",
         "copilot",
+        "threading",
+        "concurrent.futures",
         "git_loopy.git",
         "git_loopy.gh",
         "git_loopy.worktree",
@@ -687,3 +697,414 @@ def test_the_maximum_trial_count_is_every_rung_walked_unanimously() -> None:
 def test_a_staircase_with_no_rungs_plans_no_trials() -> None:
     """A refused staircase costs nothing, and the plan says so as a number."""
     assert maximum_trials(rungs_available=0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Concurrency (#381)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDispatcher:
+    """An inline dispatcher that remembers what was bought at a time.
+
+    Wraps rather than replaces :class:`InlineTrialDispatcher`, so the grouping
+    these tests assert on is the grouping the production dispatcher is handed.
+    """
+
+    def __init__(self, width: int) -> None:
+        self._inner = InlineTrialDispatcher(width)
+        self.width = width
+        self.dispatches: list[tuple[TrialRequest, ...]] = []
+
+    def dispatch(
+        self, runner: TrialRunner, requests: Sequence[TrialRequest]
+    ) -> tuple[TrialResult, ...]:
+        self.dispatches.append(tuple(requests))
+        return self._inner.dispatch(runner, requests)
+
+    @property
+    def sizes(self) -> list[int]:
+        return [len(dispatch) for dispatch in self.dispatches]
+
+
+def test_a_rung_probes_with_one_trial_before_buying_the_rest() -> None:
+    """The first Trial of a rung runs alone, and the other four run together.
+
+    Promotion is unanimous, so a single red Trial kills a rung — which makes one
+    Trial the cheapest possible evidence that a rung is dead, and cheapest-first
+    means most rungs are. The probe is what keeps concurrency a wall-clock saving
+    rather than a credit bill: a rung that lives still collapses from five
+    Trial-times to two.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+    dispatcher = _RecordingDispatcher(width=PROMOTION_TRIALS)
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=dispatcher,
+    )
+
+    assert result.stop is SearchStop.WINNER
+    assert dispatcher.sizes == [1, 4]
+
+
+def test_a_rung_that_dies_at_its_probe_costs_exactly_what_it_costs_serially() -> None:
+    """Concurrency buys nothing it does not need, on the rungs it expects to fail.
+
+    The whole point of probing: without it, a width of five would spend five
+    Trials to learn what one Trial already said, on every rung below the winner.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    dear = _candidate("dear-1", 4.0)
+    runner = _ScriptedTrialRunner(
+        {
+            ("cheap-1", "medium"): [_failed()],
+            ("dear-1", "medium"): [_passed()] * PROMOTION_TRIALS,
+        }
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap, dear),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert result.stop is SearchStop.WINNER
+    assert runner.trials_for(cheap) == 1
+    assert (result.rungs[0].passed, result.rungs[0].total) == (0, 1)
+
+
+def test_the_remainder_is_bought_at_the_operators_width() -> None:
+    """A narrower host buys the four post-probe Trials in narrower dispatches.
+
+    The bound is the operator's, because the useful ceiling is the host's and
+    this project cannot pick it.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+    dispatcher = _RecordingDispatcher(width=2)
+
+    search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=dispatcher,
+    )
+
+    assert dispatcher.sizes == [1, 2, 2]
+
+
+def test_a_serial_dispatcher_buys_one_trial_at_a_time_in_order() -> None:
+    """Width 1 is the walk the search always performed, reached by the same code.
+
+    Which is *why* a gate outcome is identical to a serial run: there is no
+    second path for a parallel search to take.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+    dispatcher = _RecordingDispatcher(width=1)
+
+    search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=dispatcher,
+    )
+
+    assert dispatcher.sizes == [1, 1, 1, 1, 1]
+
+
+def test_no_two_trials_in_one_dispatch_share_a_slot() -> None:
+    """Distinct slots are what make distinct worktrees structural.
+
+    The runner (#369) keys its worktree and working branch off the slot it is
+    handed, so *"concurrent Trials share no worktree and no working branch"* is
+    a property of what the search issues rather than a convention the runner has
+    to honour. Slots stay inside the operator's width, so a host prepared for
+    ``width`` worktrees never has to hold one more.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+    dispatcher = _RecordingDispatcher(width=PROMOTION_TRIALS)
+
+    search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=dispatcher,
+    )
+
+    for dispatch in dispatcher.dispatches:
+        slots = [request.slot for request in dispatch]
+        assert len(set(slots)) == len(slots)
+        assert max(slots) < dispatcher.width
+
+
+def test_a_dispatched_trial_carries_the_pair_and_the_task_it_replays() -> None:
+    """The request is the whole of what distinguishes one concurrent Trial.
+
+    A production runner is called from several threads at once, so anything it
+    had to remember between calls would be shared state between Trials that are
+    supposed to share none.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+    tasks = _proving_set()
+
+    search_price_staircase(
+        candidates=(cheap,),
+        proving_set=tasks,
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert [call.candidate for call in runner.calls] == [cheap] * PROMOTION_TRIALS
+    assert {call.task for call in runner.calls} == set(tasks)
+
+
+def test_wall_clock_is_elapsed_time_and_not_the_sum_of_overlapping_trials() -> None:
+    """Trials that ran together took the longest of them, not all of them added up.
+
+    The defect concurrency exposes, and the reason this is not a reporting
+    detail: a Calibration that summed overlapping Trials would report itself five
+    times slower than the operator watched it be — and would trip its own
+    wall-clock ceiling at a fifth of the time they authorised, which is the one
+    ceiling concurrency exists to fit inside.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner(
+        {("cheap-1", "medium"): [_passed(seconds=600.0)] * PROMOTION_TRIALS}
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    # The probe, then four Trials that overlapped: two Trial-times, not five.
+    assert result.wall_clock_seconds == 1200.0
+    assert result.rungs[0].wall_clock_seconds == 1200.0
+
+
+def test_a_serial_search_still_reports_the_sum_it_always_did() -> None:
+    """Because a dispatch of one has a maximum equal to its sum.
+
+    So the elapsed rule is not a change to the serial walk; it is the same
+    number reached by a statement that also holds when Trials overlap.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner(
+        {("cheap-1", "medium"): [_passed(seconds=600.0)] * PROMOTION_TRIALS}
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+    )
+
+    assert result.wall_clock_seconds == 3000.0
+
+
+def test_concurrency_discounts_no_credit() -> None:
+    """Five Trials run at once cost what five Trials cost.
+
+    Wall clock is what overlapping changes; **AI Credits** are not, and a search
+    that folded them the same way would under-report its own spend.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner(
+        {("cheap-1", "medium"): [_passed(credits=2.0)] * PROMOTION_TRIALS}
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert result.credits == Decimal("10")
+
+
+def test_both_ceilings_still_bound_a_concurrent_search() -> None:
+    """The bound is on the Calibration as a whole, however wide it ran.
+
+    Checked before every dispatch rather than before every Trial, so a search
+    can overshoot by at most one dispatch — the same statement as before, with
+    "Trial" widened to "what is bought at a time".
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    dear = _candidate("dear-1", 4.0)
+    runner = _ScriptedTrialRunner(
+        {
+            ("cheap-1", "medium"): [_failed(credits=60.0)],
+            ("dear-1", "medium"): [_passed(credits=1.0)] * PROMOTION_TRIALS,
+        }
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap, dear),
+        proving_set=_proving_set(),
+        budget=_budget(credits=50.0),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert result.stop is SearchStop.CREDIT_CEILING
+    assert result.winner is None
+    assert runner.trials_for(dear) == 0
+
+
+def test_the_result_records_the_width_it_was_measured_at() -> None:
+    """A rung's wall clock is only comparable to another measured the same way.
+
+    Contention makes a Trial's wall clock noisier under concurrency, and wall
+    clock is the third key the search scores on — so the record has to say what
+    width produced it or a reader cannot tell noise from a result.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(3),
+    )
+
+    assert result.concurrency == 3
+
+
+def test_a_serial_result_records_a_width_of_one() -> None:
+    """The default is serial, and the record says so rather than saying nothing."""
+    cheap = _candidate("cheap-1", 0.25)
+    runner = _ScriptedTrialRunner({("cheap-1", "medium"): [_passed()] * PROMOTION_TRIALS})
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+    )
+
+    assert result.concurrency == 1
+
+
+@pytest.mark.parametrize("width", range(1, PROMOTION_TRIALS + 1))
+def test_the_gate_outcome_and_the_tally_are_identical_at_every_width(width: int) -> None:
+    """The same script promotes the same pair on the same evidence, however wide.
+
+    The acceptance criterion stated as a walk: a rung that dies at its probe and
+    a rung that goes five of five are the two shapes cheapest-first actually
+    produces, and neither depends on how many Trials were in flight.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    dear = _candidate("dear-1", 4.0)
+    runner = _ScriptedTrialRunner(
+        {
+            ("cheap-1", "medium"): [_failed(credits=0.5)],
+            ("dear-1", "medium"): [_passed(credits=2.0)] * PROMOTION_TRIALS,
+        }
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap, dear),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(width),
+    )
+
+    assert result.stop is SearchStop.WINNER
+    assert result.winner == dear
+    assert [(rung.passed, rung.total) for rung in result.rungs] == [(0, 1), (5, 5)]
+    assert result.credits == Decimal("10.5")
+
+
+def test_an_interrupt_mid_dispatch_keeps_the_trials_that_had_completed() -> None:
+    """Ctrl-C during a concurrent dispatch keeps what was already paid for.
+
+    Under concurrency the Trials that had returned when the operator interrupted
+    arrive on the interrupt itself, which is the only way they reach the record —
+    a search that let them fall on the floor would make an operator who stops one
+    pay for it twice, which is the fault the serial path was already written to
+    avoid.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+
+    class _InterruptingRunner(_ScriptedTrialRunner):
+        def run(self, request: TrialRequest) -> TrialResult:
+            if self.trials_for(cheap) == 3:
+                self.calls.append(request)
+                raise KeyboardInterrupt
+            return super().run(request)
+
+    runner = _InterruptingRunner(
+        {("cheap-1", "medium"): [_passed(seconds=60.0)] * PROMOTION_TRIALS}
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap,),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert result.stop is SearchStop.INTERRUPTED
+    assert result.winner is None
+    # The probe, plus the two Trials of the second dispatch that had returned.
+    assert (result.rungs[0].passed, result.rungs[0].total) == (3, 3)
+
+
+def test_a_trial_that_could_not_be_measured_fails_its_rung_rather_than_the_search() -> None:
+    """A Trial that explodes is a red Trial, and the search keeps its record.
+
+    A raise would lose the rungs already measured, which is hours of a
+    Calibration thrown away over one unreachable worktree — and would leave a
+    ``calibrate`` run with no record of what it had already spent.
+    """
+    cheap = _candidate("cheap-1", 0.25)
+    dear = _candidate("dear-1", 4.0)
+
+    class _ExplodingOnCheap(_ScriptedTrialRunner):
+        def run(self, request: TrialRequest) -> TrialResult:
+            if request.candidate == cheap:
+                self.calls.append(request)
+                raise RuntimeError("worktree vanished")
+            return super().run(request)
+
+    runner = _ExplodingOnCheap(
+        {("dear-1", "medium"): [_passed()] * PROMOTION_TRIALS}
+    )
+
+    result = search_price_staircase(
+        candidates=(cheap, dear),
+        proving_set=_proving_set(),
+        budget=_budget(),
+        runner=runner,
+        dispatcher=InlineTrialDispatcher(PROMOTION_TRIALS),
+    )
+
+    assert result.stop is SearchStop.WINNER
+    assert result.winner == dear
+    assert (result.rungs[0].passed, result.rungs[0].total) == (0, 1)
+    # ADR-0026: the crashed Trial's Consumption is unknown, so the search's is.
+    assert result.credits is None

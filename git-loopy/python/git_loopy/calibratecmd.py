@@ -59,6 +59,7 @@ from git_loopy.proving_set import MinedProvingSet
 from git_loopy.roster_drift import compare_classifier_pin, compare_roster_to_measured
 from git_loopy.staircase import PriceStaircase, render_pair
 from git_loopy.task_type_classifier import ClassifierPair, resolve_classifier_pair
+from git_loopy.trial_concurrency import CONCURRENCY_ENV, resolve_trial_concurrency
 
 if TYPE_CHECKING:
     from git_loopy.cli import ResolvedConfig
@@ -419,6 +420,8 @@ def run_calibrate_dry_run(
     out("")
     _report_ceilings(found, budget, out)
     out("")
+    _report_concurrency(env, out)
+    out("")
     _report_plan(found, out)
     return 0
 
@@ -451,10 +454,43 @@ def _report_ceilings(
     rungs = len(found.staircase.candidates)
     out("Ceilings, per Task type:")
     out(f"  AI Credits: {budget.credit_ceiling}")
-    out(f"  Wall clock: {_render_duration(budget.wall_clock_ceiling_seconds)}")
+    out(
+        f"  Wall clock: {_render_duration(budget.wall_clock_ceiling_seconds)} "
+        "(elapsed, so Trials that run together spend it once)"
+    )
     out(
         f"  Maximum Trials: {maximum_trials(rungs_available=rungs)} "
         f"({rungs} rungs x {PROMOTION_TRIALS} Proving tasks)"
+    )
+
+
+def _report_concurrency(env: Mapping[str, str], out: Callable[[str], None]) -> None:
+    """How many **Trials** would run at once, and which setting said so (#381).
+
+    Printed before anything is spent because concurrency is the one plan input
+    an operator's *host* decides rather than this repository — and because it
+    changes what a Calibration costs in hours without changing what it costs in
+    credits, which is the trade they are being asked to make.
+    """
+    resolved = resolve_trial_concurrency(env=env, ceiling=PROMOTION_TRIALS)
+    out("Concurrency:")
+    if resolved.serial:
+        out("  1 Trial at a time (serial).")
+        out(
+            f"  Set {CONCURRENCY_ENV}=N to run N Trials at once, each in its own "
+            f"worktree. Wall clock, not spend, is what limits a Calibration."
+        )
+        return
+    out(f"  {resolved.effective} Trials at a time, each in its own worktree.")
+    out(f"  From {resolved.source}.")
+    if resolved.capped:
+        out(
+            f"  Capped from {resolved.requested}: a rung buys {PROMOTION_TRIALS} "
+            f"Trials, so a wider host has nothing more to run."
+        )
+    out(
+        "  A rung's first Trial is a probe run alone, so a rung that fails costs "
+        "what it costs serially."
     )
 
 
