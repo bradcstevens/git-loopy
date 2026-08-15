@@ -403,7 +403,7 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
 
 /// The pointer gesture one terminal mouse report expresses.
 ///
-/// Every button drags, deliberately: ADR-0031 says nothing about which, and the
+/// Every button drags, deliberately: ADR-0038 says nothing about which, and the
 /// Python renderer accepts any, so narrowing it here would open exactly the
 /// drift between the two renderers this port exists to close. A bare move with
 /// no button held is not a gesture — the handle has not been taken — and every
@@ -435,7 +435,7 @@ fn gesture(mouse: MouseEvent) -> Option<Pointer> {
 /// here as a key rather than a signal, which is precisely what lets the helper
 /// hand the terminal back on its own one exit path.
 ///
-/// `shift+↑` / `shift+↓` and `a` are the bottom rung of ADR-0031's
+/// `shift+↑` / `shift+↓` and `a` are the bottom rung of ADR-0038's
 /// **drag → click → keys** ladder: the terminal that reports no mouse at all
 /// still sizes the Activity band. Shift is matched on the two arrows only, so
 /// `G` — which arrives shifted — keeps meaning the tail of the Queue.

@@ -1,6 +1,6 @@
-"""The glossary entry ADR-0031's shipped code earned (#382).
+"""The glossary entry ADR-0038's shipped code earned (#382).
 
-``CONTEXT.md`` records *shipped reality*, and ADR-0031 says so itself:
+``CONTEXT.md`` records *shipped reality*, and ADR-0038 says so itself:
 **Collapsed** "becomes a named state of the **Activity** band with defined
 transitions, so ``CONTEXT.md`` owes the term […] it is recorded when the code
 implements it and not before." This is when it is implemented.
@@ -8,7 +8,7 @@ implements it and not before." This is when it is implemented.
 Documentation-only and deliberately narrow. Every assertion is a claim a future
 slice could contradict without noticing — the band quietly going back to being
 fixed-height, or **Collapsed** decaying into "hidden" and taking the band out of
-the layout again, which is the one-way gesture ADR-0031 exists to remove. Claims
+the layout again, which is the one-way gesture ADR-0038 exists to remove. Claims
 are asserted against *reflowed* prose, so re-wrapping a paragraph cannot fail a
 test but deleting a claim must.
 """
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-ADR_0031 = "docs/adr/0031-collapsed-activity-band-keeps-its-handle.md"
+ADR_0038 = "docs/adr/0038-collapsed-activity-band-keeps-its-handle.md"
 
 
 def _repo_root() -> Path | None:
@@ -61,7 +61,7 @@ def _entry(term: str) -> str:
 
 
 def test_the_glossary_names_collapsed_as_a_state_of_the_activity_band() -> None:
-    """**Collapsed** is a state with a handle, not an absence (ADR-0031)."""
+    """**Collapsed** is a state with a handle, not an absence (ADR-0038)."""
     entry = _entry("Collapsed")
 
     # It is the band's own state, and it is the header stub that remains.
@@ -85,7 +85,7 @@ def test_the_glossary_records_how_collapsed_is_entered_and_left() -> None:
 
 
 def test_the_glossary_records_the_activity_band_as_operator_sized() -> None:
-    """The band stopped being a fixed nine rows when ADR-0031 shipped."""
+    """The band stopped being a fixed nine rows when ADR-0038 shipped."""
     entry = _entry("Activity")
 
     assert "sizes" in entry or "sized" in entry
@@ -97,7 +97,7 @@ def test_the_glossary_records_the_activity_band_as_operator_sized() -> None:
 def test_the_glossary_records_the_band_header_as_the_drag_handle() -> None:
     """The band is sized by the mouse as well as by the keys (#383).
 
-    ADR-0021 asked for the header row to be the drag handle and ADR-0031 is what
+    ADR-0021 asked for the header row to be the drag handle and ADR-0038 is what
     made that survivable. A glossary that still says "from the keyboard" would
     describe a band the operator can only half drive.
     """
@@ -108,7 +108,7 @@ def test_the_glossary_records_the_band_header_as_the_drag_handle() -> None:
 
 
 def test_the_glossary_records_the_mouse_path_into_and_out_of_collapsed() -> None:
-    """**drag → click → keys** is a ladder with no dead end (ADR-0031), so the
+    """**drag → click → keys** is a ladder with no dead end (ADR-0038), so the
     two mouse rungs belong to the term's definition rather than to one
     renderer's implementation of it.
 
@@ -122,7 +122,7 @@ def test_the_glossary_records_the_mouse_path_into_and_out_of_collapsed() -> None
 
 
 def test_the_adr_records_that_a_downward_drag_on_the_stub_writes_nothing() -> None:
-    """ADR-0031 is *"the normative spec for the second renderer"* (#384), which
+    """ADR-0038 is *"the normative spec for the second renderer"* (#384), which
     implements from the table rather than from this source.
 
     So a rule the Python renderer relies on has to live in the ADR or the Rust
@@ -131,7 +131,7 @@ def test_the_adr_records_that_a_downward_drag_on_the_stub_writes_nothing() -> No
     no-op. Left unstated, the second renderer would let the mouse destroy the
     height the keys preserve and still claim parity.
     """
-    adr = " ".join(_doc(ADR_0031).split())
+    adr = " ".join(_doc(ADR_0038).split())
 
     assert "no-op" in adr
     assert "no height below the stub to state" in adr
@@ -141,8 +141,8 @@ def test_the_collapsed_activity_band_decision_is_accepted() -> None:
     """The ADR is not a proposal once the code implements it."""
     status = [
         line
-        for line in _doc(ADR_0031).splitlines()
+        for line in _doc(ADR_0038).splitlines()
         if line.startswith("**Status:**")
     ]
-    assert status, "ADR-0031 declares no status"
+    assert status, "ADR-0038 declares no status"
     assert "accepted" in status[0]

@@ -266,7 +266,7 @@ async def test_activity_band_starts_at_the_named_height_and_queue_reclaims_the_r
     """The band opens at the named starting **requested** height and the Queue
     takes the remaining space (``1fr``), so a long Queue is never crushed.
 
-    Rewritten from the #69 fixed-height assertion: ADR-0031 makes the band
+    Rewritten from the #69 fixed-height assertion: ADR-0038 makes the band
     operator-sized, so the constant is its *starting* request rather than an
     invariant. The Queue still reclaims what the band does not take — but now
     from a band the operator can size.
@@ -284,7 +284,7 @@ async def test_activity_band_starts_at_the_named_height_and_queue_reclaims_the_r
 
 # ---------------------------------------------------------------------------
 # Sizing: ``shift+down`` / ``shift+up`` move the band one row per press
-# (ADR-0031 — the operator sizes the band from the keyboard)
+# (ADR-0038 — the operator sizes the band from the keyboard)
 # ---------------------------------------------------------------------------
 
 
@@ -345,7 +345,7 @@ async def test_shift_up_never_grows_past_the_queues_three_row_floor() -> None:
 
 # ---------------------------------------------------------------------------
 # Collapsed: the band's one-line header stub — a state, not an absence
-# (ADR-0031, superseding ADR-0021's snap-to-collapsed clause)
+# (ADR-0038, superseding ADR-0021's snap-to-collapsed clause)
 # ---------------------------------------------------------------------------
 
 
@@ -423,7 +423,7 @@ async def test_a_sizing_gesture_counts_from_the_height_on_screen() -> None:
 async def test_shift_up_from_the_stub_reopens_the_band_at_its_floor() -> None:
     """``shift+up`` out of **Collapsed** lands on the three-row floor, not on the
     remembered height: it is a sizing gesture, and sizing gestures state fresh
-    intent (ADR-0031). ``a`` is the gesture that restores."""
+    intent (ADR-0038). ``a`` is the gesture that restores."""
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test() as pilot:
         band = app.query_one("#activity", _ActivityBand)
@@ -463,7 +463,7 @@ async def test_shift_down_from_the_stub_is_a_no_op() -> None:
 
 # ---------------------------------------------------------------------------
 # The mouse: the band's header row is its drag handle, and a bare click on it
-# toggles collapse (ADR-0031 — the drag → click → keys ladder)
+# toggles collapse (ADR-0038 — the drag → click → keys ladder)
 # ---------------------------------------------------------------------------
 
 
@@ -476,7 +476,7 @@ async def test_dragging_the_header_up_grows_the_band_with_the_pointer() -> None:
     """Grab the band's header row and pull up: the band follows the pointer row
     for row, and the Queue's ``1fr`` gives the rows back.
 
-    The drag is a **sizing** gesture, so it writes ``requested`` (ADR-0031) — the
+    The drag is a **sizing** gesture, so it writes ``requested`` (ADR-0038) — the
     same number ``shift+up`` writes, reached with the mouse.
     """
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
@@ -576,7 +576,7 @@ async def test_dragging_below_the_floor_releases_into_the_collapsed_stub() -> No
 
 
 async def test_one_drag_can_collapse_the_band_and_pull_it_back_out() -> None:
-    """The whole point of the one-row stub (ADR-0031): the handle survives the
+    """The whole point of the one-row stub (ADR-0038): the handle survives the
     gesture, so a single unbroken drag can push the band into **Collapsed** and
     pull it straight back out. No keyboard is needed to recover.
 
@@ -697,7 +697,7 @@ async def test_clicking_the_stub_reopens_the_band_at_the_requested_height() -> N
 
 async def test_a_drag_that_ends_where_it_began_is_read_as_a_click() -> None:
     """Press, release, no motion in between: indistinguishable from a click, and
-    therefore treated as one (ADR-0031).
+    therefore treated as one (ADR-0038).
 
     A drag that *did* wander and came back is not: it stated a size, and
     collapsing a band the operator has just finished sizing would be the
@@ -799,7 +799,7 @@ async def test_a_log_opened_mid_drag_ends_the_drag_and_frees_the_mouse() -> None
 
 async def test_dragging_the_stub_further_down_keeps_the_remembered_height() -> None:
     """A drag that asks a **Collapsed** band to be shorter still is a no-op on
-    ``requested``, exactly as ``shift+down`` from the stub is (ADR-0031).
+    ``requested``, exactly as ``shift+down`` from the stub is (ADR-0038).
 
     All three controls drive one state machine, so the mouse must not be able to
     destroy what the keys preserve. There is nothing shorter than the stub to
@@ -836,7 +836,7 @@ async def test_the_drag_gives_the_mouse_back_when_it_ends() -> None:
 
     The capture that protects the Queue during a drag would swallow every
     later mouse event if it outlived it — the Queue's row click, which is the
-    **Log**'s own mouse path (ADR-0031), would go to the band's handle instead
+    **Log**'s own mouse path (ADR-0038), would go to the band's handle instead
     and drill-in would be gone for the rest of the Run. So the release is
     asserted twice over: the app holds no capture, and the very next click on a
     Queue row still opens that issue's Log.
@@ -978,7 +978,7 @@ async def test_detach_tears_down_the_band_with_the_tui() -> None:
 async def test_a_key_toggles_between_the_stub_and_the_requested_height() -> None:
     """``a`` is a **toggle** gesture: it collapses the band to its one-line
     header stub and restores it at the operator's ``requested`` height, which it
-    preserves throughout (ADR-0031).
+    preserves throughout (ADR-0038).
 
     It no longer removes the band from the layout (issue #70's ``display =
     False``): the Queue reclaims one row fewer, and in exchange the operator can
@@ -1020,7 +1020,7 @@ async def test_a_key_toggles_between_the_stub_and_the_requested_height() -> None
 async def test_activity_binding_appears_in_footer_labelled_activity() -> None:
     """The band's three keyboard gestures are surfaced in the Footer — ``a`` to
     collapse/expand (issue #70) and ``shift+up`` / ``shift+down`` to size it
-    (ADR-0031) — alongside the unchanged Stop / Detach / Back."""
+    (ADR-0038) — alongside the unchanged Stop / Detach / Back."""
     app = GitLoopyApp(_state_with_active_log(), refresh_interval=3600)
     async with app.run_test():
         entries = {key.key: key.description for key in app.query(FooterKey)}
@@ -1064,7 +1064,7 @@ async def test_collapse_state_persists_across_a_log_open_and_close() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Resize: a clamp is never destructive of the operator's setting (ADR-0031)
+# Resize: a clamp is never destructive of the operator's setting (ADR-0038)
 # ---------------------------------------------------------------------------
 
 

@@ -1,6 +1,6 @@
-//! The **Activity** band's state machine, cell by cell against ADR-0031.
+//! The **Activity** band's state machine, cell by cell against ADR-0038.
 //!
-//! ADR-0031 is *"the normative spec for the second renderer"*, so these tests
+//! ADR-0038 is *"the normative spec for the second renderer"*, so these tests
 //! are written from its table rather than from the Python renderer's source: a
 //! drag is not an **Event**, so nothing about it arrives through the Event
 //! schema and no Conformance fixture pins it today.

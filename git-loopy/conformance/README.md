@@ -501,7 +501,7 @@ producible rather than that today's native Run loop reaches every input the seam
 accepts.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
-(ADR-0031) — are deliberately **not** in this fixture set, now that both renderers
+(ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
 implement them. A drag is not an Event, so nothing about it reaches the Event schema, and
 the state machine's `ceiling` input is defined relationally against each renderer's *other*
 bands rather than as a shared number. Pinning it would mean injecting a ceiling neither
@@ -509,7 +509,7 @@ renderer's production seam exposes on both sides: the Rust `ActivityBand` takes 
 parameter, while Python's `_ActivityBand` derives one from a live Textual layout, so a
 Python adapter could only reach it through a subclass — and a fixture whose second port is
 a test double is exactly the adapter that reproduces the walk and agrees with itself.
-ADR-0031's own state-machine table is the contract instead, and both renderers' suites are
+ADR-0038's own state-machine table is the contract instead, and both renderers' suites are
 written from it. The amendment on that ADR records the prerequisite that would change the
 answer.
 

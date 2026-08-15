@@ -1,6 +1,6 @@
 //! The **Activity** band's operator-sized state machine.
 //!
-//! ADR-0031 is the normative spec: the band holds **two numbers, not one** —
+//! ADR-0038 is the normative spec: the band holds **two numbers, not one** —
 //! `requested`, the operator's stated intent in absolute rows, and `effective`,
 //! that intent clamped to what currently fits. Only an explicit gesture writes
 //! `requested`; a clamp never does, so a terminal that shrinks and grows again
@@ -14,13 +14,13 @@
 //!
 //! This module is the library's, not the binary's: it is where the drag, the
 //! click and the two keys meet as **one** state machine, which is the whole
-//! claim ADR-0031 makes. The terminal that reports the gestures is the caller's.
+//! claim ADR-0038 makes. The terminal that reports the gestures is the caller's.
 
 /// The band's **starting** `requested` height in terminal rows, including its
 /// header.
 ///
 /// A named tunable, and deliberately the same number the Python renderer starts
-/// at: ADR-0031 makes the two renderers one state machine, so an operator
+/// at: ADR-0038 makes the two renderers one state machine, so an operator
 /// moving between them should not find the band a different size. The one row
 /// the two spend differently is the header — Textual's is a line of text, this
 /// renderer's is the block's titled top border — which is a presentation
@@ -109,7 +109,7 @@ impl ActivityBand {
     ///
     /// From **Collapsed** it lands on the floor rather than the remembered
     /// height: it is a sizing gesture and sizing gestures state fresh intent
-    /// (ADR-0031). The click and `a` are the gestures that restore.
+    /// (ADR-0038). The click and `a` are the gestures that restore.
     ///
     /// The cap is written into `requested` and not only into `effective`, so
     /// leaning on the key stores up no pent-up height that would spring out the
