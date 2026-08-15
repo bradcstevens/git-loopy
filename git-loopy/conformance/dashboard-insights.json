@@ -363,7 +363,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "max_nmt_strikes": 3
         },
@@ -1269,7 +1269,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "max_nmt_strikes": 3
         },
@@ -1748,7 +1748,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "rate_card": {
             "models": {
@@ -3296,7 +3296,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3749,7 +3749,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "max_nmt_strikes": 3
         },
@@ -4126,7 +4126,7 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": false
+            "contribution_events": true
           },
           "max_nmt_strikes": 3
         },

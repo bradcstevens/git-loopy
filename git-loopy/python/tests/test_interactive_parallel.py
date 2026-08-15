@@ -40,6 +40,8 @@ from git_loopy.events import (
     WRAPPER_AFK_READY_COLLECTED,
     WRAPPER_AUTO_CLOSE,
     WRAPPER_COMMIT_RECORDED,
+    WRAPPER_CONTRIBUTION_END,
+    WRAPPER_CONTRIBUTION_START,
     WRAPPER_ISSUE_ACTIVATED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
@@ -444,3 +446,296 @@ def test_serial_iteration_end_still_reconciles_single_active() -> None:
     # No stray Lane bookkeeping leaked into the serial run.
     assert state._lane_streams == {}
     assert state._lane_commits == {}
+
+
+# ---------------------------------------------------------------------------
+# Rolling dispatch: a contribution outlives the Lane slot it started in (#310)
+# ---------------------------------------------------------------------------
+
+
+def _open_run(state: LiveRunState, *, issues: list[int]) -> None:
+    """Drive run-start -> pool for a **Rolling dispatch** Run (no round)."""
+    state.render(_ev(WRAPPER_RUN_START, run_id="01RUN", max_nmt_strikes=5))
+    state.render(_ev(WRAPPER_AFK_READY_COLLECTED, issues=issues))
+
+
+def _contribution_start(ref: int, *, lane: str) -> dict:
+    """One ``wrapper.contribution.start``, carrying the identity triple."""
+    return _ev(
+        WRAPPER_CONTRIBUTION_START,
+        iter=None,
+        contribution_id=f"c-{ref}",
+        issue=ref,
+        lane_id=lane,
+    )
+
+
+def _contribution_end(
+    ref: int,
+    *,
+    lane: str,
+    published: bool,
+    reason: str,
+    closure_outcome: str,
+    tokens: tuple[str | None, int, int] = (None, 0, 0),
+    cost_usd: float | None = None,
+    agent_seconds: float = 0.0,
+    lifecycle_seconds: float = 0.0,
+) -> dict:
+    """One authoritative ``wrapper.contribution.end`` row (#219 §7, ADR-0020)."""
+    model, tokens_in, tokens_out = tokens
+    return _ev(
+        WRAPPER_CONTRIBUTION_END,
+        iter=None,
+        contribution_id=f"c-{ref}",
+        issue=ref,
+        lane_id=lane,
+        published=published,
+        reason=reason,
+        summary={
+            "model": model,
+            "effort": "high",
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "observed_tokens": tokens_in + tokens_out,
+            "cost_usd": cost_usd,
+            "commits": 1,
+            "closures": 1 if closure_outcome == STATUS_CLOSED else 0,
+            "closure_outcome": closure_outcome,
+            "recovery_attempts": 0,
+            "agent_seconds": agent_seconds,
+            "lifecycle_seconds": lifecycle_seconds,
+            "peak_context_window": None,
+            "strike_reaction": "reset" if published else "+1",
+        },
+        issues=[
+            {
+                "issue": ref,
+                "status": closure_outcome,
+                "first_started_at": "2026-06-21T12:00:00Z",
+                "closed_at": (
+                    "2026-06-21T12:00:10Z"
+                    if closure_outcome == STATUS_CLOSED
+                    else None
+                ),
+                "issue_elapsed_seconds": None,
+                "active_seconds": agent_seconds,
+                "cumulative_active_seconds": agent_seconds,
+                "consumption": {
+                    "model": model,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                },
+                "cost_usd": cost_usd,
+                "peak_context_window": None,
+            }
+        ],
+    )
+
+
+def test_a_refilled_lane_slot_never_takes_a_running_contributions_work() -> None:
+    """A contribution's accounting boundary is its own, not the slot's (#310).
+
+    Under **Rolling dispatch** a **Lane** slot is reused many times per Run, so
+    the next contribution's boundary events arrive while an earlier one is
+    still working. Nothing the arriving contribution does may reach back into
+    the running one: #42 keeps its own Log, its own commit tally, and stays
+    **active** across #43's whole start-to-finish arc -- even though both
+    contributions started in the same reusable Lane.
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    _open_run(state, issues=[42, 43])
+
+    state.render(_contribution_start(42, lane="lane-0"))
+    state.render(
+        _ev(WRAPPER_COMMIT_RECORDED, sha="aaa", subject="lane 42", lane_issue=42)
+    )
+    state.stream_message("forty-two is still typing", issue=42)
+
+    # The Lane slot #42 started in refills with #43, which runs start to end.
+    clock.advance(5)
+    state.render(_contribution_start(43, lane="lane-0"))
+    state.render(
+        _ev(WRAPPER_COMMIT_RECORDED, sha="bbb", subject="lane 43", lane_issue=43)
+    )
+    state.render(
+        _ev(
+            USAGE_TOKENS,
+            model="claude-opus-4.8", input=10, output=2, lane_issue=43,
+        )
+    )
+    state.render(_ev(WRAPPER_AUTO_CLOSE, issue=43, lane_issue=43))
+    state.render(
+        _contribution_end(
+            43,
+            lane="lane-0",
+            published=True,
+            reason="published",
+            closure_outcome=STATUS_CLOSED,
+            tokens=("claude-opus-4.8", 10, 2),
+            cost_usd=0.5,
+            agent_seconds=5.0,
+            lifecycle_seconds=5.0,
+        )
+    )
+
+    clock.advance(5)
+    by_ref = {row.ref: row for row in queue_rows(state, now=clock.value)}
+    assert by_ref[42].is_active, "#42's contribution outlives the slot's refill"
+    assert by_ref[42].active_seconds == 10.0, "and keeps its own timer running"
+    assert by_ref[43].status == STATUS_CLOSED
+
+    # #42's Log still carries its own lines, and the open partial survives.
+    lines_42 = [line.text for line in state.log(42)]
+    assert any("lane 42" in text for text in lines_42)
+    assert any("forty-two is still typing" in text for text in lines_42)
+    assert not any("lane 43" in text for text in lines_42)
+
+    # #42 now finishes, with its own row rather than one #43's end cut for it.
+    state.render(
+        _contribution_end(
+            42,
+            lane="lane-0",
+            published=True,
+            reason="published",
+            closure_outcome=STATUS_ADVANCED,
+            tokens=("claude-opus-4.8", 7, 1),
+            cost_usd=0.25,
+            agent_seconds=10.0,
+            lifecycle_seconds=10.0,
+        )
+    )
+    detail_42 = issue_detail(state, 42)
+    assert [c.kind for c in detail_42.contributions] == ["lane"]
+    assert [c.lane for c in detail_42.contributions] == [42]
+    assert detail_42.status == STATUS_ADVANCED
+    assert [
+        (c.usage.tokens_in, c.usage.tokens_out) for c in detail_42.contributions
+    ] == [(7, 1)]
+    detail_43 = issue_detail(state, 43)
+    assert [c.kind for c in detail_43.contributions] == ["lane"]
+    assert detail_43.status == STATUS_CLOSED
+    assert [
+        (c.usage.tokens_in, c.usage.tokens_out) for c in detail_43.contributions
+    ] == [(10, 2)]
+
+
+def test_a_serial_iteration_end_never_reconciles_an_open_contribution() -> None:
+    """An Iteration's end is not a **Lane contribution**'s end (#310).
+
+    Under **Rolling dispatch** a serial Iteration is interleaved with Lane work
+    rather than replacing it, and a contribution can still be parked, waiting
+    on **Integration**, or in recovery when one ends. Only the contribution's
+    own boundary may reconcile it -- a round-shaped reading would close the
+    books on work that is still running.
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    _open_run(state, issues=[42, 90])
+
+    state.render(_contribution_start(42, lane="lane-0"))
+    state.render(
+        _ev(WRAPPER_COMMIT_RECORDED, sha="aaa", subject="lane 42", lane_issue=42)
+    )
+
+    clock.advance(3)
+    state.render(_ev(WRAPPER_ITERATION_START, iter=2))
+    state.render(
+        _ev(
+            WRAPPER_ISSUE_ACTIVATED,
+            issue=90,
+            activated_at="2026-06-21T12:00:00Z",
+            binding_source="working_marker",
+        )
+    )
+    state.render(
+        _ev(
+            WRAPPER_ITERATION_END,
+            iter=2,
+            outcome="no_progress",
+            duration_seconds=3.0,
+            summary={},
+            issues=[
+                {
+                    "issue": 90,
+                    "status": STATUS_NO_PROGRESS,
+                    "active_seconds": 3.0,
+                    "cumulative_active_seconds": 3.0,
+                    "consumption": {"model": None, "tokens_in": None, "tokens_out": None},
+                    "cost_usd": None,
+                }
+            ],
+        )
+    )
+
+    clock.advance(4)
+    by_ref = {row.ref: row for row in queue_rows(state, now=clock.value)}
+    assert by_ref[90].status == STATUS_NO_PROGRESS
+    assert by_ref[42].is_active, "#42's contribution has not reached its own end"
+    assert by_ref[42].active_seconds == 7.0, "and its timer never stopped"
+
+
+
+# ---------------------------------------------------------------------------
+# Historical Wave-era logs still replay (#310)
+# ---------------------------------------------------------------------------
+
+
+def test_a_historical_wave_era_event_log_still_renders() -> None:
+    """A pre-Rolling-dispatch **Wave** log replays into the same Dashboard (#310).
+
+    The Wave barrier (#61, ADR-0008) was retired by #306, but its logs are on
+    disk and remain replay-grade. Its shape is the one #310 changes: a *round*
+    owned the only ``wrapper.iteration.start``/``.end`` pair and every Lane
+    folded into it, so a Lane there carries no boundary of its own. Replaying
+    the fixture pins that the round-scoped shape is still read the way it was
+    written -- two Lane contributions reconciled independently at the round's
+    end, then a serial Iteration in the next round -- rather than being
+    mistaken for contributions that never finished.
+    """
+    import json
+    from pathlib import Path
+
+    from git_loopy.interactive.state import IssueContribution  # noqa: F401
+
+    fixture = Path(__file__).parent / "fixtures" / "wave-era-run.jsonl"
+    state = _make_state(_FakeClock())
+    for line in fixture.read_text(encoding="utf-8").splitlines():
+        state.render(json.loads(line))
+
+    rows = {row.ref: row for row in queue_rows(state, now=100.0)}
+    assert set(rows) == {66, 64, 70}
+    assert rows[66].status == STATUS_CLOSED
+    assert rows[64].status == STATUS_NO_PROGRESS
+    assert rows[70].status == STATUS_ADVANCED
+    assert not any(row.is_active for row in rows.values()), (
+        "a Wave's round end reconciles every Lane it opened; nothing is left "
+        "running once the log is exhausted"
+    )
+
+    # Round-scoped Lanes still read as Lane contributions, and the serial
+    # Iteration in the next round still reads as an Iteration.
+    assert [
+        (c.kind, c.lane, c.iteration)
+        for c in issue_detail(state, 66).contributions
+    ] == [("lane", 66, None)]
+    assert [
+        (c.kind, c.lane, c.iteration)
+        for c in issue_detail(state, 70).contributions
+    ] == [("iteration", None, 2)]
+
+    # Per-issue Consumption and timing all come off the round's authoritative
+    # rows, attributed to the Lane that spent them. Cost is not a row attribute:
+    # it is asked of a CostDenomination (ADR-0026), so the tokens the Lane
+    # actually spent are what carries the attribution claim here.
+    assert (rows[66].usage.tokens_in, rows[66].usage.tokens_out) == (100, 50)
+    assert (rows[64].usage.tokens_in, rows[64].usage.tokens_out) == (20, 10)
+    assert rows[66].active_seconds == 5.0
+    assert rows[64].active_seconds == 5.5
+
+    # Each Lane's Log still holds only its own lines.
+    log_66 = [line.text for line in state.log(66)]
+    assert any("sixty-six" in text for text in log_66)
+    assert any("lane 66" in text for text in log_66)
+    assert not any("sixty-six" in line.text for line in state.log(64))

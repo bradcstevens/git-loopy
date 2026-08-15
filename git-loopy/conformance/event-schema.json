@@ -84,7 +84,7 @@
         "rolling_dispatch": true,
         "integration_backlog": true,
         "adaptive_lane_limit": true,
-        "contribution_events": false
+        "contribution_events": true
       },
       "shell": {
         "parallel_mode": false,

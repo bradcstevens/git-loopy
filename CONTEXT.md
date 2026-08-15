@@ -680,7 +680,10 @@ _Avoid_: transcript (the prior code term), output, stream.
 The per-run accounting band of the **Dashboard**, with one row per serial
 **Iteration** or parallel **Lane contribution** (**Consumption**, **Observed tokens**,
 tools, skill calls, skills consulted, commits, closures, and strikes), mirrored in
-the run-end table. A band of the **Dashboard**, not a separate screen.
+the run-end table. A band of the **Dashboard**, not a separate screen. A row is cut
+only when its accounting unit **finalizes**, so work still parked, integrating, or in
+recovery has no partial row — under **Rolling dispatch** an unfinished **Lane
+contribution** is simply absent from the Summary, never half-counted in it.
 
 **Activity**:
 The **Dashboard** band that holds one **Activity window** per live **Agent**, always
@@ -780,7 +783,8 @@ _Avoid_: context used, context utilisation, context fill.
 **Iteration breakdown**:
 The per-issue drill-in band that itemizes each **Iteration**'s contribution to that
 issue, including its **Consumption**, Cost, and available peak **Context fill**. In
-**Parallel mode**, the row is the issue's **Lane** contribution.
+**Parallel mode**, the row is the issue's **Lane contribution** — attributed to the
+issue that produced it, never to whichever issue its **Lane** slot went on to work.
 _Avoid_: session breakdown, history table.
 
 **ModelSelectionMode**:
@@ -1101,7 +1105,11 @@ _Avoid_: worker, thread.
 One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
 when its Lane agent session starts and ending at green publication or a terminal
 unpublished handoff. It persists through parking, **Integration**, and recovery even
-after the reusable **Lane** moves on.
+after the reusable **Lane** moves on. It is the **accounting unit** of Parallel mode,
+not the **Lane** slot: it owns its own boundary events, its own **Consumption** and
+timing, its own **Summary** row, and its own durable record entry, so a refilled slot
+never inherits or overwrites them. It is *not* an **Iteration** — there is no barrier
+round to number — so it carries no Iteration number.
 _Avoid_: parallel Iteration, round, Wave, session.
 
 **Lane cap**:

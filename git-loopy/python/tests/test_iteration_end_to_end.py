@@ -495,7 +495,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "rolling_dispatch": True,
         "integration_backlog": True,
         "adaptive_lane_limit": True,
-        "contribution_events": False,
+        "contribution_events": True,
     }
     iteration_end = next(
         event
