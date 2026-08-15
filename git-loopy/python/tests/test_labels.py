@@ -325,6 +325,28 @@ def test_bootstrap_is_idempotent(tmp_path: Path) -> None:
     assert second.existing == tuple(spec.name for spec in vocabulary)
 
 
+def test_bootstrap_creates_a_label_added_to_the_vocabulary_since_it_last_ran(
+    tmp_path: Path,
+) -> None:
+    """``init`` is re-runnable, and a tracker it did not create is still ensured.
+
+    The tracker here was set up by an earlier ``init``, before ``priority`` and
+    the ``task-type:`` labels joined the vocabulary. Re-running has to land them
+    — ``priority`` shipped with #395 and this repository ranked every issue the
+    same until a human created the label by hand (#399).
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    added = {LABEL_PRIORITY, "task-type:bugfix"}
+    client = _FakeLabelClient(
+        *(spec.name for spec in vocabulary if spec.name not in added)
+    )
+
+    result = labels_module.bootstrap_labels(vocabulary, client)
+
+    assert set(result.created) == added
+    assert result.unavailable is None
+
+
 def test_bootstrap_matches_an_existing_label_case_insensitively(tmp_path: Path) -> None:
     """GitHub rejects a label differing from an existing one only in case.
 
@@ -543,3 +565,405 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "task-type:chore",
         "task-type:bugfix",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Reconciling the vocabulary against the tracker (#399)
+# ---------------------------------------------------------------------------
+
+
+class _FakeReconcileClient:
+    """A tracker carrying ``present`` labels, recording every write asked of it."""
+
+    def __init__(
+        self,
+        *present: labels_module.TrackerLabel,
+        fail: Exception | None = None,
+        fail_write: Exception | None = None,
+    ) -> None:
+        self.present = list(present)
+        self.created: list[labels_module.LabelSpec] = []
+        self.updated: list[tuple[str, labels_module.LabelSpec]] = []
+        self._fail = fail
+        self._fail_write = fail_write
+
+    def label_catalog(self) -> list[labels_module.TrackerLabel]:
+        if self._fail is not None:
+            raise self._fail
+        return list(self.present)
+
+    def label_create(self, spec: labels_module.LabelSpec) -> None:
+        if self._fail_write is not None:
+            raise self._fail_write
+        self.created.append(spec)
+        self.present.append(
+            labels_module.TrackerLabel(
+                name=spec.name, color=spec.color, description=spec.description
+            )
+        )
+
+    def label_update(self, name: str, spec: labels_module.LabelSpec) -> None:
+        if self._fail_write is not None:
+            raise self._fail_write
+        self.updated.append((name, spec))
+        self.present = [
+            labels_module.TrackerLabel(
+                name=name, color=spec.color, description=spec.description
+            )
+            if existing.name == name
+            else existing
+            for existing in self.present
+        ]
+
+
+def _carrying(*specs: labels_module.LabelSpec) -> tuple[labels_module.TrackerLabel, ...]:
+    """The tracker labels a repository would have if ``specs`` were in perfect shape."""
+    return tuple(
+        labels_module.TrackerLabel(
+            name=spec.name, color=spec.color, description=spec.description
+        )
+        for spec in specs
+    )
+
+
+def test_reconcile_reports_a_vocabulary_entry_the_tracker_is_missing(
+    tmp_path: Path,
+) -> None:
+    """The case this exists for: ``priority`` shipped and no tracker carried it.
+
+    ``bootstrap_labels`` runs once, at ``init``, so a label added to the
+    vocabulary afterwards never lands and nothing anywhere says so. Reconcile is
+    the path that says so.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    carried = [spec for spec in vocabulary if spec.name != LABEL_PRIORITY]
+    client = _FakeReconcileClient(*_carrying(*carried))
+
+    result = labels_module.reconcile_labels(vocabulary, client)
+
+    assert [difference.spec.name for difference in result.missing] == [LABEL_PRIORITY]
+    assert result.drifted == ()
+    assert len(result.matched) == len(vocabulary) - 1
+    assert result.unavailable is None
+
+
+def test_reconcile_reports_a_drifted_description_and_colour(tmp_path: Path) -> None:
+    """Six labels on this repo's own tracker disagreed with the vocabulary.
+
+    Nothing reads a description, so the drift is cosmetic on its own — it matters
+    because it is the same silence that hid the missing ``priority``.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    carried = list(_carrying(*vocabulary))
+    carried[0] = labels_module.TrackerLabel(
+        name=carried[0].name, color="ededed", description=carried[0].description
+    )
+    carried[2] = labels_module.TrackerLabel(
+        name=carried[2].name, color=carried[2].color, description="Ready for the bot"
+    )
+    client = _FakeReconcileClient(*carried)
+
+    result = labels_module.reconcile_labels(vocabulary, client)
+
+    assert [(d.spec.name, d.differs) for d in result.drifted] == [
+        ("needs-triage", ("color",)),
+        (LABEL_READY_FOR_AGENT, ("description",)),
+    ]
+    assert result.missing == ()
+
+
+def test_reconcile_ignores_a_colour_spelled_with_a_hash(tmp_path: Path) -> None:
+    """``#D4C5F9`` and ``d4c5f9`` are the same colour, not permanent drift."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    carried = [
+        labels_module.TrackerLabel(
+            name=spec.name,
+            color=f"#{spec.color.upper()}",
+            description=spec.description,
+        )
+        for spec in vocabulary
+    ]
+
+    result = labels_module.reconcile_labels(vocabulary, _FakeReconcileClient(*carried))
+
+    assert result.divergent == ()
+
+
+def test_reconcile_writes_nothing_by_default(tmp_path: Path) -> None:
+    """Reporting and applying are separate; the default only ever reads."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient()
+
+    result = labels_module.reconcile_labels(vocabulary, client)
+
+    assert client.created == []
+    assert client.updated == []
+    assert result.applied == ()
+    assert len(result.missing) == len(vocabulary)
+
+
+def test_reconcile_applies_creates_and_updates(tmp_path: Path) -> None:
+    """Applying creates what is missing and corrects what drifted, in one pass."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    carried = [
+        labels_module.TrackerLabel(
+            name=spec.name, color=spec.color, description=spec.description
+        )
+        for spec in vocabulary
+        if spec.name != LABEL_PRIORITY
+    ]
+    carried[0] = labels_module.TrackerLabel(
+        name=carried[0].name, color="ededed", description="Needs a look"
+    )
+    client = _FakeReconcileClient(*carried)
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert [spec.name for spec in client.created] == [LABEL_PRIORITY]
+    assert [(name, spec.name) for name, spec in client.updated] == [
+        ("needs-triage", "needs-triage")
+    ]
+    assert result.applied == ("needs-triage", LABEL_PRIORITY)
+    assert result.unavailable is None
+    # The report still describes the tracker as it was *read*.
+    assert [d.spec.name for d in result.missing] == [LABEL_PRIORITY]
+    assert [d.spec.name for d in result.drifted] == ["needs-triage"]
+
+
+def test_reconcile_applied_twice_is_idempotent(tmp_path: Path) -> None:
+    """The second run finds nothing divergent and writes nothing."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient()
+
+    first = labels_module.reconcile_labels(vocabulary, client, apply=True)
+    client.created.clear()
+    client.updated.clear()
+    second = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert len(first.applied) == len(vocabulary)
+    assert client.created == []
+    assert client.updated == []
+    assert second.applied == ()
+    assert second.divergent == ()
+    assert len(second.matched) == len(vocabulary)
+
+
+def test_reconcile_leaves_a_label_outside_the_vocabulary_alone(tmp_path: Path) -> None:
+    """A repository's own labels are its business — never reported, never deleted."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient(
+        labels_module.TrackerLabel("bug", "d73a4a", "Something is broken"),
+        *_carrying(*vocabulary),
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert result.divergent == ()
+    assert "bug" not in [d.spec.name for d in result.differences]
+    assert labels_module.TrackerLabel("bug", "d73a4a", "Something is broken") in (
+        client.present
+    )
+    assert client.created == [] and client.updated == []
+
+
+def test_reconcile_follows_a_renamed_triage_role(tmp_path: Path) -> None:
+    """A rename resolved through the documented mapping is neither missing nor drift.
+
+    A tracker calling ``needs-triage`` ``bug:triage`` has not diverged from the
+    vocabulary — it *is* the vocabulary, under the string this repository
+    documents. Reporting it missing would push the operator into creating a
+    duplicate role.
+    """
+    _write_mapping(
+        tmp_path, "| `needs-triage` | `bug:triage` | Maintainer needs to evaluate |\n"
+    )
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient(*_carrying(*vocabulary))
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert result.divergent == ()
+    assert client.created == []
+    assert "bug:triage" in [d.spec.name for d in result.matched]
+    assert "needs-triage" not in [d.spec.name for d in result.differences]
+
+
+def test_reconcile_compares_a_non_renameable_label_on_its_literal_string(
+    tmp_path: Path,
+) -> None:
+    """``parallel-safe``, ``priority`` and ``task-type:*`` are read as literals.
+
+    A mapping row cannot move them, so a tracker carrying a differently-named
+    near-miss is still missing the string three Orchestrators read.
+    """
+    _write_mapping(
+        tmp_path, "| `parallel-safe` | `concurrent-ok` | not a triage role |\n"
+    )
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient(
+        labels_module.TrackerLabel("concurrent-ok", "5319e7", "Safe in its own Lane"),
+        *_carrying(*(s for s in vocabulary if s.name != LABEL_PARALLEL_SAFE)),
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client)
+
+    assert [d.spec.name for d in result.missing] == [LABEL_PARALLEL_SAFE]
+
+
+def test_reconcile_reports_an_unreachable_tracker_without_writing(
+    tmp_path: Path,
+) -> None:
+    """An unreadable tracker is never half-reconciled."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient(fail=RuntimeError("gh: HTTP 401 Bad credentials"))
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert result.unavailable == "gh: HTTP 401 Bad credentials"
+    assert result.differences == ()
+    assert result.applied == ()
+    assert client.created == [] and client.updated == []
+
+
+def test_reconcile_reports_a_credential_that_may_not_write_labels(
+    tmp_path: Path,
+) -> None:
+    """A read-only credential stops at the first write and says why."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeReconcileClient(
+        fail_write=RuntimeError("gh: HTTP 403 Resource not accessible by integration")
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert result.applied == ()
+    assert result.unavailable == (
+        "gh: HTTP 403 Resource not accessible by integration"
+    )
+    assert len(result.missing) == len(vocabulary)
+
+
+def test_reconcile_updates_a_case_differing_label_where_it_actually_is(
+    tmp_path: Path,
+) -> None:
+    """``WontFix`` is the same label as ``wontfix``; a reconcile edits, never renames."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    wontfix = next(spec for spec in vocabulary if spec.role == "wontfix")
+    client = _FakeReconcileClient(
+        labels_module.TrackerLabel("WontFix", "ffffff", "nope"),
+        *_carrying(*(s for s in vocabulary if s.role != "wontfix")),
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert client.created == []
+    assert [name for name, _ in client.updated] == ["WontFix"]
+    assert [d.differs for d in result.drifted] == [("description",)]
+    assert client.present[0] == labels_module.TrackerLabel(
+        "WontFix", "ffffff", wontfix.description
+    )
+
+
+def test_subprocess_label_client_reads_colour_and_description(monkeypatch) -> None:
+    """Reconciling needs more than names, and a null description is not drift."""
+    from git_loopy import gh
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        payload = (
+            '[{"name":"needs-triage","color":"D4C5F9","description":"Evaluate"},'
+            '{"name":"bug","color":"d73a4a","description":null}]'
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr="")
+
+    monkeypatch.setattr(gh.subprocess, "run", _fake_run)
+
+    assert gh.SubprocessLabelClient().label_catalog() == [
+        labels_module.TrackerLabel("needs-triage", "D4C5F9", "Evaluate"),
+        labels_module.TrackerLabel("bug", "d73a4a", ""),
+    ]
+    assert calls == [
+        ["gh", "api", "repos/{owner}/{repo}/labels?per_page=100", "--paginate"]
+    ]
+
+
+def test_subprocess_label_client_updates_a_label_without_renaming_it(
+    monkeypatch,
+) -> None:
+    """The tracker's own spelling addresses the edit; the name is never changed."""
+    from git_loopy import gh
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(gh.subprocess, "run", _fake_run)
+
+    gh.SubprocessLabelClient().label_update(
+        "WontFix",
+        labels_module.LabelSpec(
+            role="wontfix", name="wontfix", color="ffffff", description="d"
+        ),
+    )
+
+    assert calls == [
+        [
+            "gh",
+            "label",
+            "edit",
+            "WontFix",
+            "--color",
+            "ffffff",
+            "--description",
+            "d",
+        ]
+    ]
+
+
+def test_subprocess_label_client_satisfies_the_reconcile_seam() -> None:
+    from git_loopy import gh
+
+    assert isinstance(gh.SubprocessLabelClient(), labels_module.LabelReconcileClient)
+
+
+def test_reconcile_reports_exactly_what_landed_when_a_write_fails_mid_pass(
+    tmp_path: Path,
+) -> None:
+    """A write that fails part-way is accounted for, never rolled back.
+
+    An unauthorised credential is refused on the *first* write, so "no partial
+    write" holds where the issue asks for it. A failure after some labels landed
+    — a throttle, a flaky network — is a different animal: undoing it would mean
+    deleting labels, which reconciling never does. What it owes instead is an
+    exact account, so the operator knows a re-run finishes the job.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    class _FailsAfterTwoWrites(_FakeReconcileClient):
+        budget = 2
+
+        def label_create(self, spec: labels_module.LabelSpec) -> None:
+            if self.budget == 0:
+                raise RuntimeError("gh: HTTP 502 Bad Gateway")
+            self.budget -= 1
+            super().label_create(spec)
+
+    client = _FailsAfterTwoWrites()
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert result.applied == ("needs-triage", "needs-info")
+    assert result.unavailable == "gh: HTTP 502 Bad Gateway"
+    assert [spec.name for spec in client.created] == list(result.applied)
+
+    # Idempotence is what makes the failure resumable: a second pass sees the
+    # two that landed and creates exactly the rest.
+    client.budget = len(vocabulary)
+    resumed = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert resumed.unavailable is None
+    assert len(resumed.matched) == 2
+    assert len(resumed.applied) == len(vocabulary) - 2

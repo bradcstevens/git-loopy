@@ -16855,7 +16855,7 @@
         "exit_code": 2,
         "stdout": null,
         "stdout_exact": "",
-        "stderr_exact": "usage: git-loopy [-h] {init,config,skills,continuation,calibrate} ...\ngit-loopy: error: unrecognized arguments: --terminal\n",
+        "stderr_exact": "usage: git-loopy [-h] {init,config,skills,labels,continuation,calibrate} ...\ngit-loopy: error: unrecognized arguments: --terminal\n",
         "stderr_contains": "usage:",
         "github_calls": []
       }

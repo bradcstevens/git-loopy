@@ -57,6 +57,24 @@ order. See `CONTEXT.md`, `docs/wrapper-contract.md` §3.2 and
 `parallel-safe`, `priority`, and Task-type labels are absent and leaves the ones
 that already exist untouched. Re-running it creates nothing.
 
+That is *ensure*, not reconcile, and it runs once — at whatever moment `init`
+happened to run. So a label added to the vocabulary afterwards never lands on a
+tracker set up before it, and a colour or description that drifts stays drifted.
+`git-loopy labels` is the command that says so:
+
+```bash
+git-loopy labels            # report only — reads the tracker, changes nothing
+git-loopy labels --apply    # create what is missing, correct what drifted
+```
+
+It reports every label in the vocabulary as `missing`, `drifted` (naming the
+attribute that differs), or matched, resolving the five roles through the table
+above so a renamed role is neither missing nor drift. `parallel-safe`,
+`priority`, and the `task-type:` labels are compared on their literal strings.
+Labels the tracker carries outside the vocabulary are never reported, never
+edited, and never deleted; nothing is ever renamed. An unreachable or
+unauthorised tracker warns and exits non-zero.
+
 ## Task-type labels
 
 Task type is a closed routing taxonomy. The only valid labels are

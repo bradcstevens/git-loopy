@@ -37,10 +37,13 @@ Design:
   keys routing accepts. This matters more than the other rows: the label-writing
   path *creates* a label before attaching it, so an invented key would become a
   real, permanent tracker label routing to the default forever (#375, ADR-0029).
-* **Ensure, never reconcile.** :func:`bootstrap_labels` creates what is absent and
-  leaves what exists exactly as it is — colour and description included. An
-  operator who recoloured ``ready-for-agent`` keeps their colour, and a re-run
-  creates nothing.
+* **Ensure, never reconcile — at ``init``.** :func:`bootstrap_labels` creates what
+  is absent and leaves what exists exactly as it is — colour and description
+  included. An operator who recoloured ``ready-for-agent`` keeps their colour, and
+  a re-run creates nothing. That is right for a renamed label and silent about
+  everything else, so :func:`reconcile_labels` is the *separate*, opt-in path that
+  reports the difference and can write it back (#399). Neither ever deletes a
+  label the vocabulary does not name.
 * **Never fatal.** A tracker that cannot be reached, or a credential without
   permission to create labels, yields an ``unavailable`` reason on the result
   rather than an exception: label bootstrap is one step of setup, not setup.
@@ -61,11 +64,16 @@ __all__ = [
     "LabelSpec",
     "LabelBootstrap",
     "LabelBootstrapClient",
+    "LabelDifference",
+    "LabelReconcileClient",
+    "LabelReconciliation",
+    "TrackerLabel",
     "TRIAGE_ROLES",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
     "read_tracker_vocabulary",
+    "reconcile_labels",
 ]
 
 #: Where the documented triage-label mapping lives, relative to the repo root.
@@ -332,3 +340,205 @@ def _reason(exc: BaseException) -> str:
     """Render why the tracker was unavailable, without a traceback."""
     text = str(exc).strip()
     return text or type(exc).__name__
+
+
+# --------------------------------------------------------------------------- #
+# Reconciling the vocabulary against the tracker (#399)                        #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TrackerLabel:
+    """One label as the tracker actually carries it.
+
+    Attributes:
+        name: The label string in the tracker, exactly as it is spelled there.
+        color: Six hex digits, with or without a leading ``#``.
+        description: The tracker's prose, or ``""`` when it carries none.
+    """
+
+    name: str
+    color: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class LabelDifference:
+    """What one vocabulary entry looks like against the tracker.
+
+    Attributes:
+        spec: The vocabulary entry, already resolved to *this* tracker's name.
+        tracker: The label the tracker carries under that name, or ``None`` when
+            it carries none — the entry is missing.
+        differs: The attribute names that disagree (``"color"``, ``"description"``),
+            in that order. Empty when the tracker matches, and always empty when
+            the entry is missing: an absent label does not also drift.
+    """
+
+    spec: LabelSpec
+    tracker: TrackerLabel | None = None
+    differs: tuple[str, ...] = ()
+
+    @property
+    def status(self) -> str:
+        """``"missing"``, ``"drifted"`` or ``"matched"`` — the three verdicts."""
+        if self.tracker is None:
+            return "missing"
+        return "drifted" if self.differs else "matched"
+
+
+@dataclass(frozen=True)
+class LabelReconciliation:
+    """What the vocabulary and the tracker say about each other, and what was written.
+
+    Attributes:
+        differences: One entry per vocabulary label, in vocabulary order,
+            describing the tracker **as it was read** — so an applied run still
+            reports what it found rather than the state it left behind.
+        applied: Label names written, in the order they were written. Always
+            empty on a reporting run.
+        unavailable: Why the tracker could not be read or written, or ``None``.
+    """
+
+    differences: tuple[LabelDifference, ...] = ()
+    applied: tuple[str, ...] = ()
+    unavailable: str | None = None
+
+    @property
+    def missing(self) -> tuple[LabelDifference, ...]:
+        """Vocabulary entries the tracker does not carry at all."""
+        return tuple(d for d in self.differences if d.status == "missing")
+
+    @property
+    def drifted(self) -> tuple[LabelDifference, ...]:
+        """Entries the tracker carries with a differing colour or description."""
+        return tuple(d for d in self.differences if d.status == "drifted")
+
+    @property
+    def matched(self) -> tuple[LabelDifference, ...]:
+        """Entries the tracker already agrees with."""
+        return tuple(d for d in self.differences if d.status == "matched")
+
+    @property
+    def divergent(self) -> tuple[LabelDifference, ...]:
+        """Everything that disagrees — missing and drifted — in vocabulary order."""
+        return tuple(d for d in self.differences if d.status != "matched")
+
+
+@runtime_checkable
+class LabelReconcileClient(Protocol):
+    """The tracker operations reconciling needs.
+
+    A superset of :class:`LabelBootstrapClient`'s powers in *kind* rather than in
+    signature: ensuring only has to know which names exist, while reconciling has
+    to read colour and description back and be able to overwrite them.
+    """
+
+    def label_catalog(self) -> list[TrackerLabel]:
+        """Return every label the repository carries, with colour and description."""
+        ...
+
+    def label_create(self, spec: LabelSpec) -> None:
+        """Create ``spec`` in the repository."""
+        ...
+
+    def label_update(self, name: str, spec: LabelSpec) -> None:
+        """Set the colour and description of the existing label ``name`` from ``spec``.
+
+        ``name`` is the tracker's own spelling rather than ``spec.name`` so a
+        label matched case-insensitively is edited where it actually is, and is
+        never renamed by a reconcile.
+        """
+        ...
+
+
+def reconcile_labels(
+    vocabulary: Sequence[LabelSpec],
+    client: LabelReconcileClient,
+    *,
+    apply: bool = False,
+) -> LabelReconciliation:
+    """Report every vocabulary entry as missing, drifted, or matched — and optionally fix it.
+
+    Reads the tracker once and compares in memory. A tracker label outside the
+    vocabulary is not looked at, never reported, and never deleted: the
+    vocabulary says what a repository *must* carry, never what it may not.
+
+    With ``apply`` the same pass writes the difference back, in vocabulary order
+    — creating what is missing, and overwriting the colour and description of
+    what drifted under the tracker's own spelling of the name, so a reconcile
+    never renames anything. Idempotent by construction: a second call finds
+    nothing divergent and writes nothing.
+
+    The default writes nothing at all. Reporting is what an operator can run
+    against someone else's tracker without consequence, so it is the default
+    rather than a flag on a writing command.
+
+    An unreadable tracker, or a credential that may not write labels, comes back
+    as :attr:`LabelReconciliation.unavailable` rather than as an exception, for
+    the same reason :func:`bootstrap_labels` does it. The tracker is classified
+    in full *before* the first write, so a write that fails part-way cannot make
+    a label the tracker already carried look missing in the report.
+
+    Nothing is rolled back. An unauthorised credential is refused on the first
+    write, so it costs no partial write at all; a failure *after* some labels
+    landed is a different animal, and undoing it would mean deleting labels —
+    which reconciling never does, because a label deleted is a label detached
+    from every issue carrying it. What a part-way failure owes instead is an
+    exact account of what landed, which idempotence makes resumable: re-running
+    finishes the job and re-writes nothing.
+    """
+    try:
+        catalog = {label.name.casefold(): label for label in client.label_catalog()}
+    except Exception as exc:  # noqa: BLE001 - any backend failure is "unavailable"
+        return LabelReconciliation(unavailable=_reason(exc))
+
+    differences: list[LabelDifference] = []
+    seen: set[str] = set()
+    for spec in vocabulary:
+        folded = spec.name.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        differences.append(_compare(spec, catalog.get(folded)))
+    report = LabelReconciliation(differences=tuple(differences))
+    if not apply:
+        return report
+
+    applied: list[str] = []
+    for difference in report.divergent:
+        try:
+            if difference.tracker is None:
+                client.label_create(difference.spec)
+            else:
+                client.label_update(difference.tracker.name, difference.spec)
+        except Exception as exc:  # noqa: BLE001
+            return LabelReconciliation(
+                differences=report.differences,
+                applied=tuple(applied),
+                unavailable=_reason(exc),
+            )
+        applied.append(difference.spec.name)
+    return LabelReconciliation(differences=report.differences, applied=tuple(applied))
+
+
+def _compare(spec: LabelSpec, tracker: TrackerLabel | None) -> LabelDifference:
+    """Verdict for one vocabulary entry against what the tracker carries."""
+    if tracker is None:
+        return LabelDifference(spec=spec)
+    differs: list[str] = []
+    if _normalise_color(tracker.color) != _normalise_color(spec.color):
+        differs.append("color")
+    if tracker.description.strip() != spec.description.strip():
+        differs.append("description")
+    return LabelDifference(spec=spec, tracker=tracker, differs=tuple(differs))
+
+
+def _normalise_color(color: str) -> str:
+    """A colour as the tracker means it: six hex digits, no ``#``, case-free.
+
+    ``gh label create --color`` accepts either spelling and the API answers in
+    one of them, so comparing the raw strings would report a repository that
+    typed ``#D4C5F9`` as permanently drifted from ``d4c5f9``.
+    """
+    return color.strip().lstrip("#").casefold()

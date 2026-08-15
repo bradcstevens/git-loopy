@@ -477,6 +477,17 @@ with no `parallel-safe` can never engage **Parallel mode**, and one with no
 _Avoid_: tags; triage vocabulary as the name for the whole set — **Parallel-safe**,
 **Priority** and the **Task type** labels are not triage roles.
 
+**Vocabulary drift**:
+The difference between the **Label vocabulary** and what a tracker actually carries.
+Because `init` *ensures* rather than reconciles, and runs once, a label added to the
+vocabulary afterwards never lands and a colour or description that diverges stays
+diverged — in both cases silently. `git-loopy labels` reports every entry as missing,
+drifted, or matched, and `--apply` writes the difference back. A renamed triage role is
+neither: it resolves through the documented mapping and *is* the vocabulary under this
+tracker's string. Reconciling is additive — it creates and corrects, never renames, and
+a tracker label outside the vocabulary is never reported and never deleted.
+_Avoid_: sync, mirror; drift as the name for a **Roster drift** (which is about models).
+
 **Pool**:
 The candidate `ready-for-agent` work discovered from the source. A serial **Iteration**
 collects its own full authoritative Pool at the start of the Iteration and offers it to

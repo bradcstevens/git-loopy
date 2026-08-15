@@ -86,7 +86,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
-    from git_loopy.labels import LabelSpec
+    from git_loopy.labels import LabelSpec, TrackerLabel
 
 __all__ = [
     "GhError",
@@ -1722,13 +1722,26 @@ class SubprocessLabelClient:
 
     Kept apart from :class:`SubprocessGitHubClient` because the two answer to
     different seams: the loop reads issues, setup writes vocabulary. Satisfies
-    :class:`git_loopy.labels.LabelBootstrapClient` structurally, which is why
-    nothing here imports :mod:`git_loopy.labels` (that module imports
-    :mod:`git_loopy.sources`, which imports this one).
+    both :class:`git_loopy.labels.LabelBootstrapClient` and
+    :class:`git_loopy.labels.LabelReconcileClient` structurally, which is why
+    nothing here imports :mod:`git_loopy.labels` at module scope (that module
+    imports :mod:`git_loopy.sources`, which imports this one).
     """
 
     def label_list(self) -> list[str]:
         """Return every existing label name in the repository the cwd resolves to.
+
+        The names of :meth:`label_catalog`, kept as its own method because
+        *ensuring* the vocabulary only ever asks which names exist — colour and
+        description are the reconcile path's business (#399).
+
+        Raises:
+            GhError: If the listing fails or returns an unreadable payload.
+        """
+        return [label.name for label in self.label_catalog()]
+
+    def label_catalog(self) -> list["TrackerLabel"]:
+        """Return every label the repository carries, with colour and description.
 
         Paginated to exhaustion rather than capped: a canonical label past a
         truncation point looks absent, so the bootstrap would try to create a
@@ -1737,9 +1750,18 @@ class SubprocessLabelClient:
         Read as JSON rather than ``gh label list``'s human table so a label whose
         name contains a comma or whitespace survives intact.
 
+        A label with no description comes back as ``""`` rather than ``None``, so
+        an undescribed tracker label is comparable without every caller
+        special-casing it.
+
         Raises:
             GhError: If the listing fails or returns an unreadable payload.
         """
+        # Imported here rather than at module scope because ``git_loopy.labels``
+        # imports ``git_loopy.sources``, which imports this module: at call time
+        # everything is loaded, at import time it would be a cycle.
+        from git_loopy.labels import TrackerLabel
+
         cmd = [
             "api",
             f"repos/{{owner}}/{{repo}}/labels?per_page={_LABEL_PAGE_SIZE}",
@@ -1753,14 +1775,20 @@ class SubprocessLabelClient:
                 0,
                 f"expected JSON array for the label listing, got {type(parsed).__name__}",
             )
-        names: list[str] = []
+        catalog: list[TrackerLabel] = []
         for entry in parsed:
             if not isinstance(entry, dict) or "name" not in entry:
                 raise GhError(
                     [_GH_BIN, *cmd], 0, f"gh label listing entry malformed: {entry!r}"
                 )
-            names.append(str(entry["name"]))
-        return names
+            catalog.append(
+                TrackerLabel(
+                    name=str(entry["name"]),
+                    color=str(entry.get("color") or ""),
+                    description=str(entry.get("description") or ""),
+                )
+            )
+        return catalog
 
     def label_create(self, spec: LabelSpec) -> None:
         """Create the label described by ``spec`` (a ``LabelSpec``).
@@ -1774,6 +1802,30 @@ class SubprocessLabelClient:
                 "label",
                 "create",
                 spec.name,
+                "--color",
+                spec.color,
+                "--description",
+                spec.description,
+            ]
+        )
+
+    def label_update(self, name: str, spec: LabelSpec) -> None:
+        """Set the colour and description of the existing label ``name`` from ``spec``.
+
+        ``name`` is the tracker's own spelling rather than ``spec.name``, and
+        ``--name`` is deliberately not passed: reconciling corrects a label's
+        appearance and never renames one, because a rename would detach every
+        issue that already carries it.
+
+        Raises:
+            GhError: If ``gh label edit`` fails — including when the credential
+                lacks permission. The caller decides whether that is fatal.
+        """
+        _run(
+            [
+                "label",
+                "edit",
+                name,
                 "--color",
                 spec.color,
                 "--description",

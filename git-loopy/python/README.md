@@ -173,6 +173,49 @@ ranks the same — and nothing in a Run says why.
 - Outside a git repository (`init --global` with no repo) there is no tracker to
   write to, so the step does not run.
 
+### Reconciling the vocabulary (`git-loopy labels`)
+
+`init` **ensures** — it creates what is absent and leaves what exists alone — and
+it runs *once*. So a label added to the vocabulary after `init` last ran never
+lands on that tracker, and a colour or description that drifts stays drifted,
+both silently. `git-loopy labels` is the reconcile path:
+
+```bash
+# Report only. Reads the tracker and changes nothing.
+git-loopy labels
+
+# Write the difference back: create what is missing, correct what drifted.
+git-loopy labels --apply
+```
+
+```text
+matched needs-triage
+matched needs-info
+drifted ready-for-agent (description)
+...
+missing priority
+2 labels differ from the vocabulary; 12 match. Re-run with --apply to write the difference.
+```
+
+- **Reporting is the default**; applying is an explicit flag.
+- **Every vocabulary label gets a verdict** — `missing`, `drifted` (naming the
+  attribute that differs), or `matched` — so "is this label read at all?" is
+  answerable, not just "is anything wrong?".
+- The five roles resolve through
+  [`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md), so a
+  **renamed role is neither missing nor drift**. `parallel-safe`, `priority`, and
+  the `task-type:` labels compare on their literal strings.
+- **Additive only.** Labels the tracker carries outside the vocabulary are never
+  reported, never edited, and never deleted, and nothing is ever renamed —
+  a rename would detach every issue already carrying the label.
+- **Idempotent.** Applying twice reports no difference the second time.
+- An unreachable or unauthorised tracker **warns and exits non-zero**; a
+  difference on its own is a finding, not a failure, and exits `0`.
+- Nothing is rolled back. An unauthorised credential is refused on the *first*
+  write, so it costs no partial write; a failure after some labels landed is
+  reported with an exact account of what did, and idempotence makes a re-run
+  finish the job.
+
 Hand-editing `config.toml` directly stays fully supported — `init` is a
 convenience over it, not a replacement. To inspect or change persisted settings
 afterwards without hand-finding the file, use the

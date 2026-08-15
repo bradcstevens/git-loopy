@@ -516,7 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "continuation", "calibrate")
+_SUBCOMMANDS = ("init", "config", "skills", "labels", "continuation", "calibrate")
 
 
 def _add_scope_flags(
@@ -568,7 +568,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,continuation,calibrate}",
+        metavar="{init,config,skills,labels,continuation,calibrate}",
     )
 
     init = sub.add_parser(
@@ -645,6 +645,31 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_scope_flags(skills_sync)
+
+    labels_cmd = sub.add_parser(
+        "labels",
+        help="Report — and optionally fix — the tracker against the Label vocabulary.",
+        description=(
+            "Compare this repository's tracker with the Label vocabulary a Run "
+            "reads: the five triage roles (under the strings "
+            "docs/agents/triage-labels.md maps them to), parallel-safe, "
+            "priority, and the seven task-type labels. `init` only ever creates "
+            "what is absent at the moment it runs, so a label added to the "
+            "vocabulary afterwards never lands and a drifted colour or "
+            "description stays drifted. Reports by default and changes nothing; "
+            "labels the tracker carries outside the vocabulary are never touched "
+            "and never deleted."
+        ),
+    )
+    labels_cmd.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Write the difference back: create the labels the tracker is missing "
+            "and correct the colour / description of the ones that drifted. "
+            "Never renames and never deletes."
+        ),
+    )
 
     continuation = sub.add_parser(
         "continuation",
@@ -911,6 +936,31 @@ def _run_init(args: argparse.Namespace) -> int:
         # Labels live in a repository's tracker, so there is nothing to ensure
         # when setup is not running inside one.
         label_client=_make_label_client() if repo_root is not None else None,
+    )
+
+
+def _run_labels(args: argparse.Namespace) -> int:
+    """Dispatch ``git-loopy labels`` to the vocabulary reconcile handler.
+
+    The handler module (:mod:`git_loopy.labelscmd`) is imported lazily so the
+    subcommand parser stays SDK-free, and the real ``gh`` adapter is built here
+    through the same :func:`_make_label_client` factory ``init`` uses — the
+    handler never builds a live backend for itself.
+
+    Outside a repository there is no tracker to reconcile, which the handler
+    reports as an error rather than a silent skip: unlike ``init``, reconciling
+    is the *whole* of what this command does.
+    """
+    from git_loopy import labelscmd
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    return labelscmd.run_labels(
+        repo_root=repo_root,
+        client=_make_label_client(),
+        apply=bool(args.apply),
     )
 
 
@@ -2184,6 +2234,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_init(sub_args)
         if sub_args.command == "skills":
             return _run_skills(sub_args)
+        if sub_args.command == "labels":
+            return _run_labels(sub_args)
         if sub_args.command == "continuation":
             return _run_continuation(sub_args)
         if sub_args.command == "calibrate":
