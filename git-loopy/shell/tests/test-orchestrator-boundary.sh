@@ -17,6 +17,9 @@ real_git="$(command -v git)"
 real_git_dir="$(dirname "$real_git")"
 bash_bin="$(command -v bash)"
 
+# shellcheck disable=SC1091
+source "$script_dir/sigpipe.sh"
+
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1
@@ -159,10 +162,11 @@ for arg in "$@"; do
   printf '%s\n' "$arg" >>"$FAKE_COPILOT_FLAGS"
 done
 printf '%s' "$prompt" >"$FAKE_COPILOT_PROMPT"
-# An opt-in record of the signal dispositions this process inherited. The live
-# interface has to ignore SIGPIPE across its own writes; if it ever left that
-# ignored for the whole Run, `exec` would carry SIG_IGN into the agent process
-# and every tool it starts.
+# An opt-in record of the signal dispositions this process inherited. The
+# Orchestrator/agent boundary owes the agent a *default* SIGPIPE — both when the
+# live interface has ignored it across its own writes, and when the Orchestrator
+# was handed an ignore it cannot itself lift. Either leak would carry SIG_IGN
+# through `exec` into the agent process and every tool it starts.
 if [[ -n "${FAKE_COPILOT_SIGNALS:-}" ]]; then
   trap -p PIPE >"$FAKE_COPILOT_SIGNALS"
 fi
@@ -281,6 +285,14 @@ add_fake_remote() {
   git -C "$root" push -q -u origin HEAD
 }
 
+# How the Orchestrator is launched, as far as its inherited SIGPIPE disposition
+# goes: `default` (a developer's terminal) or `ignored` (a parent that ignores
+# SIGPIPE process-wide, which is every GitHub Actions `run:` step because the
+# Node-based runner does exactly that). Both are *staged* rather than inherited —
+# a suite that simply ran the entrypoint would silently test whichever
+# disposition it happened to be started with, which is precisely the bug.
+turn_entrypoint_sigpipe="default"
+
 run_turn_entrypoint() {
   local repo="$1"
   local fake_bin="$2"
@@ -288,13 +300,25 @@ run_turn_entrypoint() {
   local stderr_path="$4"
   shift 4
 
+  local -a launch=("$bash_bin" "$entrypoint" "$@")
+  case "$turn_entrypoint_sigpipe" in
+    ignored) launch=("${sigpipe_ignored_launcher[@]}" "${launch[@]}") ;;
+    default)
+      launch=(
+        ${sigpipe_default_launcher[@]+"${sigpipe_default_launcher[@]}"}
+        "${launch[@]}"
+      )
+      ;;
+    *) fail "unknown staged SIGPIPE disposition: $turn_entrypoint_sigpipe" ;;
+  esac
+
   (
     cd "$repo"
     PATH="$fake_bin:$real_jq_dir:$real_git_dir:/usr/bin:/bin" \
       HOME="$repo/home" \
       XDG_CONFIG_HOME="$repo/xdg" \
       FAKE_REPO_ROOT="$repo" \
-      "$bash_bin" "$entrypoint" "$@"
+      "${launch[@]}"
   ) >"$stdout_path" 2>"$stderr_path"
 }
 
@@ -918,6 +942,49 @@ jq -se '
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-nonzero.stdout" >/dev/null ||
   fail "non-zero agent turn drifted from warn-and-continue"
+
+# The agent process gets a DEFAULT SIGPIPE disposition, and that is a property of
+# the boundary rather than of how the operator happened to launch the Run. An
+# agent that inherits SIG_IGN does not die when its downstream reader goes away —
+# it collects EPIPE on every write and decides for itself whether to care — and
+# the ignore reaches every tool the agent starts, through `exec`, as well. Both
+# launch dispositions are exercised against the same scenario, because the two
+# halves fail for different reasons: `default` would catch an Orchestrator that
+# installed an ignore of its own, and `ignored` catches the one it was handed and
+# that `trap` provably cannot give back.
+for sigpipe_launch in default ignored; do
+  if [[ "$sigpipe_launch" == "default" ]] && ((sigpipe_default_stageable == 0)); then
+    continue
+  fi
+  repo="$temp_dir/sigpipe-$sigpipe_launch"
+  fake_bin="$temp_dir/sigpipe-$sigpipe_launch-bin"
+  make_real_repo "$repo"
+  write_turn_tools "$fake_bin"
+  cp "$temp_dir/github-list.json" "$temp_dir/sigpipe-$sigpipe_launch-list.json"
+  export FAKE_GH_LOG="$temp_dir/sigpipe-$sigpipe_launch-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/sigpipe-$sigpipe_launch-list.count"
+  export FAKE_GH_LIST_JSON="$temp_dir/sigpipe-$sigpipe_launch-list.json"
+  export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+  setup_copilot_env "sigpipe-$sigpipe_launch"
+  export FAKE_COPILOT_COMMITS=0
+  export FAKE_COPILOT_SIGNALS="$temp_dir/sigpipe-$sigpipe_launch-copilot.signals"
+  rm -f "$FAKE_COPILOT_SIGNALS"
+  turn_entrypoint_sigpipe="$sigpipe_launch"
+  if ! run_turn_entrypoint \
+    "$repo" "$fake_bin" "$temp_dir/sigpipe-$sigpipe_launch.stdout" \
+    "$temp_dir/sigpipe-$sigpipe_launch.stderr" 1; then
+    fail "a Run launched with SIGPIPE $sigpipe_launch did not exit 0: \
+$(<"$temp_dir/sigpipe-$sigpipe_launch.stderr")"
+  fi
+  turn_entrypoint_sigpipe="default"
+  unset FAKE_COPILOT_COMMITS
+  [[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
+    fail "the SIGPIPE-$sigpipe_launch Run never reached the agent process"
+  [[ ! -s "$FAKE_COPILOT_SIGNALS" ]] ||
+    fail "a Run launched with SIGPIPE $sigpipe_launch left SIGPIPE ignored for \
+the agent process: $(<"$FAKE_COPILOT_SIGNALS")"
+  unset FAKE_COPILOT_SIGNALS
+done
 
 # The turn feeds EXACTLY the last five commits (contract §4), newest-first, and
 # truncates older history. Every other turn scenario runs against a <=3-commit
@@ -2544,6 +2611,11 @@ setup_copilot_env "tui-stuck"
 export FAKE_COPILOT_COMMITS=0
 export FAKE_COPILOT_SIGNALS="$temp_dir/tui-stuck-copilot.signals"
 rm -f "$FAKE_COPILOT_SIGNALS"
+# Start this Run the way CI starts every one: from a parent that ignores
+# SIGPIPE. Bash cannot lift an ignore it was handed, so without this the case
+# only exercises the leak on a runner and passes on a developer's terminal —
+# which is how a boundary that never held could look green for a whole release.
+export FAKE_IGNORE_SIGPIPE=1
 
 set +e
 run_turn_entrypoint \
@@ -2552,20 +2624,18 @@ run_turn_entrypoint \
   --interactive 0
 status=$?
 set -e
-unset FAKE_COPILOT_COMMITS
+unset FAKE_COPILOT_COMMITS FAKE_IGNORE_SIGPIPE
 assert_equal "1" "$status" "a stuck interactive Run still exits 1"
 assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
   "the stuck Run ran under the live interface"
+# Guard the guard: if `trap '' PIPE` followed by `exec` ever stopped handing an
+# ignore down, the assertion below would pass without exercising the leak at all.
+[[ -n "$(bash -c 'trap "" PIPE; exec bash -c "trap -p PIPE"')" ]] ||
+  fail "the ignored-SIGPIPE setup no longer reaches the Orchestrator"
 [[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
   fail "the interactive stuck Run never reached the agent process"
-# The guarantee is that the live interface *added* no ignore, not that SIGPIPE
-# reaches the agent at its default. POSIX has a non-interactive shell unable to
-# trap or reset a signal that was already ignored on entry, so under a parent
-# that ignores SIGPIPE -- the CI runner does -- no Orchestrator can hand the
-# default back. Comparing against what this suite itself inherited keeps the
-# check on the one thing the live interface controls.
-assert_equal "$(trap -p PIPE)" "$(<"$FAKE_COPILOT_SIGNALS")" \
-  "the live interface changed SIGPIPE for the agent process"
+[[ ! -s "$FAKE_COPILOT_SIGNALS" ]] ||
+  fail "the Orchestrator/agent boundary left SIGPIPE ignored for the agent process: $(<"$FAKE_COPILOT_SIGNALS")"
 unset FAKE_COPILOT_SIGNALS
 jq -se '
   .[-1].type == "wrapper.run.end" and .[-1].outcome == "stuck"
