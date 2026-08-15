@@ -336,8 +336,11 @@ timestamp, discovery order, or recency; they surface as an `action_conflict` dia
 excluded from guidance until one lineage retires.
 
 Python, shell, and PowerShell Reconciliation return an opaque `sha256:` observation token over the
-repository, current Producer heads, and inspected comment validators. Immutable publication names
-exactly those observed heads. The append is deterministic and idempotent: an indeterminate retry finds the same
+repository, current Producer heads, and inspected comment validators. The observation is a
+whole-repository read, so its heads span every live Workstream; immutable publication names exactly
+those observed heads that lie on its own lineage — the same carrier, Producer, and Workstream
+anchor — because only those can be its predecessors. Heads under other Workstreams are carried,
+bound by the token, and named by nothing. The append is deterministic and idempotent: an indeterminate retry finds the same
 revision. Equivalent concurrent heads deduplicate in guidance; non-equivalent stale appends remain
 visible as a fork until one fresh revision names every current head. Edited comments, missing
 predecessors, revoked authority, and unauthorized ancestry quarantine only their lineage. Recovery
@@ -347,8 +350,9 @@ revision identity, Reconciliation supplies a deterministic comment-scoped affect
 so the recovery ceremony remains explicit and satisfiable.
 
 Callers select the Python, shell, or PowerShell immutable-revision capability with
-`revision_protocol: true` on `reconcile`, then pass the exact `observation` and ordered `parents` to
-`publish`. Omitting those fields selects only the family-wide atomic-root capability subset.
+`revision_protocol: true` on `reconcile`, then pass the exact `observation` and the ordered
+`parents` it names for that lineage to `publish`. Omitting those fields selects only the
+family-wide atomic-root capability subset.
 Supplying `parents` or `reattestation` without an observation is invalid rather than silently
 ignored.
 

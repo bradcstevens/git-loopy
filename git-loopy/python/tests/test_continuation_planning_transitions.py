@@ -839,6 +839,98 @@ def test_a_later_session_resolves_an_unresolved_ticket_as_a_successor(
     assert resolved["completion"] == _research_request()["completion"]
 
 
+def test_a_successor_publishes_while_a_second_workstream_holds_a_live_head(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A live head on another Workstream cannot block this one's successor.
+
+    Reconciliation observes the *whole repository*, so the moment a second
+    Workstream holds a live head the observation names heads this Producer is
+    not advancing. Naming them all as `parents` would claim another lineage's
+    revision as this record's predecessor; naming none of them would publish a
+    second root and fork the carrier. Neither is what the Producer did.
+
+    So the observation stays a complete read — that read is what the token is
+    worth — and it is *scoped where it is consumed*: `parents` names the
+    observed heads on this completion's own lineage, which is exactly the
+    request every planning Skill documents.
+    """
+    github = _RecordingGitHub()
+    # Two carriers, two Workstreams, one live head each.
+    for skill in ("research", "prototype"):
+        assert (
+            _run("publish", _unresolved_request(skill), github, monkeypatch, capsys)[0]
+            == 0
+        )
+    _code, seen, _stderr = _run(
+        "reconcile",
+        _reconcile_request(revision_protocol=True),
+        github,
+        monkeypatch,
+        capsys,
+    )
+    observation = seen["result"]["observation"]
+    assert {head["carrier"] for head in observation["heads"]} == {
+        RESEARCH_TICKET,
+        PROTOTYPE_TICKET,
+    }
+
+    github.issues[RESEARCH_TICKET] = "CLOSED"
+    resolved = _research_request()
+    resolved["observation"] = observation
+    resolved["parents"] = [
+        head["revision_id"]
+        for head in observation["heads"]
+        if head["carrier"] == RESEARCH_TICKET
+    ]
+    # The filter is doing real work here, unlike a single-Workstream fixture.
+    assert len(resolved["parents"]) == 1
+    assert len(observation["heads"]) == 2
+
+    exit_code, published, stderr = _run("publish", resolved, github, monkeypatch, capsys)
+
+    assert exit_code == 0
+    assert stderr == ""
+    assert published["receipt"]["status"] == "committed"
+    assert published["receipt"]["parents"] == resolved["parents"]
+
+    # Naming every observed head instead is still a rejection, and it is
+    # refused before anything durable happens: the prototype ticket's head is
+    # nobody's predecessor here, and this record does not succeed it.
+    overreaching = _research_request()
+    overreaching["observation"] = observation
+    overreaching["parents"] = [head["revision_id"] for head in observation["heads"]]
+    durable_before = list(github.calls)
+
+    exit_code, rejected, _stderr = _run(
+        "publish", overreaching, github, monkeypatch, capsys
+    )
+
+    assert exit_code == 1
+    assert rejected["error"]["code"] == "invalid_request"
+    assert github.calls == durable_before
+
+    exit_code, result, _stderr = _run(
+        "reconcile",
+        _reconcile_request(revision_protocol=True),
+        github,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    # One lineage advanced; the other neither forked nor vanished.
+    assert result["result"]["diagnostics"] == []
+    [outcome] = result["result"]["outcomes"]
+    assert outcome["kind"] == "complete"
+    assert outcome["workstream_anchor"]["number"] == RESEARCH_TICKET
+    assert {head["carrier"] for head in result["result"]["observation"]["heads"]} == {
+        RESEARCH_TICKET,
+        PROTOTYPE_TICKET,
+    }
+
+
 def test_a_planning_transition_publishes_only_after_its_evidence_is_durable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

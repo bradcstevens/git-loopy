@@ -774,12 +774,38 @@ _git_loopy_continuation_fingerprints() {
   printf '%s\n' "$fingerprints"
 }
 
+_git_loopy_continuation_observed_lineage_heads() {
+  # The observed heads this completion may succeed, in observation order.
+  # Reconciliation observes the whole repository, so `observation.heads` names
+  # every live head under every Workstream — including ones this Producer is
+  # not advancing. Only the completion's own lineage can be its predecessor.
+  local request="$1"
+  local completion="$2"
+  jq -c --argjson completion "$completion" '
+    try (
+      [
+        .observation.heads[]
+        | select(
+          .carrier == $completion.carrier.number
+          and .producer == $completion.producer.login
+          and .workstream_anchor == $completion.workstream.anchor
+        )
+        | .revision_id
+      ]
+    ) catch []
+  ' <<<"$request"
+}
+
 _git_loopy_continuation_validate_observation() {
   local request="$1"
   local repository="$2"
-  local result token_source expected_token
+  local completion="$3"
+  local result token_source expected_token lineage_parents
+  lineage_parents="$(
+    _git_loopy_continuation_observed_lineage_heads "$request" "$completion"
+  )"
   result="$(
-    jq -c '
+    jq -c --argjson lineage_parents "$lineage_parents" '
       def digest: test("\\A[0-9a-f]{64}\\z");
       if (
         (.observation | type == "object")
@@ -807,7 +833,7 @@ _git_loopy_continuation_validate_observation() {
           | ($ids | unique | length) == ($ids | length)
         )
         and (.parents | type == "array")
-        and (.parents == [.observation.heads[].revision_id])
+        and (.parents == $lineage_parents)
       ) then
         {ok:true}
       else
@@ -819,8 +845,8 @@ _git_loopy_continuation_validate_observation() {
     GIT_LOOPY_CONTINUATION_VALIDATION_ERROR="$(
       if ! jq -e '.observation | type == "object"' <<<"$request" >/dev/null 2>&1; then
         printf '%s' "observation must be an object"
-      elif ! jq -e '.parents == [.observation.heads[].revision_id]' \
-        <<<"$request" >/dev/null 2>&1; then
+      elif ! jq -e --argjson lineage_parents "$lineage_parents" \
+        '.parents == $lineage_parents' <<<"$request" >/dev/null 2>&1; then
         printf '%s' "parents must name the observed heads in order"
       else
         printf '%s' "observation is outside the supported immutable revision contract"
@@ -1865,7 +1891,8 @@ _git_loopy_continuation_publish() {
   fi
 
   if ((protocol)); then
-    if ! _git_loopy_continuation_validate_observation "$request" "$repository"; then
+    if ! _git_loopy_continuation_validate_observation \
+      "$request" "$repository" "$completion"; then
       _git_loopy_continuation_error \
         "publish" \
         "invalid_request" \
