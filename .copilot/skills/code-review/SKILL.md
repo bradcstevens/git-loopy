@@ -12,11 +12,17 @@ Both axes run as **parallel sub-agents** so they don't pollute each other's cont
 
 The issue tracker should have been provided to you — run `/setup-agent-skills` if `docs/agents/issue-tracker.md` is missing.
 
+This skill is the **Transition owner** for the review transition. Every review it publishes is one `Review head` **Action occurrence** pinned to one exact durable head, and its outcome is either an `Address review findings` successor or a `Publish head` successor.
+
 ## Process
 
-### 1. Pin the fixed point
+### 1. Pin the fixed point and the reviewed head
 
 Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+
+Resolve the **reviewed head** with `git rev-parse HEAD` and record it. That SHA — not the branch name, not the ticket, not the session — is this review occurrence's identity. A review is only reviewable when the candidate is already committed: a dirty worktree, an in-progress merge or rebase, or unstaged work means there is no exact head to pin, so stop and say what has to be committed first.
+
+Because the occurrence is the head, a review result never transfers to another head. When the head has moved since a prior review — remediation commits, a rebase, an amend, or a conflict resolution — that prior occurrence is retired and this is a **new** `Review head` occurrence that must be performed from scratch. Never reuse, inherit, or carry forward a prior review's completion.
 
 Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
@@ -84,6 +90,45 @@ The report uses **Tailwind via CDN** for layout and styling, and renders the two
 See [HTML-REPORT.md](HTML-REPORT.md) for the full HTML scaffold, palette, finding-card anatomy, and styling guidance.
 
 End with a one-line summary in the chat as well as in the report footer: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+
+### 6. Publish the review transition
+
+The review of that exact head is now durable, so publish its semantic delta.
+
+First check that publication is available at all. `git-loopy continuation capabilities` reports `operations.publish`; that capability — not the Continuation *mode*, which is a Run-level automation setting and never a publication feature flag — decides whether there is a native command to publish through. When the command is absent or reports `publish` unsupported, report the review result and the successor now due, and stop. That is an absent capability, not a failure.
+
+Then record the transition's own durable evidence. `transition.evidence` accepts `issue-comment` references only, so post one comment on the ticket or pull request carrying the review outcome and the reviewed head, and reference that comment. The report file and the head are not transition evidence; they are the Action's `basis` and `target`.
+
+Publish with the native command, reading the one JSON completion envelope from a file:
+
+```bash
+git-loopy continuation publish --input <request.json>
+```
+
+The envelope carries `"transition": {"owner": "code-review", "evidence": [<that issue-comment>]}` and exactly one successor for that head:
+
+- **Findings exist** → one `Address review findings` Action. Its **Basis** is the durable findings themselves — the comment, the report, and the quoted hunks, cited per finding — not "the review said so". Its `occurrence` names the reviewed head, its `target` is the ticket or branch under remediation, and its `instruction` is `/implement`. Publish it together with the new `Review head` Action it returns to, in one fragment, so its `completion_condition` can be an `action-completed` reference to that sibling's key — a local reference must name another Action in the same fragment and may never name itself. Remediation produces a changed head, which retires this occurrence and requires a **new** `Review head` Action against the new head. Publish that return edge explicitly: findings never end the lifecycle at remediation.
+- **Clean, and the reviewed head is not yet published** → one `Publish head` Action targeting that exact head, with `/push` as its Instruction and a `branch-head-equals` completion condition naming the branch and the reviewed SHA, which is exactly what the push will make true. A clean review authorizes publication of *this* head only; publishing any other head does not inherit it.
+- **Clean, and the reviewed head is already published unchanged** → there is no successor to add. That is still a recognized durable transition, so publish a shared `no-guidance` completion with reason `no-successor-created` rather than publishing nothing: "nothing follows" is a claim this transition owes the record.
+
+Every Action carries exactly one interaction classification and its evidence: `AFK-safe` with a `transition-owner-attestation` whose `owner` matches `completion.transition.owner`, or `HITL-required` with a complete `human-boundary` — `kind`, `reason`, and a durable typed `resolution_condition`. An incomplete boundary is rejected, not treated leniently.
+
+Choose every completion condition from the contract's registry, and only one that is **not already satisfied when the Action is published**: an Action reconciliation completes on its first read has been published dead.
+
+Retiring the prior review occurrence is provable only on the immutable-revision chain. Call `reconcile` with `revision_protocol: true`, pass its exact `observation` and ordered `parents` to `publish`, and carry one `completion.retirements` receipt naming the `predecessor_revision_id`, the retired `action_key`, and a `reason` of `completed` or `supersession`. The recurrence must carry a **distinct** `occurrence`; re-declaring the retired one is the same occurrence and proves no retirement.
+
+A review that is session-only advice — no committed head, or a head the user asked you not to record — is `ephemeral-only`. Render it and stop; it never becomes shared guidance.
+
+### 7. Treat a failed publication as repair required
+
+The review of that head happened whether or not publication succeeded, so a failure after it strands real evidence. A rejected, errored, or `repair_required` receipt is reported as **repair required**, naming the reviewed head, the transition owner, and the operation that failed. Never fall back to session-only advice and never report a success-shaped result: a missing Producer revision must not look like a completed review.
+
+### Human boundaries this skill does not cross
+
+A finding that needs a person is published as its own hard-HITL Action, never resolved inside the review:
+
+- Authority the session does not already hold — a login, MFA prompt, new token or secret, an OAuth consent screen, or a permission or scope expansion needed to read a private dependency, a protected branch, or a required check — is an `Authorize operation` Action, always `HITL-required`, carrying a complete `human-boundary` whose `reason` is `credential-required`, `consent-required`, or `privilege-expansion` and whose `resolution_condition` is a durable typed condition. Never prompt for or work around that boundary while unattended.
+- Subjective acceptance the two axes cannot settle stays a `Perform manual validation` Action owned by the implementation transition, `HITL-required` with a `subjective-validation` boundary; do not restate it as a standards finding.
 
 ## Why two axes
 

@@ -1,0 +1,348 @@
+diff --git a/.copilot/skills/code-review/SKILL.md b/.copilot/skills/code-review/SKILL.md
+index ffc9369..db846ed 100644
+--- a/.copilot/skills/code-review/SKILL.md
++++ b/.copilot/skills/code-review/SKILL.md
+@@ -12,12 +12,18 @@ Both axes run as **parallel sub-agents** so they don't pollute each other's cont
+ 
+ The issue tracker should have been provided to you — run `/setup-agent-skills` if `docs/agents/issue-tracker.md` is missing.
+ 
++This skill is the **Transition owner** for the review transition. Every review it publishes is one `Review head` **Action occurrence** pinned to one exact durable head, and its outcome is either an `Address review findings` successor or a `Publish head` successor.
++
+ ## Process
+ 
+-### 1. Pin the fixed point
++### 1. Pin the fixed point and the reviewed head
+ 
+ Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+ 
++Resolve the **reviewed head** with `git rev-parse HEAD` and record it. That SHA — not the branch name, not the ticket, not the session — is this review occurrence's identity. A review is only reviewable when the candidate is already committed: a dirty worktree, an in-progress merge or rebase, or unstaged work means there is no exact head to pin, so stop and say what has to be committed first.
++
++Because the occurrence is the head, a review result never transfers to another head. When the head has moved since a prior review — remediation commits, a rebase, an amend, or a conflict resolution — that prior occurrence is retired and this is a **new** `Review head` occurrence that must be performed from scratch. Never reuse, inherit, or carry forward a prior review's completion.
++
+ Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+ 
+ Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
+@@ -85,6 +91,35 @@ See [HTML-REPORT.md](HTML-REPORT.md) for the full HTML scaffold, palette, findin
+ 
+ End with a one-line summary in the chat as well as in the report footer: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+ 
++### 6. Publish the review transition
++
++The review of that exact head is now durable, so publish its semantic delta with the native command, reading the one JSON completion envelope from a file:
++
++```bash
++git-loopy continuation publish --input <request.json>
++```
++
++The envelope carries `"transition": {"owner": "code-review", ...}` with the reviewed head and the report as its evidence, and exactly one successor for that head:
++
++- **Findings exist** → one `Address review findings` Action. Its **Basis** is the durable findings themselves — the report and the quoted hunks, cited per finding — not "the review said so". Its `occurrence` names the reviewed head, its `target` is the ticket or branch under remediation, and its `instruction` is `/implement`. Its completion condition is machine-evaluable, not prose: a `commit-exists` condition against the remediation head, or an `action-completed` reference to the new review Action in the same fragment. Remediation produces a changed head, which retires this occurrence and requires a **new** `Review head` Action against the new head. Publish that return edge explicitly: findings never end the lifecycle at remediation.
++- **Clean, and the reviewed head is not yet published** → one `Publish head` Action targeting that exact head, with `/push` as its Instruction and a `branch-head-equals` Prerequisite proving the branch still resolves to the reviewed head. A clean review authorizes publication of *this* head only; publishing any other head does not inherit it.
++- **Clean, and the reviewed head is already published unchanged** → publish nothing new here. Publication's own successor is `/push`'s transition, and the existing Action already covers it.
++
++A review that is session-only advice — no committed head, or a head the user asked you not to record — is `ephemeral-only`. Render it and stop; it never becomes shared guidance.
++
++When the repository has no native `git-loopy continuation` command, or its Continuation mode is `off`, there is no carrier to publish to. Report the review result and the successor that is now due, and stop. That is an absent capability, not a failure.
++
++### 7. Treat a failed publication as repair required
++
++The review of that head happened whether or not publication succeeded, so a failure after it strands real evidence. A rejected, errored, or `repair_required` receipt is reported as **repair required**, naming the reviewed head, the transition owner, and the operation that failed. Never fall back to session-only advice and never report a success-shaped result: a missing Producer revision must not look like a completed review.
++
++### Human boundaries this skill does not cross
++
++A finding that needs a person is published as its own hard-HITL Action, never resolved inside the review:
++
++- Authority the session does not already hold — a login, MFA prompt, new token or secret, an OAuth consent screen, or a permission or scope expansion needed to read a private dependency, a protected branch, or a required check — is an `Authorize operation` Action, always `HITL-required`. Never prompt for or work around that boundary while unattended.
++- Subjective acceptance the two axes cannot settle stays a `Perform manual validation` Action owned by the implementation transition; do not restate it as a standards finding.
++
+ ## Why two axes
+ 
+ A change can pass one axis and fail the other:
+diff --git a/.copilot/skills/implement/SKILL.md b/.copilot/skills/implement/SKILL.md
+index 7a0b11f..9133335 100644
+--- a/.copilot/skills/implement/SKILL.md
++++ b/.copilot/skills/implement/SKILL.md
+@@ -4,12 +4,133 @@ description: "Implement a piece of work based on a spec or set of tickets."
+ disable-model-invocation: true
+ ---
+ 
+-Implement the work described by the user in the spec or tickets.
++# Implement the Ticket
+ 
+-Use /tdd where possible, at pre-agreed seams.
++This skill is the **Transition owner** for the implementation transition. It
++performs an `Implement ticket` or `Address review findings` Action, produces a
++committed candidate, and publishes the `Review head` successor pinned to that
++exact head. Writing a candidate is not ticket completion, and this skill never
++reviews its own head.
+ 
+-Run typechecking regularly, single test files regularly, and the full test suite once at the end.
++## 1. Establish the ticket and its durable Target
+ 
+-Once done, use /code-review to review the work.
++Read `docs/agents/issue-tracker.md`, then refresh the live state of the ticket
++in scope: its state, labels, dependencies, parent, and any review findings
++already recorded against an earlier head. Note the branch and its current head.
+ 
+-Commit your work to the current branch.
++Ticket text that only *asserts* readiness is not durable **Basis**. A ticket
++whose scope is ambiguous, whose acceptance is a matter of taste, or whose
++prerequisites are unmet is not implementable here — say so and stop rather than
++inventing the missing decision.
++
++This step is complete when the ticket, its branch, its starting head, and any
++outstanding findings are known from their durable sources.
++
++## 2. Implement and validate
++
++Implement the work. Use `/tdd` at pre-agreed seams, and `/diagnosing-bugs` for a
++defect that needs a reproducing signal first. Consult `/codebase-design` before
++a new module boundary and `/domain-modeling` for vocabulary.
++
++Those nested skills are **pointer-only participants**: they return tests,
++findings, diagrams, decisions, or references to this transition. They publish no
++shared guidance of their own, and neither does `/handoff`.
++
++Run the repository's own checks — typecheck and single test files as you go, the
++full suite once at the end. Every automated check that covers the change must
++pass before the candidate is committed. Failing or unrun validation is not a
++finding for review to catch; it is unfinished implementation.
++
++This step is complete when the work satisfies the ticket's acceptance criteria
++and every automated check covering it passes.
++
++## 3. Commit the candidate
++
++Stage exactly the intended paths and commit. The commit is the durable evidence
++the review transition is pinned to, so it happens **before** any review Action
++exists. Record the resulting head with `git rev-parse HEAD`.
++
++This step is complete when `HEAD` is a new commit containing the whole candidate
++and the working tree carries no unstaged part of it.
++
++## 4. Publish the Review head transition
++
++The durable transition has now happened: a candidate exists at an exact head.
++Publish the successor with the native command, reading the one JSON completion
++envelope from a file:
++
++```bash
++git-loopy continuation publish --input <request.json>
++```
++
++The envelope carries `"transition": {"owner": "implement", ...}` with the commit
++as its evidence, and one Action:
++
++- `kind`: `Review head`;
++- `occurrence`: the exact head SHA, so a later head is a **new Action
++  occurrence** rather than a reuse of this one;
++- `target`: the `commit` just made;
++- `basis`: the ticket and that commit;
++- `instruction`: `/code-review <head>`;
++- `completion_condition`: an `action-completed` or `commit-exists` condition
++  against that head.
++
++Never publish a `Review head` Action whose occurrence names a head that does not
++exist yet, and never republish an unchanged head — the prior occurrence still
++covers it.
++
++When the repository has no native `git-loopy continuation` command, or its
++Continuation mode is `off`, there is no carrier to publish to. Report the
++committed head and the review that is now due, and stop. That is an absent
++capability, not a failure.
++
++This step is complete when the receipt is committed, or the absence of the
++capability has been reported.
++
++## 5. Treat a failed publication as repair required
++
++The candidate commit is durable whether or not publication succeeds, so a
++failure after it strands real evidence. A rejected, errored, or `repair_required`
++receipt is reported as **repair required**, naming the head, the transition
++owner, and the operation that failed.
++
++Never retry by mutating the candidate, never fall back to session-only advice,
++and never report the iteration as complete. A missing Producer revision must not
++look like successful completion.
++
++This step is complete when a failed publication has been reported as repair
++required and no success-shaped result has been claimed.
++
++## 6. Route the human boundaries out of the AFK-safe path
++
++Some of the ticket's work is not this skill's to do, and hiding it inside an
++AFK-safe implementation is what makes an unattended Run wrong rather than slow.
++Publish these as their own Actions instead:
++
++- **Subjective acceptance** — "does this feel right", visual judgement, a device
++  or hardware check, or any acceptance no automated check can settle. Publish a
++  `Perform manual validation` Action. It is always `HITL-required`, carries a
++  `human-boundary` evidence with reason `subjective-validation`, and is never
++  folded into the implementation Action's completion condition.
++- **Authority the Run does not already hold** — a login, MFA prompt, new token
++  or secret, an OAuth consent screen, a permission or scope expansion, or any
++  approval that widens what the Run may touch. Publish an `Authorize operation`
++  Action. It is always `HITL-required`, with a `human-boundary` reason of
++  `credential-required`, `consent-required`, or `privilege-expansion` and a
++  durable resolution condition.
++
++Unattended execution never prompts for login, MFA, secrets, consent, or
++privilege expansion, and never works around the boundary with a stored or
++guessed credential. It stops at the boundary and lets the published Action carry
++it to a human.
++
++This step is complete when every human-judgement and authority boundary the
++ticket met is a separate hard-HITL Action rather than a step inside the
++implementation.
++
++## 7. Report
++
++Report the committed head, the checks that passed, the published Review head
++occurrence, and any hard-HITL Action the ticket produced. Review of that head is
++`/code-review`'s transition, and publication is `/push`'s; this skill performs
++neither.
+diff --git a/.copilot/skills/push/SKILL.md b/.copilot/skills/push/SKILL.md
+index 3cf935e..8c1abf4 100644
+--- a/.copilot/skills/push/SKILL.md
++++ b/.copilot/skills/push/SKILL.md
+@@ -10,6 +10,12 @@ Treat invocation as approval to persist the work in scope from the current
+ conversation. Preserve unrelated worktree changes. Honor any commit message,
+ remote, base branch, or pull-request preference supplied by the user.
+ 
++This skill is the **Transition owner** for the publication transition. It
++performs a `Publish head` Action and, once the branch is durably published,
++publishes the hard-HITL `Review and merge PR` successor. A push is not
++implementation completion and never closes a ticket or its parent as a side
++effect.
++
+ ## 1. Establish the publication state
+ 
+ Inspect:
+@@ -86,10 +92,81 @@ non-GitHub remote makes a pull request inapplicable.
+ This step is complete when the pull-request URL is known or its inapplicability
+ is established.
+ 
+-## 7. Report the durable result
+-
+-Report the commit SHA and subject, remote branch, pull-request URL or status, and
+-any unrelated changes left in the worktree.
+-
+-Publication is complete only when the remote branch matches local `HEAD` and the
+-pull-request requirement is resolved.
++## 7. Publish the publication transition
++
++Only now — with the remote branch actually resolving to the pushed head and the
++pull-request question answered — does the durable transition exist. Publish its
++semantic delta with the native command, reading the one JSON completion envelope
++from a file:
++
++```bash
++git-loopy continuation publish --input <request.json>
++```
++
++The envelope carries `"transition": {"owner": "push", ...}` with the pushed head,
++the remote branch, and the pull request as its evidence. Publish the `Publish
++head` Action as completed against that head, then exactly one successor:
++
++- **Non-default branch on a GitHub remote** → one `Review and merge PR` Action
++  targeting the pull request. It is always `HITL-required` and carries a
++  `human-boundary` evidence with reason `human-decision`. Its Prerequisites are
++  the durable, machine-evaluable ones: required checks passing, the required
++  approval as a `pull-request-review-state` condition of `approved`, no
++  conflicts with the base, and a `branch-head-equals` condition proving the PR
++  head is still the exact clean reviewed head. Its completion condition is
++  `pull-request-merged`. Never merge, approve, or auto-merge it yourself.
++- **The push changed the head** — an amend, a rebase, a squash, or new commits
++  on top of the reviewed one → the prior review occurrence is retired and a new
++  `Review head` Action against the new head is the successor. A pull request
++  whose head has moved past the reviewed head does not inherit that review, so
++  publish the review edge before, or instead of, the merge edge.
++- **Default-branch push or a non-GitHub remote** → a pull request is
++  inapplicable; publish no `Review and merge PR` Action.
++
++Publish nothing before the evidence exists: no `Publish head` completion for a
++push the remote rejected, and no `Review and merge PR` Action for a pull request
++that was never created.
++
++Publication is not ticket completion. A merged pull request plus durable
++ticket-completion evidence completes the implementation **Workstream**; a closed
++but unmerged pull request never counts as success. Leave the ticket's own
++closure to that evidence, and leave parent cleanup alone: closing the last child
++neither closes its parent nor proves the parent's **Destination**. Parent
++cleanup is an independent, low-priority Successor **Workstream** carried by a
++separate `Close parent` Action that `/triage` owns. It never blocks this
++publication and this publication never performs it.
++
++When the repository has no native `git-loopy continuation` command, or its
++Continuation mode is `off`, there is no carrier to publish to. Report the
++durable result below and stop. That is an absent capability, not a failure.
++
++## 8. Treat a failed publication as repair required
++
++The commit, the pushed branch, and the pull request are durable whether or not
++publication succeeded, so a failure after them strands real evidence. A rejected,
++errored, or `repair_required` receipt is reported as **repair required**, naming
++the pushed head, the remote branch, the pull request, and the operation that
++failed. Never re-push to "retry", never fall back to session-only advice, and
++never report a success-shaped result.
++
++## 9. Report the durable result
++
++Report the commit SHA and subject, remote branch, pull-request URL or status, the
++published successor, and any unrelated changes left in the worktree.
++
++Publication is complete only when the remote branch matches local `HEAD`, the
++pull-request requirement is resolved, and the successor is published or its
++absence explained.
++
++## Human boundaries this skill does not cross
++
++Authority the session does not already hold — a login, MFA prompt, new token or
++secret, an OAuth consent or SSO authorization screen, a protected-branch
++override, or any permission or scope expansion — is published as an
++`Authorize operation` Action, always `HITL-required`, with a `human-boundary`
++reason of `credential-required`, `consent-required`, or `privilege-expansion` and
++a durable resolution condition. Unattended execution never prompts for login,
++MFA, secrets, consent, or privilege expansion, and never works around the
++boundary with a stored or guessed credential. A force push is the same kind of
++boundary: it needs separate, explicit human approval and is never taken
++unattended.
+diff --git a/.copilot/skills/resolving-merge-conflicts/SKILL.md b/.copilot/skills/resolving-merge-conflicts/SKILL.md
+index aadb3fc..5f99fba 100644
+--- a/.copilot/skills/resolving-merge-conflicts/SKILL.md
++++ b/.copilot/skills/resolving-merge-conflicts/SKILL.md
+@@ -3,7 +3,13 @@ name: resolving-merge-conflicts
+ description: "Use when you need to resolve an in-progress git merge/rebase conflict."
+ ---
+ 
+-1. **See the current state** of the merge/rebase. Check git history, and the conflicting files.
++# Resolve the Conflict
++
++This skill is the **Transition owner** for conflict resolution. It performs a
++`Resolve conflict` Action and, because resolution always produces a different
++head, publishes a **new** `Review head` occurrence against it.
++
++1. **See the current state** of the merge/rebase. Check git history, and the conflicting files. Record the pre-resolution head and the operation in flight (`git status`, `MERGE_HEAD`/`REBASE_HEAD`).
+ 
+ 2. **Find the primary sources** for each conflict. Understand deeply why each change was made, and what the original intent was. Read the commit messages, check the PRs, check original issues/tickets.
+ 
+@@ -12,3 +18,19 @@ description: "Use when you need to resolve an in-progress git merge/rebase confl
+ 4. Discover the project's **automated checks** and run them — typically typecheck, then tests, then format. Fix anything the merge broke.
+ 
+ 5. **Finish the merge/rebase.** Stage everything and commit. If rebasing, continue the rebase process until all commits are rebased.
++
++6. **Publish the resolution transition.** Only now — with the merge or rebase actually finished and a new commit reachable from `HEAD` — does the durable transition exist. Resolve the new head with `git rev-parse HEAD` and publish with the native command, reading the one JSON completion envelope from a file:
++
++   ```bash
++   git-loopy continuation publish --input <request.json>
++   ```
++
++   The envelope carries `"transition": {"owner": "resolving-merge-conflicts", ...}` with the resolution commit as its evidence. Publish the `Resolve conflict` Action as completed against that commit, and one new `Review head` Action whose `occurrence` is the **new** head and whose completion condition is a machine-evaluable `commit-exists` condition against it.
++
++   A resolved head is a changed head, so the prior review occurrence is retired and cannot be reused — even when the resolution was purely mechanical, even when the resolution was `--ours`, and even when the tree matches a previously reviewed one. Never inherit a prior review's completion, and never publish while a conflict is still in flight, the index still has unmerged paths, or the rebase has commits left to apply: an unfinished operation has no durable git evidence to publish from.
++
++   When the repository has no native `git-loopy continuation` command, or its Continuation mode is `off`, there is no carrier to publish to. Report the resolved head and the review now due, and stop. That is an absent capability, not a failure.
++
++7. **Treat a failed publication as repair required.** The resolution commit is durable whether or not publication succeeded. A rejected, errored, or `repair_required` receipt is reported as **repair required**, naming the resolved head and the operation that failed. Never re-resolve to "retry", never fall back to session-only advice, and never report a success-shaped result.
++
++**Human boundaries.** A conflict that turns on a decision no diff can settle — which product behaviour is intended, which of two incompatible designs wins — is not yours to invent: stop and report it. Authority the session does not hold (a login, MFA prompt, new token or secret, consent screen, or permission expansion needed to read a fork, a protected branch, or a private submodule) is an `Authorize operation` Action, always `HITL-required`. Unattended execution never prompts for or works around that boundary.
