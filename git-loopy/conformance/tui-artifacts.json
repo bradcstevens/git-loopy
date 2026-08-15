@@ -80,7 +80,7 @@
       "runner": "ubuntu-22.04",
       "build": "cross",
       "container": "ghcr.io/rust-cross/manylinux2014-cross:aarch64",
-      "packages_install": "pip3 install cargo-zigbuild",
+      "packages_install": "python3 -m pip install cargo-zigbuild ziglang",
       "requires_tool": "cargo-zigbuild"
     },
     {
@@ -102,7 +102,7 @@
       "runner": "ubuntu-22.04",
       "build": "cross",
       "container": "messense/rust-musl-cross:aarch64-musl",
-      "packages_install": "pip3 install cargo-zigbuild",
+      "packages_install": "python3 -m pip install cargo-zigbuild ziglang",
       "requires_tool": "cargo-zigbuild"
     },
     {
