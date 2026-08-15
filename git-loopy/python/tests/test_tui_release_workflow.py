@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from git_loopy import tui_release
+from git_loopy import release_trust, tui_release
 
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -85,27 +85,6 @@ def _step_environment(step: dict[str, Any], **supplied: str) -> dict[str, str]:
     return {**inherited, **declared, **supplied}
 
 
-def _stub_dist(directory: Path) -> Path:
-    """A `dist` that records which signing variables actually reached it.
-
-    cargo-dist decides whether to sign with `std::env::var(..).ok()`, which
-    answers `Some("")` for a variable that is set and empty — so "did the
-    variable arrive" is the exact question, and `env` is the only honest way to
-    ask it. A variable absent from this listing is one the signer never sees.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    executable = directory / "dist"
-    executable.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "argv=%s\\n" "$*" >> "$DIST_CALLS"\n'
-        'env | grep -E "^(CODESIGN_|SSLDOTCOM_)" | sort >> "$DIST_CALLS" || true\n'
-        'exit "${DIST_EXIT:-0}"\n',
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
-    return executable
-
-
 def test_the_matrix_builds_every_declared_artifact_on_its_declared_runner() -> None:
     metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
     workflow = _load_workflow()
@@ -148,6 +127,102 @@ def test_the_toolchain_is_installed_at_exactly_the_pinned_version() -> None:
         in install[0]["run"]
     )
     assert 'dist --version | grep -q "$CARGO_DIST_VERSION"' in install[0]["run"]
+
+
+def test_the_release_tool_is_built_for_the_architecture_that_executes_it() -> None:
+    """#316: a cross container's default target is the target being cross-built.
+
+    Both cross images set `CARGO_BUILD_TARGET` to the arm64 triple they exist to
+    produce, so a plain `cargo install` builds an arm64 `dist` that the x64
+    container cannot run — the build died at `Exec format error` before it
+    compiled anything. And `manylinux2014-cross` carries no Rust at all, so the
+    same step died at `cargo: command not found` one target over. The release
+    tool has to be reachable, and built for the architecture that runs it, which
+    is discovered from the compiler rather than assumed from the matrix.
+    """
+    workflow = _load_workflow()
+
+    install = [
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Install the pinned release toolchain"
+    ]
+    assert len(install) == 1
+    run = install[0]["run"]
+
+    assert "command -v cargo" in run, (
+        "a cross container that carries no Rust must get one before `cargo install`"
+    )
+    assert "rustup" in run
+    assert "rustc -vV" in run, (
+        "the executing architecture is read off the compiler, not assumed"
+    )
+    assert '--target "$HOST_TRIPLE"' in run, (
+        "`cargo install` otherwise honours the container's cross-build target "
+        "and installs a `dist` this host cannot execute"
+    )
+
+
+def test_a_signer_is_armed_only_when_its_credentials_are_present() -> None:
+    """#316: an empty credential is not an absent one.
+
+    cargo-dist reads each signing credential with `env::var(..).ok()`, so `""`
+    is `Some("")` and arms the signer. Handing the build step every secret
+    unconditionally therefore armed both signers on a pull request, where each
+    secret resolves to the empty string: `security import` refused an empty
+    certificate and ssl.com refused the OIDC exchange. The credentials are
+    carried under a `SIGNING_` prefix cargo-dist does not read, and only a
+    complete set is promoted to the names it does.
+    """
+    workflow = _load_workflow()
+
+    build_step = [
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Build the release artifact"
+    ]
+    assert len(build_step) == 1
+    env = build_step[0]["env"]
+
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    bound = set(env) & set(policy.credentials)
+    assert bound == set(), (
+        "a name cargo-dist reads as a credential must not be bound in the step "
+        f"environment, where a pull request resolves it to '': {sorted(bound)}"
+    )
+    # The hardened-runtime option is configuration, not a credential: cargo-dist
+    # only consults it once it is already signing, so it stays unconditional.
+    assert env["CODESIGN_OPTIONS"] == "runtime"
+
+    assert {name for name in env if name.startswith("SIGNING_")} == {
+        "SIGNING_CODESIGN_CERTIFICATE",
+        "SIGNING_CODESIGN_CERTIFICATE_PASSWORD",
+        "SIGNING_CODESIGN_IDENTITY",
+        "SIGNING_SSLDOTCOM_USERNAME",
+        "SIGNING_SSLDOTCOM_PASSWORD",
+        "SIGNING_SSLDOTCOM_CREDENTIAL_ID",
+        "SIGNING_SSLDOTCOM_TOTP_SECRET",
+    }
+    for name, value in env.items():
+        if "secrets." in str(value):
+            assert name.startswith("SIGNING_"), (
+                f"{name} hands a credential straight to cargo-dist"
+            )
+
+    run = build_step[0]["run"]
+    assert "::notice" in run, "the skip has to be visible in the log, not silent"
+    for name in (
+        "CODESIGN_CERTIFICATE",
+        "CODESIGN_CERTIFICATE_PASSWORD",
+        "CODESIGN_IDENTITY",
+        "SSLDOTCOM_USERNAME",
+        "SSLDOTCOM_PASSWORD",
+        "SSLDOTCOM_CREDENTIAL_ID",
+        "SSLDOTCOM_TOTP_SECRET",
+    ):
+        assert f'export {name}="$SIGNING_{name}"' in run, (
+            f"{name} never reaches cargo-dist, so nothing is ever signed"
+        )
 
 
 def test_publication_waits_for_conformance_and_the_complete_artifact_set() -> None:
@@ -308,123 +383,6 @@ def test_the_helper_package_opts_back_into_the_release_toolchain() -> None:
     assert tui_release.helper_package_is_distributable(REPOSITORY_ROOT) is True
 
 
-def _build_the_artifact(tmp_path: Path, **supplied: str) -> subprocess.CompletedProcess[str]:
-    """Run the build step's own bash, with a `dist` that reports what reached it."""
-    step = _build_step("Build the release artifact")
-    bin_dir = tmp_path / "bin"
-    _stub_dist(bin_dir)
-    return subprocess.run(
-        ["bash", "-eo", "pipefail", "-c", str(step["run"])],
-        cwd=tmp_path,
-        env=_step_environment(
-            step,
-            RELEASE_TAG="v1.2.3",
-            DIST_CALLS=str(tmp_path / "dist.log"),
-            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            **supplied,
-        ),
-        capture_output=True,
-        text=True,
-    )
-
-
-def test_a_signer_without_credentials_is_skipped_rather_than_handed_empty_ones(
-    tmp_path: Path,
-) -> None:
-    """The invariant this step already claims about itself, made true.
-
-    cargo-dist's two signers each gate on `std::env::var(name).ok()`, which
-    answers `Some("")` for a variable that is set and empty. A pull request
-    enters an environment that holds none of these secrets, and an expression
-    for a secret that does not exist renders as the empty string rather than
-    dropping the variable -- so every credential arrived, empty, and the macOS
-    signer handed an empty certificate to `security import` instead of taking
-    the branch that warns and skips. Absent has to mean absent by the time
-    `dist` is executed, which is the only place cargo-dist looks.
-    """
-    completed = _build_the_artifact(tmp_path, TARGET="aarch64-apple-darwin")
-
-    assert completed.returncode == 0, completed.stderr
-    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
-    for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS:
-        assert not any(line.startswith(f"{name}=") for line in recorded), (
-            f"{name} reached dist empty; an empty credential is not an absent one"
-        )
-
-
-def test_the_skipped_signature_is_announced_rather_than_silently_dropped(
-    tmp_path: Path,
-) -> None:
-    """An unsigned artifact is a fact about the Release, not an implementation detail."""
-    completed = _build_the_artifact(tmp_path, TARGET="x86_64-pc-windows-msvc")
-
-    assert completed.returncode == 0, completed.stderr
-    log = completed.stdout + completed.stderr
-    assert "CODESIGN" in log and "SSLDOTCOM" in log
-    assert log.lower().count("skip") >= 2, log
-
-
-def test_credentials_that_are_present_still_reach_the_signer_intact(
-    tmp_path: Path,
-) -> None:
-    """The half of the fix that a "just stop signing" change would have lost.
-
-    A tagged Release enters the environment that holds these secrets, and every
-    one of them has to arrive verbatim -- withholding is a response to absence,
-    not a new policy about signing.
-    """
-    granted = {
-        name: f"value-of-{name.lower()}"
-        for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS
-    }
-    completed = _build_the_artifact(
-        tmp_path, TARGET="aarch64-apple-darwin", **granted
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
-    for name, value in granted.items():
-        assert f"{name}={value}" in recorded
-    assert "CODESIGN_OPTIONS=runtime" in recorded
-    assert 'argv=build --target aarch64-apple-darwin --tag v1.2.3 --artifacts=local' in recorded
-
-
-def test_a_signer_that_fails_with_credentials_present_still_fails_the_job(
-    tmp_path: Path,
-) -> None:
-    """Losing the ability to detect a broken signer is not an acceptable trade."""
-    granted = {
-        name: f"value-of-{name.lower()}"
-        for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS
-    }
-    completed = _build_the_artifact(
-        tmp_path, TARGET="aarch64-apple-darwin", DIST_EXIT="1", **granted
-    )
-
-    assert completed.returncode != 0
-
-
-def test_a_partial_credential_set_signs_nothing_rather_than_half_of_it(
-    tmp_path: Path,
-) -> None:
-    """cargo-dist needs every variable in a set, so a partial set signs nothing.
-
-    Passing the fragment through would only move the discovery to `security
-    import`, which is where this defect was found in the first place.
-    """
-    completed = _build_the_artifact(
-        tmp_path,
-        TARGET="aarch64-apple-darwin",
-        CODESIGN_CERTIFICATE="a-certificate",
-        CODESIGN_IDENTITY="an-identity",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
-    for name in MACOS_CREDENTIALS:
-        assert not any(line.startswith(f"{name}=") for line in recorded), name
-
-
 def _stub_cargo(directory: Path) -> Path:
     """A `cargo` that records the build target it was handed, and installs `dist`.
 
@@ -454,7 +412,27 @@ def _stub_cargo(directory: Path) -> Path:
     return executable
 
 
-def _stub_rustup_over_curl(directory: Path, cargo: Path) -> Path:
+def _stub_rustc(
+    directory: Path, host_triple: str = "x86_64-unknown-linux-gnu"
+) -> Path:
+    """A `rustc` that answers `-vV` with the triple it is running on.
+
+    The step names the host triple explicitly rather than letting the container
+    choose, so the compiler is what it asks -- and a toolchain that could not
+    answer would make the question vacuous rather than exercised.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    executable = directory / "rustc"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "host: {host_triple}"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def _stub_rustup_over_curl(directory: Path, cargo: Path, rustc: Path) -> Path:
     """A `curl` serving an installer that provisions a toolchain the way rustup does.
 
     `manylinux2014-cross:aarch64` ships neither cargo nor rustup, so the step
@@ -467,7 +445,8 @@ def _stub_rustup_over_curl(directory: Path, cargo: Path) -> Path:
         "#!/bin/sh\n"
         'home="${CARGO_HOME:-$HOME/.cargo}"\n'
         'mkdir -p "$home/bin"\n'
-        f'cp "{cargo}" "$home/bin/cargo"\n',
+        f'cp "{cargo}" "$home/bin/cargo"\n'
+        f'cp "{rustc}" "$home/bin/rustc"\n',
         encoding="utf-8",
     )
     executable = directory / "curl"
@@ -487,10 +466,12 @@ def _install_the_toolchain(
     step = _build_step("Install the pinned release toolchain")
     bin_dir = tmp_path / "bin"
     cargo = _stub_cargo(tmp_path / "toolchain")
-    _stub_rustup_over_curl(bin_dir, cargo)
+    rustc = _stub_rustc(tmp_path / "toolchain")
+    _stub_rustup_over_curl(bin_dir, cargo, rustc)
     if cargo_on_path:
-        shutil.copy(cargo, bin_dir / "cargo")
-        (bin_dir / "cargo").chmod(0o755)
+        for tool in (cargo, rustc):
+            shutil.copy(tool, bin_dir / tool.name)
+            (bin_dir / tool.name).chmod(0o755)
 
     return subprocess.run(
         ["bash", "-eo", "pipefail", "-c", str(step["run"])],

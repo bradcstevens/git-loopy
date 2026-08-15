@@ -82,9 +82,12 @@ windows-archive = ".zip"
 # Signing runs *inside* `dist build`, which is the only place it can run: the
 # `.sha256` beside each archive is written afterwards, so a published checksum
 # is a checksum of the signed artifact. Both signers degrade to a warning when
-# their credentials are absent, which is what keeps a pull request buildable —
-# and exactly why `git_loopy.release_trust` proves the signature by asking the
-# artifact rather than by trusting a step that did not fail.
+# their credentials are **absent** — not when they are empty, because cargo-dist
+# reads each one with `env::var(..).ok()` and `""` is a value. The release
+# workflow therefore withholds an incomplete credential set rather than passing
+# it through, which is what keeps a pull request buildable — and exactly why
+# `git_loopy.release_trust` proves the signature by asking the artifact rather
+# than by trusting a step that did not fail.
 macos-sign = true
 ssldotcom-windows-sign = "prod"
 targets = [
