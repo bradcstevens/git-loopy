@@ -497,9 +497,146 @@ run_capability_verification_gate() {
   ((unknown_status != 0)) || fail "an unknown capability profile was answered"
 }
 
+run_family_rollout_gate() {
+  # The family-wide staged rollout gate (#267). A capability manifest describes
+  # capability only, so a member that implements a mode ahead of its siblings
+  # advertises it honestly; what no single manifest can say is whether the family
+  # has *released* that mode. The release is derived here from the fixture's three
+  # `capabilities-<distribution>` scenarios --- each proven by that family adapter
+  # executing its real native entrypoint --- and compared with what the fixture
+  # declares, so the declaration can never claim a release the three manifests do
+  # not support. Every family adapter runs this itself: a distribution must be
+  # able to prove its own release position without a Python runtime present.
+  local derived declared
+  derived="$(
+    jq -S -c '
+      def advertised_manifests:
+        [ .scenarios[]
+          | select(.id | startswith("capabilities-"))
+          | {key: .distributions[0], value: .expected.stdout.capabilities}
+        ]
+        | from_entries;
+      def forbidden_refusal($capability):
+        {"concurrent_dispatch": "concurrent-dispatch-advertised"}[$capability]
+        // "unknown-forbidden-capability";
+      def stage_closed($stage; $refusal):
+        {
+          mode: $stage.mode,
+          released: false,
+          blocking_distributions: [],
+          refusal: $refusal
+        };
+      .family_rollout as $rollout
+      | $rollout.mandatory_distributions as $mandatory
+      | advertised_manifests as $manifests
+      | reduce $rollout.stages[] as $stage ({released: true, verdicts: []};
+          .released as $earlier
+          | (
+              if ($stage.declared | not)
+              then stage_closed($stage; "stage-undeclared")
+              elif ($earlier | not)
+              then stage_closed($stage; "earlier-stage-unreleased")
+              else
+                ( [ $stage.forbidden_optional_capabilities[]
+                    | . as $capability
+                    | {
+                        capability: $capability,
+                        widened: (
+                          [ $mandatory[]
+                            | select(
+                                ((($manifests[.] // {}).optional_capabilities // {})[$capability])
+                                == true
+                              )
+                          ] | sort
+                        )
+                      }
+                    | select((.widened | length) > 0)
+                  ] ) as $widenings
+                | if ($widenings | length) > 0
+                  then
+                    {
+                      mode: $stage.mode,
+                      released: false,
+                      blocking_distributions: $widenings[0].widened,
+                      refusal: forbidden_refusal($widenings[0].capability)
+                    }
+                  else
+                    ( [ $mandatory[]
+                        | select(
+                            ((($manifests[.] // {}).continuation_modes // {})[$stage.mode])
+                            != true
+                          )
+                      ] | sort ) as $blocking
+                    | {
+                        mode: $stage.mode,
+                        released: (($blocking | length) == 0),
+                        blocking_distributions: $blocking,
+                        refusal: (
+                          if ($blocking | length) > 0
+                          then "distribution-unadvertised"
+                          else ""
+                          end
+                        )
+                      }
+                  end
+              end
+            ) as $verdict
+          | {released: $verdict.released, verdicts: (.verdicts + [$verdict])}
+        )
+      | .verdicts
+    ' "$fixture"
+  )"
+  declared="$(
+    jq -S -c '
+      [ .family_rollout.stages[]
+        | {mode, released, blocking_distributions, refusal}
+      ]
+    ' "$fixture"
+  )"
+  [[ "$derived" == "$declared" ]] || fail \
+    "the declared family rollout disagrees with what the family advertises:"$'\n'"derived:  $derived"$'\n'"declared: $declared"
+
+  # The gate binds this distribution, not only the fixture. Every mode this
+  # distribution advertises must be one the family has released --- a member that
+  # advertised ahead of the gate would hand its adopters a mode the other two
+  # cannot serve, and all three adopters read the same documentation.
+  local advertised_ahead
+  advertised_ahead="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_capabilities |
+      jq -r --argjson rollout "$declared" '
+        [ $rollout[] | select(.released | not) | .mode ] as $unreleased
+        | [ .capabilities.continuation_modes
+            | to_entries[]
+            | select(.key != "default" and .value == true)
+            | .key
+          ] as $advertised
+        | [ $unreleased[] | select(. as $mode | $advertised | index($mode)) ]
+        | join(", ")
+      '
+  )"
+  [[ -z "$advertised_ahead" ]] || fail \
+    "shell advertises modes the family has not released: $advertised_ahead"
+
+  # `off` is never staged and always the default: release is not adoption, and a
+  # rollout that also flipped the default would adopt every adopter's project the
+  # moment the last family member landed.
+  local default_mode
+  default_mode="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_capabilities |
+      jq -r '.capabilities.continuation_modes.default'
+  )"
+  [[ "$default_mode" == "off" ]] || fail \
+    "shell defaults to continuation mode $default_mode rather than off"
+}
+
 run_capability_coverage_gate
 run_capability_verification_gate
 run_end_to_end_coverage_gate
+run_family_rollout_gate
 
 run_transport_probe() {
   local probe_script="$tmp/probe-github-script.json"

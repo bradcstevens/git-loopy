@@ -21,6 +21,14 @@ No Continuation operation may establish a central continuation issue, authoritat
 snapshot, mutable project queue, append-only execution journal, central tombstone ledger, or
 authoritative local cache.
 
+No Continuation operation may infer, convert, or mass-backfill Producer semantics from labels,
+prose, issue or pull-request comments, local files, or conversation history. A Producer's semantics
+come from a durable typed revision that Producer published, and from nothing else. The prohibition
+is not a quality bar on inference — it is the boundary that makes a projection trustworthy at all.
+A record derived from a label is a record its named Producer never wrote, and a Reconciliation
+carrying one would attribute to that Producer a claim it could not be held to. Migration therefore
+has no backfill step (§11).
+
 ## 2. Native command namespace
 
 Every supported distribution exposes:
@@ -71,9 +79,10 @@ flag, or authority to publish or Dispatch.
 At the 1.0 foundation gate, every family member advertised the GitHub Adapter but no supported
 tracker operation. The Python, shell, and PowerShell distributions now advertise their
 capability-gated `publish`/`reconcile` implementations described below. Each family member's native
-manifest remains the declaration of its other capabilities. Report mode, execute-frontier, and
-concurrent Dispatch remain unsupported everywhere; `record-dispatch-result` is supported by every
-family member. Python, shell, and PowerShell now all advertise `terminal_rendering: true`; no family
+manifest remains the declaration of its other capabilities. At that gate report mode,
+execute-frontier, and concurrent Dispatch were unsupported everywhere; `record-dispatch-result` is
+supported by every family member. Python, shell, and PowerShell now all advertise
+`terminal_rendering: true`; no family
 member fails closed on `reconcile --terminal` any longer. Python, shell, and PowerShell advertise
 their trusted immutable-revision protocol and explicit `repair-index`. Mode is `off`.
 
@@ -135,8 +144,9 @@ Contract 1.3 is the revision that satisfies this precondition and advertises
 `continuation_modes.report: true` across Python, shell and PowerShell. The interlock stays an
 implication in the direction it was written: coverage gates the advertisement, and the suite fails
 if `report` is advertised while any locked area is unowned. `default` remains `off` — an adopter
-opts in per §10 — and `execute-frontier` remains `false` in every distribution until it can
-actually dispatch one.
+opts in per §10. `execute-frontier` is advertised by a distribution that can actually dispatch one:
+the Python Runner does and shell and PowerShell do not. Whether the *family* has released the mode
+is a separate question, answered by the staged rollout gate in §11, and today the answer is no.
 
 ## 5. Event observations
 
@@ -219,6 +229,13 @@ closed, in a workflow narrowed for a `capability_coverage` reason — and requir
 `reconcile`, and `record-dispatch-result` all to be exercised. `read_only_call_prefixes` pins the
 read-only shape of Reconciliation against the observed transport for every pinned `reconcile`, so a
 refresh that writes fails on the call it made rather than on the words it printed.
+
+Fixture schema 1.11 adds `family_rollout`, the family-wide staged rollout gate (§11). The block
+declares the ordered stages and the mandatory members; the release state beside each stage is
+derived from the fixture's own three `capabilities-<distribution>` scenarios rather than asserted,
+so the declaration cannot claim a release the three advertised manifests do not support. Every
+family adapter evaluates it, and each also checks that its own manifest advertises no unreleased
+mode and still defaults to `off`.
 
 The same revision retires `unsupported_reconciliation_semantics` from
 `revision_protocol.diagnostic_codes`. The vocabulary is the union across every distribution, and no
@@ -629,10 +646,12 @@ moment that is least true.
 **Configuration narrows; capability fails closed.** An operator asking for less somewhere is
 recorded in `narrowed` and exits `0`. A *distribution* that cannot serve the effective mode is a
 different thing entirely and exits `1` with `unsupported_operation`: the mode is not advertised in
-`continuation_modes`, the tracker adapter is not supported, or the adapter is missing an operation
+`continuation_modes`, the tracker adapter is not supported, the adapter is missing an operation
 the mode requires (`report` requires `reconcile`; `execute-frontier` also requires
-`record-dispatch-result`). Mode `off` consults the manifest at no point, so a distribution that
-supports nothing can still answer honestly that this Run does nothing.
+`record-dispatch-result`), or the family has not released the mode (§11) — which is checked last,
+after this distribution's own advertisement, because capability and release are different claims and
+an operator needs to know which one refused. Mode `off` consults the manifest at no point, so a
+distribution that supports nothing can still answer honestly that this Run does nothing.
 
 **One narrowing implementation, two callers.** The native command and the Python Runner's own
 preflight resolve through the same function. The Runner collects its `continuation_*` config keys
@@ -640,3 +659,98 @@ and `GIT_LOOPY_CONTINUATION_*` environment overrides into three *uncombined* sou
 over; it never pre-merges. A Runner with its own copy of these rules would be projecting a different
 view of the project than the one an operator can ask for by hand — and the copy that drifts is
 always the one nobody runs directly.
+
+## 11. Family-wide staged rollout
+
+§4 is explicit that a capability manifest "describes capability only". A family member that
+implements a mode ahead of its siblings therefore advertises it honestly, and the manifest is not
+the wrong place to say so. What no single manifest can say is whether the **family** has released
+that mode, and the answer matters because all three distributions' adopters read the same
+documentation: a mode shipped in one member and promised to all three is a mode two thirds of the
+adopters find missing.
+
+The rollout is staged, and each stage opens only when every mandatory member — Python, shell and
+PowerShell — can serve it:
+
+| Stage | State | Held by |
+| --- | --- | --- |
+| `report` | Released at contract 1.3 | — |
+| `execute-frontier` | Closed | `shell`, `powershell` (#265, #266) |
+| `concurrent-dispatch` | Undeclared | its own later family-wide capability gate |
+
+**Release is derived, never asserted.** `family_rollout` in
+[`continuation-scenarios.json`](../git-loopy/conformance/continuation-scenarios.json) (fixture
+schema 1.11) declares the stages; the release state beside each one is checked against a derivation
+over the fixture's three `capabilities-<distribution>` scenarios, each proven by that family adapter
+executing its real native entrypoint. This is the same discipline §6's `capability_coverage` applies
+to scenario scoping, for the same reason: two hand-maintained lists kept in sync by discipline alone
+eventually disagree, and the one that drifts is the one nobody reads. Every family adapter evaluates
+the block itself, because a distribution must be able to prove its own release position without a
+Python runtime present.
+
+**Four typed refusals, because "closed" is not an answer an operator can act on.**
+`distribution-unadvertised` names the members with work left. `earlier-stage-unreleased` names none,
+because this stage's own members may all be ready and it is the stage below that is not.
+`concurrent-dispatch-advertised` means a member advertised `concurrent_dispatch` while a serial-only
+stage was being opened. `stage-undeclared` means nobody has staged this release at all — a closure
+that finishing the stage below does not change, which is why it is reported instead of the nearer
+`earlier-stage-unreleased`.
+
+**The gate binds Runs, not only fixtures.** `resolve-authority` refuses an unreleased mode with
+`unsupported_operation`, naming the blocking members, *after* the distribution's own manifest check
+has passed. So the Python Runner — which implements serial fixed-frontier Dispatch and advertises
+`execute-frontier` — still refuses to resolve an authority for it today. Capability present, release
+withheld, which is the whole of what staging means. Resolving it anyway would tell an operator their
+Run is permitted something two of three members cannot do, which is the same failure §9 and §10 fail
+closed against everywhere else.
+
+**Serial first, and concurrency never inferred.** The first `execute-frontier` release is
+serial-only: the stage forbids `concurrent_dispatch`, so a member that advertised it would hold the
+stage closed rather than ship concurrency through a gate reviewed for one Action at a time. Every
+family member advertises `concurrent_dispatch: false`. Concurrent Dispatch has its own later
+family-wide capability gate and is *undeclared*, not merely blocked. Nothing converts an issue's
+`parallel-safe` label plus the Prerequisite, Target and effect-scope checks — which admit **one**
+Action to a Lane — into evidence about Continuation Dispatch in general.
+
+**Release is not adoption.** `continuation_modes.default` stays `off` at every stage. An operator
+opts in per §10, so the last family member to land a stage does not adopt every adopter's project by
+arriving.
+
+### Setup, migration, and recovery
+
+**Selecting and verifying one native distribution.** Setup verifies the distribution that is running
+it (§4, `capability_verification`). There is no entrypoint to resolve and no family member to name:
+the selection is expressed by the invocation and forgotten afterwards, which is precisely how it is
+recorded without committing a host-specific executable path. Every command in this contract resolves
+its tools through `PATH`. An operator who needs a stage the family has not released does not
+hand-edit an advertisement — the verdict names the requirement, and the answer is a distribution
+that meets the profile.
+
+**Capability requirements per stage.** `report` requires the `report` profile: the foundation
+requirements plus `resolve-authority` and the advertised mode. `execute-frontier` adds
+`mode-execute-frontier` and the `fixed_frontier_authorization` optional capability, and requires
+`report` beside it — narrowing is real, and a distribution that advertised only the stronger mode
+would fail closed on the weaker one an operator's project table just narrowed it to.
+
+**Migration has no backfill step.** A legacy Workstream is adopted at exactly the moment its next
+recognized Transition owner publishes the first trusted root for it, and at no moment before. There
+is no conversion pass, no label sweep, and no import: §1 forbids inferring Producer semantics from
+labels, prose, comments, local files, or conversation history, and adoption is the case that
+prohibition exists for. A project therefore migrates one Workstream at a time, as work reaches each
+one, and mixed adopted/unadopted coverage is the normal steady state rather than a transitional
+error.
+
+**Unadopted Workstreams authorize nothing.** Reconciliation projects records; it does not invent
+them, so an unadopted Workstream contributes no Action, no outcome, and no grant. It also cannot be
+counted as finished: `status` is `complete` only when there is at least one discovered lineage, every
+one of them is terminal with a destination-satisfied outcome, and coverage is explicitly closed (§8).
+An empty projection reports `waiting`, never `complete`, precisely so that "nobody has published
+here yet" is never rendered as "everything here is done".
+
+**Failure recovery.** A stage that closes is a stage nothing was ever authorized under, because the
+refusal happens at preflight rather than mid-Run: a Run that discovered mid-flight it could not serve
+its mode would already have behaved like `off` while reporting success. An operator whose mode was
+narrowed reads `narrowed` and `declared_mode` from `resolve-authority` (§10) to see the gap between
+what was configured and what was granted. Discovery metadata that has drifted is repaired with
+`repair-index`, which is a metadata repair and not a semantic one — it never republishes a record or
+invents a Producer's claim.

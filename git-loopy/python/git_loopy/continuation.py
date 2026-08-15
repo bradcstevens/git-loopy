@@ -18,6 +18,7 @@ from git_loopy.gh import (
     GhError,
     SubprocessContinuationGitHubClient,
 )
+from git_loopy import continuation_rollout
 from git_loopy.release_version import read_runtime_release_version
 
 CONTINUATION_CONTRACT_VERSION = "1.3"
@@ -4609,6 +4610,13 @@ def _assert_mode_supported(mode: str, tracker_adapter: str) -> None:
         raise CapabilityUnsupported(
             f"continuation mode {mode} is not supported by this distribution"
         )
+    # Capability is not release. This distribution may implement a mode the family
+    # has not shipped --- that is exactly what a staged rollout produces while it
+    # is being staged --- and resolving an authority for it would tell an operator
+    # their Run is permitted something two of the three members cannot serve.
+    unreleased = continuation_rollout.refusal_detail(mode)
+    if unreleased:
+        raise CapabilityUnsupported(unreleased)
     # Report mode is read-only Reconciliation, so the Adapter must be able to
     # reconcile; a mode advertised over an Adapter that cannot read records would
     # fail during the Run instead of before it.

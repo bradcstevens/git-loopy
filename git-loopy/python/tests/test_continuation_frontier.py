@@ -19,7 +19,43 @@ from typing import Any
 
 import pytest
 
-from git_loopy import config, continuation, continuation_frontier, verification
+from git_loopy import (
+    config,
+    continuation,
+    continuation_frontier,
+    continuation_rollout,
+    verification,
+)
+
+
+@pytest.fixture(autouse=True)
+def _family_has_released_execute_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Judge this Runner against a family that has released the mode (#267).
+
+    Serial fixed-frontier Dispatch is this distribution's *capability*; whether
+    the family has *released* it is a separate question the staged rollout gate
+    answers, and today the answer is no while shell and PowerShell land #265 and
+    #266. Every property below is about the Runner that acts on an
+    execute-frontier authority, so the gate is opened here rather than worked
+    around: the day it opens for real, this fixture becomes a no-op and nothing
+    else about these tests changes.
+    """
+    released = continuation_rollout.FamilyRollout(
+        stages=tuple(
+            stage
+            if stage.mode != 'execute-frontier'
+            else continuation_rollout.StageVerdict(
+                mode=stage.mode,
+                released=True,
+                blocking_distributions=(),
+                refusal='',
+            )
+            for stage in continuation_rollout.DECLARED_ROLLOUT.stages
+        )
+    )
+    monkeypatch.setattr(continuation_rollout, 'DECLARED_ROLLOUT', released)
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +136,14 @@ def test_the_report_profile_does_not_inherit_execute_frontier_requirements() -> 
     assert "fixed-frontier" not in report.requirements
 
 
-def test_a_run_may_now_resolve_execute_frontier_from_configuration() -> None:
-    """The mode the manifest advertises is the mode an operator's config resolves to."""
+def test_a_run_may_resolve_execute_frontier_once_the_family_releases_it() -> None:
+    """The capability is real; only the family-wide release is withheld (#267).
+
+    With the staged rollout gate open, an operator's configuration resolves to the
+    mode this distribution advertises. `test_continuation_rollout.py` pins the
+    other half --- that the same request is refused while the gate is closed --- so
+    the two together say exactly which of the two claims is missing today.
+    """
     resolved = continuation.resolve_authority(
         {
             "sources": [

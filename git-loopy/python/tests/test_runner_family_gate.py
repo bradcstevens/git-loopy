@@ -57,6 +57,7 @@ POWERSHELL_BOUNDARY = "test-orchestrator-boundary.ps1"
 PYTHON_CONFORMANCE = "test_conformance.py"
 FAMILY_RELEASE_CONFORMANCE = "test_release_identity_conformance.py"
 PYTHON_CONTINUATION = "test_continuation_scenarios.py"
+PYTHON_FAMILY_ROLLOUT = "test_continuation_rollout.py"
 PYTHON_TEST_TREE = "git-loopy/python/tests"
 # The Rust Dashboard core is a family member too: its suite drives the same
 # shared semantic fixture Python does, so it must not drift unwatched.
@@ -173,6 +174,7 @@ def _is_python_gate(job: _Job) -> bool:
         and PYTHON_CONFORMANCE in text
         and FAMILY_RELEASE_CONFORMANCE in text
         and PYTHON_CONTINUATION in text
+        and PYTHON_FAMILY_ROLLOUT in text
     )
 
 
@@ -360,3 +362,30 @@ def test_trigger_helper_handles_the_yaml_on_boolean_key() -> None:
         "push",
         "pull_request",
     }
+
+
+def test_ci_fails_on_cross_family_continuation_rollout_drift() -> None:
+    """#267: the staged rollout gate is a CI gate in every family member.
+
+    The gate exists because three distributions can drift apart, so it is worth
+    exactly as much as the number of members that run it. A gate wired only into
+    the Python job would be a Python opinion about the family, and a member that
+    advertised a mode ahead of the release would find out from a reviewer.
+    """
+    workflows = _loaded_workflows()
+
+    for member, predicate, adapter in (
+        ("python", _is_python_gate, PYTHON_FAMILY_ROLLOUT),
+        ("shell", _is_shell_gate, SHELL_CONTINUATION),
+        ("PowerShell", _is_powershell_gate, POWERSHELL_CONTINUATION),
+    ):
+        gated = [
+            _job_run_text(job)
+            for _path, _name, job in _all_jobs(workflows)
+            if predicate(job)
+        ]
+        assert gated, f"no CI job gates the {member} family member"
+        assert any(adapter in text for text in gated), (
+            f"the {member} CI job does not run {adapter}, which is where that "
+            "member evaluates the family-wide Continuation rollout gate"
+        )

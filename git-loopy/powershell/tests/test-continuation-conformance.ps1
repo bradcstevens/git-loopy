@@ -1687,10 +1687,200 @@ function Test-CapabilityVerificationGate {
     Assert-True (-not $Widened) "an unknown capability profile is refused"
 }
 
+function Get-GitLoopyAdvertisedManifests {
+    <#
+    .SYNOPSIS
+        The three real manifests, from the fixture's capability scenarios.
+    .DESCRIPTION
+        Each `capabilities-<distribution>` scenario is proven by that family
+        adapter executing its real native entrypoint, so this is the advertised
+        manifest rather than a second copy of it.
+    #>
+    $Manifests = [ordered]@{}
+    foreach ($Scenario in $Fixture["scenarios"]) {
+        $Id = [string]$Scenario["id"]
+        if (-not $Id.StartsWith("capabilities-")) { continue }
+        $Distribution = [string]@($Scenario["distributions"])[0]
+        $Manifests[$Distribution] = $Scenario["expected"]["stdout"]["capabilities"]
+    }
+    return $Manifests
+}
+
+function Get-GitLoopyAdvertisedValue {
+    <#
+    .SYNOPSIS
+        Read one advertised key, treating absent as unadvertised.
+    .DESCRIPTION
+        An optional capability and a participating mode are both
+        absent-by-default, so a manifest that never mentioned one has not claimed
+        it. Indexing a missing key would answer `$null` either way; this says so
+        deliberately rather than by accident.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]$Container,
+        [Parameter(Mandatory, Position = 1)][string]$Key
+    )
+
+    if ($Container -isnot [Collections.IDictionary]) { return $null }
+    if (-not $Container.Contains($Key)) { return $null }
+    return $Container[$Key]
+}
+
+function Get-GitLoopyDerivedFamilyRollout {
+    <#
+    .SYNOPSIS
+        Derive the family's staged rollout from what the three members advertise.
+    .DESCRIPTION
+        A capability manifest describes capability only, so a member that
+        implements a mode ahead of its siblings advertises it honestly. What no
+        single manifest can say is whether the *family* has released that mode,
+        and that is what this derives. Nothing here may widen: a member cannot
+        vote itself released, and a mode nobody advertised opens no stage.
+    #>
+    $Rollout = $Fixture["family_rollout"]
+    $Mandatory = @($Rollout["mandatory_distributions"] | ForEach-Object { [string]$_ })
+    $Manifests = Get-GitLoopyAdvertisedManifests
+    $ForbiddenRefusals = @{ concurrent_dispatch = "concurrent-dispatch-advertised" }
+
+    $Verdicts = [Collections.Generic.List[object]]::new()
+    $EarlierReleased = $true
+    foreach ($Stage in $Rollout["stages"]) {
+        $Mode = [string]$Stage["mode"]
+        $Verdict = $null
+        if (-not $Stage["declared"]) {
+            # Undeclared, not merely blocked: a stage nobody has opened stays
+            # closed for a reason finishing the stage below it does not change.
+            $Verdict = [ordered]@{
+                mode = $Mode
+                released = $false
+                blocking_distributions = @()
+                refusal = "stage-undeclared"
+            }
+        }
+        elseif (-not $EarlierReleased) {
+            # Deliberately no blocking distributions: this stage's own members may
+            # all be ready, and naming them would send an operator to fix
+            # distributions that have nothing left to do.
+            $Verdict = [ordered]@{
+                mode = $Mode
+                released = $false
+                blocking_distributions = @()
+                refusal = "earlier-stage-unreleased"
+            }
+        }
+        else {
+            foreach ($Capability in @($Stage["forbidden_optional_capabilities"])) {
+                $Name = [string]$Capability
+                $Widened = @(
+                    $Mandatory |
+                        Where-Object {
+                            (Get-GitLoopyAdvertisedValue `
+                                $Manifests[$_]["optional_capabilities"] $Name) -eq $true
+                        } |
+                        Sort-Object -CaseSensitive
+                )
+                if ($Widened.Count -gt 0) {
+                    $Verdict = [ordered]@{
+                        mode = $Mode
+                        released = $false
+                        blocking_distributions = @($Widened)
+                        refusal = [string]$ForbiddenRefusals[$Name]
+                    }
+                    break
+                }
+            }
+        }
+        if ($null -eq $Verdict) {
+            $Blocking = @(
+                $Mandatory |
+                    Where-Object {
+                        (Get-GitLoopyAdvertisedValue `
+                            $Manifests[$_]["continuation_modes"] $Mode) -ne $true
+                    } |
+                    Sort-Object -CaseSensitive
+            )
+            $Verdict = [ordered]@{
+                mode = $Mode
+                released = ($Blocking.Count -eq 0)
+                blocking_distributions = @($Blocking)
+                refusal = $(
+                    if ($Blocking.Count -gt 0) { "distribution-unadvertised" } else { "" }
+                )
+            }
+        }
+        $Verdicts.Add($Verdict)
+        $EarlierReleased = [bool]$Verdict["released"]
+    }
+    return , $Verdicts.ToArray()
+}
+
+function Test-FamilyRolloutGate {
+    <#
+    .SYNOPSIS
+        The family-wide staged rollout gate (#267).
+    .DESCRIPTION
+        The fixture may not claim a release the three advertised manifests do not
+        support, so the declaration is compared with the derivation rather than
+        trusted beside it. Every family adapter runs this itself: a distribution
+        must be able to prove its own release position without a Python runtime.
+    #>
+    $Rollout = $Fixture["family_rollout"]
+    $Derived = Get-GitLoopyDerivedFamilyRollout
+    $Declared = @(
+        $Rollout["stages"] | ForEach-Object {
+            [ordered]@{
+                mode = [string]$_["mode"]
+                released = [bool]$_["released"]
+                blocking_distributions = @(
+                    $_["blocking_distributions"] | ForEach-Object { [string]$_ }
+                )
+                refusal = [string]$_["refusal"]
+            }
+        }
+    )
+
+    Assert-True ($Derived.Count -eq $Declared.Count) (
+        "the declared family rollout stages the same modes the family advertises"
+    )
+    for ($Index = 0; $Index -lt $Declared.Count; $Index++) {
+        $Expected = $Declared[$Index]
+        $Actual = $Derived[$Index]
+        Assert-True (
+            ($Actual | ConvertTo-Json -Compress -Depth 8) -ceq
+                ($Expected | ConvertTo-Json -Compress -Depth 8)
+        ) (
+            "the declared rollout stage $($Expected['mode']) matches what the " +
+            "family advertises (derived: $($Actual | ConvertTo-Json -Compress -Depth 8))"
+        )
+    }
+
+    # The gate binds this distribution, not only the fixture. A member that
+    # advertised ahead of the gate would hand its adopters a mode the other two
+    # cannot serve, and all three adopters read the same documentation.
+    $Manifest = (Get-GitLoopyAdvertisedManifests)["powershell"]
+    $Modes = $Manifest["continuation_modes"]
+    foreach ($Stage in $Derived) {
+        if ($Stage["released"]) { continue }
+        Assert-True (
+            (Get-GitLoopyAdvertisedValue $Modes ([string]$Stage["mode"])) -ne $true
+        ) (
+            "PowerShell does not advertise the unreleased mode $($Stage['mode'])"
+        )
+    }
+
+    # Release is not adoption. `default` stays `off` at every stage, or the last
+    # family member to land would adopt every adopter's project by arriving.
+    Assert-True (
+        (Get-GitLoopyAdvertisedValue $Modes "default") -ceq "off"
+    ) "PowerShell defaults to continuation mode off whatever the family released"
+}
+
 try {
     Test-CapabilityCoverageGate
     Test-CapabilityVerificationGate
     Test-EndToEndCoverageGate
+    Test-FamilyRolloutGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(
         $Fixture["scenarios"] |

@@ -5,8 +5,12 @@ name: Runner family gate
 # reference Orchestrator, the shell + PowerShell ports, and the Rust Dashboard core
 # still implement the same Wrapper contract on the operating systems each member
 # claims to support. All jobs use fake external tools and scratch repositories, so
-# the gate needs neither live Copilot nor GitHub credentials. The shape of this file
-# is pinned by git-loopy/python/tests/test_runner_family_gate.py.
+# the gate needs neither live Copilot nor GitHub credentials. Each family member's
+# Continuation Conformance step also evaluates the family-wide staged rollout gate
+# (#267) over the three advertised capability manifests, so a member that advertised
+# a Continuation mode ahead of the family's release fails its own job rather than a
+# reviewer's attention. The shape of this file is pinned by
+# git-loopy/python/tests/test_runner_family_gate.py.
 
 on:
   push:
@@ -37,6 +41,7 @@ jobs:
           python -m pytest -q git-loopy/python/tests/test_conformance.py
           git-loopy/python/tests/test_release_identity_conformance.py
           git-loopy/python/tests/test_continuation_scenarios.py
+          git-loopy/python/tests/test_continuation_rollout.py
 
       - name: Python test suite
         run: >-
