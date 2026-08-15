@@ -348,7 +348,7 @@
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -725,7 +725,7 @@
           "run_id": "01HXR0000000000000000000EE",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1254,7 +1254,7 @@
           "run_id": "01HXR0000000000000000000FF",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1732,7 +1732,7 @@
           "run_id": "01HXR0000000000000000000LN",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -2865,7 +2865,7 @@
           "run_id": "01HXR0000000000000000000WC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -3280,7 +3280,7 @@
           "run_id": "01HXR0000000000000000000RC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -3734,7 +3734,7 @@
           "run_id": "01HXR0000000000000000000SP",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -4111,7 +4111,7 @@
           "run_id": "01HXR0000000000000000000PK",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.8.0",
+          "release_version": "0.9.0-dev.0",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
