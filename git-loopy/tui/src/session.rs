@@ -35,7 +35,7 @@ pub struct DashboardFrame {
     pub screen: Screen,
     /// The issue under the cursor.
     pub selected: IssueRef,
-    /// How tall the operator has asked the Activity band to be (ADR-0031).
+    /// How tall the operator has asked the Activity band to be (ADR-0038).
     pub activity_band: ActivityBand,
     /// What the terminal drawing this frame can render.
     pub capabilities: TerminalCapabilities,
@@ -259,7 +259,7 @@ impl DashboardSession {
 
     /// The terminal changed size.
     ///
-    /// The *drawn* band needs nothing from this — ADR-0031's re-clamp is
+    /// The *drawn* band needs nothing from this — ADR-0038's re-clamp is
     /// non-destructive and happens against the frame the renderer is handed —
     /// but hit-testing does, because the drag handle moves with the layout. Any
     /// drag in progress ends here: its grab row was measured against a screen
@@ -337,7 +337,7 @@ impl DashboardSession {
 
     /// Apply one pointer gesture, reporting whether the loop should go on.
     ///
-    /// The **drag → click → keys** ladder's first two rungs (ADR-0031). A press
+    /// The **drag → click → keys** ladder's first two rungs (ADR-0038). A press
     /// on the Activity band's header row takes the handle; a move sizes the
     /// band; a release lets go, and a release that never moved is a *click*,
     /// which toggles **Collapsed**. The wheel is deliberately inert.

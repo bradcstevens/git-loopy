@@ -212,7 +212,7 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
 ///
 /// Deliberately a value the renderer *returns* rather than geometry it keeps to
 /// itself, because a pointer gesture has to be answered in the same coordinates
-/// the frame was drawn in. ADR-0031 makes the Activity band's header row its
+/// the frame was drawn in. ADR-0038 makes the Activity band's header row its
 /// **drag handle**, so a second, privately-derived layout would put the handle
 /// somewhere other than where the operator can see it.
 ///
@@ -255,7 +255,7 @@ pub struct DashboardBands {
 
 impl DashboardBands {
     /// The Activity band's header row, which is also its drag handle
-    /// (ADR-0021, ADR-0031).
+    /// (ADR-0021, ADR-0038).
     ///
     /// One row, whether the band is Expanded or Collapsed: **Collapsed keeps
     /// its handle**, which is what makes a drag undoable by a drag.
@@ -282,7 +282,7 @@ impl DashboardBands {
 
 /// The largest Activity band this terminal can carry.
 ///
-/// ADR-0031's `ceiling`: the largest height that still leaves the **Queue** its
+/// ADR-0038's `ceiling`: the largest height that still leaves the **Queue** its
 /// three-row floor (ADR-0021), once the fixed header and the Summary have taken
 /// theirs. Never below the band's own floor — a terminal too short for both
 /// floors squeezes the Queue rather than dropping the band into a state no
@@ -295,7 +295,7 @@ pub fn activity_ceiling(area: Rect) -> u16 {
 
 /// The Summary band's height, which is still derived rather than chosen.
 ///
-/// ADR-0031 made only the **Activity** band operator-sized; the Summary keeps
+/// ADR-0038 made only the **Activity** band operator-sized; the Summary keeps
 /// the third-of-the-body share it has always taken, so the band the operator
 /// did not ask about does not move under them.
 fn summary_height(height: u16) -> u16 {

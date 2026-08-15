@@ -4,6 +4,11 @@
 [ADR-0021](0021-activity-windows-per-agent.md) (operator-sized Activity band). ADR-0021's
 other four decisions are upheld in full.
 
+**Numbering:** landed as ADR-0031 and renumbered to ADR-0038, because 0031 was already
+taken on `main` by [the retirement of the "Ralph loop" name](0031-encoded-workflows-retire-the-loop-name.md),
+which was committed first. Two decisions shared the number until this correction; anything
+citing "ADR-0031" for the Activity band means this one.
+
 ## Context
 
 [ADR-0021](0021-activity-windows-per-agent.md) made the **Activity** band operator-sized

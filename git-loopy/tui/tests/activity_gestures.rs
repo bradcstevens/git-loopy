@@ -1,6 +1,6 @@
 //! The **Activity** band's three controls, driving one state machine.
 //!
-//! ADR-0031's degradation ladder is **drag → click → `shift+↑`/`shift+↓`**, with
+//! ADR-0038's degradation ladder is **drag → click → `shift+↑`/`shift+↓`**, with
 //! no dead end: a terminal that reports motion gets all three, one that reports
 //! clicks but not motion keeps the click, and one with no mouse reporting at
 //! all keeps the keys. These tests drive each rung through the same session the
@@ -271,7 +271,7 @@ fn a_press_and_release_that_never_moved_is_a_click_and_toggles() {
 /// It cannot say the pointer travelled, so a release two rows down arrives
 /// looking exactly like a release where the button went in. Reading it as a
 /// click is what leaves that terminal a working control; refusing it because
-/// the coordinates differ would leave it with no mouse at all. ADR-0031 says so
+/// the coordinates differ would leave it with no mouse at all. ADR-0038 says so
 /// out loud, and the Python renderer answers the same way — this is one state
 /// machine across two renderers, so it cannot be answered differently here.
 #[test]
@@ -332,7 +332,7 @@ fn a_drag_that_wanders_down_over_the_queue_keeps_sizing_the_band() {
     // The other half of capture — that no *other* element answers the pointer
     // meanwhile — costs nothing to assert and nothing to hold today, because
     // this renderer has no Queue pointer path yet. It is where the collision
-    // ADR-0031 warns about would first show up.
+    // ADR-0038 warns about would first show up.
     assert_eq!(session.frame().selected, before);
 }
 

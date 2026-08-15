@@ -32,7 +32,7 @@ pub enum Input {
     /// The new size travels with the input because the Activity band's drag
     /// handle is hit-tested against the layout, and a layout computed from a
     /// stale terminal size would put the handle somewhere the operator cannot
-    /// see it (ADR-0031).
+    /// see it (ADR-0038).
     Resized(u16, u16),
     /// Time passed and nothing else did.
     Tick(Timestamp),
@@ -60,7 +60,7 @@ pub struct Pointer {
 /// The pointer gestures the Dashboard distinguishes.
 ///
 /// [`Wheel`](PointerAction::Wheel) is here precisely so that "the wheel never
-/// resizes" (ADR-0031) is a pinned behaviour of the shipped path rather than an
+/// resizes" (ADR-0038) is a pinned behaviour of the shipped path rather than an
 /// event the caller happens not to forward: resize-by-wheel is the accidental
 /// gesture class ADR-0021's Context section is an argument against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

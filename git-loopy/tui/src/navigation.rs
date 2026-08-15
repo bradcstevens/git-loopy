@@ -33,7 +33,7 @@ pub enum Key {
     Open,
     /// Leave the detail for the Dashboard.
     Back,
-    /// Collapse the Activity band to its stub, or restore it (ADR-0031).
+    /// Collapse the Activity band to its stub, or restore it (ADR-0038).
     ToggleActivity,
     /// Ask for one more row of Activity band.
     GrowActivity,
