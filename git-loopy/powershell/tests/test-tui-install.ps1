@@ -824,6 +824,44 @@ else {
         "executable, which this platform cannot fabricate)")
 }
 
+# --- Setup verifies this distribution's Continuation capabilities (#257) -----
+#
+# 10. The distribution being verified is the clone this installer belongs to, so
+#     the report names the profile and this clone's Release rather than an
+#     executable path: nothing host-specific is stated and nothing about the
+#     choice is written down.
+
+Assert-Contains $OptOut.Output "Continuation capabilities" `
+    "the installation reports the Continuation capabilities it verified"
+Assert-Contains $OptOut.Output "foundation profile" `
+    "the report names the capability profile that was satisfied"
+Assert-Contains $OptOut.Output "concurrent_dispatch" `
+    "the report names the optional capabilities this distribution does not support"
+
+# 11. A distribution that misses a required capability installs nothing at all.
+#
+#     Verification runs before the launcher is written for the same reason
+#     preflight exists: an operator who is told at install time never learns it
+#     from a Run that fails further from the cause.
+$UnverifiableClone = Join-Path $CliDir "unverifiable"
+$UnverifiableInstaller = New-FakeClone -Root $UnverifiableClone -Version 4.5.6
+# Drop one required native operation from the manifest this clone advertises.
+$ManifestSource = Join-Path (Split-Path -Parent $UnverifiableInstaller) `
+    "GitLoopy.Continuation.psm1"
+[IO.File]::WriteAllText(
+    $ManifestSource,
+    ([IO.File]::ReadAllText($ManifestSource) -replace
+        '"repair-index" = \$true', '"repair-index" = $false'))
+$UnverifiableBin = Join-Path $CliDir "unverifiable-bin"
+$Unverifiable = Invoke-Installer -Installer $UnverifiableInstaller `
+    -Arguments @("-BinDir", $UnverifiableBin, "-NoTui")
+Assert-True ($Unverifiable.ExitCode -ne 0) "an unverifiable distribution installed anyway"
+Assert-Contains $Unverifiable.Output "native-operations" `
+    "the refusal names the requirement the distribution does not satisfy"
+Assert-True (
+    -not (Test-Path -LiteralPath (Join-Path $UnverifiableBin $LauncherName))
+) "an unverifiable distribution installed its launcher"
+
 # --- A Run never installs software ------------------------------------------
 #
 # The other half of the promise. Installation is an explicit act by the operator

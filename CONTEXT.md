@@ -102,6 +102,13 @@ versions, tracker adapters, Instruction handlers, evaluators, and optional capab
 it supports. It describes capability but grants no execution authority.
 _Avoid_: Automation scope, Performer posture, feature flags.
 
+**Continuation capability profile**:
+One named set of requirements a **Continuation capability manifest** must satisfy for a
+setup surface to install or write anything. `foundation` is the only profile the family
+declares. Judging a manifest against a profile is a **Consumer** act, not a Continuation
+operation, and satisfying one grants no execution authority.
+_Avoid_: capability tier, feature flag, Continuation mode, readiness level.
+
 **Continuation view**:
 A **Consumer**-specific ordered projection of **Continuation guidance**. Its ordering
 helps select work but does not itself establish prerequisites.
