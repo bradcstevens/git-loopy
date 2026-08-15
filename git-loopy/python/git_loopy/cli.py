@@ -141,12 +141,17 @@ _DEFAULT_MAX_PARALLEL = 3
 # Default model used when ``GIT_LOOPY_MODEL`` is unset. A bare base id (model id and
 # reasoning effort are separate axes on the live Copilot CLI — a suffixed
 # id like ``claude-opus-4.7-xhigh`` is rejected as "not available").
-_DEFAULT_MODEL = "claude-opus-4.8"
+_DEFAULT_MODEL = "claude-opus-5"
 # Reasoning effort applied only on a *pure default invocation* (neither
 # ``GIT_LOOPY_MODEL`` nor ``GIT_LOOPY_REASONING_EFFORT`` set), preserving the kit's
 # "works out of the box at full reasoning" intent. Once the operator
 # picks a model, effort comes from the env / model suffix / model default.
-_DEFAULT_REASONING_EFFORT = "max"
+#
+# ``xhigh`` and deliberately **not** ``max`` (ADR-0036): ``max`` is the
+# escalation rung, so a default that spent it would leave unclassified work —
+# which is the whole corpus while nothing produces ``task-type:`` labels — with
+# a second attempt at the identical pair. The default **reserves** the ceiling.
+_DEFAULT_REASONING_EFFORT = "xhigh"
 
 
 def resolve_repo_root(start: Path | None = None) -> Path:

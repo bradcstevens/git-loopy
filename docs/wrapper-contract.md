@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.16 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.17 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -415,8 +415,8 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 
 | Variable                       | Phase | Default          | Meaning                                                        |
 | ------------------------------ | ----- | ---------------- | -------------------------------------------------------------- |
-| `GIT_LOOPY_MODEL`              | 1     | `claude-opus-4.8`| Model id (bare base id).                                       |
-| `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
+| `GIT_LOOPY_MODEL`              | 1     | `claude-opus-5`  | Model id (bare base id).                                       |
+| `GIT_LOOPY_REASONING_EFFORT`   | 1     | `xhigh` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
@@ -922,7 +922,10 @@ run-wide default:
 - **Gate and fall back.** Pass the resolved effort through the shared effort gate against the
   model roster and apply the fallback (an effort the model does not accept drops to "let the
   backend pick"; an unknown model passes through). Routed **and** default pairs are gated
-  identically.
+  identically. A **reasoning-incapable** model — one whose roster entry is the empty set — is
+  therefore **unroutable**: an Orchestrator MUST NOT ship a recommended pair naming one, because
+  an effort supplied to such a model *hard-rejects session creation* rather than downgrading, and
+  a pair the gate can only rescue is a pair that fails wherever the gate is not in the path.
 - **Pass to the single invocation.** Feed the gated `(model, effort)` to that Iteration's one
   `--model` agent invocation (§4), reusing the same pair for the Lane's integration /
   auto-resolution session, so the Lane runs entirely on the resolved pair.
@@ -934,7 +937,7 @@ that scoped this section to the **Lane** — that a serial Iteration is handed t
 the agent picks mid-session — is no longer true. The scope has deliberately **not** moved with
 it: a serial Iteration resolves its Routed pair at Pickup, so an unknown `task-type:` key is
 refused there and the candidate is skipped (§3.3), but the Iteration then runs on the run-wide
-pair (`claude-opus-4.8 @ max`) — zero-regression. Applying the resolved pair in serial mode is a
+pair (`claude-opus-5 @ xhigh`) — zero-regression. Applying the resolved pair in serial mode is a
 separate decision about ADR-0027's scope, not a consequence of moving the pickup, and it owes the
 calibration question its own answer.
 
@@ -948,6 +951,14 @@ resolved `(model, effort)` and whether it warns), and
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
 constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
+
+`model-roster.json` MUST carry a **`cli_version`** stamp naming the Copilot CLI its content was
+captured against. Reasoning-effort capability is not vendor data: `models.list` discards CAPI's
+advertised array and substitutes a table hardcoded in the CLI bundle, so the roster is a function
+of **CLI version** ([ADR-0019](adr/0019-roster-derived-from-the-pinned-harness.md)) and an
+unstamped roster cannot distinguish a correction from a defect. The stamp is a statement about the
+fixture, not about the harness an Orchestrator spawns: where the two differ the divergence is
+reportable, and reconciling them is a pinned-harness bump plus a regeneration, made as one change.
 
 ### 14.1 The measured tier
 

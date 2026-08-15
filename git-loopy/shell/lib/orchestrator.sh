@@ -583,7 +583,7 @@ git_loopy_resolve_config() {
   local env_skills="${GIT_LOOPY_DENY_SKILLS:-}"
   local env_timeout="${GIT_LOOPY_SEND_TIMEOUT_SECONDS:-}"
 
-  local model="claude-opus-4.8"
+  local model="claude-opus-5"
   local effort=""
   local model_explicit=0
   local effort_explicit=0
@@ -748,7 +748,7 @@ git_loopy_resolve_config() {
     if [[ -n "$suffix_effort" ]]; then
       effort="$suffix_effort"
     elif ((model_explicit == 0)); then
-      effort="max"
+      effort="xhigh"
     else
       effort=""
     fi

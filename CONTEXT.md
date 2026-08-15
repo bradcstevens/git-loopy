@@ -871,6 +871,16 @@ does not accept is dropped so the backend chooses. Resolved once at **Pickup** a
 switched mid-session; the same pair carries the unit's follow-on work.
 _Avoid_: model override, effective model.
 
+**Default pair**:
+The kit's built-in model and reasoning effort — the pair a unit of work runs on when
+**Routing** resolved nothing, which is every unit while the corpus carries no **Task type**.
+**Atomic**: naming a model opts out of the kit's effort too, and the pair becomes "let the
+backend pick". It sits deliberately one rung *below* the escalation rung, so the default
+**reserves** the ceiling instead of spending it and work that stalls has somewhere to escalate
+to (ADR-0036). Identical in every member of the **Runner family**, and an independent constant:
+it resembles one seeded **Routed pair** by rationale, never by derivation.
+_Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
+
 **Measured routing**:
 The **Calibration**-authored precedence tier — one rung between global **Config** and the
 built-in default, so it supplies a **Routed pair** only where the operator is silent and a

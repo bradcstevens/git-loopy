@@ -179,7 +179,7 @@ distribution whose Events this port doesn't speak).
 ## Run it
 
 ```bash
-# Unlimited iterations, default model (claude-opus-4.8 at `max` reasoning effort).
+# Unlimited iterations, default model (claude-opus-5 at `xhigh` reasoning effort).
 git-loopy
 
 # Cap at 5 iterations (0 or omitted = unlimited).
@@ -215,8 +215,8 @@ set **union** of their CLI and env values, not an override.
 | --- | --- | --- | --- |
 | — | `--version` | — | Print the distribution Release version and exit before Run preflight. |
 | — | `<max-iterations>` (positional) | `0` (unlimited) | Cap the Run at N Iterations. Reaching it is a clean exit. |
-| `GIT_LOOPY_MODEL` | `--model ID` | `claude-opus-4.8` | Model id (bare base id). |
-| `GIT_LOOPY_REASONING_EFFORT` | `--reasoning-effort` | `max` for the built-in model | `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Choosing another model without an effort leaves it to the backend. |
+| `GIT_LOOPY_MODEL` | `--model ID` | `claude-opus-5` | Model id (bare base id). |
+| `GIT_LOOPY_REASONING_EFFORT` | `--reasoning-effort` | `xhigh` for the built-in model | `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Choosing another model without an effort leaves it to the backend. |
 | `GIT_LOOPY_ISSUE_SOURCE` | `--issue-source` | `github` | `github` or `prds` (legacy local markdown). |
 | `GIT_LOOPY_MAX_NMT_STRIKES` | `--max-nmt-strikes N` | `3` | Consecutive no-progress Iterations before abort. |
 | `GIT_LOOPY_DENY_TOOLS` | `--deny-tool TOOL` (repeatable) | empty | Tools to deny the agent (union). |

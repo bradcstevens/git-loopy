@@ -606,11 +606,11 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
     config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert config["routing"] == {
         "planning": {"model": "claude-opus-5", "effort": "max"},
-        "review": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "review": {"model": "gpt-5.6-terra", "effort": "xhigh"},
         "implementation": {"model": "claude-sonnet-5", "effort": "low"},
         "test": {"model": "claude-sonnet-5", "effort": "medium"},
         "docs": {"model": "claude-sonnet-5", "effort": "low"},
-        "chore": {"model": "claude-haiku-4.5", "effort": "none"},
+        "chore": {"model": "gpt-5.6-luna", "effort": "none"},
         "bugfix": {"model": "claude-opus-5", "effort": "xhigh"},
     }
     assert config["model"] == "claude-opus-4.8"

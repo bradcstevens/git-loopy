@@ -66,8 +66,8 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     resolved = _resolve()
     run = resolved.run
     assert isinstance(run, RunConfig)
-    assert run.model == "claude-opus-4.8"
-    assert run.reasoning_effort == "max"
+    assert run.model == "claude-opus-5"
+    assert run.reasoning_effort == "xhigh"
     assert run.issue_source == "github"
     assert run.include_prs is None
     assert run.max_iterations == 0
@@ -412,7 +412,7 @@ def test_max_nmt_strikes_subone_config_aborts() -> None:
 
 def test_model_effort_pure_default() -> None:
     run = _resolve().run
-    assert (run.model, run.reasoning_effort) == ("claude-opus-4.8", "max")
+    assert (run.model, run.reasoning_effort) == ("claude-opus-5", "xhigh")
 
 
 def test_config_model_from_project() -> None:

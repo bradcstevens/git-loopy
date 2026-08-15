@@ -189,7 +189,7 @@ def test_main_config_routes_to_handler_no_loop(
 
     assert rc == 0
     assert captured == []  # the loop never ran
-    assert capsys.readouterr().out.strip() == "claude-opus-4.8"
+    assert capsys.readouterr().out.strip() == "claude-opus-5"
 
 
 def test_main_skills_list_routes_to_handler_no_loop(

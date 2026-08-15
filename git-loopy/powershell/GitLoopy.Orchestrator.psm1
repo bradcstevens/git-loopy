@@ -118,7 +118,7 @@ function Resolve-GitLoopyConfig {
     $Model = Get-GitLoopyEnvironmentValue $Environment "GIT_LOOPY_MODEL"
     $ModelExplicit = -not [string]::IsNullOrWhiteSpace($Model)
     if (-not $ModelExplicit) {
-        $Model = "claude-opus-4.8"
+        $Model = "claude-opus-5"
     }
     $ReasoningEffort = Get-GitLoopyEnvironmentValue `
         $Environment `
@@ -328,7 +328,7 @@ function Resolve-GitLoopyConfig {
             $ReasoningEffort = $SuffixEffort
         }
         elseif (-not $ModelExplicit) {
-            $ReasoningEffort = "max"
+            $ReasoningEffort = "xhigh"
         }
         else {
             $ReasoningEffort = $null

@@ -118,7 +118,7 @@ def test_main_default_invocation_uses_base_model_and_default_effort(
 
     Model id and reasoning effort are separate axes on the live CLI, so
     the composed config must carry a **bare base** model id
-    (``claude-opus-4.8``) — not a ``-<effort>`` suffixed id, which the
+    (``claude-opus-5``) — not a ``-<effort>`` suffixed id, which the
     CLI rejects as "not available" — plus the kit's default effort.
     """
     captured: list[RunConfig] = []
@@ -129,8 +129,8 @@ def test_main_default_invocation_uses_base_model_and_default_effort(
     assert exit_code == 0
     assert len(captured) == 1
     cfg = captured[0]
-    assert cfg.model == "claude-opus-4.8"
-    assert cfg.reasoning_effort == "max"
+    assert cfg.model == "claude-opus-5"
+    assert cfg.reasoning_effort == "xhigh"
 
 
 def test_main_strips_effort_suffix_to_base_model_id(
@@ -421,10 +421,10 @@ def test_main_reasoning_effort_flag_overrides_env(
 def test_main_reasoning_effort_flag_overrides_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``--reasoning-effort`` alone overrides the kit default effort (``max``).
+    """``--reasoning-effort`` alone overrides the kit default effort (``xhigh``).
 
-    With no ``--model`` / env, the default model (``claude-opus-4.8``) still
-    resolves, but the flag replaces the default ``max`` effort.
+    With no ``--model`` / env, the default model (``claude-opus-5``) still
+    resolves, but the flag replaces the default ``xhigh`` effort.
     """
     captured: list[RunConfig] = []
     _install_fake_runner(monkeypatch, captured, tmp_path)
@@ -432,7 +432,7 @@ def test_main_reasoning_effort_flag_overrides_default(
     exit_code = cli_module.main(["--reasoning-effort", "high"])
 
     assert exit_code == 0
-    assert captured[0].model == "claude-opus-4.8"
+    assert captured[0].model == "claude-opus-5"
     assert captured[0].reasoning_effort == "high"
 
 

@@ -144,46 +144,56 @@ REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
 #: task-type key       Model                 Effort
 #: ==================  ====================  ========
 #: ``planning``        ``claude-opus-5``     ``max``
-#: ``review``          ``gpt-5.6-sol``       ``xhigh``
+#: ``review``          ``gpt-5.6-terra``     ``xhigh``
 #: ``implementation``  ``claude-sonnet-5``   ``low``
 #: ``test``            ``claude-sonnet-5``   ``medium``
 #: ``docs``            ``claude-sonnet-5``   ``low``
-#: ``chore``           ``claude-haiku-4.5``  ``none``
+#: ``chore``           ``gpt-5.6-luna``      ``none``
 #: ``bugfix``          ``claude-opus-5``     ``xhigh``
 #: ==================  ====================  ========
 #:
 #: **Provenance.** Adopted from the model-routing run of **2026-07-24** (the v3
 #: table posted on issue #280, sourced from the live ``GET /models`` response for
-#: Copilot CLI ``1.0.75``), reconciled with the decisions taken on that map:
-#: ``bugfix`` is issue #294's addition at ``xhigh`` — ``high`` would make
-#: labelling a bug *cheaper* than not labelling it, and ``max`` is reserved as
-#: the escalation rung (#291). Record two things a future reader will otherwise
-#: "correct" back toward some other source:
+#: Copilot CLI ``1.0.75``), locked by #285 and #294, and recorded in
+#: ADR-0035. The table **departs from the run twice**, and both departures are
+#: what a future reader will otherwise "correct" back toward it:
 #:
-#: * ``chore`` routes to a **reasoning-incapable** model. ``claude-haiku-4.5``
-#:   exposes no effort dial, so :func:`gate_reasoning_effort` drops the ``none``
-#:   to ``None`` and signals :attr:`EffortGateWarning.INCAPABLE_MODEL`. The
-#:   ``none`` is therefore *declarative* — it records the intent "do not reason"
-#:   for a model that has no switch to honour it, and Haiku's internal thinking
-#:   budget remains uncapped. This is the **one** row that does not gate clean,
-#:   and ``tests/test_config.py`` pins it by name so a second such route cannot
-#:   be added silently.
-#: * ``planning`` and ``bugfix`` share a model with the global default's
-#:   successor but not its effort; the relation is rationale, not mechanism.
+#: * ``review`` is ``gpt-5.6-terra``, not the run's ``gpt-5.6-sol``. The run's
+#:   whole mitigation for Sol's measured task-cheating is that it "writes no
+#:   files and has no metric to game" — true of the ``code-review`` *subagent*
+#:   and false of the ``review`` *Task type*, which is a full write-capable Lane
+#:   holding authority to close its own issue. Terra is the run's own runner-up:
+#:   same vendor, so cross-vendor review still holds by construction.
+#: * ``chore`` is ``gpt-5.6-luna @ none``, not ``claude-haiku-4.5``. Haiku
+#:   exposes **no effort dial at all**, so ``claude-haiku-4.5 @ none`` is not a
+#:   configuration that exists: it *reads* as "Haiku with reasoning off" and
+#:   *delivers* Haiku with an uncapped internal thinking budget — and an effort
+#:   supplied to an effort-incapable model **hard-rejects session creation**
+#:   rather than downgrading (ADR-0019). Luna @ ``none`` is deterministic about
+#:   not thinking. The boundary rule this cashes out: **a reasoning-incapable
+#:   model is unroutable through** ``[routing]``, invariant at four layers —
+#:   this mapping's ``tuple[str, str]`` type, ``settings.table_routing``'s
+#:   exactly-``{model, effort}`` demand, ``init``'s ``supported_efforts`` filter,
+#:   and ``tests/test_config.py``'s uniform gates-clean assertion.
 #:
-#: The **global default stays** ``claude-opus-4.8 @ max`` (today's built-in), so
-#: an unlabelled issue is unaffected: it routes through the global default, not
-#: the ``planning`` route, which deliberately diverges from the default. Every
-#: pair is valid against :data:`MODEL_REASONING_EFFORTS` — clean, or the single
-#: documented ``chore`` exception above — pinned by ``tests/test_config.py``.
+#: ``bugfix`` is #294's addition at ``xhigh`` — ``high`` would make labelling a
+#: bug *cheaper* than not labelling it, and ``max`` is #291's escalation rung, so
+#: a ``max`` route would make escalation a no-op for bug work.
+#:
+#: ``planning`` and ``bugfix`` share a model with the **global default**
+#: (``claude-opus-5 @ xhigh``, ADR-0036) but not, in ``planning``'s case, its
+#: effort: the default deliberately sits one rung below the escalation rung so
+#: it *reserves* the ceiling, while ``planning`` spends it outright. That
+#: relation is rationale, not mechanism — the default is an independent constant
+#: in ``cli.py`` and is never derived from this table.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
         "planning": ("claude-opus-5", "max"),
-        "review": ("gpt-5.6-sol", "xhigh"),
+        "review": ("gpt-5.6-terra", "xhigh"),
         "implementation": ("claude-sonnet-5", "low"),
         "test": ("claude-sonnet-5", "medium"),
         "docs": ("claude-sonnet-5", "low"),
-        "chore": ("claude-haiku-4.5", "none"),
+        "chore": ("gpt-5.6-luna", "none"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
 )

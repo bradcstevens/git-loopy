@@ -461,7 +461,7 @@ def test_routing_use_recommended_replaces_every_canonical_route(
 
     assert rc == 0
     routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
-    assert routing["review"] == {"model": "gpt-5.6-sol", "effort": "xhigh"}
+    assert routing["review"] == {"model": "gpt-5.6-terra", "effort": "xhigh"}
     assert routing["planning"] == {"model": "claude-opus-5", "effort": "max"}
     assert routing["docs"] == {"model": "claude-sonnet-5", "effort": "low"}
     assert len(routing) == 7
@@ -519,7 +519,7 @@ def test_get_falls_back_to_builtin_default(tmp_path: Path) -> None:
         "model", repo_root=tmp_path, env=_env(tmp_path), out=out, err=_Sink()
     )
     assert rc == 0
-    assert out.text == "claude-opus-4.8"  # built-in default, no quotes
+    assert out.text == "claude-opus-5"  # built-in default, no quotes
 
 
 def test_get_reflects_project_config(tmp_path: Path) -> None:

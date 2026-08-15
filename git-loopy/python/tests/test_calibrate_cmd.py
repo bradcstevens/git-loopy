@@ -261,7 +261,7 @@ def test_status_reports_each_task_types_pair_the_tier_behind_it_and_its_corpus(
 
     assert code == 0
     assert "task-type:bugfix" in out.text
-    assert "Routed pair: claude-opus-4.8 @ max (built-in default)" in out.text
+    assert "Routed pair: claude-opus-5 @ xhigh (built-in default)" in out.text
     assert "5 mined candidate(s)" in out.text
     for key in ("planning", "review", "implementation", "test", "docs", "chore"):
         assert f"task-type:{key}" in out.text

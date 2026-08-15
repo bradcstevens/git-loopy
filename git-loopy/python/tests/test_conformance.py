@@ -2575,6 +2575,39 @@ def test_model_roster_fixture_matches_python_constant() -> None:
     assert roster == MODEL_REASONING_EFFORTS
 
 
+def test_the_model_roster_fixture_names_the_harness_it_describes() -> None:
+    """An unstamped roster cannot tell a correction from a defect (#401).
+
+    ``models.list`` does not report the vendor's reasoning-effort array — the
+    Copilot CLI overwrites it from a table hardcoded in its own bundle — so the
+    roster is a **function of CLI version** (ADR-0019). The fixture named no
+    version at all, which is how it was twice "fixed" toward a binary the kit
+    does not run while every assertion stayed green.
+
+    The stamp records the harness the *content* was captured against, which is
+    the operator's Homebrew CLI ``1.0.75``, and not the harness the kit spawns
+    (``github-copilot-sdk==1.0.5`` -> CLI ``1.0.67``). Stamping does not close
+    that gap; it makes it a fact somebody can read instead of an unknown.
+    Reconciling the two is a pinned-harness bump plus a regeneration, which
+    ADR-0019 requires to be one atomic change and which is owned elsewhere.
+    """
+    assert _MODEL_ROSTER["cli_version"] == "1.0.75"
+
+
+def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> None:
+    """The stamp is checkable against the fixture's own content, not decorative.
+
+    ADR-0019 recorded the three CLI versions' answers side by side. Only
+    ``1.0.75`` reports ``minimal`` for **both** Gemini flash models; the pinned
+    ``1.0.67`` reports ``gemini-3.6-flash`` as absent entirely. So the two rows
+    that produced the whole investigation are exactly the rows that identify the
+    stamp, and a stamp moved without regenerating the content fails here.
+    """
+    roster = _MODEL_ROSTER["roster"]
+    assert "minimal" in roster["gemini-3.5-flash"]
+    assert "minimal" in roster["gemini-3.6-flash"]
+
+
 _EFFORT_GATE = _load_fixture("effort-gate.json")
 
 

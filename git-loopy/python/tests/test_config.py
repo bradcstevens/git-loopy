@@ -226,16 +226,21 @@ def test_recommended_routing_is_the_locked_core() -> None:
     the ``[routing]`` config table), in the fixed key order the guided-setup
     surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
     so the original six keep the sequence the guided walk shipped with.
+
+    These are the values #285 locked, not the values the routing run proposed:
+    ``review`` departs to ``gpt-5.6-terra`` and ``chore`` to ``gpt-5.6-luna``.
+    Both departures are recorded in ADR-0035 — a future reader who "corrects"
+    either back toward the run fails here first.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
         "planning": ("claude-opus-5", "max"),
-        "review": ("gpt-5.6-sol", "xhigh"),
+        "review": ("gpt-5.6-terra", "xhigh"),
         "implementation": ("claude-sonnet-5", "low"),
         "test": ("claude-sonnet-5", "medium"),
         "docs": ("claude-sonnet-5", "low"),
-        "chore": ("claude-haiku-4.5", "none"),
+        "chore": ("gpt-5.6-luna", "none"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
@@ -260,62 +265,111 @@ def test_recommended_routing_is_a_read_only_mapping() -> None:
 
 
 def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
-    """Every recommended pair gates *as documented* — clean, or a named exception.
+    """Every recommended pair gates clean — no row is merely tolerated.
 
     "Valid against the roster's per-model accepted-effort sets" means the pair
     passes :func:`gate_reasoning_effort` without being rewritten or warned — the
     same gate a routed pair flows through at Active-issue pickup.
 
-    One row is deliberately **not** clean. ``chore`` routes to
-    ``claude-haiku-4.5``, which exposes no reasoning-effort dial at all (its
-    roster entry is the empty set), so the gate forces the effort to ``None``
-    and signals :attr:`EffortGateWarning.INCAPABLE_MODEL`. That is a shipped,
-    intentional choice, so it is pinned here **by name** rather than waved
-    through by a blanket "warnings allowed": adding a second reasoning-incapable
-    route must fail this test until someone records why.
+    Until #401 one row was deliberately not clean: ``chore`` routed to
+    ``claude-haiku-4.5``, whose roster entry is the empty set, so the gate
+    dropped the effort and warned :attr:`EffortGateWarning.INCAPABLE_MODEL`.
+    That is now understood to be worse than untidy — an effort supplied to an
+    effort-incapable model **hard-rejects session creation** rather than
+    downgrading (ADR-0019), so the shipped table would have aborted every
+    ``task-type:chore`` Iteration the moment the corpus carried the label. The
+    carve-out is gone and the assertion is uniform: a reasoning-incapable model
+    is **unroutable** through ``[routing]``.
     """
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         RECOMMENDED_ROUTING,
-        EffortGateWarning,
         gate_reasoning_effort,
     )
 
-    #: Routes whose model exposes no effort dial: the gate drops the effort to
-    #: ``None`` and warns. Keep this set as small as the shipped table demands.
-    incapable_keys = {"chore"}
-
     for key, (model, effort) in RECOMMENDED_ROUTING.items():
         assert model in MODEL_REASONING_EFFORTS, key
-        gated = gate_reasoning_effort(model, effort)
-        if key in incapable_keys:
-            assert MODEL_REASONING_EFFORTS[model] == frozenset(), key
-            assert (gated.model, gated.effort) == (model, None), key
-            assert gated.warning is EffortGateWarning.INCAPABLE_MODEL, key
-            continue
+        assert MODEL_REASONING_EFFORTS[model] != frozenset(), key
         assert effort in MODEL_REASONING_EFFORTS[model], key
+        gated = gate_reasoning_effort(model, effort)
         assert (gated.model, gated.effort) == (model, effort), key
         assert gated.warning is None, key
 
 
-def test_recommended_routing_preserves_the_shipped_global_default() -> None:
-    """The shipped global default stays ``claude-opus-4.8 @ max`` (#154, #110).
+def test_recommended_routing_reserves_the_escalation_rung_for_the_default() -> None:
+    """The run-wide default is ``claude-opus-5 @ xhigh`` — one rung below ``max``.
 
-    The recommended core is behaviour-preserving for an unlabelled issue: an
-    issue with no ``task-type:`` label routes through the global default, which
-    is unchanged, so seeding the core changes nothing for it. The ``planning``
-    route now deliberately diverges from the default, so it is asserted
-    explicitly rather than mirrored off the default.
+    #286 locked the pair and named the rule that is invisible in every artifact:
+    **the default reserves the ceiling, it does not spend it.** ``max`` is
+    #291's escalation rung, so a default of ``max`` would leave unclassified
+    work — the whole corpus, since nothing produces ``task-type:`` labels — with
+    a second attempt at the identical pair.
+
+    ``planning`` deliberately *diverges* from the default by holding the rung
+    outright, so it is asserted explicitly rather than mirrored off the default.
     """
     from git_loopy import cli
-    from git_loopy.config import RECOMMENDED_ROUTING
+    from git_loopy.config import RECOMMENDED_ROUTING, REASONING_EFFORT_ORDER
 
     assert (cli._DEFAULT_MODEL, cli._DEFAULT_REASONING_EFFORT) == (
-        "claude-opus-4.8",
-        "max",
+        "claude-opus-5",
+        "xhigh",
     )
-    assert RECOMMENDED_ROUTING["planning"] == ("claude-opus-5", "max")
+    rung_model, rung_effort = "claude-opus-5", "max"
+    ladder = REASONING_EFFORT_ORDER
+    assert ladder.index(cli._DEFAULT_REASONING_EFFORT) == ladder.index(rung_effort) - 1
+    assert RECOMMENDED_ROUTING["planning"] == (rung_model, rung_effort)
     assert RECOMMENDED_ROUTING["planning"] != (
         cli._DEFAULT_MODEL,
         cli._DEFAULT_REASONING_EFFORT,
     )
+
+
+def _tracked_project_config() -> dict[str, object]:
+    """This repository's own tracked ``git-loopy/config.toml``, or a skip.
+
+    The file is *tracked in git*, so it is effectively shipped: it is the
+    flagship consumer of everything ``[routing]`` promises, and an operator
+    reading it learns what the kit's own maintainers run on.
+    """
+    import tomllib
+
+    for parent in Path(__file__).resolve().parents:
+        tracked = parent / "git-loopy" / "config.toml"
+        if tracked.is_file():
+            return tomllib.loads(tracked.read_text(encoding="utf-8"))
+    pytest.skip("tracked project Config not found (installed-wheel run)")
+
+
+def test_the_tracked_project_config_states_the_same_default_as_the_builtin() -> None:
+    """One run-wide default, not three (#401).
+
+    The pair lived at three different values — ``claude-opus-5 @ high`` here,
+    ``claude-opus-4.8 @ max`` in the built-in constant, and a third in the
+    Wrapper contract's statement of it. Divergence between a tracked Config and
+    the constant it overrides is silent by construction: the Config simply wins,
+    and nobody learns the kit disagrees.
+    """
+    from git_loopy import cli
+
+    tracked = _tracked_project_config()
+    assert tracked["model"] == cli._DEFAULT_MODEL
+    assert tracked["reasoning_effort"] == cli._DEFAULT_REASONING_EFFORT
+
+
+def test_the_tracked_project_config_carries_the_locked_routing_table() -> None:
+    """The flagship consumer of routing routes (#401).
+
+    With no ``[routing]`` table every issue in this repository resolves through
+    the early return in ``resolve_iteration_model``, which never inspects a
+    label — so the repository that owns the feature was the one repository
+    proving it inert.
+    """
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    tracked = _tracked_project_config()
+    routing = tracked["routing"]
+    assert isinstance(routing, dict)
+    assert {
+        key: (entry["model"], entry["effort"]) for key, entry in routing.items()
+    } == dict(RECOMMENDED_ROUTING)
