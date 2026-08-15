@@ -497,8 +497,59 @@ run_capability_verification_gate() {
   ((unknown_status != 0)) || fail "an unknown capability profile was answered"
 }
 
+run_rollout_gate() {
+  # The family-wide rollout gate (#267). The fixture's `rollout` block says which
+  # staged gates the *family* may call available; this half proves that what shell
+  # really advertises agrees with it. A member that started advertising a mode the
+  # gate still calls withheld --- or stopped advertising one the gate counts as
+  # proved --- is exactly the drift an operator would otherwise discover when a Run
+  # resolved a mode two thirds of the family cannot serve.
+  local modes stage_count index
+  modes="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_capabilities | jq -c '.capabilities.continuation_modes'
+  )"
+  stage_count="$(jq '.capability_verification.rollout.stages | length' "$fixture")"
+  ((stage_count > 0)) || fail "the fixture registers no rollout stages"
+  for ((index = 0; index < stage_count; index++)); do
+    local stage profile advertised expected
+    stage="$(jq -c ".capability_verification.rollout.stages[$index]" "$fixture")"
+    profile="$(jq -r '.profile' <<<"$stage")"
+    # `foundation` is a requirement set, not a Continuation mode, so there is no
+    # `continuation_modes` entry to compare it against.
+    [[ "$profile" != "foundation" ]] || continue
+    expected="$(jq -r --arg profile "$profile" '
+      if (.proved | index("shell")) then "true"
+      elif (.pending | index("shell")) then "false"
+      else "absent" end
+    ' <<<"$stage")"
+    [[ "$expected" != "absent" ]] || fail \
+      "rollout stage $profile places shell in neither proved nor pending"
+    advertised="$(jq -r --arg profile "$profile" '.[$profile]' <<<"$modes")"
+    [[ "$advertised" == "$expected" ]] || fail \
+      "shell advertises continuation mode $profile as $advertised, but the family-wide rollout gate records $expected"
+  done
+
+  # Serial is the whole of the first execute-frontier release's claim, and the
+  # advertised manifest has to say so independently of what the gate declares.
+  local concurrent gate_concurrent
+  concurrent="$(
+    # shellcheck disable=SC1091
+    source "$port_dir/lib/continuation.sh"
+    git_loopy_continuation_capabilities |
+      jq -r '.capabilities.optional_capabilities.concurrent_dispatch'
+  )"
+  gate_concurrent="$(
+    jq -r '.capability_verification.rollout.concurrent_dispatch' "$fixture"
+  )"
+  [[ "$concurrent" == "false" && "$gate_concurrent" == "false" ]] || fail \
+    "concurrent Dispatch must stay unsupported until its own family-wide gate"
+}
+
 run_capability_coverage_gate
 run_capability_verification_gate
+run_rollout_gate
 run_end_to_end_coverage_gate
 
 run_transport_probe() {

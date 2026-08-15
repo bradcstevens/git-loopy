@@ -106,6 +106,7 @@ def continuation_view_order:
 _GIT_LOOPY_CONTINUATION_GUIDANCE_JQ='
 def coverage_uncertainty_codes:
   [
+    "index_label_stale",
     "invalid_revision", "missing_predecessor", "missing_retirement_receipt",
     "mutated_revision", "retired_occurrence_resurrected", "revision_fork"
   ];

@@ -21,6 +21,7 @@ import time
 from collections import Counter
 from typing import Any, Callable, Iterable, Mapping
 
+from git_loopy.continuation_rollout import AdoptionCoverage
 from git_loopy.events import WRAPPER_CONTINUATION_RECONCILED
 
 #: The Reconciliation phases an Iteration observes. Report mode renders guidance
@@ -147,7 +148,13 @@ class ContinuationReporter:
 
 
 def _render(repository: str, phase: str, result: Mapping[str, Any]) -> str:
-    """One operator-facing line per Reconciliation, in the locked vocabulary."""
+    """One operator-facing line per Reconciliation, in the locked vocabulary.
+
+    The adoption coverage is stated beside the counts rather than left implicit
+    (#267): report mode is the adoption step, so this is the Run most likely to be
+    reading a half-migrated repository, and counts alone would let a partial
+    projection read as the whole project.
+    """
     actions = _sequence(result.get("actions"))
     ready = sum(1 for action in actions if _text(action.get("readiness")) == "Ready")
     diagnostics = len(_sequence(result.get("diagnostics")))
@@ -158,7 +165,11 @@ def _render(repository: str, phase: str, result: Mapping[str, Any]) -> str:
     )
     if diagnostics:
         line += f"; {diagnostics} diagnostic(s)"
-    return line + ". No successor Action was executed."
+    line += ". No successor Action was executed."
+    coverage = AdoptionCoverage.of(result)
+    if coverage.unadopted_carriers:
+        line += f" {coverage.render()}"
+    return line
 
 
 def _sequence(value: Any) -> list[Mapping[str, Any]]:

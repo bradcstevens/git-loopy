@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from git_loopy import continuation_rollout
 from git_loopy import init as init_module
 from git_loopy import settings
 from git_loopy import verification as verification_module
@@ -941,6 +942,37 @@ def test_run_init_reports_the_verified_continuation_capabilities(
     assert len(verified) == 1
     assert "foundation profile" in verified[0]
     assert "concurrent_dispatch" in verified[0]
+
+
+def test_run_init_reports_the_family_wide_continuation_rollout(
+    tmp_path: Path,
+) -> None:
+    """Setup separates "this distribution can" from "the family has rolled it out".
+
+    The verified profile is a claim about the distribution running setup; an
+    operator deciding whether to opt a project in needs the other claim too. The
+    Python Runner satisfies `execute-frontier` (#264) while shell and PowerShell do
+    not (#265, #266), so a line that only reported the local verdict would read as
+    general availability for a mode two thirds of the family cannot run.
+    """
+    output = _Output()
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=output,
+        fetch_choices=lambda: [],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    rollout = [line for line in output.lines if line.startswith("Continuation rollout")]
+    assert rollout == [continuation_rollout.this_family_rollout().render()]
+    assert "withheld pending powershell, shell" in rollout[0]
 
 
 def test_run_init_fails_closed_when_this_distribution_misses_a_capability(

@@ -152,7 +152,9 @@ contract](docs/wrapper-contract.md) defines every Orchestrator's behavior,
 [`docs/skill-policy.md`](docs/skill-policy.md) covers the closed-world **Skill
 policy** that decides which Skills a Run may load,
 [`docs/parallel-mode.md`](docs/parallel-mode.md) covers **Parallel mode** — the
-opt-in **Lanes** that work several `parallel-safe` issues at once — and
+opt-in **Lanes** that work several `parallel-safe` issues at once —
+[`docs/continuation-rollout.md`](docs/continuation-rollout.md) records which staged
+**Continuation** gates are open family-wide and how a repository adopts one, and
 [`docs/runners.md`](docs/runners.md) documents the Runner family — the
 [Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and
 [PowerShell](git-loopy/powershell/README.md) Orchestrators available today.

@@ -55,6 +55,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
 )
 from git_loopy.prompt import PromptMetadataError, resolve_required_skills
+from git_loopy.continuation_rollout import this_family_rollout
 from git_loopy.verification import (
     ContinuationVerification,
     verify_this_distribution,
@@ -702,6 +703,11 @@ def run_init(
         warn(f"{verification.render()}; nothing was written.")
         return 1
     output_fn(verification.render())
+    # What this distribution can do is one claim; what the *family* has rolled out
+    # is another, and an operator opting a project in needs both (#267). Printed
+    # rather than enforced: the gate reports availability, it does not narrow what
+    # the distribution running setup already satisfies.
+    output_fn(this_family_rollout().render())
 
     try:
         resolved_scope = _resolve_scope(

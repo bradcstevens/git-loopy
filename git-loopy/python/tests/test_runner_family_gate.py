@@ -360,3 +360,34 @@ def test_trigger_helper_handles_the_yaml_on_boolean_key() -> None:
         "push",
         "pull_request",
     }
+
+
+def test_ci_runs_every_tracked_native_suite() -> None:
+    """#267: the family gate runs the *complete* native suites, not a chosen subset.
+
+    The four guards above name the suites the gate was built around, so a member
+    that adds a fifth --- a new production-seam or framing suite --- can wire it into
+    ``AGENTS.md`` and still leave CI silently narrower than the local feedback loop.
+    Cross-family drift is exactly what this gate exists to fail on, so the check is
+    the whole tracked set rather than a list maintained by hand.
+    """
+    repo_root = _find_repo_root()
+    if repo_root is None:
+        pytest.skip("repo root not found (installed-wheel run) -- nothing to check")
+    workflows = _loaded_workflows()
+    ci_text = "\n".join(
+        _job_run_text(job) for _path, _name, job in _all_jobs(workflows)
+    )
+
+    suites = sorted(
+        path.name
+        for pattern in ("shell/tests/test-*.sh", "powershell/tests/test-*.ps1")
+        for path in (repo_root / "git-loopy").glob(pattern)
+    )
+    assert suites, "no native suites found to gate"
+    unwired = [suite for suite in suites if suite not in ci_text]
+    assert not unwired, (
+        "these native suites are tracked in the repository but no CI job runs "
+        f"them: {unwired}. The Runner-family gate must run every family member's "
+        "complete suite, or the gate is narrower than the local feedback loop."
+    )

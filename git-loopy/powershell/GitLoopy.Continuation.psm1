@@ -136,8 +136,11 @@ $Script:NoGuidanceReasons = @("no-successor-created", "ephemeral-only")
 $Script:TerminalRemainderRows = 3
 # A trustworthy, complete all-state read is what makes terminal completion
 # provable. Any one of these diagnostics says the read is not trustworthy, so
-# the projection may not claim closed coverage over it.
+# the projection may not claim closed coverage over it. `index_label_stale` is
+# here because an indexed carrier holding no trusted record is an observed
+# Workstream carrier nobody has published a trusted root on (#267).
 $Script:CoverageUncertaintyCodes = @(
+    "index_label_stale",
     "invalid_revision",
     "missing_predecessor",
     "missing_retirement_receipt",

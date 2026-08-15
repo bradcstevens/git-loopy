@@ -1687,9 +1687,48 @@ function Test-CapabilityVerificationGate {
     Assert-True (-not $Widened) "an unknown capability profile is refused"
 }
 
+function Test-RolloutGate {
+    # The family-wide rollout gate (#267). The fixture's `rollout` block says which
+    # staged gates the *family* may call available; this half proves that what
+    # PowerShell really advertises agrees with it. A member that started advertising
+    # a mode the gate still calls withheld --- or stopped advertising one the gate
+    # counts as proved --- is exactly the drift an operator would otherwise discover
+    # when a Run resolved a mode two thirds of the family cannot serve.
+    $Rollout = $Fixture["capability_verification"]["rollout"]
+    $Manifest = Get-GitLoopyCapabilityManifest
+    $Modes = $Manifest["continuation_modes"]
+
+    Assert-True (@($Rollout["stages"]).Count -gt 0) "the fixture registers rollout stages"
+    foreach ($Stage in $Rollout["stages"]) {
+        $StageProfile = [string]$Stage["profile"]
+        # `foundation` is a requirement set, not a Continuation mode, so there is no
+        # `continuation_modes` entry to compare it against.
+        if ($StageProfile -ceq "foundation") { continue }
+
+        $Proved = @($Stage["proved"] | ForEach-Object { [string]$_ }) -contains "powershell"
+        $Pending = @($Stage["pending"] | ForEach-Object { [string]$_ }) -contains "powershell"
+        Assert-True ($Proved -or $Pending) (
+            "rollout stage $StageProfile places powershell in proved or pending"
+        )
+        Assert-True ([bool]$Modes[$StageProfile] -eq $Proved) (
+            "PowerShell advertises continuation mode $StageProfile as " +
+            "$([bool]$Modes[$StageProfile]), but the family-wide rollout gate " +
+            "records $Proved"
+        )
+    }
+
+    # Serial is the whole of the first execute-frontier release's claim, and the
+    # advertised manifest has to say so independently of what the gate declares.
+    Assert-True (
+        (-not [bool]$Manifest["optional_capabilities"]["concurrent_dispatch"]) -and
+        (-not [bool]$Rollout["concurrent_dispatch"])
+    ) "concurrent Dispatch stays unsupported until its own family-wide gate"
+}
+
 try {
     Test-CapabilityCoverageGate
     Test-CapabilityVerificationGate
+    Test-RolloutGate
     Test-EndToEndCoverageGate
     Test-ScriptedGitHubTransport
     $CapabilityScenario = @(

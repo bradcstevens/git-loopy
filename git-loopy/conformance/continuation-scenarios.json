@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.10",
+  "fixture_schema_version": "1.11",
   "continuation_contract_version": "1.3",
   "record_format": 1,
   "wrapper_contract_version": "1.5",
@@ -3179,7 +3179,66 @@
         ],
         "profile": "execute-frontier"
       }
-    ]
+    ],
+    "rollout": {
+      "note": "The family-wide rollout gate (#267). `profile_distributions` above records which members declare each requirement set; this block records what the family may tell an operator is *available*, which is a different claim with a different failure mode -- a member quietly counted as ready ships a mode two thirds of the family answers `unsupported_operation` to. A stage is open only when every mandatory member has proved it, and a later stage stays shut behind a withheld earlier one because the requirement sets are nested. `report` is open family-wide (#263); `execute-frontier` is withheld until shell (#265) and PowerShell (#266) join Python (#264). Opening it does not open concurrency: `concurrent_dispatch` is its own later family-wide gate, so the first execute-frontier release is serial-only, and `concurrency_inputs` is the closed set an across-issue concurrency decision may read -- anything outside it is inference. `prohibited_surfaces` carries the six surfaces contract section 1 forbids outright, because opening a gate is exactly when one of them starts to look like a reasonable shortcut.",
+      "mandatory_distributions": [
+        "powershell",
+        "python",
+        "shell"
+      ],
+      "stages": [
+        {
+          "profile": "foundation",
+          "open": true,
+          "proved": [
+            "powershell",
+            "python",
+            "shell"
+          ],
+          "pending": []
+        },
+        {
+          "profile": "report",
+          "open": true,
+          "proved": [
+            "powershell",
+            "python",
+            "shell"
+          ],
+          "pending": []
+        },
+        {
+          "profile": "execute-frontier",
+          "open": false,
+          "proved": [
+            "python"
+          ],
+          "pending": [
+            "powershell",
+            "shell"
+          ]
+        }
+      ],
+      "open_stage": "report",
+      "concurrent_dispatch": false,
+      "serial_only": true,
+      "concurrency_inputs": [
+        "issue-backed-parallel-safe",
+        "prerequisites",
+        "targets",
+        "effect-scopes"
+      ],
+      "prohibited_surfaces": [
+        "central continuation issue",
+        "authoritative Markdown snapshot",
+        "mutable project queue",
+        "append-only execution journal",
+        "central tombstone ledger",
+        "authoritative local cache"
+      ],
+      "render": "Continuation rollout: report is open family-wide; execute-frontier is withheld pending powershell, shell. Concurrent Dispatch is unsupported. Mode stays off until an operator opts in."
+    }
   },
   "scenarios": [
     {
@@ -28922,6 +28981,154 @@
           "api repos/octo/example/collaborators/planner/permission"
         ]
       }
+    },
+    {
+      "id": "reconcile-withholds-completion-over-an-unadopted-carrier",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "reconcile"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "revision_protocol": true
+        }
+      },
+      "github_script": [
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": [
+            {
+              "number": 300,
+              "state": "open",
+              "html_url": "https://github.com/octo/example/issues/300",
+              "labels": [
+                {
+                  "name": "git-loopy-continuation"
+                }
+              ],
+              "comments": 1
+            },
+            {
+              "number": 301,
+              "state": "open",
+              "html_url": "https://github.com/octo/example/issues/301",
+              "labels": [
+                {
+                  "name": "git-loopy-continuation"
+                }
+              ],
+              "comments": 0
+            }
+          ]
+        },
+        {
+          "command": "api repos/octo/example/issues/300/comments?per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": [
+            {
+              "id": 9101,
+              "html_url": "https://github.com/octo/example/issues/300#issuecomment-9101",
+              "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"carrier\":{\"kind\":\"issue\",\"number\":300,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"terminal\",\"outcome\":{\"destination_satisfied\":true,\"effective_at\":\"2026-07-22T18:00:00Z\",\"evidence\":[{\"kind\":\"issue\",\"number\":300,\"repository\":\"octo/example\"}],\"kind\":\"complete\",\"summary\":\"Workstream 300 reached a terminal outcome.\"},\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"731a124954927f75fe18d3c1d802049d7640e1a4083e15c1cda20980c51c250c\",\"semantic_fingerprints\":{},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":300,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":300,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":300,\"repository\":\"octo/example\"}}}}\n```",
+              "user": {
+                "login": "planner",
+                "type": "User"
+              },
+              "created_at": "2026-07-22T20:00:00Z",
+              "updated_at": "2026-07-22T20:00:00Z"
+            }
+          ]
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": {
+          "ok": true,
+          "operation": "reconcile",
+          "result": {
+            "status": "waiting",
+            "observed": {
+              "repository": "octo/example",
+              "indexed_carriers": 2,
+              "producer_revisions": 1
+            },
+            "actions": [],
+            "outcomes": [
+              {
+                "workstream_anchor": {
+                  "kind": "issue",
+                  "number": 300,
+                  "repository": "octo/example"
+                },
+                "kind": "complete",
+                "destination_satisfied": true,
+                "effective_at": "2026-07-22T18:00:00Z",
+                "evidence": [
+                  {
+                    "kind": "issue",
+                    "number": 300,
+                    "repository": "octo/example"
+                  }
+                ],
+                "summary": "Workstream 300 reached a terminal outcome."
+              }
+            ],
+            "retirements": [],
+            "diagnostics": [
+              {
+                "code": "index_label_stale",
+                "carrier": 301
+              }
+            ],
+            "observation": {
+              "heads": [
+                {
+                  "carrier": 300,
+                  "producer": "planner",
+                  "revision_id": "731a124954927f75fe18d3c1d802049d7640e1a4083e15c1cda20980c51c250c",
+                  "workstream_anchor": {
+                    "kind": "issue",
+                    "number": 300,
+                    "repository": "octo/example"
+                  }
+                }
+              ],
+              "token": "sha256:49c03b4e57e17a926b3c2ef51e7a84ba0e18c6f96529056a9bed5a39b16c0c38",
+              "validators": [
+                {
+                  "comment_id": 9101,
+                  "sha256": "7917a7e3150f1364c46f050ea16095e006aef58c3013d09d3723cb27afc5852c"
+                }
+              ]
+            }
+          }
+        },
+        "stderr_contains": null,
+        "github_calls": [
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/300/comments?per_page=100&page=1",
+          "api repos/octo/example/collaborators/planner/permission"
+        ]
+      },
+      "note": "#267: a project may be adopted into Continuation one Workstream at a time, so a repository that predates the contract is expected to hold carriers no recognized Transition owner has published a trusted root on. Carrier 301 is exactly that: the index says it carries Continuation records and it holds none. The adopted half of this read is affirmatively terminal -- carrier 300 is a `complete` outcome with its Destination satisfied -- so the projection would render `complete` if the unadopted carrier were ignored, which would be a project-wide completion claim about a Workstream nobody has published for. `index_label_stale` is therefore a coverage-uncertainty code in every family member, and the status stays `waiting`."
     },
     {
       "id": "reconcile-attaches-exact-occurrence-handoff",

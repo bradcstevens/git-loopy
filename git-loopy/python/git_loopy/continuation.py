@@ -170,6 +170,12 @@ RETIREMENT_REASONS = frozenset(
 )
 _COVERAGE_UNCERTAINTY_CODES = frozenset(
     {
+        # An indexed carrier holding no trusted record is an observed Workstream
+        # carrier no recognized Transition owner has published a trusted root on
+        # (#267). Coverage over it is not closed, so a project-wide "complete"
+        # claim built beside it would be a claim about Workstreams nobody has
+        # published for.
+        "index_label_stale",
         "invalid_revision",
         "missing_predecessor",
         "missing_retirement_receipt",

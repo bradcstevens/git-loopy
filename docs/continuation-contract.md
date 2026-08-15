@@ -138,6 +138,44 @@ if `report` is advertised while any locked area is unowned. `default` remains `o
 opts in per §10 — and `execute-frontier` remains `false` in every distribution until it can
 actually dispatch one.
 
+### The family-wide rollout gate
+
+A manifest is one distribution's claim. Whether a mode is *available* is a claim about the whole
+family, and the two are answered separately: the Python Runner advertises
+`continuation_modes.execute-frontier: true` because it implements serial fixed-frontier Dispatch,
+while shell and PowerShell advertise it `false` until their native modules do. Reporting only the
+local verdict would read as general availability for a mode two thirds of the family answers
+`unsupported_operation` to.
+
+The gate is therefore derived rather than asserted. `capability_verification.profile_distributions`
+records which members declare each requirement set, each member pins its own row against the
+manifest its real native entrypoint advertises, and
+`capability_verification.rollout` is computed from those attributions. Two rules govern it:
+
+- **A stage is proved, never counted.** It opens only when every mandatory member — Python, shell,
+  PowerShell — has passed the mandatory fixtures for it. The Rust Dashboard core is not mandatory:
+  it consumes Events and never publishes or reconciles, so it has no manifest to judge.
+- **Staging is monotonic.** A later gate stays shut behind a withheld earlier one, because the
+  requirement sets are nested (`foundation ⊂ report ⊂ execute-frontier`).
+
+Opening the execute-frontier gate does not open a concurrency gate. `concurrent_dispatch` has its
+own later family-wide gate, so the first execute-frontier release is serial-only, and an
+across-issue concurrency decision reads a closed set of inputs — an issue-backed `parallel-safe`
+assertion plus the Prerequisite, Target, and effect-scope checks — and nothing else.
+
+Rolling out over a repository that predates the contract is not a backfill. A legacy Workstream is
+adopted when its next recognized Transition owner publishes the first trusted root for it, and
+nothing else adopts one: not a label, prose, a comment, a local file, or conversation history. A
+Reconciliation that observes both adopted Workstreams and carriers holding no trusted root reports
+the mixture explicitly, and the unadopted half is excluded from authorization and from any
+terminal-completion claim. `index_label_stale` — an indexed carrier holding no trusted record — is
+therefore a coverage-uncertainty diagnostic in every family member: an all-state read that finds
+one has not closed coverage, so it renders `waiting` rather than a project-wide `complete` built
+only over the adopted half.
+
+`docs/continuation-rollout.md` is the operator-facing companion: distribution selection and
+verification, the staged gates, migration behavior, capability requirements, and failure recovery.
+
 ## 5. Event observations
 
 Event schema 1.1 adds `wrapper.continuation.reconciled`,

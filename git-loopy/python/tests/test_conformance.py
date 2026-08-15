@@ -15,6 +15,7 @@ from rich.console import Console
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import continuation as continuation_module
+from git_loopy import continuation_rollout as rollout_module
 from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
@@ -1259,7 +1260,7 @@ def test_run_start_fixture_pins_exact_release_identity() -> None:
 
 
 def test_continuation_fixture_pins_independent_version_axes() -> None:
-    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.10"
+    assert _CONTINUATION_SCENARIOS["fixture_schema_version"] == "1.11"
     assert (
         _CONTINUATION_SCENARIOS["continuation_contract_version"]
         == continuation_module.CONTINUATION_CONTRACT_VERSION
@@ -1356,6 +1357,81 @@ def test_continuation_capability_profiles_name_the_distributions_that_declare_th
         for profile, distributions in attribution.items()
         if "python" in distributions
     } == set(verification_module.CONTINUATION_PROFILES)
+
+
+def test_the_family_wide_rollout_gate_is_derived_from_the_pinned_attributions() -> None:
+    """The staged gate every family member is judged by, computed once and shared.
+
+    `profile_distributions` records *who declares what*; the rollout records *what
+    the family may tell an operator is available*, and the second is derived from
+    the first rather than asserted beside it. That is what makes the chain complete:
+    each member pins its own verdict against the manifest it really advertises, the
+    attributions are pinned against those verdicts, and the stage an operator is
+    shown falls out of them. A member that starts advertising `execute-frontier`
+    without widening the attribution changes nothing here; one that widens the
+    attribution opens the gate here, in one place, for all three.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    rollout_fixture = verification["rollout"]
+    attribution = verification["profile_distributions"]
+
+    # The release's own declaration and the shared fixture are the same claim.
+    assert {
+        profile: list(distributions)
+        for profile, distributions in rollout_module.PROVED_DISTRIBUTIONS.items()
+    } == {profile: sorted(distributions) for profile, distributions in attribution.items()}
+
+    rollout = rollout_module.evaluate_family_rollout(attribution)
+    assert rollout_fixture["mandatory_distributions"] == list(
+        rollout_module.MANDATORY_DISTRIBUTIONS
+    )
+    assert rollout_fixture["stages"] == [
+        {
+            "profile": stage.profile,
+            "open": stage.open,
+            "proved": list(stage.proved),
+            "pending": list(stage.pending),
+        }
+        for stage in rollout.stages
+    ]
+    assert rollout_fixture["open_stage"] == rollout.open_stage == "report"
+    assert rollout_fixture["concurrent_dispatch"] is rollout.concurrent_dispatch is False
+    assert rollout_fixture["serial_only"] is rollout.serial_only is True
+    assert rollout_fixture["concurrency_inputs"] == list(
+        rollout_module.CONCURRENCY_INPUTS
+    )
+    assert rollout_fixture["prohibited_surfaces"] == list(
+        rollout_module.PROHIBITED_SURFACES
+    )
+    assert rollout_fixture["render"] == rollout.render()
+
+
+def test_no_family_member_advertises_a_mode_the_rollout_withholds_from_it() -> None:
+    """A withheld stage and a member advertising its mode cannot both be true.
+
+    This is the anti-drift half. The advertised manifests are the ones the three
+    Conformance adapters drive through each real native entrypoint, so a member that
+    started advertising `execute-frontier` without joining the attribution would be
+    caught here rather than by an operator whose Run resolved a mode the family gate
+    still calls withheld.
+    """
+    verification = _CONTINUATION_SCENARIOS["capability_verification"]
+    rollout = rollout_module.evaluate_family_rollout(
+        verification["profile_distributions"]
+    )
+    manifests = _advertised_manifests()
+
+    for stage in rollout.stages:
+        if stage.profile == verification_module.FOUNDATION_PROFILE:
+            continue  # the foundation gate is not a `continuation_modes` entry
+        for distribution in stage.pending:
+            assert (
+                manifests[distribution]["continuation_modes"][stage.profile] is False
+            ), (distribution, stage.profile)
+        for distribution in stage.proved:
+            assert (
+                manifests[distribution]["continuation_modes"][stage.profile] is True
+            ), (distribution, stage.profile)
 
 
 def _manifest_without(manifest: dict[str, Any], path: list[str]) -> dict[str, Any]:
