@@ -20,6 +20,7 @@ import io
 import json
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -2253,3 +2254,118 @@ def test_the_two_reasons_credits_are_unavailable_read_differently() -> None:
     assert "this Orchestrator cannot report Cost" in native
     assert "no billing telemetry reported" not in native
 
+# Rolling dispatch: the Summary reports finalized contributions only (#310)
+# ---------------------------------------------------------------------------
+
+
+def _contribution_summary(
+    *, tokens_in: int, cost_usd: float, closure_outcome: str
+) -> dict[str, Any]:
+    """The 14-key ``wrapper.contribution.end`` summary the contract pins."""
+    return {
+        "model": "claude-opus-4.8",
+        "effort": "high",
+        "tokens_in": tokens_in,
+        "tokens_out": 5,
+        "observed_tokens": tokens_in + 5,
+        "cost_usd": cost_usd,
+        "commits": 1,
+        "closures": 1 if closure_outcome == "closed" else 0,
+        "closure_outcome": closure_outcome,
+        "recovery_attempts": 0,
+        "agent_seconds": 4.0,
+        "lifecycle_seconds": 9.0,
+        "peak_context_window": None,
+        "strike_reaction": "reset",
+        "tool_count": 2,
+        "skill_call_count": 1,
+        "skills_consulted": ["tdd"],
+    }
+
+
+def test_overlapping_contributions_each_reach_the_summary_as_their_own_row() -> None:
+    """Rolling dispatch: one Summary row per finalized **Lane contribution** (#310).
+
+    Under the retired Wave a round opened one snapshot and closed it, so the
+    Summary's single "current iteration" slot was safe. Rolling dispatch has no
+    round: #43 starts while #42 is still open, and #42 finishes *after* #43 —
+    a single slot would give whichever finished first the other's tokens, or
+    drop a row entirely. Each contribution's row is instead cut from its own
+    authoritative ``wrapper.contribution.end``.
+    """
+    renderer, summary, _buf = _make_renderer()
+    for ref, lane in ((42, "L1"), (43, "L2")):
+        renderer.render(
+            {
+                "type": events_module.WRAPPER_CONTRIBUTION_START,
+                "iter": None,
+                "contribution_id": f"c-{ref}",
+                "issue": ref,
+                "lane_id": lane,
+            }
+        )
+    # #43 finalizes first — its Lane slot is already free for the next issue.
+    for ref, lane, tokens, cost, outcome in (
+        (43, "L2", 20, 0.2, "advanced"),
+        (42, "L1", 90, 0.9, "closed"),
+    ):
+        renderer.render(
+            {
+                "type": events_module.WRAPPER_CONTRIBUTION_END,
+                "iter": None,
+                "contribution_id": f"c-{ref}",
+                "issue": ref,
+                "lane_id": lane,
+                "published": True,
+                "reason": "published",
+                "summary": _contribution_summary(
+                    tokens_in=tokens, cost_usd=cost, closure_outcome=outcome
+                ),
+                "issues": [{"issue": ref, "status": outcome}],
+            }
+        )
+
+    assert [snap.issue_num for snap in summary.completed] == [43, 42]
+    assert [snap.usage.tokens_in for snap in summary.completed] == [20, 90]
+    assert [snap.outcome for snap in summary.completed] == ["advanced", "closed"]
+    assert [snap.normalized_cost_usd for snap in summary.completed] == [
+        Decimal("0.2"),
+        Decimal("0.9"),
+    ]
+    assert summary.open_contributions == {}
+    # Skill adoption still measured per contribution, not dropped in Parallel.
+    assert [sorted(snap.skills_consulted) for snap in summary.completed] == [
+        ["tdd"], ["tdd"]
+    ]
+
+
+def test_an_unfinalized_contribution_contributes_no_summary_row() -> None:
+    """The Summary carries no partial row for in-flight work (#310).
+
+    A **Lane contribution** can be parked behind the **Integration backlog**,
+    merging, or in bounded auto-resolution long after its agent session ends.
+    Only ``wrapper.contribution.end`` — the authoritative finalized row — puts
+    it in the Summary, so an operator reading the table mid-Run never sees a
+    half-counted contribution presented as a finished one.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render(
+        {
+            "type": events_module.WRAPPER_CONTRIBUTION_START,
+            "iter": None,
+            "contribution_id": "c-42",
+            "issue": 42,
+            "lane_id": "L1",
+        }
+    )
+    renderer.render(
+        {
+            "type": events_module.WRAPPER_COMMIT_RECORDED,
+            "sha": "abc1234",
+            "subject": "feat: work in flight",
+            "lane_issue": 42,
+        }
+    )
+    assert summary.completed == []
+    assert set(summary.open_contributions) == {"c-42"}
+    assert list(summary.build_run_table().rows) == []

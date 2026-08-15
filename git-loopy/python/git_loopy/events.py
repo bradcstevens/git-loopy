@@ -208,10 +208,11 @@ PYTHON_PARALLEL_CAPABILITIES: dict[str, bool] = {
     "rolling_dispatch": True,
     "integration_backlog": True,
     "adaptive_lane_limit": True,
-    # The Lane-contribution lifecycle literals below are reserved but have no
-    # producer yet: a Parallel Run still records legacy Wave-shaped rows. `true`
-    # here would advertise a stream no replay contains.
-    "contribution_events": False,
+    # The Lane-contribution lifecycle literals now have producers (#310): a
+    # Parallel Run opens and reconciles one accounting scope per contribution
+    # rather than one per Lane slot, so a replay really does contain the stream
+    # this declares.
+    "contribution_events": True,
 }
 
 _DEFAULT_CONTEXT_TARGET_TOKENS = 100_000

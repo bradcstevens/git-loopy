@@ -589,3 +589,80 @@ def test_rollup_never_sums_a_subagent_s_self_reported_totals() -> None:
     assert summary["premium_requests"] == pytest.approx(1.0)
     assert summary["tokens_in"] == 10
     assert summary["model"] == "gpt-5.6-terra"
+def test_overlapping_lane_contributions_each_account_only_their_own_work() -> None:
+    """Rolling dispatch: one open accounting scope per **Lane contribution**.
+
+    #310. Under the retired Wave a round opened one scope and every Lane folded
+    into it, so the round boundary was also the accounting boundary. Rolling
+    dispatch has no round: #42's contribution can finalize while #43's session
+    is still running, and #43's Lane slot can already be working #44. A single
+    "current Iteration" slot would hand whichever contribution finished first
+    the tokens every other one had spent.
+    """
+    clock = _Clock()
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=clock
+    )
+
+    for issue in (42, 43):
+        rollup.observe(
+            {
+                "type": "wrapper.contribution.start",
+                "iter": None,
+                "contribution_id": f"c-{issue}",
+                "issue": issue,
+                "lane_id": "lane-0",
+            }
+        )
+        rollup.observe(
+            {
+                "type": "wrapper.issue.activated",
+                "issue": issue,
+                "lane_issue": issue,
+                "activated_at": f"2026-05-16T00:00:0{issue - 41}.000Z",
+                "binding_source": "lane_pickup",
+            }
+        )
+    for issue, tokens in ((42, 100), (43, 7)):
+        rollup.observe(
+            {
+                "type": "usage.tokens",
+                "lane_issue": issue,
+                "model": "test-model",
+                "input": tokens,
+                "output": 1,
+            }
+        )
+        rollup.observe({"type": "wrapper.commit.recorded", "lane_issue": issue})
+
+    clock.value = 104.0
+    rollup.observe(
+        {
+            "type": "wrapper.auto_close",
+            "issue": 42,
+            "lane_issue": 42,
+            "ts": "2026-05-16T00:00:04.000Z",
+        }
+    )
+    first = rollup.finish(iter_num=1, strikes=0, lane_issue=42)
+
+    # #43's session carries on in a Lane slot #42 has long since released.
+    rollup.observe(
+        {
+            "type": "usage.tokens",
+            "lane_issue": 43,
+            "model": "test-model",
+            "input": 5,
+            "output": 1,
+        }
+    )
+    second = rollup.finish(iter_num=2, strikes=0, lane_issue=43)
+
+    assert [issue["issue"] for issue in first["issues"]] == [42]
+    assert first["summary"]["tokens_in"] == 100
+    assert first["summary"]["commits"] == 1
+    assert first["issues"][0]["status"] == "closed"
+    assert [issue["issue"] for issue in second["issues"]] == [43]
+    assert second["summary"]["tokens_in"] == 12
+    assert second["summary"]["commits"] == 1
+    assert second["issues"][0]["consumption"]["tokens_in"] == 12
