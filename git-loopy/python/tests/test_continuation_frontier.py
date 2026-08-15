@@ -14,12 +14,27 @@ pinning the transport instead.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from typing import Any
 
 import pytest
 
-from git_loopy import config, continuation, continuation_frontier, verification
+from git_loopy import config, continuation, verification
+
+# #264 is mid-flight. This suite was Checkpointed (ADR-0004) ahead of the module
+# it drives, and an unimportable test module is a *collection error*: pytest
+# stops, so the AGENTS.md Python loop -- the one every Lane merge runs through
+# Integration -- reports nothing at all rather than one red suite. Absence is
+# the only thing skipped, deliberately: once #264 lands the module, an
+# ImportError raised *inside* it is a defect and must still be raised.
+if importlib.util.find_spec("git_loopy.continuation_frontier") is None:
+    pytest.skip(
+        "git_loopy.continuation_frontier has not landed yet (#264)",
+        allow_module_level=True,
+    )
+
+from git_loopy import continuation_frontier  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

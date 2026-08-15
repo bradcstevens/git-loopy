@@ -162,12 +162,41 @@ jobs:
       # per-platform installer script, so one line covers every runner and the
       # pin is the same string everywhere. The version check is a refusal, not a
       # report: a different cargo-dist may plan a different artifact set.
+      #
+      # A cross container is a *different machine* from the one whose
+      # architecture executes the tool, and both of ours say so in their own
+      # way. `manylinux2014-cross:aarch64` carries the aarch64 gcc and no Rust
+      # at all, so an unqualified `cargo install` there exits 127 before the
+      # compiler is reached. Both containers preset `CARGO_BUILD_TARGET` to the
+      # *target* triple, so a `cargo install` that does succeed hands back a
+      # perfectly good arm64 `dist` the x86_64 host cannot exec (126, `Exec
+      # format error`). Reach a toolchain first, then build the tool for the
+      # architecture that runs it — the target triple belongs to `dist build`,
+      # not to `dist` itself.
       - name: Install the pinned release toolchain
         shell: bash
         env:
           CARGO_DIST_VERSION: "0.32.0"
         run: |
-          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          if ! command -v cargo >/dev/null 2>&1; then
+            export PATH="$cargo_home/bin:$PATH"
+            if ! command -v cargo >/dev/null 2>&1; then
+              echo "no Rust in this container; installing the default toolchain"
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+              export PATH="$cargo_home/bin:$PATH"
+            fi
+            # Handed forward only here: the image's own PATH never mentioned a
+            # Rust toolchain, so the build step would not find `dist` either.
+            # Every runner that already had one keeps the PATH it came with.
+            dirname -- "$(command -v cargo)" >> "$GITHUB_PATH"
+          fi
+          command -v cargo >/dev/null 2>&1 || { echo "no cargo on PATH" >&2; exit 1; }
+
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "installing cargo-dist $CARGO_DIST_VERSION for $host"
+          CARGO_BUILD_TARGET="$host" cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
           dist --version
           dist --version | grep -q "$CARGO_DIST_VERSION"
 
@@ -176,21 +205,61 @@ jobs:
         working-directory: git-loopy/tui
         env:
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          # Not a credential: the hardened runtime is a signing *option*, and
+          # `release-trust.json` pins this exact name and value as the whole of
+          # "hardened". It costs nothing on a run that signs nothing.
+          CODESIGN_OPTIONS: runtime
           # cargo-dist signs inside this step, which is the only place signing
           # can happen: it writes each `.sha256` afterwards, so a published
           # checksum is a checksum of the *signed* artifact. Both signers
           # degrade to a warning when their credentials are absent — which is
           # what keeps a pull request buildable, and exactly why the trust gate
           # asks the artifact instead of trusting this step's exit code.
-          CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
-          CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
-          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
-          CODESIGN_OPTIONS: runtime
-          SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
-          SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
-          SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
-          SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
-        run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
+          #
+          # An **empty** credential is not an **absent** one, and only the
+          # second takes that warn-and-skip path: cargo-dist reads these names
+          # with `env::var().ok()`, so a name set to "" reads as supplied. On a
+          # pull request every `secrets.*` renders to "", which is how a clean
+          # compile went on to hand `security import` an empty certificate.
+          # They are staged here under names cargo-dist does not read, and
+          # promoted below only when a platform's whole set is present.
+          STAGED_CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
+          STAGED_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+          STAGED_CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          STAGED_SSLDOTCOM_USERNAME: ${{ secrets.SSLDOTCOM_USERNAME }}
+          STAGED_SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
+          STAGED_SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
+          STAGED_SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
+        run: |
+          # A partial set signs nothing, so it is treated as no set at all
+          # rather than as a signer discovered failing halfway through.
+          if [ -n "$STAGED_CODESIGN_CERTIFICATE" ] &&
+            [ -n "$STAGED_CODESIGN_CERTIFICATE_PASSWORD" ] &&
+            [ -n "$STAGED_CODESIGN_IDENTITY" ]; then
+            echo "signing: macOS signing credentials present; the artifact will be signed"
+            export CODESIGN_CERTIFICATE="$STAGED_CODESIGN_CERTIFICATE"
+            export CODESIGN_CERTIFICATE_PASSWORD="$STAGED_CODESIGN_CERTIFICATE_PASSWORD"
+            export CODESIGN_IDENTITY="$STAGED_CODESIGN_IDENTITY"
+          else
+            echo "signing: no macOS signing credentials on this run; building unsigned"
+          fi
+
+          if [ -n "$STAGED_SSLDOTCOM_USERNAME" ] &&
+            [ -n "$STAGED_SSLDOTCOM_PASSWORD" ] &&
+            [ -n "$STAGED_SSLDOTCOM_CREDENTIAL_ID" ] &&
+            [ -n "$STAGED_SSLDOTCOM_TOTP_SECRET" ]; then
+            echo "signing: Windows signing credentials present; the artifact will be signed"
+            export SSLDOTCOM_USERNAME="$STAGED_SSLDOTCOM_USERNAME"
+            export SSLDOTCOM_PASSWORD="$STAGED_SSLDOTCOM_PASSWORD"
+            export SSLDOTCOM_CREDENTIAL_ID="$STAGED_SSLDOTCOM_CREDENTIAL_ID"
+            export SSLDOTCOM_TOTP_SECRET="$STAGED_SSLDOTCOM_TOTP_SECRET"
+          else
+            echo "signing: no Windows signing credentials on this run; building unsigned"
+          fi
+
+          # A signer that ran and failed still fails the job: nothing here
+          # swallows dist's exit code.
+          dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
 
       - name: Publish the artifact checksum alongside it
         shell: bash

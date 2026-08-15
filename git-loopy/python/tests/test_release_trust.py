@@ -531,19 +531,43 @@ def test_every_declared_credential_actually_reaches_the_signing_job() -> None:
     The inverse of the test above, and the one that matters for trust rather
     than for secrecy. cargo-dist's Windows signer carries the literal string
     "skipping codesigning, required SSLDOTCOM env-vars aren't set" and its macOS
-    signer warns per target — both exit 0. So deleting one `env:` line stops the
-    signing without stopping the build, and the only thing that would notice is
-    the publication gate, seven finished builds later, and only on the stable
-    channel.
+    signer warns per target — both exit 0. So breaking one credential's wiring
+    stops the signing without stopping the build, and the only thing that would
+    notice is the publication gate, seven finished builds later, and only on the
+    stable channel.
+
+    #316 put a deliberate indirection in that wiring: on a pull request every
+    `secrets.*` renders to the empty string, and cargo-dist reads an empty name
+    as *supplied*, so the credentials are staged under names it does not read
+    and promoted only when a platform's whole set is present. Both halves are
+    followed here — the secret has to reach some staging name, and that staging
+    name has to reach the name the signer reads — because a staged credential
+    that is never promoted is exactly the silent non-signing this pins against.
     """
     policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-    job = yaml.safe_dump(_workflow(policy)["jobs"][policy.signing_job])
+    steps = [
+        step
+        for step in _workflow(policy)["jobs"][policy.signing_job]["steps"]
+        if isinstance(step, dict)
+    ]
 
     for mechanism in policy.mechanisms:
         for credential in mechanism.credentials:
-            assert f"{credential}: ${{{{ secrets.{credential} }}}}" in job, (
+            expression = f"${{{{ secrets.{credential} }}}}"
+            wiring = [
+                (name, str(step.get("run", "")))
+                for step in steps
+                for name, value in step.get("env", {}).items()
+                if value == expression
+            ]
+            assert len(wiring) == 1, (
                 f"{mechanism.id} declares {credential}, but the signing job "
-                "never hands it to the tool that needs it"
+                "never reads it from secrets exactly once"
+            )
+            name, body = wiring[0]
+            assert name == credential or f'export {credential}="${name}"' in body, (
+                f"{mechanism.id} stages {credential} as {name}, but never "
+                "promotes it to the name the signer reads"
             )
 
 
