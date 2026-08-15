@@ -4,6 +4,13 @@
 > Part of map [#98 — git-loopy init scaffolds the full workflow skill catalog](https://github.com/bradcstevens/git-loopy/issues/98)
 > Throwaway research branch: `research/skills-licensing`
 
+
+**Superseded — retained as a dated finding.** This question assumed git-loopy would
+*vendor* the Skill catalog into its own distribution. It no longer does:
+[ADR-0023](../adr/0023-pinned-external-skill-catalog.md) pins an external catalog and
+[ADR-0025](../adr/0025-installed-skill-catalog.md) installs it, so a distribution carries
+the pin rather than the Skills. What follows records what was true when it was asked.
+
 ## Verdict: **NEEDS ONE ACTION**
 
 `mattpocock/skills` is **MIT-licensed** and unconditionally permits redistribution + modification in a downstream MIT wheel on PyPI — *except* the one MIT condition: Matt Pocock's copyright + permission notice must travel with every copy. That condition is **not currently satisfied by the wheel** (the repo-root `LICENSE` is Brad Stevens' only; the README credit is informal attribution, not the legal notice, and a wheel installer never reads the README). Excluding the 3 Microsoft/Playwright skills cleanly removes any obligation tied to them. None of the 26 vendored `SKILL.md` files embed per-skill copyright headers.

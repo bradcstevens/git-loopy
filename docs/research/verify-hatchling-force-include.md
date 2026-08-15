@@ -4,6 +4,13 @@
 > Part of map [#98 — git-loopy init scaffolds the full workflow skill catalog](https://github.com/bradcstevens/git-loopy/issues/98)
 > Throwaway research branch: `research/verify-hatchling`
 
+
+**Superseded — retained as a dated finding.** This question assumed git-loopy would
+*vendor* the Skill catalog into its own distribution. It no longer does:
+[ADR-0023](../adr/0023-pinned-external-skill-catalog.md) pins an external catalog and
+[ADR-0025](../adr/0025-installed-skill-catalog.md) installs it, so a distribution carries
+the pin rather than the Skills. What follows records what was true when it was asked.
+
 ## Verdict: **FEASIBLE** (empirically confirmed)
 
 Single-source packaging of the skill catalog from repo-root `.copilot/skills/` — **without** duplicating trees into `git_loopy/skills/` — works via `[tool.hatch.build.targets.wheel.force-include]` with parent-relative paths (`../../.copilot/skills/<name>`). Selective inclusion (ship 26, drop 3) is achieved by listing exactly the skills to ship. **No `init.py` code change is required** for the wheel path — but there are two decision-shaping gotchas for the packaging ticket (#101), especially **editable installs**.
