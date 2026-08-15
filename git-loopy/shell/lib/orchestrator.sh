@@ -2198,51 +2198,6 @@ _git_loopy_stream_agent_output() {
   done
 }
 
-# The Orchestrator/agent boundary owes the turn a *default* SIGPIPE disposition,
-# so an agent whose downstream reader goes away dies rather than collecting
-# EPIPE on every write and deciding for itself whether to care. Bash cannot
-# supply one: a signal that was SIG_IGN when the shell started can never be
-# reset by the `trap` builtin — POSIX-specified shell behaviour, not a bash
-# quirk, and `trap - PIPE` is a silent no-op there. An Orchestrator launched by
-# a parent that ignores SIGPIPE therefore hands SIG_IGN through `exec` to the
-# agent and every tool it starts. Every GitHub Actions `run:` step is such a
-# child, which is why this reproduces in CI on two platforms and on neither
-# machine locally.
-#
-# The repair is an argv prefix that sets SIG_DFL and then `exec`s the turn in
-# place: the turn keeps the PID the watchdog signals and returns its own real
-# exit status (contract §4), and nothing extra survives into the Run.
-_GIT_LOOPY_SIGPIPE_RESET_PERL='$SIG{PIPE} = "DEFAULT";
-exec { $ARGV[0] } @ARGV
-  or do { print STDERR "git-loopy: could not start the agent turn: $!\n"; exit 127; };'
-
-# Resolved once per Run, and *only* when the disposition is actually leaking: a
-# Run started with a default SIGPIPE spawns exactly what it spawns today and
-# reaches for nothing extra, so this is a repair for a broken environment rather
-# than a new step in the ordinary path. Perl 5 is the mechanism because it is
-# already a prerequisite of this port (the native Continuation command uses it),
-# and because it is the one that behaves identically on Linux and macOS —
-# GNU `env --default-signal=` would work on Linux, but choosing per platform
-# would leave each of the family's two shell jobs proving a path the other never
-# runs. With no `perl`, the Run says so once and continues: a leaked signal
-# disposition is a weaker failure than a Run that refuses to start.
-_GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED=0
-declare -a _GIT_LOOPY_SIGPIPE_PREFIX=()
-
-_git_loopy_resolve_default_sigpipe_prefix() {
-  ((_GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED == 0)) || return 0
-  _GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED=1
-  _GIT_LOOPY_SIGPIPE_PREFIX=()
-
-  [[ -n "$(trap -p PIPE)" ]] || return 0
-
-  if command -v perl >/dev/null 2>&1; then
-    _GIT_LOOPY_SIGPIPE_PREFIX=(perl -e "$_GIT_LOOPY_SIGPIPE_RESET_PERL" --)
-  else
-    printf 'git-loopy: this Orchestrator inherited an ignored SIGPIPE and has no `perl` to restore it; the agent process inherits the ignore.\n' >&2
-  fi
-}
-
 git_loopy_run_bounded_turn() {
   # Run one already-assembled agent turn ("$@") with stdout converted into
   # unclassified Events while the same text remains visible on stderr, bounded by a
@@ -2291,11 +2246,14 @@ git_loopy_run_bounded_turn() {
       >"$flag_dir/active-monotonic" || return 1
   fi
   # One spawn, one disposition: whatever SIGPIPE this Orchestrator was handed,
-  # the turn below starts from the default.
-  _git_loopy_resolve_default_sigpipe_prefix
-  local -a turn=(
-    ${_GIT_LOOPY_SIGPIPE_PREFIX[@]+"${_GIT_LOOPY_SIGPIPE_PREFIX[@]}"} "$@"
-  )
+  # the turn below starts from the default. Applied here rather than at the
+  # agent-turn caller because this is the single place a turn is spawned, so
+  # every bounded turn crosses the boundary the same way.
+  local -a turn=()
+  if _git_loopy_sigpipe_shim; then
+    turn=("${_GIT_LOOPY_SIGPIPE_SHIM[@]}")
+  fi
+  turn+=("$@")
   if [[ -n "$iteration" ]]; then
     local output_fifo="$flag_dir/agent-output"
     mkfifo "$output_fifo" || {
@@ -2371,6 +2329,92 @@ git_loopy_run_bounded_turn() {
   return "$result"
 }
 
+# Whether SIGPIPE was already ignored when this shell started. Recorded once, at
+# source time, because it is the only moment the answer is unambiguous: the live
+# interface installs and clears an ignore of its own around each guarded write,
+# and a later reading could land inside that window. Bash reports an
+# ignored-at-entry signal through `trap -p` forever — that is precisely what makes
+# it unrecoverable.
+_GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY=0
+[[ -z "$(trap -p PIPE)" ]] || _GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY=1
+
+declare -a _GIT_LOOPY_SIGPIPE_SHIM=()
+_GIT_LOOPY_SIGPIPE_SHIM_RESOLVED=0
+
+# The mechanisms that can hand a process a default SIGPIPE across `exec`, most
+# preferred first. It is data rather than a chain of `elif`s so each member can be
+# pinned on its own; nothing outside `_git_loopy_sigpipe_mechanism` knows the set.
+declare -a _GIT_LOOPY_SIGPIPE_MECHANISMS=(env perl python3)
+
+# Set `_GIT_LOOPY_SIGPIPE_SHIM` to the named mechanism's command prefix, or return
+# 1 when this host cannot serve it. Each mechanism is probed for the *capability*
+# rather than for the name: the BSD `env` on macOS is on every PATH and has no
+# `--default-signal` at all.
+_git_loopy_sigpipe_mechanism() {
+  case "$1" in
+    env)
+      env --default-signal=PIPE "${BASH:-bash}" -c '' 2>/dev/null || return 1
+      _GIT_LOOPY_SIGPIPE_SHIM=(env --default-signal=PIPE)
+      ;;
+    perl)
+      command -v perl >/dev/null 2>&1 || return 1
+      _GIT_LOOPY_SIGPIPE_SHIM=(
+        perl -e '$SIG{PIPE} = "DEFAULT"; exec { $ARGV[0] } @ARGV or die "$!\n"' --
+      )
+      ;;
+    python3)
+      command -v python3 >/dev/null 2>&1 || return 1
+      _GIT_LOOPY_SIGPIPE_SHIM=(
+        python3 -c 'import os, signal, sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])'
+      )
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Populate `_GIT_LOOPY_SIGPIPE_SHIM` with the command prefix that hands the
+# process it launches a *default* SIGPIPE disposition across `exec`, and return
+# 0. Returns 1, leaving the array empty, when no prefix is needed or none could
+# be resolved.
+#
+# The Orchestrator owes the agent process a default SIGPIPE: an agent whose
+# downstream reader goes away should die, not collect EPIPE on every write and
+# decide for itself whether to care. Bash cannot promise that on its own. POSIX
+# specifies that a signal which is SIG_IGN when the shell starts cannot be
+# restored by the `trap` builtin, and a parent that ignores SIGPIPE is not
+# exotic: every GitHub Actions `run:` step inherits SIG_IGN from the Node-based
+# runner, so the ignore would pass through `exec` into the agent process and
+# every tool it starts.
+#
+# The prefix is resolved from tools the shell distribution already depends on or
+# is very likely to find, never added as a new requirement: GNU
+# `env --default-signal`, then `perl` — already required for the native
+# Continuation command's portable JSON profile — then `python3`. A host with none
+# of the three gets one diagnostic and an unshimmed turn: the Run still works, it
+# just cannot make the boundary promise, which beats refusing to run at all.
+_git_loopy_sigpipe_shim() {
+  ((_GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY == 1)) || return 1
+
+  if ((_GIT_LOOPY_SIGPIPE_SHIM_RESOLVED == 0)); then
+    _GIT_LOOPY_SIGPIPE_SHIM_RESOLVED=1
+    local mechanism
+    for mechanism in ${_GIT_LOOPY_SIGPIPE_MECHANISMS[@]+"${_GIT_LOOPY_SIGPIPE_MECHANISMS[@]}"}; do
+      _git_loopy_sigpipe_mechanism "$mechanism" && break
+      _GIT_LOOPY_SIGPIPE_SHIM=()
+    done
+    if ((${#_GIT_LOOPY_SIGPIPE_SHIM[@]} == 0)); then
+      printf 'git-loopy: %s %s\n' \
+        'SIGPIPE was already ignored when this Run started and no way to restore it' \
+        '(GNU env --default-signal, perl, python3) is on PATH; the agent process inherits the ignore.' \
+        >&2
+    fi
+  fi
+
+  ((${#_GIT_LOOPY_SIGPIPE_SHIM[@]} > 0))
+}
+
 git_loopy_run_agent_turn() {
   local iteration="$1"
   local prompt="$2"
@@ -2390,8 +2434,13 @@ git_loopy_run_agent_turn() {
   # stream, and bound the turn by the resolved send timeout. The helper preserves
   # Copilot's real exit status (contract §4), or terminates and fails a turn that
   # overruns the bound so a hung agent never hangs the Iteration.
+  local -a launch=()
+  if _git_loopy_sigpipe_shim; then
+    launch=("${_GIT_LOOPY_SIGPIPE_SHIM[@]}")
+  fi
+  launch+=("${argv[@]}")
   git_loopy_run_bounded_turn \
-    "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "$iteration" "${argv[@]}"
+    "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "$iteration" "${launch[@]}"
 }
 
 _GIT_LOOPY_AUTO_CLOSURES=0
