@@ -547,6 +547,50 @@ def test_every_declared_credential_actually_reaches_the_signing_job() -> None:
             )
 
 
+def test_every_credential_the_signing_step_receives_belongs_to_a_signer() -> None:
+    """#316: an empty credential is a credential, so the step must drop it.
+
+    A pull request enters an environment that holds no secrets, so every
+    `${{ secrets.* }}` in the signing step's `env:` block expands to the empty
+    string -- and cargo-dist's signers read presence, not content. Both darwin
+    targets exited 255 inside `security import` and Windows exited 127 inside
+    an OIDC exchange, while the step's own comment claimed they degraded to a
+    warning.
+
+    The step now drops each signer's credentials as a *set* before running the
+    tool, and the sets are pinned against the trust policy rather than restated:
+    a credential added to the workflow but to no mechanism would otherwise be
+    handed to a signer empty again, which is the bug this closes.
+    `test_tui_release_build_steps.py` runs the script and observes the result.
+    """
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+    environment = _signing_step(policy).get("env", {})
+
+    supplied = {
+        name
+        for name, value in environment.items()
+        if isinstance(value, str) and f"secrets.{name}" in value
+    }
+    grouped = {
+        line.split()[0]: line.split()[1:]
+        for line in str(environment.get("SIGNING_MECHANISMS", "")).splitlines()
+        if line.strip()
+    }
+
+    assert grouped == {
+        mechanism.id: [
+            credential
+            for credential in mechanism.credentials
+            if credential in supplied
+        ]
+        for mechanism in policy.mechanisms
+        if any(credential in supplied for credential in mechanism.credentials)
+    }
+    assert {
+        credential for credentials in grouped.values() for credential in credentials
+    } == supplied
+
+
 def test_a_credential_written_to_disk_is_removed_on_every_path() -> None:
     """AC4: a failed step must not leave a signing key behind for the next one.
 

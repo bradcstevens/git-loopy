@@ -158,16 +158,43 @@ jobs:
         shell: bash
         run: ${{ matrix.packages_install }}
 
+      # A cross image is a build environment, not a runner image, and the two
+      # differ on the one thing every later step needs. `manylinux2014-cross`
+      # ships no Rust at all -- its `PATH` is the system directories plus the
+      # cross toolchain's `bin` -- so the job's first `cargo` exited 127 and
+      # that target never reached the compiler (#316). `rust-musl-cross` ships
+      # its own under `/root/.cargo/bin` and is left exactly as it is: the
+      # toolchain a cross container carries is the reason to build inside it.
+      - name: Reach a Rust toolchain that runs on this machine
+        shell: bash
+        run: |
+          if command -v cargo > /dev/null 2>&1; then
+            echo "using the toolchain this machine already carries: $(command -v cargo)"
+            exit 0
+          fi
+          echo "no cargo on PATH; installing a minimal toolchain for this machine"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+
       # Installed from source at an exact version rather than through a
       # per-platform installer script, so one line covers every runner and the
       # pin is the same string everywhere. The version check is a refusal, not a
       # report: a different cargo-dist may plan a different artifact set.
+      #
+      # `--target` is what makes that installation runnable. Both cross images
+      # export `CARGO_BUILD_TARGET` naming the triple they build *for*, so
+      # without it `cargo install` cross-compiles `dist` itself and the next
+      # line dies on `Exec format error` (#316). `rustc -vV` is the one answer a
+      # toolchain gives about the machine it is actually running on.
       - name: Install the pinned release toolchain
         shell: bash
         env:
           CARGO_DIST_VERSION: "0.32.0"
         run: |
-          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
+          host=$(rustc -vV | tr -d '\r' | sed -n 's/^host: //p')
+          echo "installing cargo-dist $CARGO_DIST_VERSION for $host"
+          cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked --target "$host"
           dist --version
           dist --version | grep -q "$CARGO_DIST_VERSION"
 
@@ -178,10 +205,21 @@ jobs:
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
           # cargo-dist signs inside this step, which is the only place signing
           # can happen: it writes each `.sha256` afterwards, so a published
-          # checksum is a checksum of the *signed* artifact. Both signers
-          # degrade to a warning when their credentials are absent — which is
-          # what keeps a pull request buildable, and exactly why the trust gate
-          # asks the artifact instead of trusting this step's exit code.
+          # checksum is a checksum of the *signed* artifact.
+          #
+          # Both signers degrade to a warning when their credentials are
+          # *absent* — which is what keeps a pull request buildable, and exactly
+          # why the trust gate asks the artifact instead of trusting this step's
+          # exit code. They read presence, not content, so an **empty**
+          # credential is not an absent one: it is a credential they will try to
+          # use. A pull request enters an environment that holds no secrets, so
+          # every expression below expands to the empty string, and #316 was
+          # five permanently-red jobs saying so. Which names belong to which
+          # signer is declared here and dropped as a set by the script, because
+          # a half-supplied signer is a misconfigured Release, not an absent one.
+          SIGNING_MECHANISMS: |
+            apple-developer-id CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD CODESIGN_IDENTITY
+            ssldotcom-esigner SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET
           CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
           CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
@@ -190,7 +228,33 @@ jobs:
           SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
           SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
           SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
-        run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
+        run: |
+          while read -r mechanism credentials; do
+            [ -n "$mechanism" ] || continue
+            present=()
+            absent=()
+            for name in $credentials; do
+              if [ -n "${!name:-}" ]; then
+                present+=("$name")
+              else
+                absent+=("$name")
+              fi
+            done
+            if [ ${#absent[@]} -eq 0 ]; then
+              echo "signing enabled: $mechanism holds every credential it needs"
+              continue
+            fi
+            # Half a credential set is the one case that must not be quiet: it
+            # is a Release whose secrets were edited, and skipping it would ship
+            # an unsigned artifact under a green check.
+            if [ ${#present[@]} -ne 0 ]; then
+              echo "::error::$mechanism holds ${present[*]} but not ${absent[*]}"
+              exit 1
+            fi
+            unset "${absent[@]}"
+            echo "signing skipped: $mechanism has no credentials on this runner; building unsigned"
+          done <<< "$SIGNING_MECHANISMS"
+          dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
 
       - name: Publish the artifact checksum alongside it
         shell: bash
