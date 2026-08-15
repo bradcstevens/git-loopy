@@ -2198,6 +2198,51 @@ _git_loopy_stream_agent_output() {
   done
 }
 
+# The Orchestrator/agent boundary owes the turn a *default* SIGPIPE disposition,
+# so an agent whose downstream reader goes away dies rather than collecting
+# EPIPE on every write and deciding for itself whether to care. Bash cannot
+# supply one: a signal that was SIG_IGN when the shell started can never be
+# reset by the `trap` builtin — POSIX-specified shell behaviour, not a bash
+# quirk, and `trap - PIPE` is a silent no-op there. An Orchestrator launched by
+# a parent that ignores SIGPIPE therefore hands SIG_IGN through `exec` to the
+# agent and every tool it starts. Every GitHub Actions `run:` step is such a
+# child, which is why this reproduces in CI on two platforms and on neither
+# machine locally.
+#
+# The repair is an argv prefix that sets SIG_DFL and then `exec`s the turn in
+# place: the turn keeps the PID the watchdog signals and returns its own real
+# exit status (contract §4), and nothing extra survives into the Run.
+_GIT_LOOPY_SIGPIPE_RESET_PERL='$SIG{PIPE} = "DEFAULT";
+exec { $ARGV[0] } @ARGV
+  or do { print STDERR "git-loopy: could not start the agent turn: $!\n"; exit 127; };'
+
+# Resolved once per Run, and *only* when the disposition is actually leaking: a
+# Run started with a default SIGPIPE spawns exactly what it spawns today and
+# reaches for nothing extra, so this is a repair for a broken environment rather
+# than a new step in the ordinary path. Perl 5 is the mechanism because it is
+# already a prerequisite of this port (the native Continuation command uses it),
+# and because it is the one that behaves identically on Linux and macOS —
+# GNU `env --default-signal=` would work on Linux, but choosing per platform
+# would leave each of the family's two shell jobs proving a path the other never
+# runs. With no `perl`, the Run says so once and continues: a leaked signal
+# disposition is a weaker failure than a Run that refuses to start.
+_GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED=0
+declare -a _GIT_LOOPY_SIGPIPE_PREFIX=()
+
+_git_loopy_resolve_default_sigpipe_prefix() {
+  ((_GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED == 0)) || return 0
+  _GIT_LOOPY_SIGPIPE_PREFIX_RESOLVED=1
+  _GIT_LOOPY_SIGPIPE_PREFIX=()
+
+  [[ -n "$(trap -p PIPE)" ]] || return 0
+
+  if command -v perl >/dev/null 2>&1; then
+    _GIT_LOOPY_SIGPIPE_PREFIX=(perl -e "$_GIT_LOOPY_SIGPIPE_RESET_PERL" --)
+  else
+    printf 'git-loopy: this Orchestrator inherited an ignored SIGPIPE and has no `perl` to restore it; the agent process inherits the ignore.\n' >&2
+  fi
+}
+
 git_loopy_run_bounded_turn() {
   # Run one already-assembled agent turn ("$@") with stdout converted into
   # unclassified Events while the same text remains visible on stderr, bounded by a
@@ -2245,6 +2290,12 @@ git_loopy_run_bounded_turn() {
     printf '%s' "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC" \
       >"$flag_dir/active-monotonic" || return 1
   fi
+  # One spawn, one disposition: whatever SIGPIPE this Orchestrator was handed,
+  # the turn below starts from the default.
+  _git_loopy_resolve_default_sigpipe_prefix
+  local -a turn=(
+    ${_GIT_LOOPY_SIGPIPE_PREFIX[@]+"${_GIT_LOOPY_SIGPIPE_PREFIX[@]}"} "$@"
+  )
   if [[ -n "$iteration" ]]; then
     local output_fifo="$flag_dir/agent-output"
     mkfifo "$output_fifo" || {
@@ -2253,9 +2304,9 @@ git_loopy_run_bounded_turn() {
     }
     _git_loopy_stream_agent_output "$iteration" "$flag_dir" <"$output_fifo" &
     output_pid=$!
-    "$@" >"$output_fifo" &
+    "${turn[@]}" >"$output_fifo" &
   else
-    "$@" 1>&2 &
+    "${turn[@]}" 1>&2 &
   fi
   local turn_pid=$!
 

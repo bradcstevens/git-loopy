@@ -527,6 +527,67 @@ bounded_stdout="$(git_loopy_run_bounded_turn 30 bash -c 'printf agent-marker' 2>
 assert_equal "" "$bounded_stdout" \
   "the turn's own stdout is folded to stderr, never onto the Event stream"
 
+# The Orchestrator/agent boundary hands the turn a *default* SIGPIPE
+# disposition, so an agent whose downstream reader goes away dies instead of
+# collecting EPIPE on every write and deciding for itself whether to care. That
+# has to be a property of the boundary, not of how the operator happened to
+# launch the Run: a non-interactive Bash cannot restore a signal that was
+# SIG_IGN at shell entry (POSIX — `trap - PIPE` is a silent no-op there), so an
+# Orchestrator started by an ignoring parent would otherwise leak SIG_IGN
+# through `exec` into the agent and every tool it starts. Both parent
+# dispositions are pinned, because the leak reproduces only under the ignoring
+# one — a case that ran only under the suite's own disposition passes on a
+# developer's terminal and fails in CI, where every `run:` step is a child of a
+# runner process that ignores SIGPIPE.
+sigpipe_probe="$temp_dir/sigpipe-probe.sh"
+cat >"$sigpipe_probe" <<'PROBE'
+set -uo pipefail
+# shellcheck disable=SC1091
+source "$PROBE_PORT_DIR/lib/orchestrator.sh"
+trap -p PIPE >"$PROBE_PARENT_RECORD"
+git_loopy_run_bounded_turn 30 \
+  bash -c 'trap -p PIPE >"$PROBE_RECORD"' >/dev/null 2>&1
+PROBE
+
+# Neither arm can be left to inheritance. A suite started under an ignore (every
+# CI `run:` step is) would otherwise run `default` as a second `ignored` case and
+# never notice — which is exactly how this shipped. Bash can *impose* an ignore
+# (`trap '' PIPE` then `exec`) but can never lift one, so the default arm borrows
+# Perl, which can. Each arm asserts the disposition it actually produced, so a
+# setup that failed to produce it fails the case instead of passing vacuously.
+sigpipe_default_perl='$SIG{PIPE} = "DEFAULT"; exec { $ARGV[0] } @ARGV;'
+
+for sigpipe_parent in default ignored; do
+  sigpipe_record="$temp_dir/sigpipe-$sigpipe_parent.record"
+  sigpipe_parent_record="$temp_dir/sigpipe-$sigpipe_parent.parent"
+  rm -f "$sigpipe_record" "$sigpipe_parent_record"
+  if [[ "$sigpipe_parent" == "default" ]]; then
+    sigpipe_launcher=(
+      perl -e "$sigpipe_default_perl" -- bash "$sigpipe_probe"
+    )
+  else
+    sigpipe_launcher=(
+      bash -c 'trap "" PIPE; exec bash "$@"' bash "$sigpipe_probe"
+    )
+  fi
+  PROBE_PORT_DIR="$port_dir" \
+    PROBE_RECORD="$sigpipe_record" \
+    PROBE_PARENT_RECORD="$sigpipe_parent_record" \
+    "${sigpipe_launcher[@]}"
+
+  if [[ "$sigpipe_parent" == "default" ]]; then
+    [[ ! -s "$sigpipe_parent_record" ]] ||
+      fail "the default-SIGPIPE case did not start the Orchestrator with a default SIGPIPE"
+  else
+    [[ -s "$sigpipe_parent_record" ]] ||
+      fail "the ignored-SIGPIPE case did not start the Orchestrator with SIGPIPE ignored"
+  fi
+  [[ -e "$sigpipe_record" ]] ||
+    fail "the bounded turn never reached the agent process (parent SIGPIPE: $sigpipe_parent)"
+  [[ ! -s "$sigpipe_record" ]] ||
+    fail "the agent turn inherited a non-default SIGPIPE from a $sigpipe_parent-SIGPIPE Orchestrator: $(<"$sigpipe_record")"
+done
+
 # Closed-world Skill policy (contract §17.6): the shell port has no native
 # `enabled_skills` support yet, so every policy surface the family contract names
 # must be *detected*, not ignored. The fixture's `native_transition` block is the

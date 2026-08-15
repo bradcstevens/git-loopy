@@ -159,10 +159,11 @@ for arg in "$@"; do
   printf '%s\n' "$arg" >>"$FAKE_COPILOT_FLAGS"
 done
 printf '%s' "$prompt" >"$FAKE_COPILOT_PROMPT"
-# An opt-in record of the signal dispositions this process inherited. The live
-# interface has to ignore SIGPIPE across its own writes; if it ever left that
-# ignored for the whole Run, `exec` would carry SIG_IGN into the agent process
-# and every tool it starts.
+# An opt-in record of the signal dispositions this process inherited. The
+# Orchestrator/agent boundary owes the agent a *default* SIGPIPE — both when the
+# live interface has ignored it across its own writes, and when the Orchestrator
+# was handed an ignore it cannot itself lift. Either leak would carry SIG_IGN
+# through `exec` into the agent process and every tool it starts.
 if [[ -n "${FAKE_COPILOT_SIGNALS:-}" ]]; then
   trap -p PIPE >"$FAKE_COPILOT_SIGNALS"
 fi
@@ -290,11 +291,19 @@ run_turn_entrypoint() {
 
   (
     cd "$repo"
-    PATH="$fake_bin:$real_jq_dir:$real_git_dir:/usr/bin:/bin" \
-      HOME="$repo/home" \
-      XDG_CONFIG_HOME="$repo/xdg" \
-      FAKE_REPO_ROOT="$repo" \
-      "$bash_bin" "$entrypoint" "$@"
+    export PATH="$fake_bin:$real_jq_dir:$real_git_dir:/usr/bin:/bin"
+    export HOME="$repo/home"
+    export XDG_CONFIG_HOME="$repo/xdg"
+    export FAKE_REPO_ROOT="$repo"
+    # Opt-in: hand the Orchestrator the disposition CI hands every `run:` step —
+    # a parent that ignores SIGPIPE, because the Node-based runner ignores it
+    # process-wide. `trap '' PIPE` followed by `exec` is how a Bash gives a
+    # child an ignore the child can never take back, so a scenario that pins the
+    # boundary's signal contract reproduces here rather than only on a runner.
+    if [[ "${FAKE_IGNORE_SIGPIPE:-0}" == "1" ]]; then
+      trap '' PIPE
+    fi
+    exec "$bash_bin" "$entrypoint" "$@"
   ) >"$stdout_path" 2>"$stderr_path"
 }
 
@@ -2544,6 +2553,11 @@ setup_copilot_env "tui-stuck"
 export FAKE_COPILOT_COMMITS=0
 export FAKE_COPILOT_SIGNALS="$temp_dir/tui-stuck-copilot.signals"
 rm -f "$FAKE_COPILOT_SIGNALS"
+# Start this Run the way CI starts every one: from a parent that ignores
+# SIGPIPE. Bash cannot lift an ignore it was handed, so without this the case
+# only exercises the leak on a runner and passes on a developer's terminal —
+# which is how a boundary that never held could look green for a whole release.
+export FAKE_IGNORE_SIGPIPE=1
 
 set +e
 run_turn_entrypoint \
@@ -2552,20 +2566,18 @@ run_turn_entrypoint \
   --interactive 0
 status=$?
 set -e
-unset FAKE_COPILOT_COMMITS
+unset FAKE_COPILOT_COMMITS FAKE_IGNORE_SIGPIPE
 assert_equal "1" "$status" "a stuck interactive Run still exits 1"
 assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
   "the stuck Run ran under the live interface"
+# Guard the guard: if `trap '' PIPE` followed by `exec` ever stopped handing an
+# ignore down, the assertion below would pass without exercising the leak at all.
+[[ -n "$(bash -c 'trap "" PIPE; exec bash -c "trap -p PIPE"')" ]] ||
+  fail "the ignored-SIGPIPE setup no longer reaches the Orchestrator"
 [[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
   fail "the interactive stuck Run never reached the agent process"
-# The guarantee is that the live interface *added* no ignore, not that SIGPIPE
-# reaches the agent at its default. POSIX has a non-interactive shell unable to
-# trap or reset a signal that was already ignored on entry, so under a parent
-# that ignores SIGPIPE -- the CI runner does -- no Orchestrator can hand the
-# default back. Comparing against what this suite itself inherited keeps the
-# check on the one thing the live interface controls.
-assert_equal "$(trap -p PIPE)" "$(<"$FAKE_COPILOT_SIGNALS")" \
-  "the live interface changed SIGPIPE for the agent process"
+[[ ! -s "$FAKE_COPILOT_SIGNALS" ]] ||
+  fail "the Orchestrator/agent boundary left SIGPIPE ignored for the agent process: $(<"$FAKE_COPILOT_SIGNALS")"
 unset FAKE_COPILOT_SIGNALS
 jq -se '
   .[-1].type == "wrapper.run.end" and .[-1].outcome == "stuck"
