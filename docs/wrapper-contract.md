@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.18 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.19 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -486,9 +486,18 @@ segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`, `
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
 SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
 `assistant.reasoning`, `tool.call`, `tool.result`, `tool.permission_requested`,
-`tool.permission_denied`, `usage.tokens`. Secrets MUST be scrubbed before a line is written. Ports
+`tool.permission_denied`, `usage.tokens`, `session.error`, `model.call_failure`. Secrets MUST be
+scrubbed before a line is written. Ports
 MUST copy these literals verbatim from `git_loopy.events`; a drifted literal (e.g. an underscore
 where a dot belongs) is a conformance failure.
+
+The last two carry the harness's own account of a failure — its error type, its message, the
+service status code where one was reached, and for a call failure the source that failed —
+rather than a sentence about it, which is what lets an Orchestrator tell an exhausted quota, a
+rate limit, and a rejected credential apart from a session that merely produced nothing (#403).
+Mapping them is recording, not reacting: an Orchestrator MUST NOT abort a **Run**, back off, or
+withhold an issue on the strength of one. As with every SDK-mapped type, a port that streams no
+SDK events declares the literals and emits neither.
 
 Every `wrapper.run.start` MUST carry the exact distribution `release_version`, numeric
 `schema_version: 1`, and an

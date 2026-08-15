@@ -55,6 +55,7 @@ from copilot.generated.session_events import (
     AssistantMessageData,
     AssistantUsageData,
     PermissionRequestCustomTool,
+    SessionErrorData,
     SessionEvent,
     SessionEventType,
     SessionUsageInfoData,
@@ -2759,3 +2760,60 @@ def test_the_retained_fallback_still_binds_when_pickup_did_not(
         "single_member_pool",
     )
     assert loop_obj._infer_active_binding(pool, [], []) is None
+
+
+def test_loop_records_the_session_ending_and_its_error_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """A Run refused by the account records the refusal, not just the silence (#403).
+
+    The harness reports an exhausted quota as a ``session.error`` and then lets
+    the session finish politely, so an Iteration spent entirely being refused
+    used to look exactly like an Agent that read the issue and did nothing: the
+    record dropped the harness's failure, and the diagnostic said "no progress".
+
+    Both halves are pinned here because either alone leaves the ending
+    unreadable: the replay log now carries the harness's own structured fields,
+    and the Iteration's diagnostic names the **Session outcome** together with
+    the **Session error** identity behind it.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42)],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    refusal = _sdk_event(
+        SessionEventType.SESSION_ERROR,
+        SessionErrorData(
+            error_type="QuotaExceededError",
+            message="Monthly premium request quota exhausted.",
+            error_code="insufficient_quota",
+            status_code=429,
+        ),
+    )
+    fake_client = FakeCopilotClient(scripted_events=[refusal])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="github", max_iterations=1)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    logs = tmp_path / ".git-loopy" / "logs"
+    jsonl = next(iter(logs.glob("*.jsonl")))
+    recorded = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["type"] == events_module.SESSION_ERROR
+    ]
+    assert len(recorded) == 1
+    assert recorded[0]["error_code"] == "insufficient_quota"
+    assert recorded[0]["status_code"] == 429
+
+    diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
+    assert "no_progress" in diagnostics
+    assert "quota_exhausted" in diagnostics

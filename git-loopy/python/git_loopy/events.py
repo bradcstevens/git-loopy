@@ -131,6 +131,8 @@ __all__ = [
     "USAGE_TOKENS",
     "AGENT_OUTPUT",
     "USAGE_CONTEXT_WINDOW",
+    "SESSION_ERROR",
+    "MODEL_CALL_FAILURE",
     # Functions
     "make_event",
     "make_contribution_event",
@@ -387,6 +389,16 @@ TOOL_PERMISSION_DENIED = "tool.permission_denied"
 USAGE_TOKENS = "usage.tokens"
 AGENT_OUTPUT = "agent.output"
 USAGE_CONTEXT_WINDOW = "usage.context_window"
+#: The two failure records the harness sends and the mapper used to drop (#403).
+#: A session that ended because the account was out of quota, was rate-limited or
+#: presented a credential the service refused produced no line at all, so the
+#: replay log could not tell that ending from an Agent that simply committed
+#: nothing. They carry the harness's own structured fields — code, type, status —
+#: rather than a rendered sentence: the sentence is what made those conditions
+#: indistinguishable in the first place. Recording only; neither implies any
+#: reaction by any Orchestrator.
+SESSION_ERROR = "session.error"
+MODEL_CALL_FAILURE = "model.call_failure"
 
 # ---------------------------------------------------------------------------
 # Internal constants
@@ -897,6 +909,45 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             "effective_target_tokens": target,
             "effective_ceiling_tokens": ceiling,
         }
+    if et is SessionEventType.SESSION_ERROR:
+        error_payload: dict[str, Any] = {
+            "type": SESSION_ERROR,
+            "error_type": data.error_type,
+            "message": data.message,
+        }
+        error_payload.update(
+            _present(
+                error_code=data.error_code,
+                status_code=(
+                    int(data.status_code) if data.status_code is not None else None
+                ),
+                service_request_id=data.service_request_id,
+                provider_call_id=data.provider_call_id,
+                url=data.url,
+            )
+        )
+        return error_payload
+    if et is SessionEventType.MODEL_CALL_FAILURE:
+        failure_payload: dict[str, Any] = {
+            "type": MODEL_CALL_FAILURE,
+            "source": _enum_value(data.source),
+        }
+        failure_payload.update(
+            _present(
+                model=data.model,
+                error_type=data.error_type,
+                error_code=data.error_code,
+                message=data.error_message,
+                status_code=(
+                    int(data.status_code) if data.status_code is not None else None
+                ),
+                bad_request_kind=_enum_value(data.bad_request_kind),
+                initiator=data.initiator,
+                api_call_id=data.api_call_id,
+                service_request_id=data.service_request_id,
+            )
+        )
+        return failure_payload
     if et in (
         SessionEventType.PERMISSION_REQUESTED,
         SessionEventType.PERMISSION_COMPLETED,
@@ -996,6 +1047,18 @@ def _json_default(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return _format_ts(obj)
     return str(obj)
+
+
+def _present(**fields: Any) -> dict[str, Any]:
+    """Keep the fields the harness actually reported, drop the ones it withheld.
+
+    Additive by omission, the same rule :func:`_billed_usage` follows: a value the
+    harness did not send contributes no key rather than a ``null``. On a failure
+    record that distinction is the whole point — an absent ``status_code`` means
+    the failure never reached a service, and a ``null`` one would read as a
+    service that answered with nothing.
+    """
+    return {name: value for name, value in fields.items() if value is not None}
 
 
 def _enum_value(obj: Any) -> Any:

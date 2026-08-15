@@ -516,6 +516,26 @@ reaching the limit stops refill and grants no further serial Iteration, then end
 once started work has drained. A runner **Checkpoint** does not count as progress.
 _Avoid_: failure, miss.
 
+**Session outcome**:
+How one **Agent**'s session ended, as data the loop keeps rather than a sentence it
+logs. Five endings and the absence of one are the whole vocabulary: silent no-progress,
+timeout, crash, an explicit declaration that no tasks remain, and content-filtered — and
+a session that advanced its issue reached none of them. Distinct from a **Strike**,
+which is the Run's *accounting* of a result: several endings tick the same strike, and
+the ending is what says which. Distinct too from an Iteration's outcome in the Run
+summary, which reports what the work produced rather than how the session finished.
+_Avoid_: exit code, session status, failure reason.
+
+**Session error**:
+The structured identity of a failure the harness reported during a session — its error
+type, its message, the service status code where one was reached, and where in the
+session it arose — classified into a closed set of kinds: quota exhaustion, rate
+limiting, authentication, content filtering, transport, service fault, and unknown. It
+is what lets an exhausted account be told from a session that merely produced nothing,
+which a flattened string never could. Recording one implies no reaction: the ending is
+still attributed to the issue that happened to be in hand.
+_Avoid_: error message, failure string, exception.
+
 **Checkpoint**:
 A runner-authored commit that captures any uncommitted or untracked changes the agent
 left at a serial **Iteration** or Lane-work boundary, so subsequent work starts from a

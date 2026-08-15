@@ -38,9 +38,12 @@ from copilot.generated.session_events import (
     AssistantReasoningDeltaData,
     AssistantUsageCopilotUsage,
     AssistantUsageData,
+    ModelCallFailureData,
+    ModelCallFailureSource,
     PermissionApproved,
     PermissionCompletedData,
     SessionEvent,
+    SessionErrorData,
     SessionEventType,
     SessionIdleData,
     SessionShutdownData,
@@ -60,9 +63,11 @@ from git_loopy.events import (
     ASSISTANT_MESSAGE,
     ASSISTANT_REASONING,
     MAX_TOOL_ARGS_CHARS,
+    MODEL_CALL_FAILURE,
     REDACTED_SECRET,
     SESSION_CREATED,
     SESSION_DELETED,
+    SESSION_ERROR,
     SESSION_IDLE,
     TOOL_CALL,
     TOOL_PERMISSION_DENIED,
@@ -1330,3 +1335,68 @@ def test_pickup_events_carry_no_contribution_identity() -> None:
             position=1, considered=4,
         )
         assert event["iter"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Harness failure records (#403)
+# ---------------------------------------------------------------------------
+
+
+def test_map_sdk_event_session_error_carries_the_harness_identity() -> None:
+    """The harness said *what* went wrong and the mapper threw it away (#403).
+
+    `session.error` was one of the two records that had no JSONL equivalent at
+    all, so an account-level condition — a spent quota, a refused credential —
+    reached the replay log as nothing and reached the Run as "no progress". The
+    mapping keeps the harness's own fields rather than a rendered sentence,
+    because the sentence is what made the three conditions one.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.SESSION_ERROR,
+        SessionErrorData(
+            error_type="RateLimitError",
+            message="Too many requests, please retry.",
+            error_code="rate_limited",
+            status_code=429,
+            service_request_id="req-77",
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert out["type"] == SESSION_ERROR
+    assert out["error_type"] == "RateLimitError"
+    assert out["message"] == "Too many requests, please retry."
+    assert out["error_code"] == "rate_limited"
+    assert out["status_code"] == 429
+    assert out["service_request_id"] == "req-77"
+
+
+def test_map_sdk_event_model_call_failure_keeps_the_call_it_failed() -> None:
+    """A failed API call names the model and the call, not just the trouble.
+
+    `model.call_failure` is per-call, so it is the record that survives a turn the
+    harness retried internally: the Iteration may still have finished, and the
+    line is what says at whose expense. Fields the harness withheld contribute no
+    key, so an absent status code reads as "never reached a service" rather than
+    as a service that answered with nothing.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.MODEL_CALL_FAILURE,
+        ModelCallFailureData(
+            source=ModelCallFailureSource.TOP_LEVEL,
+            model="claude-opus-5",
+            error_code="insufficient_quota",
+            error_message="Monthly premium request quota exhausted.",
+            status_code=429,
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert out["type"] == MODEL_CALL_FAILURE
+    assert out["source"] == "top_level"
+    assert out["model"] == "claude-opus-5"
+    assert out["error_code"] == "insufficient_quota"
+    assert out["message"] == "Monthly premium request quota exhausted."
+    assert out["status_code"] == 429
+    assert "bad_request_kind" not in out
+    assert "initiator" not in out

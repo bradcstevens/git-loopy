@@ -136,6 +136,7 @@ from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import routing_scope
+from git_loopy import session_outcome as session_outcome_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
@@ -808,6 +809,56 @@ def _integration_worktree_path(
     )
 
 
+@dataclass(frozen=True)
+class _LaneSessionSignals:
+    """The half of a Lane's ending only its session can see (#403).
+
+    A Lane's ending needs two facts and they are known in two places: how the
+    wait on the session came back, and whether the Lane's branch ended up
+    carrying anything. This carries the first back to the caller that learns the
+    second, so neither has to guess the other.
+    """
+
+    termination: session_outcome_module.SessionTermination
+    error: session_outcome_module.SessionError | None
+
+
+def _report_session_outcome(
+    diag: logging.Logger,
+    *,
+    ref: int | str,
+    record: session_outcome_module.SessionOutcomeRecord,
+) -> None:
+    """Say one **Session outcome** once, in the operator's diagnostics.
+
+    A session that advanced its issue reached no ending and says nothing here:
+    its productivity is already the Run's own report, and a second line about it
+    would be noise on the common good path. What does print is the ending
+    together with the **Session error** identity behind it, which is precisely
+    what the three flattened warnings this replaced could not say — they knew a
+    session had produced nothing and never knew the account had been refused.
+    """
+    if record.outcome is None:
+        return
+    error = record.error
+    detail = ""
+    if error is not None:
+        where = error.origin
+        if error.status_code is not None:
+            where = f"{where} {error.status_code}"
+        detail = (
+            f"; {error.kind.value} ({where}): "
+            f"{error.message or error.error_type or 'no detail reported'}"
+        )
+    diag.warning(
+        "session for #%s ended %s [termination=%s]%s",
+        ref,
+        record.outcome.value,
+        record.termination.value,
+        detail,
+    )
+
+
 class _EventObserver(Protocol):
     """Anything that folds raw Events into its own accounting."""
 
@@ -937,6 +988,13 @@ class _Loop:
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
         )
+        # The last Iteration's **Session outcome** (#403). Held as the record
+        # rather than as the line it prints, because the per-issue attempt
+        # lifecycle is keyed off the ending; recording it is all that happens
+        # here, and no Run-level reaction reads it yet.
+        self._last_session_outcome: (
+            session_outcome_module.SessionOutcomeRecord | None
+        ) = None
         # The **Routed pair** each candidate resolved to at the last serial
         # **Pickup** (#394). Refreshed per Iteration by ``_pick_active_issue``:
         # a pair is a fact about one Pool's admission pass, and carrying one
@@ -1313,8 +1371,21 @@ class _Loop:
                 self._finish_iteration(iter_num, outcome="no_progress")
                 return ("continue", 0, 0)
 
-            # 5) Run the SDK session.
+            # 5) Run the SDK session. How it ends is *data* (#403): the ending
+            #    and, where there was a failure, its structured identity are
+            #    resolved below rather than spent on a log line, because the
+            #    attempt lifecycle is keyed off the ending and a sentence is not
+            #    a key. Recording only — nothing here aborts the Run, waits, or
+            #    leaves the issue alone, so an account-level condition is still
+            #    attributed to the issue whose Iteration met it.
             send_timeout = self._config.send_timeout_seconds
+            termination = session_outcome_module.SessionTermination.COMPLETED
+            raised: session_outcome_module.SessionError | None = None
+            # The harness reports a refused call on the Event stream and lets the
+            # session finish politely, so the `except` clauses below see nothing
+            # at all in exactly the case worth explaining. The watch is what
+            # reads it, joined to the Run's own observer rather than replacing it.
+            session_watch = session_outcome_module.SessionOutcomeWatch()
             with telemetry.span("git_loopy.session"):
                 try:
                     async with IterationSession(
@@ -1328,30 +1399,33 @@ class _Loop:
                         reasoning_effort=reasoning_effort,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
-                        event_observer=self._session_observer,
+                        event_observer=_ChainedObserver(
+                            observers=(self._session_observer, session_watch)
+                        ),
                     ) as sdk_session:
                         try:
                             await sdk_session.send_and_wait(
                                 prompt, timeout=send_timeout
                             )
                         except asyncio.TimeoutError:
-                            self._diag.warning(
-                                "SDK send_and_wait timed out after %ss; "
-                                "treating iteration as no-progress",
-                                send_timeout,
+                            termination = (
+                                session_outcome_module.SessionTermination.TIMED_OUT
                             )
                         except Exception as exc:
-                            # Treat any copilot failure as no-progress;
-                            # bookkeeping below still runs.
-                            self._diag.warning(
-                                "SDK send_and_wait raised %s: %s; "
-                                "treating iteration as no-progress",
-                                type(exc).__name__, exc,
+                            # Contained exactly as before: the bookkeeping below
+                            # still runs and the Iteration is accounted as
+                            # no-progress. What changed is that the ending is
+                            # now recoverable rather than only readable.
+                            termination = (
+                                session_outcome_module.SessionTermination.CRASHED
+                            )
+                            raised = session_outcome_module.SessionError.from_exception(
+                                exc, origin="send"
                             )
                 except Exception as exc:
-                    self._diag.error(
-                        "IterationSession lifecycle failed: %s: %s; iteration aborted",
-                        type(exc).__name__, exc,
+                    termination = session_outcome_module.SessionTermination.CRASHED
+                    raised = session_outcome_module.SessionError.from_exception(
+                        exc, origin="session_lifecycle"
                     )
 
             # 6) Post-iteration accounting.
@@ -1466,6 +1540,20 @@ class _Loop:
                 checkpoints_in_iter=checkpoints_in_iter,
                 pr_advances_in_iter=pr_advances,
             )
+            # The **Session outcome** (#403), resolved here because the ending is
+            # a joint fact: how the session came back, and whether the Run
+            # observed anything durable from it. `made_progress` is §6's own
+            # predicate rather than a second notion of progress invented beside
+            # it — a Run that scores an Iteration as productive must not describe
+            # the same Iteration as having got nowhere.
+            session_ending = session_outcome_module.resolve_session_outcome(
+                termination=termination,
+                progressed=made_progress,
+                error=session_outcome_module.strongest_error(
+                    session_watch.error, raised
+                ),
+            )
+            self._record_session_outcome(active.ref, session_ending)
             if outcome == "aborted" or not made_progress:
                 # Either we just hit the strike threshold OR this iteration
                 # had no progress (a single strike). Either way emit the
@@ -1755,6 +1843,21 @@ class _Loop:
                 type(exc).__name__, exc,
             )
             return []
+
+    def _record_session_outcome(
+        self,
+        ref: int | str,
+        record: session_outcome_module.SessionOutcomeRecord,
+    ) -> None:
+        """Keep this Iteration's **Session outcome**, and say it once (#403).
+
+        Kept as the record rather than as the sentence it prints: the attempt
+        lifecycle is keyed off the ending, and a lifecycle that had to parse a
+        log line back into a decision would be reading the Run's diagnostics as
+        an API.
+        """
+        self._last_session_outcome = record
+        _report_session_outcome(self._diag, ref=ref, record=record)
 
     def _finish_iteration(
         self,
@@ -3015,9 +3118,24 @@ class _ParallelLoop:
             recent = []
         commits_block = _format_recent_commits(recent)
 
-        await self._run_lane_session(contribution, lane_work, commits_block)
+        signals = await self._run_lane_session(
+            contribution, lane_work, commits_block
+        )
 
         changed, checkpoint_ok = self._account_lane(contribution, lane_work)
+        # The Lane's **Session outcome** (#403). `changed` is this mode's own
+        # progress answer -- an agent commit or a Checkpoint on the Lane branch
+        # -- so the ending agrees with what the scheduler was told about the
+        # same contribution.
+        _report_session_outcome(
+            self._diag,
+            ref=lane_work.item.ref,
+            record=session_outcome_module.resolve_session_outcome(
+                termination=signals.termination,
+                progressed=changed,
+                error=signals.error,
+            ),
+        )
 
         if checkpoint_ok:
             try:
@@ -3092,21 +3210,31 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         commits_block: str,
-    ) -> None:
+    ) -> _LaneSessionSignals:
         """Run one Lane contribution's SDK session, pinned to its worktree.
 
         Concurrent by construction with every other Lane's session and any
         in-flight Integration (#219, ADR-0020) — bulletproof like the retired
         Wave's ``_run_lane_session``: a timeout, a send failure, or a
-        session-lifecycle error is logged and swallowed so one Lane can never
-        abort another's task or the driver loop; the caller then accounts and
-        finishes the contribution as no-progress.
+        session-lifecycle error is swallowed so one Lane can never abort
+        another's task or the driver loop; the caller then accounts and finishes
+        the contribution as no-progress.
+
+        What it now returns instead of logging (#403): the two halves of the
+        ending only this method can see — how the wait came back, and the
+        structured identity of any failure the harness reported on the way. The
+        ending itself is resolved by the caller, because the missing half is
+        whether the Lane's branch carries anything, and that is not known until
+        the Lane is accounted.
         """
         prompt = (
             f"Previous commits: {commits_block} "
             f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
         )
         send_timeout = self._config.send_timeout_seconds
+        termination = session_outcome_module.SessionTermination.COMPLETED
+        raised: session_outcome_module.SessionError | None = None
+        watch = session_outcome_module.SessionOutcomeWatch()
         try:
             # Deliberately no `event_observer=self._rollup`: unlike the serial
             # `_Loop` (which feeds every `IterationSession` into the single
@@ -3138,29 +3266,30 @@ class _ParallelLoop:
                 working_directory=str(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
-                event_observer=self._cost_meter,
+                event_observer=_ChainedObserver(
+                    observers=(self._cost_meter, watch)
+                ),
             ) as sdk_session:
                 try:
                     await sdk_session.send_and_wait(
                         prompt, timeout=send_timeout
                     )
                 except asyncio.TimeoutError:
-                    self._diag.warning(
-                        "lane #%s send_and_wait timed out after %ss; "
-                        "treating as no-progress",
-                        lane_work.item.ref, send_timeout,
-                    )
+                    termination = session_outcome_module.SessionTermination.TIMED_OUT
                 except Exception as exc:
-                    self._diag.warning(
-                        "lane #%s send_and_wait raised %s: %s; "
-                        "treating as no-progress",
-                        lane_work.item.ref, type(exc).__name__, exc,
+                    termination = session_outcome_module.SessionTermination.CRASHED
+                    raised = session_outcome_module.SessionError.from_exception(
+                        exc, origin="send"
                     )
         except Exception as exc:
-            self._diag.error(
-                "lane #%s IterationSession lifecycle failed: %s: %s",
-                lane_work.item.ref, type(exc).__name__, exc,
+            termination = session_outcome_module.SessionTermination.CRASHED
+            raised = session_outcome_module.SessionError.from_exception(
+                exc, origin="session_lifecycle"
             )
+        return _LaneSessionSignals(
+            termination=termination,
+            error=session_outcome_module.strongest_error(watch.error, raised),
+        )
 
     def _account_lane(
         self,

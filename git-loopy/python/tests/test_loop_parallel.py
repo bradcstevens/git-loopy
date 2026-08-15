@@ -105,6 +105,7 @@ from uuid import uuid4
 import pytest
 from copilot.generated.session_events import (
     AssistantUsageData,
+    SessionErrorData,
     SessionEvent,
     SessionEventType,
 )
@@ -4537,3 +4538,80 @@ def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(
     assert skipped[0]["position"] == 1
     assert skipped[0]["considered"] == 1
     assert skipped[0]["iter"] is None
+
+
+class _RefusedLaneSession(_ParallelFakeSession):
+    """A Lane whose every call the harness refused: an error, then silence.
+
+    Commits nothing, exactly as an Agent that never got an answer would, and
+    reports the refusal the only way the harness ever does — on the Event stream,
+    without raising at the Orchestrator's boundary.
+    """
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        self.send_and_wait_calls.append((prompt, timeout))
+        refusal = SessionEvent(
+            data=SessionErrorData(
+                error_type="AuthenticationError",
+                message="Bad credentials.",
+                status_code=401,
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            type=SessionEventType.SESSION_ERROR,
+        )
+        if self._on_event is not None:
+            self._on_event(refusal)
+        return refusal
+
+
+class _RefusedLaneClient(_ParallelFakeClient):
+    _session_cls = _RefusedLaneSession
+
+
+def test_parallel_lane_records_its_session_ending_and_error_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane's ending is data in **Parallel mode** too (#403).
+
+    A Lane that was refused for its whole contribution looked identical to a Lane
+    whose Agent read the issue and shrugged: the ending was logged as
+    "no-progress" and the harness's own account of *why* went nowhere. Both are
+    now recorded — the failure record in the replay log, the ending and its
+    identity in the Run's diagnostics, attributed to the Lane's own issue.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _RefusedLaneClient(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    asyncio.run(loop_module.run(cfg))
+
+    logs = tmp_path / ".git-loopy" / "logs"
+    recorded = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "session.error"
+    ]
+    assert recorded and recorded[0]["status_code"] == 401
+
+    diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
+    assert "authentication_failed" in diagnostics
+    assert "no_progress" in diagnostics

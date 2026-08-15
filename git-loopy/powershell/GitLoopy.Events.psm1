@@ -64,6 +64,14 @@ $script:EventTypes = [ordered]@{
     TOOL_PERMISSION_DENIED = "tool.permission_denied"
     USAGE_TOKENS = "usage.tokens"
     USAGE_CONTEXT_WINDOW = "usage.context_window"
+    # The two harness failure records (contract 1.19, #403): what ended a session
+    # that ended badly, in the harness's own structured fields. Declared for
+    # vocabulary parity and never emitted here -- this port shells out to the
+    # agent binary and subscribes to no SDK event stream, so it observes no
+    # failure record to map. Recording only: neither literal implies that any
+    # Orchestrator aborts, waits, or retries because it saw one.
+    SESSION_ERROR = "session.error"
+    MODEL_CALL_FAILURE = "model.call_failure"
 }
 $script:EventSchemaVersion = 1
 $script:InsightCapabilities = [ordered]@{

@@ -625,17 +625,19 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
-    ``contract_version`` moved to 1.16 with the **Calibration records** (§12,
-    #371): a new family of additive type literals, reserved within compatibility
-    schema 1 exactly as the rolling-dispatch family was. ``event_schema_version``
-    deliberately did not move, for the same reason it did not at 1.15: no
-    *existing* record gained, lost or re-typed a field, so a consumer pinned to
-    1.1 reads a 1.16 stream unchanged — an unmodelled ``calibration.*`` type is
-    the additive extension every reader already tolerates.
+    ``contract_version`` moved to 1.19 with the two SDK-mapped failure literals
+    (§12, #403): ``session.error`` and ``model.call_failure``, a pair the
+    harness has always emitted and the family has always dropped, reserved
+    within compatibility schema 1 exactly as the **Calibration records** were at
+    1.16 and the rolling-dispatch family before them. ``event_schema_version``
+    deliberately did not move, for the same reason it did not at 1.15 or 1.16:
+    no *existing* record gained, lost or re-typed a field, so a consumer pinned
+    to 1.1 reads a 1.19 stream unchanged — an unmodelled type is the additive
+    extension every reader already tolerates.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.16"
+    assert _EVENT_SCHEMA["contract_version"] == "1.19"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
