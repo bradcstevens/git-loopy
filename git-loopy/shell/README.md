@@ -27,10 +27,30 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | --- | --- |
 | **Bash 4+** | The Orchestrator uses associative arrays. Run `bash --version` to check. |
 | **`jq`** | Required by the shell port for JSON. `brew install jq` / `apt-get install jq`. (The PowerShell port needs no `jq`.) |
-| **Perl 5** | The native Continuation command uses core `JSON::PP`, `Encode`, and `Unicode::Normalize` modules to enforce the portable JSON profile without Python. |
+| **Perl 5** | The native Continuation command uses core `JSON::PP`, `Encode`, and `Unicode::Normalize` modules to enforce the portable JSON profile without Python. Also the usual way the Orchestrator restores a default SIGPIPE at the agent boundary — see below. |
 | **`gh`**, authenticated | `gh auth login`. The default issue source is GitHub Issues. |
 | **`git`** | On `PATH`. |
 | **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |
+
+### The agent process gets a default SIGPIPE
+
+The Orchestrator spawns the agent process with SIGPIPE at its **default**
+disposition, so an agent whose downstream reader goes away dies instead of
+collecting `EPIPE` on every write and deciding for itself whether to care.
+
+Bash cannot promise that on its own: POSIX specifies that a signal which is
+`SIG_IGN` when the shell starts cannot be restored by the `trap` builtin, and
+being started under an ignored SIGPIPE is not exotic — every GitHub Actions
+`run:` step inherits `SIG_IGN` from the Node-based runner that spawns it. Left
+alone, that ignore passes through `exec` into the agent process and every tool
+the agent starts.
+
+So when — and only when — the Orchestrator was itself started with SIGPIPE
+already ignored, the agent turn is launched behind the first of these that the
+host can serve: GNU `env --default-signal=PIPE`, `perl`, or `python3`. Nothing
+new is required: `perl` is already a prerequisite above, and on a host that can
+serve none of the three the Run still proceeds, after one diagnostic on stderr
+saying the boundary could not be restored.
 
 ### macOS ships Bash 3.2
 

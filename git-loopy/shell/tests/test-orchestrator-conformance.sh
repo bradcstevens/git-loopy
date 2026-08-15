@@ -12,6 +12,10 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 conformance_dir="$port_dir/../conformance"
+bash_bin="$(command -v bash)"
+
+# shellcheck disable=SC1091
+source "$script_dir/sigpipe.sh"
 
 # shellcheck disable=SC1091
 source "$port_dir/lib/orchestrator.sh"
@@ -374,6 +378,96 @@ assert_equal "7" "$bounded_within_status" \
 bounded_stdout="$(git_loopy_run_bounded_turn 30 bash -c 'printf agent-marker' 2>/dev/null)"
 assert_equal "" "$bounded_stdout" \
   "the turn's own stdout is folded to stderr, never onto the Event stream"
+
+# --- Agent-boundary SIGPIPE disposition ----------------------------------------
+# The Orchestrator owes the agent process a *default* SIGPIPE, whatever
+# disposition the Orchestrator itself was handed. When it was started with
+# SIGPIPE already ignored, `trap` provably cannot give it back — POSIX says a
+# signal that is SIG_IGN at shell entry stays that way — so the boundary reaches
+# for a prefix that survives `exec`. Every mechanism in the chain is pinned on its
+# own, by narrowing the chain to one member, so a member that never worked cannot
+# hide behind a later one that does.
+sigpipe_probe="$temp_dir/sigpipe-probe.sh"
+cat >"$sigpipe_probe" <<PROBE
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck disable=SC1091
+source "$port_dir/lib/orchestrator.sh"
+if [[ -n "\${PROBE_MECHANISMS+set}" ]]; then
+  read -r -a _GIT_LOOPY_SIGPIPE_MECHANISMS <<<"\$PROBE_MECHANISMS"
+fi
+declare -a launch=()
+if _git_loopy_sigpipe_shim; then
+  launch=("\${_GIT_LOOPY_SIGPIPE_SHIM[@]}")
+fi
+printf 'mechanism=%s\n' "\${launch[0]:-none}"
+exec \${launch[@]+"\${launch[@]}"} \
+  "$bash_bin" -c 'printf "disposition=%s\n" "\$(trap -p PIPE)"'
+PROBE
+
+# Both dispositions are staged by the harness rather than inherited: a suite that
+# simply ran the probe would test whichever disposition it happened to be started
+# with, which is precisely the bug this block is about.
+run_sigpipe_probe() {
+  local disposition="$1"
+  local stderr_path="$2"
+  local -a launch=("$bash_bin" "$sigpipe_probe")
+  case "$disposition" in
+    ignored) launch=("${sigpipe_ignored_launcher[@]}" "${launch[@]}") ;;
+    default)
+      launch=(
+        ${sigpipe_default_launcher[@]+"${sigpipe_default_launcher[@]}"}
+        "${launch[@]}"
+      )
+      ;;
+    *) fail "unknown staged SIGPIPE disposition: $disposition" ;;
+  esac
+  "${launch[@]}" 2>"$stderr_path"
+}
+
+sigpipe_probed=0
+for sigpipe_tool in env perl python3; do
+  # The BSD `env` on macOS is on every PATH and has no `--default-signal`, so a
+  # host that cannot serve a mechanism is skipped rather than failed — the count
+  # below is what stops the whole block from silently exercising nothing.
+  case "$sigpipe_tool" in
+    env) env --default-signal=PIPE "$bash_bin" -c '' 2>/dev/null || continue ;;
+    *) command -v "$sigpipe_tool" >/dev/null 2>&1 || continue ;;
+  esac
+  sigpipe_out="$(
+    PROBE_MECHANISMS="$sigpipe_tool" run_sigpipe_probe ignored \
+      "$temp_dir/sigpipe-only-$sigpipe_tool.stderr"
+  )"
+  assert_equal "mechanism=$sigpipe_tool"$'\n'"disposition=" "$sigpipe_out" \
+    "the $sigpipe_tool shim restores a default SIGPIPE across exec"
+  [[ ! -s "$temp_dir/sigpipe-only-$sigpipe_tool.stderr" ]] ||
+    fail "the $sigpipe_tool shim warned about a disposition it restored: \
+$(<"$temp_dir/sigpipe-only-$sigpipe_tool.stderr")"
+  sigpipe_probed=$((sigpipe_probed + 1))
+done
+((sigpipe_probed > 0)) ||
+  fail "no SIGPIPE shim mechanism was exercised; the chain is untested here"
+
+# Nothing to restore: bash already hands children the default disposition, so the
+# boundary adds no process at all.
+if ((sigpipe_default_stageable == 1)); then
+  sigpipe_out="$(run_sigpipe_probe default "$temp_dir/sigpipe-default.stderr")"
+  assert_equal "mechanism=none"$'\n'"disposition=" "$sigpipe_out" \
+    "a Run started with a default SIGPIPE needs no shim"
+  [[ ! -s "$temp_dir/sigpipe-default.stderr" ]] ||
+    fail "a Run that needs no SIGPIPE shim warned anyway: \
+$(<"$temp_dir/sigpipe-default.stderr")"
+fi
+
+# A host that can serve no mechanism at all: the Run continues rather than
+# aborting, but says plainly that it cannot make the boundary promise.
+sigpipe_out="$(
+  PROBE_MECHANISMS="" run_sigpipe_probe ignored "$temp_dir/sigpipe-bare.stderr"
+)"
+assert_equal "mechanism=none"$'\n'"disposition=trap -- '' SIGPIPE" "$sigpipe_out" \
+  "an unshimmable host still runs the turn"
+[[ "$(<"$temp_dir/sigpipe-bare.stderr")" == *"SIGPIPE was already ignored"* ]] ||
+  fail "an unshimmable host did not report the leaked SIGPIPE disposition"
 
 # Closed-world Skill policy (contract §17.6): the shell port has no native
 # `enabled_skills` support yet, so every policy surface the family contract names
