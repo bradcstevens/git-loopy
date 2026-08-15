@@ -25,50 +25,46 @@ Conformance step is removed, this guard fails -- so a contributor can only evolv
 the Wrapper contract by updating the written contract, the fixtures, and every
 affected adapter together (the whole point of the backbone).
 
-Issue #317 adds the other half. Everything above is a **presence** check: it says
-the command is written down. It says nothing about whether the job can reach it,
-whether the job is allowed to fail the build, or whether the suite it names asserts
-anything at all. A gate that dies loudly goes red and CI reports it; a gate that is
-neutered into silence goes **green**, and nothing in the system says anything --
-strictly the more dangerous of the two, and the only one a static pin is positioned
-to catch. So every gate job now also has to prove:
-
-* **it can fail the workflow** (:func:`_neutering_reasons`) -- no ``continue-on-error``
-  at job or step level, no ``if:`` that can be false on an ordinary push or pull
-  request, and no shell construct (``|| true``, ``set +e``) that swallows the gate
-  command's exit status; and
-* **it asserted something** (:func:`_declares_assertion_census`) -- the job states,
-  in its own runner's reporting unit, how many assertions it executed and hands that
-  count to a guard that refuses a zero. Measured: ``cargo test`` on a crate with no
-  tests and a PowerShell loop over an empty suite list both exit ``0`` having proved
-  nothing; the shell loop's safety is incidental (an unmatched glob stays literal and
-  ``bash`` cannot open it, which ``shopt -s nullglob`` undoes). The guarantee is
-  **non-zero**, deliberately not a pinned floor count: a floor has to be bumped every
-  time a test is added, and a gate that must be edited to stay green is a gate that
-  eventually gets edited to stay quiet.
-
 The guard reads the *declared* CI configuration (the tracked workflow YAML), which
-is deterministic and needs neither a live runner nor credentials. It **fails closed**
-when it cannot find that configuration: an inability to gate is red, in the same
-spirit as ADR-0009, where a repository that declares no runnable feedback loop comes
-back red rather than green. Only a positively identified installed distribution --
-this file under ``site-packages``, where there is no workflow source by design --
-stands the pin down, because "the checkout is not where I expected" and "there is no
-checkout" are different facts and only the second one is benign.
+is deterministic and needs neither a live runner nor credentials.
+
+Presence is not enforcement (issue #317)
+----------------------------------------
+
+Matching a command in a job's ``run:`` text says the command is *written down*.
+It says nothing about whether the job is allowed to fail the build, or whether
+the suite it names asserted anything. A gate that dies loudly goes red and CI
+reports it; a gate neutered into silence goes **green**, and nothing else in the
+system says a word. So this module also pins that:
+
+* **the gate can fail the workflow** -- no ``continue-on-error``, no condition
+  that can evaluate false on an ordinary push or pull request, and no shell
+  construct (``|| true``, ``set +e``, an unguarded pipe, an unread
+  ``$LASTEXITCODE``) that discards a gate command's status;
+* **the gate executed at least one assertion** -- a *non-zero* census, never a
+  pinned floor count, because a floor has to be bumped whenever a test is added
+  and a gate that must be edited to stay green eventually gets edited to stay
+  quiet;
+* **the pin cannot skip itself** -- a run that cannot locate the workflows it
+  exists to inspect is an inability to gate and is reported red, exactly as a
+  repository that declares no runnable feedback loop is (ADR-0009). The one
+  tolerated context, an installed distribution with no source checkout, is
+  recognised *positively* from this module's own path rather than inferred from
+  a missing repository root.
 """
 
 from __future__ import annotations
 
 import re
-import shlex
 import shutil
 import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 import yaml
-from _pytest.outcomes import Failed, Skipped
 
 # A parsed workflow is a YAML mapping whose keys are *not* all strings: ``on`` is
 # a YAML 1.1 boolean keyword, so PyYAML yields the Python ``True`` key for ``on:``.
@@ -94,49 +90,6 @@ PYTHON_TEST_TREE = "git-loopy/python/tests"
 RUST_MANIFEST = "git-loopy/tui/Cargo.toml"
 RUST_SUITE = "cargo test"
 
-# The assertion census (B2, issue #317). A gate that runs a suite with nothing in
-# it exits zero having asserted nothing -- measured: `cargo test` and the PowerShell
-# suite loop both do exactly that. Each member's gate therefore computes a census in
-# its own runner's reporting unit and refuses a zero. The guarantee is deliberately
-# **non-zero**, never a floor count: a floor has to be bumped every time a test is
-# added, and a gate that must be edited to stay green is a gate that eventually gets
-# edited to stay quiet.
-COUNT_PASSED_SCRIPT = ".github/scripts/count-passed.sh"
-CENSUS_SCRIPT = ".github/scripts/assert-nonzero-census.sh"
-POWERSHELL_CENSUS_SCRIPT = ".github/scripts/AssertionCensus.ps1"
-
-# Shell constructs that let a gate command fail while its step still exits zero
-# (B1, issue #317). `|| exit 1` and friends deliberately do not match: propagating
-# a failure is the opposite of swallowing one. Matched against a step's *executable*
-# text, so a `|| true` hidden behind a trailing comment still counts and a
-# commented-out one does not.
-_SWALLOWED_STATUS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (
-        re.compile(r"\|\|\s*(?:true\b|:(?=\s|$|[;&|)]))"),
-        "a gate command's exit status is swallowed by `|| true` / `|| :`",
-    ),
-    (
-        re.compile(
-            r"(?:^|[;&|({]|&&|\b(?:then|do|else)\b)\s*set\s+\+[a-z]*e[a-z]*\b",
-            re.MULTILINE,
-        ),
-        "a gate step turns off `set -e`, so a failing command no longer fails it",
-    ),
-)
-
-# A census handed to a guard that refuses a zero. The census must be a shell or
-# PowerShell **expansion** -- a count the step computed -- because a literal is a
-# claim rather than a measurement. Anchored at the start of a logical line, so the
-# guard has to be the command: `echo`ing its path, or commenting it out, is not
-# running it.
-_CENSUS_INVOCATION_RE: re.Pattern[str] = re.compile(
-    r"^\s*&?\s*(?:\./)?(?:"
-    + "|".join(
-        re.escape(script) for script in (CENSUS_SCRIPT, POWERSHELL_CENSUS_SCRIPT)
-    )
-    + r")\b(?P<census>.*)$"
-)
-
 # The operating systems each member claims to support (ADR-0013 "Runtime floors";
 # ``docs/runners.md``). Normalised to the runner-image family (image label minus
 # its ``-latest`` / ``-<version>`` suffix).
@@ -144,35 +97,53 @@ LINUX = "ubuntu"
 MACOS = "macos"
 WINDOWS = "windows"
 
+# A run that cannot locate the checkout is either a genuine installed
+# distribution -- the one context with nothing to guard -- or a checkout that is
+# not where this module expected it. The two are *not* the same verdict: the
+# first is tolerable, the second is an inability to gate and must be red
+# (ADR-0009's "a repository that declares no runnable loop cannot be gated").
+SKIP = "skip"
+FAIL = "fail"
+
+# The directory names every installed Python distribution sits under. Their
+# presence in this module's own path is the *positive* evidence that the run has
+# no source tree, rather than the absence of evidence a bare skip would settle
+# for.
+INSTALLED_LAYOUT_MARKERS = ("site-packages", "dist-packages")
+
+
+def _is_installed_distribution(module_path: Path) -> bool:
+    """Whether this module was imported from an installed distribution."""
+    return any(part in INSTALLED_LAYOUT_MARKERS for part in module_path.parts)
+
+
+def _missing_checkout_outcome(module_path: Path) -> tuple[str, str]:
+    """The verdict for a run whose repository root could not be located."""
+    if _is_installed_distribution(module_path):
+        return (
+            SKIP,
+            f"installed distribution ({module_path}) -- this run ships no source "
+            "checkout, so there is no CI configuration to guard",
+        )
+    return (
+        FAIL,
+        "cannot locate the repository root (no ancestor of "
+        f"{module_path} holds both docs/adr/ and CONTEXT.md), and this run is "
+        "not an installed distribution. The Runner-family gate cannot be "
+        "inspected, which is an inability to gate -- reported red rather than "
+        "skipped, because a pin that can silently do nothing guards nothing.",
+    )
+
 
 def _find_repo_root() -> Path | None:
     """Walk up from this file to the repo root.
 
     The root is the first ancestor holding both ``docs/adr/`` and ``CONTEXT.md``.
-    Returns ``None`` when neither is found, which :func:`_loaded_workflows` reports
-    as a **failure** unless :func:`_installed_distribution_root` positively proves
-    the run comes from an installed distribution.
+    Returns ``None`` when neither is found (e.g. an installed-wheel run with no
+    source checkout), which the scan tests treat as "nothing to guard -> skip".
     """
     for parent in Path(__file__).resolve().parents:
         if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
-            return parent
-    return None
-
-
-def _installed_distribution_root() -> Path | None:
-    """Positively identify a run from an *installed distribution*, not a checkout.
-
-    B3 (issue #317): "I could not find the repository root" and "I am running from
-    an installed distribution that ships no source tree" are two different facts,
-    and only the second one is a legitimate reason for this pin to stand down. The
-    second is proved, never inferred from the failure of the first: an installed
-    run has this file under a ``site-packages`` / ``dist-packages`` directory.
-    Collapsing the two would let "the checkout is not where I expected" turn the
-    gate's own pin green -- exactly the silent no-op the pin exists to catch.
-    """
-    resolved = Path(__file__).resolve()
-    for parent in resolved.parents:
-        if parent.name in {"site-packages", "dist-packages"}:
             return parent
     return None
 
@@ -245,62 +216,6 @@ def _job_run_text(job: _Job) -> str:
     )
 
 
-def _executable_run_text(job: _Job) -> str:
-    """The steps' ``run:`` scripts with comments removed and continuations joined.
-
-    Every predicate and companion in this module reasons about what a step *does*,
-    and a comment does nothing. Reading the raw text confuses the two in both
-    directions: a commented-out ``cargo test`` would look like a gate, and a
-    ``cargo test || true  # tolerated for now`` would not look like a neutered one.
-    Both bash and PowerShell comment with ``#`` -- which starts a comment at the
-    start of a word, so after whitespace or a control operator -- and both continue
-    a command onto the next line, bash with ``\\`` and PowerShell with a backtick.
-    Continuations are joined first so everything downstream can match line-anchored.
-    """
-    stripped_lines: list[str] = []
-    for line in _job_run_text(job).splitlines():
-        quote: str | None = None
-        cut = len(line)
-        for index, char in enumerate(line):
-            if quote is not None:
-                if char == quote:
-                    quote = None
-            elif char in "'\"":
-                quote = char
-            elif char == "#" and (
-                index == 0 or line[index - 1].isspace() or line[index - 1] in ";&|("
-            ):
-                cut = index
-                break
-        stripped_lines.append(line[:cut].rstrip())
-    return re.sub(r"[\\`]\n\s*", " ", "\n".join(stripped_lines))
-
-
-def _unquoted_run_text(job: _Job) -> str:
-    """:func:`_executable_run_text` with the *inside* of quoted strings blanked.
-
-    A shell operator only operates when the shell sees it as an operator. ``echo
-    "cargo test || true"`` prints a warning about a construct; it does not swallow
-    anything, and flagging it would train a contributor to work around the pin
-    rather than read it. Quoted spans are blanked rather than removed so every
-    other position, and every line, is preserved.
-    """
-    text = _executable_run_text(job)
-    blanked: list[str] = []
-    quote: str | None = None
-    for char in text:
-        if quote is not None:
-            blanked.append(char if char == quote else " ")
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            blanked.append(char)
-            quote = char
-        else:
-            blanked.append(char)
-    return "".join(blanked)
-
-
 def _all_jobs(
     workflows: list[tuple[Path, _Workflow]],
 ) -> list[tuple[Path, str, _Job]]:
@@ -313,75 +228,9 @@ def _all_jobs(
     return jobs
 
 
-def _is_unconditional(condition: Any) -> bool:
-    """Whether a workflow ``if:`` expression can never evaluate false.
-
-    Only two forms qualify: a literal ``true`` and ``always()``. Everything else --
-    including ``success()``, which is false the moment an earlier step fails -- can
-    be false on an ordinary push or pull request, which is exactly the shape of a
-    gate that is present in the YAML and never actually runs.
-    """
-    if condition is True:
-        return True
-    if not isinstance(condition, str):
-        return False
-    normalised = condition.strip().strip("${{}} ").strip().lower()
-    return normalised in {"true", "always()"}
-
-
-def _neutering_reasons(job: _Job) -> list[str]:
-    """Why this job could satisfy a gate predicate and still not fail the build.
-
-    B1 (issue #317). A gate predicate answers "is this the family member's gate
-    job"; it says nothing about whether the job is *structurally capable* of
-    failing the workflow. A gate that dies loudly goes red and CI reports it; a
-    gate neutered into silence goes **green**, and nothing in the system says
-    anything at all. These are the three ways to do that from the workflow:
-
-    * ``continue-on-error`` at job or step level -- the command may fail and the
-      workflow still succeeds;
-    * an ``if:`` that can evaluate false on an ordinary push or pull request --
-      the command never runs at all;
-    * a shell construct that swallows the command's status (``|| true``, ``|| :``,
-      ``set +e``) -- the command fails and the step exits zero.
-
-    Returns a list of human-readable reasons; empty means "this job can fail the
-    build", which is the only acceptable state for a gate job.
-    """
-    reasons: list[str] = []
-
-    if job.get("continue-on-error") not in (None, False):
-        reasons.append(
-            "the job is marked continue-on-error, so its failure cannot fail the "
-            "workflow"
-        )
-    if "if" in job and not _is_unconditional(job["if"]):
-        reasons.append(
-            f"the job is conditional (if: {job['if']!r}), so it can be skipped on an "
-            "ordinary push or pull request"
-        )
-
-    steps = job.get("steps")
-    for index, step in enumerate(steps if isinstance(steps, list) else []):
-        if not isinstance(step, dict):
-            continue
-        label = step.get("name") or step.get("uses") or f"step {index}"
-        if step.get("continue-on-error") not in (None, False):
-            reasons.append(f"{label!r} is marked continue-on-error")
-        if "if" in step and not _is_unconditional(step["if"]):
-            reasons.append(f"{label!r} is conditional (if: {step['if']!r})")
-
-    text = _unquoted_run_text(job)
-    for pattern, description in _SWALLOWED_STATUS_PATTERNS:
-        if pattern.search(text):
-            reasons.append(description)
-
-    return reasons
-
-
 def _is_python_gate(job: _Job) -> bool:
     """Runs the Python test suite *and* the Conformance adapter as a named step."""
-    text = _executable_run_text(job)
+    text = _job_run_text(job)
     return (
         "pytest" in text
         and PYTHON_TEST_TREE in text
@@ -393,7 +242,7 @@ def _is_python_gate(job: _Job) -> bool:
 
 def _is_shell_gate(job: _Job) -> bool:
     """Runs both the shell Conformance adapter and the real-script boundary suite."""
-    text = _executable_run_text(job)
+    text = _job_run_text(job)
     return (
         SHELL_CONFORMANCE in text
         and SHELL_CONTINUATION in text
@@ -403,7 +252,7 @@ def _is_shell_gate(job: _Job) -> bool:
 
 def _is_powershell_gate(job: _Job) -> bool:
     """Runs both the PowerShell Conformance adapter and the boundary suite."""
-    text = _executable_run_text(job)
+    text = _job_run_text(job)
     return (
         POWERSHELL_CONFORMANCE in text
         and POWERSHELL_CONTINUATION in text
@@ -413,73 +262,417 @@ def _is_powershell_gate(job: _Job) -> bool:
 
 def _is_rust_gate(job: _Job) -> bool:
     """Runs the Rust Dashboard core's suite against the shared fixture."""
-    text = _executable_run_text(job)
+    text = _job_run_text(job)
     return RUST_SUITE in text and RUST_MANIFEST in text
 
 
-def _declares_assertion_census(job: _Job) -> bool:
-    """Whether the job hands a *measured* census to a guard that refuses a zero.
+# --------------------------------------------------------------------------
+# B1: a job that matches a gate predicate must be able to fail the workflow.
+#
+# The predicates above answer "is this the gate job". They say nothing about
+# whether the job is *allowed* to fail -- and a gate that cannot fail reports
+# green while asserting nothing, which is the one failure mode no CI signal
+# reports. These helpers answer the companion question.
+# --------------------------------------------------------------------------
 
-    The companion to the gate predicates (B2, issue #317). A predicate answers "is
-    this the member's gate job" by matching the suite command; that command reads
-    identically whether the suite has 2754 tests in it or none. This answers the
-    other half.
+# The only conditions that cannot silence a gate on an ordinary push or pull
+# request. Everything else is treated as capable of evaluating false, because
+# a pin that tried to evaluate GitHub's expression language would be re-encoding
+# a grammar it does not own.
+ALWAYS_TRUE_CONDITIONS = frozenset({"true", "${{ true }}", "always()", "${{ always() }}"})
 
-    Three ways of appearing to census without censusing are refused. Commenting the
-    guard out, or ``echo``ing its path, is not running it -- so the invocation must
-    be the command at the start of a logical line of *executable* text. And handing
-    it a literal is a claim rather than a measurement, so the **census argument**
-    itself -- the last word of the invocation, whichever member's calling
-    convention put it there -- must contain an expansion: a count the step computed
-    from what its runner actually did.
+# Shell idioms that discard a command's exit status where it stands. Matched
+# against a whitespace-normalised logical line, so ``||  true`` is the same
+# construct as ``|| true``.
+SWALLOWING_IDIOMS = ("|| true", "|| :", "|| exit 0", "; true", "|| echo")
+
+
+def _job_steps(job: _Job) -> list[dict[str, Any]]:
+    """Every mapping-shaped step of a job."""
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return []
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _step_label(index: int, step: dict[str, Any]) -> str:
+    """A human-readable handle for a step in a failure message."""
+    name = step.get("name") or step.get("uses") or "<unnamed>"
+    return f"step {index} ({name})"
+
+
+def _logical_lines(run: str) -> list[str]:
+    """A script's lines, joined across backslash and backtick continuations.
+
+    A construct split over two physical lines is one command to the shell, so
+    scanning physical lines would miss ``cargo test \\`` / ``| tee out.log``.
     """
-    for line in _executable_run_text(job).splitlines():
-        match = _CENSUS_INVOCATION_RE.match(line)
-        if match is None:
-            continue
-        try:
-            arguments = shlex.split(match.group("census"))
-        except ValueError:  # unbalanced quoting -- not something that runs
-            continue
-        if arguments and "$" in arguments[-1]:
-            return True
+    joined = re.sub(r"[\\`]\n[ \t]*", " ", run)
+    return [re.sub(r"[ \t]+", " ", line.strip()) for line in joined.splitlines()]
+
+
+def _step_bears(step: dict[str, Any], tokens: tuple[str, ...]) -> bool:
+    """Whether a step's ``run:`` script carries one of a member's gate commands."""
+    run = step.get("run")
+    return isinstance(run, str) and any(token in run for token in tokens)
+
+
+def _is_unconditional(condition: Any) -> bool:
+    """Whether an ``if:`` value is provably true for a push and a pull request."""
+    if condition is True:
+        return True
+    if isinstance(condition, str):
+        return condition.strip().lower() in ALWAYS_TRUE_CONDITIONS
     return False
 
 
-# The family's gate predicates, one per member. Each answers "is this the member's
-# gate job"; the B1/B2 companions (`_neutering_reasons`, `_declares_assertion_census`)
-# answer "and can it actually fail, and did it assert anything".
-GATE_PREDICATES: tuple[tuple[str, Any], ...] = (
-    ("Python", _is_python_gate),
-    ("shell", _is_shell_gate),
-    ("PowerShell", _is_powershell_gate),
-    ("Rust", _is_rust_gate),
+def _is_enforcing(continue_on_error: Any) -> bool:
+    """Whether a ``continue-on-error:`` value still lets the job fail the build."""
+    if continue_on_error is False:
+        return True
+    if isinstance(continue_on_error, str):
+        return continue_on_error.strip().lower() == "false"
+    return False
+
+
+def _conditional_sites(job: _Job, tokens: tuple[str, ...]) -> list[str]:
+    """Every ``if:`` that can keep a gate assertion from running.
+
+    Job level is checked unconditionally -- a skipped job asserts nothing. Step
+    level is checked only on the steps that *carry* a gate command, because a
+    conditional prerequisite step (an installer, a diagnostics dump) that does
+    not run leaves the gate step to fail loudly, which CI already reports.
+    """
+    sites: list[str] = []
+    if "if" in job and not _is_unconditional(job["if"]):
+        sites.append(f"job-level `if: {job['if']}` can evaluate false")
+    for index, step in enumerate(_job_steps(job)):
+        if not _step_bears(step, tokens):
+            continue
+        if "if" in step and not _is_unconditional(step["if"]):
+            sites.append(
+                f"{_step_label(index, step)} runs a gate command under "
+                f"`if: {step['if']}`, which can evaluate false"
+            )
+    return sites
+
+
+def _continue_on_error_sites(job: _Job, tokens: tuple[str, ...]) -> list[str]:
+    """Every ``continue-on-error:`` that excuses a gate assertion from failing."""
+    sites: list[str] = []
+    if "continue-on-error" in job and not _is_enforcing(job["continue-on-error"]):
+        sites.append(
+            f"job-level `continue-on-error: {job['continue-on-error']}` "
+            "excuses the gate from failing the workflow"
+        )
+    for index, step in enumerate(_job_steps(job)):
+        if not _step_bears(step, tokens):
+            continue
+        if "continue-on-error" in step and not _is_enforcing(step["continue-on-error"]):
+            sites.append(
+                f"{_step_label(index, step)} runs a gate command under "
+                f"`continue-on-error: {step['continue-on-error']}`"
+            )
+    return sites
+
+
+def _pipes_away_status(line: str) -> bool:
+    """Whether a command line pipes its status into another command's."""
+    return "|" in line.replace("||", "")
+
+
+def _pipefail_enabled(step: dict[str, Any], run: str) -> bool:
+    """Whether a step's shell reports a pipeline's *first* failing status.
+
+    GitHub runs an explicit ``shell: bash`` as
+    ``bash --noprofile --norc -eo pipefail``; every other default does not, and
+    an explicit ``set +o pipefail`` takes it back away again.
+    """
+    if re.search(r"set\s+\+o\s+pipefail", run):
+        return False
+    if re.search(r"set\s+-o\s+pipefail", run) or "-eo pipefail" in run:
+        return True
+    return step.get("shell") == "bash"
+
+
+def _unguarded_pwsh_sites(job: _Job) -> list[str]:
+    """Every ``pwsh -File`` invocation whose own ``$LASTEXITCODE`` is never read.
+
+    ``shell: pwsh`` propagates only the *last* native command's exit code, so a
+    sequence of script invocations reports the final one and drops the rest. A
+    single check somewhere in the job does not cover the invocations before it,
+    which is why this is per invocation rather than per job.
+    """
+    sites: list[str] = []
+    for index, step in enumerate(_job_steps(job)):
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        lines = _logical_lines(run)
+        for position, line in enumerate(lines):
+            if not re.search(r"pwsh\b.*-File", line):
+                continue
+            guarded = False
+            for follow in lines[position + 1 :]:
+                if "$LASTEXITCODE" in follow:
+                    guarded = True
+                    break
+                if re.search(r"pwsh\b.*-File", follow):
+                    break
+            if not guarded:
+                sites.append(
+                    f"{_step_label(index, step)} runs `{line}` without reading "
+                    "its `$LASTEXITCODE` before the next invocation, so only "
+                    "the last native command's status can fail the job"
+                )
+    return sites
+
+
+def _swallowed_command_sites(job: _Job, tokens: tuple[str, ...]) -> list[str]:
+    """Every gate command in a job whose non-zero status never reaches the runner."""
+    sites: list[str] = []
+
+    for index, step in enumerate(_job_steps(job)):
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        if re.search(r"(?:^|[;&\s])set\s+\+[a-z]*e\b", run):
+            sites.append(
+                f"{_step_label(index, step)} runs `set +e`, so the shell stops "
+                "failing on a non-zero status"
+            )
+        pipefail = _pipefail_enabled(step, run)
+        for line in _logical_lines(run):
+            if not any(token in line for token in tokens):
+                continue
+            sites.extend(
+                f"`{line}` discards its status with `{idiom}`"
+                for idiom in SWALLOWING_IDIOMS
+                if idiom in line
+            )
+            if _pipes_away_status(line) and not pipefail:
+                sites.append(
+                    f"`{line}` is piped without `pipefail`, so the pipeline "
+                    "reports the last command's status, not the suite's"
+                )
+
+    return sites + _unguarded_pwsh_sites(job)
+
+
+def _neutering_reasons(job: _Job, tokens: tuple[str, ...]) -> list[str]:
+    """Why a job matching a gate predicate could not fail the workflow ([] -> it can)."""
+    return (
+        _continue_on_error_sites(job, tokens)
+        + _conditional_sites(job, tokens)
+        + _swallowed_command_sites(job, tokens)
+    )
+
+
+def _zero_branch_is_fatal(
+    run: str,
+    marker: str,
+    closer: str,
+    terminators: tuple[str, ...],
+) -> bool:
+    """Whether the branch guarded by ``marker`` actually ends the step.
+
+    A census that merely *mentions* its own condition -- in a comment, or in a
+    branch that only prints -- reports green on an empty suite exactly as a
+    missing census would, so the marker is not evidence on its own.
+    """
+    lines = _logical_lines(run)
+    for position, line in enumerate(lines):
+        if marker not in line or line.startswith("#"):
+            continue
+        for follow in lines[position + 1 :]:
+            if any(terminator in follow for terminator in terminators):
+                return True
+            if follow == closer:
+                break
+    return False
+
+
+# --------------------------------------------------------------------------
+# B2: a suite that runs but asserts nothing.
+#
+# The predicates above prove a command is *written down*. They cannot know
+# whether it had anything to run, and the four runners disagree sharply about
+# an empty suite: ``pytest`` exits 5, but ``cargo test`` and a PowerShell
+# ``foreach`` both exit 0 having asserted nothing. Each member's gate therefore
+# has to prove a *non-zero* census -- deliberately not a pinned floor count,
+# which would have to be bumped whenever a test is added and so would eventually
+# be edited to stay quiet. Where the runner already reports one, that report is
+# the census; where it does not, the gate discovers its suites and refuses an
+# empty set.
+# --------------------------------------------------------------------------
+
+# pytest's exit code 5 on an empty collection *is* the Python member's census,
+# so the census check is that the gate still runs pytest and nothing suppresses
+# that exit.
+PYTHON_CENSUS_MARKER = "python -m pytest"
+# ``--co`` is pytest's own alias for ``--collect-only``: it collects, asserts
+# nothing, and exits 0.
+PYTEST_COLLECT_ONLY = re.compile(r"(?<![\w-])--(?:collect-only|co)(?![\w-])")
+PYTEST_NO_TEST_SUPPRESSORS = ("--suppress-no-test-exit-code",)
+
+# The shell member's safety was incidental: an unmatched glob stays literal and
+# ``bash`` cannot open it. ``shopt -s nullglob`` turns that into a green, empty
+# run, so the gate sets nullglob itself and asserts non-emptiness explicitly.
+SHELL_SUITE_GLOB = "git-loopy/shell/tests/test-*.sh"
+SHELL_CENSUS_MARKER = "${#discovered[@]} == 0"
+
+# ``foreach`` over an empty match set exits 0, so the PowerShell gate counts the
+# suites it discovered before running any of them.
+POWERSHELL_SUITE_GLOB = "test-*.ps1"
+POWERSHELL_CENSUS_MARKER = "$Discovered.Count -eq 0"
+
+# ``cargo test`` prints ``test result: ok. 0 passed`` and exits 0, so the only
+# evidence that an assertion executed is the runner's own report.
+RUST_NON_EMPTY_REPORT = r"test result: ok\. [1-9][0-9]* passed"
+
+
+def _env_values(job: _Job, name: str) -> list[str]:
+    """Every value bound to ``name`` by the job's or a step's ``env:`` block."""
+    values: list[str] = []
+    for scope in [job, *_job_steps(job)]:
+        env = scope.get("env")
+        if isinstance(env, dict) and isinstance(env.get(name), str):
+            values.append(env[name])
+    return values
+
+
+def _python_census_reasons(job: _Job) -> list[str]:
+    """Why the Python gate could not tell an empty collection from a pass."""
+    text = _job_run_text(job)
+    reasons: list[str] = []
+    if PYTHON_CENSUS_MARKER not in text:
+        reasons.append(
+            "the gate no longer runs pytest, whose exit code 5 on an empty "
+            "collection is this member's non-emptiness guarantee"
+        )
+    # `PYTEST_ADDOPTS` reaches the same command line without appearing on it.
+    for source in [text, *_env_values(job, "PYTEST_ADDOPTS")]:
+        reasons.extend(
+            f"`{suppressor}` stops pytest reporting an empty collection"
+            for suppressor in PYTEST_NO_TEST_SUPPRESSORS
+            if suppressor in source
+        )
+        if PYTEST_COLLECT_ONLY.search(source):
+            reasons.append(
+                "the gate only collects tests; a collect-only run exits 0 "
+                "having executed no assertion"
+            )
+    return reasons
+
+
+def _shell_census_reasons(job: _Job) -> list[str]:
+    """Why the shell gate could not tell an empty suite tree from a pass."""
+    text = _job_run_text(job)
+    reasons: list[str] = []
+    if SHELL_SUITE_GLOB not in text:
+        reasons.append(f"the gate never discovers `{SHELL_SUITE_GLOB}`")
+    if "nullglob" not in text:
+        reasons.append(
+            "the gate relies on an unmatched glob staying literal rather than "
+            "setting `nullglob` and asserting non-emptiness itself"
+        )
+    if not _zero_branch_is_fatal(text, SHELL_CENSUS_MARKER, "fi", ("exit 1",)):
+        reasons.append(
+            f"the gate never *fails* on an empty suite set "
+            f"(`{SHELL_CENSUS_MARKER}` reaches no `exit 1`)"
+        )
+    return reasons
+
+
+def _powershell_census_reasons(job: _Job) -> list[str]:
+    """Why the PowerShell gate could not tell an empty suite tree from a pass."""
+    text = _job_run_text(job)
+    reasons: list[str] = []
+    if POWERSHELL_SUITE_GLOB not in text:
+        reasons.append(f"the gate never discovers `{POWERSHELL_SUITE_GLOB}`")
+    if not _zero_branch_is_fatal(text, POWERSHELL_CENSUS_MARKER, "}", ("throw",)):
+        reasons.append(
+            f"the gate never *fails* on an empty suite set "
+            f"(`{POWERSHELL_CENSUS_MARKER}` reaches no `throw`); a `foreach` "
+            "over no match exits 0"
+        )
+    return reasons
+
+
+def _rust_census_reasons(job: _Job) -> list[str]:
+    """Why the Rust gate could not tell a zero-test run from a pass."""
+    text = _job_run_text(job)
+    reasons: list[str] = []
+    if not _zero_branch_is_fatal(text, RUST_NON_EMPTY_REPORT, "fi", ("exit 1",)):
+        reasons.append(
+            "the gate never *fails* when cargo's own report shows no passing "
+            f"test (`{RUST_NON_EMPTY_REPORT}` reaches no `exit 1`); "
+            "`cargo test` exits 0 on an empty suite"
+        )
+    if "pipefail" not in text:
+        reasons.append(
+            "cargo's report is captured through a pipe without `pipefail`, so a "
+            "failing suite would be reported by `tee` instead"
+        )
+    return reasons
+
+
+@dataclass(frozen=True)
+class _Member:
+    """One member of the Runner family, and how its CI gate is recognised."""
+
+    name: str
+    predicate: Callable[[_Job], bool]
+    tokens: tuple[str, ...]
+    platforms: frozenset[str]
+    census: Callable[[_Job], list[str]]
+    census_marker: str
+
+
+FAMILY: tuple[_Member, ...] = (
+    _Member(
+        name="Python",
+        predicate=_is_python_gate,
+        tokens=("pytest",),
+        platforms=frozenset({LINUX}),
+        census=_python_census_reasons,
+        census_marker=PYTHON_CENSUS_MARKER,
+    ),
+    _Member(
+        name="shell",
+        predicate=_is_shell_gate,
+        tokens=(SHELL_CONFORMANCE, SHELL_CONTINUATION, SHELL_BOUNDARY),
+        platforms=frozenset({LINUX, MACOS}),
+        census=_shell_census_reasons,
+        census_marker=SHELL_CENSUS_MARKER,
+    ),
+    _Member(
+        name="PowerShell",
+        predicate=_is_powershell_gate,
+        tokens=(POWERSHELL_CONFORMANCE, POWERSHELL_CONTINUATION, POWERSHELL_BOUNDARY),
+        platforms=frozenset({LINUX, MACOS, WINDOWS}),
+        census=_powershell_census_reasons,
+        census_marker=POWERSHELL_CENSUS_MARKER,
+    ),
+    _Member(
+        name="Rust",
+        predicate=_is_rust_gate,
+        tokens=(RUST_SUITE,),
+        platforms=frozenset({LINUX}),
+        census=_rust_census_reasons,
+        census_marker=RUST_NON_EMPTY_REPORT,
+    ),
 )
 
 
 def _loaded_workflows() -> list[tuple[Path, _Workflow]]:
-    """Shared setup: the parsed gate workflows, or a **failure** when unavailable.
-
-    Fails closed. Not finding the workflows is an inability to gate, and this pin's
-    whole subject is a gate that reports success without gating -- a skip here would
-    be the pin doing to itself what it exists to detect (B3, issue #317). Only a
-    positively identified installed distribution (:func:`_installed_distribution_root`)
-    stands the pin down, because there the source tree is genuinely absent by design.
-    """
+    """Shared setup: the parsed gate workflows, or a red verdict when unavailable."""
     repo_root = _find_repo_root()
     if repo_root is None:
-        installed = _installed_distribution_root()
-        if installed is not None:  # pragma: no cover - installed distribution
-            pytest.skip(
-                f"running from an installed distribution at {installed}, which "
-                "ships no workflow source to inspect"
-            )
-        pytest.fail(
-            "the Runner-family gate pin cannot locate the repository root (no "
-            "ancestor of this file holds both docs/adr/ and CONTEXT.md), and this "
-            "is not an installed distribution. A pin that cannot inspect the gate "
-            "cannot gate: reporting red, not skipping."
-        )
+        outcome, message = _missing_checkout_outcome(Path(__file__).resolve())
+        if outcome == SKIP:
+            pytest.skip(message)
+        pytest.fail(message)
     workflows = _load_workflows(repo_root)
     if not workflows:
         pytest.fail("no CI workflow under .github/workflows/ gates the Runner family")
@@ -496,6 +689,75 @@ def _gate_platforms(
         if predicate(job):
             platforms |= _job_platforms(job)
     return platforms
+
+
+def _gate_job(predicate: Callable[[_Job], bool]) -> _Job:
+    """The first job in the tracked workflows matching a gate predicate."""
+    for _path, _name, job in _all_jobs(_loaded_workflows()):
+        if predicate(job):
+            return job
+    pytest.fail("no tracked CI job matches that Runner-family gate predicate")
+
+
+def _gate_step_run(job: _Job, name_fragment: str) -> str:
+    """The ``run:`` script of the step whose name contains ``name_fragment``."""
+    for step in _job_steps(job):
+        name = step.get("name")
+        if isinstance(name, str) and name_fragment in name:
+            run = step.get("run")
+            if isinstance(run, str):
+                return run
+    pytest.fail(f"no step named like {name_fragment!r} carries a run: script")
+
+
+def _with_run_text_edit(job: _Job, needle: str, replacement: str) -> _Job:
+    """A copy of ``job`` with ``needle`` replaced in every step's ``run:`` script."""
+    edited = dict(job)
+    steps: list[dict[str, Any]] = []
+    for step in _job_steps(job):
+        copied = dict(step)
+        if isinstance(copied.get("run"), str):
+            copied["run"] = copied["run"].replace(needle, replacement)
+        steps.append(copied)
+    edited["steps"] = steps
+    return edited
+
+
+def _line_containing(text: str, needle: str) -> str:
+    """The first line of ``text`` holding ``needle`` (``""`` when absent)."""
+    for line in text.splitlines():
+        if needle in line:
+            return line.strip()
+    return ""
+
+
+def _expand_expressions(text: str, context: dict[str, str]) -> str:
+    """Substitute ``${{ ctx.key }}`` expressions so a step can be run off-runner."""
+
+    def substitute(match: re.Match[str]) -> str:
+        key = match.group(1).strip()
+        if key not in context:
+            pytest.fail(f"no value bound for the workflow expression {key!r}")
+        return context[key]
+
+    return re.sub(r"\$\{\{([^}]*)\}\}", substitute, text)
+
+
+def _run_script(
+    interpreter: list[str],
+    script: str,
+    suffix: str,
+    cwd: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a workflow step's script against a scratch checkout."""
+    path = cwd / f"gate-step{suffix}"
+    path.write_text(script, encoding="utf-8")
+    return subprocess.run(  # noqa: S603
+        [*interpreter, str(path)],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_ci_gates_python_reference_orchestrator() -> None:
@@ -583,345 +845,16 @@ def test_ci_gates_the_rust_dashboard_core() -> None:
     )
 
 
-def _powershell_suite_census_block(job: _Job) -> str:
-    """The PowerShell gate's suite loop and census, from its ``$Suites = @(`` on."""
-    text = _job_run_text(job)
-    start = text.index("$Suites = @(")
-    return text[start:]
-
-
-def test_an_empty_powershell_suite_list_reports_a_zero_census(tmp_path: Path) -> None:
-    """B2: the measured PowerShell fail-open case is now red.
-
-    A ``foreach`` over a suite list that matched nothing runs no suite and exits
-    ``0`` -- success, having asserted nothing. This drives the gate's *own* loop
-    with an emptied list and requires it to fail.
-    """
-    if shutil.which("pwsh") is None:
-        pytest.skip("pwsh is not installed; the PowerShell member's own loop covers it")
-
-    workflows = _loaded_workflows()
-    repo_root = _find_repo_root()
-    assert repo_root is not None
-
-    blocks = [
-        _powershell_suite_census_block(job)
-        for _path, _name, job in _all_jobs(workflows)
-        if _is_powershell_gate(job)
-    ]
-    assert blocks, "the PowerShell gate job declares no suite list to count"
-
-    def run_with(suites: list[Path]) -> subprocess.CompletedProcess[str]:
-        block = blocks[0]
-        listed = ", ".join(f'"{suite.as_posix()}"' for suite in suites)
-        rewritten = "$Suites = @(" + listed + block[block.index(")") :]
-        script = tmp_path / "census.ps1"
-        script.write_text(rewritten, encoding="utf-8")
-        return subprocess.run(
-            ["pwsh", "-NoLogo", "-NoProfile", "-File", str(script)],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-
-    empty = run_with([])
-    assert empty.returncode != 0, (
-        "the PowerShell gate ran no suite and still reported success: "
-        f"{empty.stdout}{empty.stderr}"
-    )
-
-    suite = tmp_path / "test-one.ps1"
-    suite.write_text("exit 0\n", encoding="utf-8")
-    executed = run_with([suite])
-    assert executed.returncode == 0, executed.stdout + executed.stderr
-    assert "1" in executed.stdout
-
-
-def _shell_suite_census_block(job: _Job) -> str:
-    """The shell gate's suite loop and census, from its ``SUITES=(`` declaration on.
-
-    Extracted so a test can execute the *workflow's own* counting idiom against a
-    scratch suite list rather than a re-typed copy of it.
-    """
-    text = _job_run_text(job)
-    start = text.index("SUITES=(")
-    return text[start:]
-
-
-def test_a_nullglob_emptied_shell_suite_list_reports_a_zero_census(
-    tmp_path: Path,
-) -> None:
-    """B2: the shell member's non-emptiness is asserted, not left to glob semantics.
-
-    The shell loop fails closed on an empty ``test-*.sh`` glob today only because
-    the unmatched pattern stays literal and ``bash`` cannot open it -- ``shopt -s
-    nullglob`` turns that into a green, empty run. This drives the gate's *own*
-    loop, with nothing but its file list swapped for a glob that matches nothing.
-    """
-    workflows = _loaded_workflows()
-    repo_root = _find_repo_root()
-    assert repo_root is not None
-
-    blocks = [
-        _shell_suite_census_block(job)
-        for _path, _name, job in _all_jobs(workflows)
-        if _is_shell_gate(job)
-    ]
-    assert blocks, "the shell gate job declares no suite list to count"
-
-    def run_with(suite_dir: Path) -> subprocess.CompletedProcess[str]:
-        block = blocks[0]
-        rewritten = (
-            "set -e\nshopt -s nullglob\nBASH_BIN=bash\nSUITES=("
-            + str(suite_dir / "test-*.sh")
-            + block[block.index(")") :]
-        )
-        return subprocess.run(
-            ["bash", "-c", rewritten],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert run_with(empty).returncode != 0, (
-        "the shell gate ran no suite and still reported success; under nullglob a "
-        "collapsed suite list is a green, empty run"
-    )
-
-    populated = tmp_path / "populated"
-    populated.mkdir()
-    (populated / "test-one.sh").write_text("exit 0\n", encoding="utf-8")
-    executed = run_with(populated)
-    assert executed.returncode == 0, executed.stderr
-    assert "1" in executed.stdout
-
-
-def test_a_gate_job_without_a_census_fails_the_pin() -> None:
-    """B2: the companion predicate -- "and did it assert anything".
-
-    Three near-misses are refused as well as the plain absence: a commented-out
-    guard, an ``echo``ed one, and a hard-coded count. The first two do not run, and
-    the third is a claim rather than a measurement.
-    """
-    assert not _declares_assertion_census({"steps": [{"run": "cargo test"}]})
-    assert not _declares_assertion_census(
-        {"steps": [{"run": f'# {CENSUS_SCRIPT} Rust "$CENSUS"'}]}
-    )
-    assert not _declares_assertion_census(
-        {"steps": [{"run": f'echo {CENSUS_SCRIPT} Rust "$CENSUS"'}]}
-    )
-    assert not _declares_assertion_census({"steps": [{"run": f"{CENSUS_SCRIPT} Rust 1"}]})
-    # ...including a literal census on a line that expands something *else*.
-    assert not _declares_assertion_census(
-        {"steps": [{"run": f'{CENSUS_SCRIPT} "$MEMBER" 1'}]}
-    )
-    assert not _declares_assertion_census(
-        {"steps": [{"run": f"& {POWERSHELL_CENSUS_SCRIPT} -Label $Member -Census 1"}]}
-    )
-
-    assert _declares_assertion_census(
-        {"steps": [{"run": f'{CENSUS_SCRIPT} Rust "$(count-passed cargo.log)"'}]}
-    )
-    assert _declares_assertion_census(
-        {
-            "steps": [
-                {
-                    "run": f"& {POWERSHELL_CENSUS_SCRIPT} -Label PowerShell "
-                    '-Census "$Executed"'
-                }
-            ]
-        }
-    )
-    # A continuation is one command: the census may sit on the next physical line,
-    # in either member's continuation syntax.
-    assert _declares_assertion_census(
-        {"steps": [{"run": f'{CENSUS_SCRIPT} Python \\\n  "$(count)"'}]}
-    )
-    assert _declares_assertion_census(
-        {
-            "steps": [
-                {
-                    "run": f"& {POWERSHELL_CENSUS_SCRIPT} -Label PowerShell `\n"
-                    '  -Census "$Executed"'
-                }
-            ]
-        }
-    )
-
-
-def test_every_family_gate_job_declares_a_nonzero_assertion_census() -> None:
-    """B2: every member's gate proves it ran at least one assertion.
-
-    A suite that runs but asserts nothing is the second way a gate reports green
-    without gating, and the pin cannot see it from the command alone -- ``cargo
-    test`` on an empty crate and ``pytest`` on a full one are the same six words.
-    So each gate job has to compute a census and hand it to a guard that refuses a
-    zero, and this is the pin that the guard is still there.
-    """
-    workflows = _loaded_workflows()
-
-    for member, predicate in GATE_PREDICATES:
-        jobs = [
-            (path, name)
-            for path, name, job in _all_jobs(workflows)
-            if predicate(job) and _declares_assertion_census(job)
-        ]
-        assert jobs, (
-            f"the {member} gate job does not assert a non-zero assertion census "
-            f"({CENSUS_SCRIPT} / {POWERSHELL_CENSUS_SCRIPT}). A suite that runs "
-            "with nothing in it exits zero, so the gate would report success "
-            "having proved nothing."
-        )
-
-
-def test_the_powershell_census_guard_refuses_a_zero_census(tmp_path: Path) -> None:
-    """B2: the PowerShell member's census guard, in its own runner.
-
-    The PowerShell suite loop is the measured fail-open case: a ``foreach`` over a
-    pattern that matched nothing exits ``0`` having asserted nothing. Its guard has
-    to be PowerShell because the gate step it protects is a ``shell: pwsh`` step on
-    Windows as well as Linux and macOS.
-    """
-    if shutil.which("pwsh") is None:
-        pytest.skip("pwsh is not installed; the PowerShell member's own loop covers it")
-
-    repo_root = _find_repo_root()
-    assert repo_root is not None
-    guard = repo_root / POWERSHELL_CENSUS_SCRIPT
-
-    def run(census: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [
-                "pwsh",
-                "-NoLogo",
-                "-NoProfile",
-                "-File",
-                str(guard),
-                "-Label",
-                "PowerShell",
-                "-Census",
-                census,
-            ],
-            capture_output=True,
-            text=True,
-            cwd=tmp_path,
-        )
-
-    empty = run("0")
-    assert empty.returncode != 0, "a zero census must fail the PowerShell gate"
-    assert "PowerShell" in empty.stderr + empty.stdout
-
-    populated = run("5")
-    assert populated.returncode == 0, populated.stderr
-    assert "5" in populated.stdout
-
-
-def test_the_census_guard_refuses_a_zero_census(tmp_path: Path) -> None:
-    """B2: a gate that asserted nothing is red, not green.
-
-    The measured fail-open cases -- ``cargo test`` on an empty crate and the
-    PowerShell suite loop over an empty match -- both exit ``0``. This is the guard
-    that turns that into a failure, and it is the same guard for every member.
-    """
-    repo_root = _find_repo_root()
-    assert repo_root is not None
-    guard = repo_root / CENSUS_SCRIPT
-
-    def run(census: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["bash", str(guard), "Rust", census],
-            capture_output=True,
-            text=True,
-            cwd=tmp_path,
-        )
-
-    empty = run("0")
-    assert empty.returncode != 0, "a zero census must fail the gate"
-    assert "Rust" in empty.stderr
-
-    populated = run("15")
-    assert populated.returncode == 0, populated.stderr
-    assert "15" in populated.stdout
-
-    # A census that is not a count at all (a parse that silently produced nothing)
-    # is an inability to census, which fails closed for the same reason.
-    assert run("").returncode != 0
-    assert run("ok").returncode != 0
-
-
-def test_the_passed_count_reads_the_pytest_and_cargo_idioms(tmp_path: Path) -> None:
-    """B2: the census comes from what each runner already prints, not a new protocol.
-
-    ``pytest`` and ``cargo test`` both report ``<N> passed``. An empty suite reports
-    either nothing or ``0 passed`` -- the exact shape that lets a runner exit zero
-    having asserted nothing.
-    """
-    repo_root = _find_repo_root()
-    assert repo_root is not None
-    counter = repo_root / COUNT_PASSED_SCRIPT
-
-    def census(log: str) -> str:
-        path = tmp_path / "runner.log"
-        path.write_text(log, encoding="utf-8")
-        completed = subprocess.run(
-            ["bash", str(counter), str(path)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return completed.stdout.strip()
-
-    assert census("2754 passed, 2 skipped in 42.11s\n") == "2754"
-    assert census("no tests ran in 0.01s\n") == "0"
-    assert (
-        census(
-            "running 12 tests\n"
-            "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; "
-            "0 filtered out; finished in 0.01s\n"
-            "running 3 tests\n"
-            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; "
-            "0 filtered out; finished in 0.00s\n"
-        )
-        == "15"
-    )
-    assert (
-        census(
-            "running 0 tests\n"
-            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; "
-            "0 filtered out; finished in 0.00s\n"
-        )
-        == "0"
-    )
-
-
-def test_every_family_gate_job_can_fail_the_build() -> None:
-    """B1: a job that satisfies a gate predicate must be able to fail the workflow.
-
-    A gate that dies loudly goes red and CI reports it; a gate neutered into
-    silence goes green and nothing reports anything, which is strictly the more
-    dangerous of the two and the only one a static pin is positioned to catch.
-    """
-    workflows = _loaded_workflows()
-
-    checked = 0
-    for path, name, job in _all_jobs(workflows):
-        if not any(predicate(job) for _member, predicate in GATE_PREDICATES):
-            continue
-        checked += 1
-        reasons = _neutering_reasons(job)
-        assert not reasons, (
-            f"{path.name} job {name!r} is a Runner-family gate job but cannot fail "
-            f"the build: {'; '.join(reasons)}"
-        )
-    assert checked, "no Runner-family gate job was found to check"
-
-
 def test_ci_gate_runs_on_every_push_and_pull_request() -> None:
+    """AC6: every workflow hosting a family-gate job triggers on push and PR."""
     workflows = _loaded_workflows()
 
-    gate_predicates = tuple(predicate for _member, predicate in GATE_PREDICATES)
+    gate_predicates = (
+        _is_python_gate,
+        _is_shell_gate,
+        _is_powershell_gate,
+        _is_rust_gate,
+    )
     hosting = [
         (path, workflow)
         for path, workflow in workflows
@@ -940,6 +873,391 @@ def test_ci_gate_runs_on_every_push_and_pull_request() -> None:
             f"{path.name} hosts a Runner-family gate job but does not run on both "
             f"push and pull_request; triggers on {sorted(triggers)}"
         )
+
+
+def test_job_platform_helper_reads_matrix_and_runs_on() -> None:
+    """Guard the guard: platform extraction covers matrix and bare ``runs-on``."""
+    matrixed = {
+        "runs-on": "${{ matrix.os }}",
+        "strategy": {"matrix": {"os": ["ubuntu-latest", "macos-latest"]}},
+    }
+    assert _job_platforms(matrixed) == {LINUX, MACOS}
+    assert _job_platforms({"runs-on": "windows-latest"}) == {WINDOWS}
+    assert _job_platforms({"runs-on": "${{ matrix.os }}"}) == set()
+
+
+def test_trigger_helper_handles_the_yaml_on_boolean_key() -> None:
+    """Guard the guard: ``on:`` is parsed as the YAML 1.1 boolean ``True`` key."""
+    workflow = yaml.safe_load("on:\n  push:\n  pull_request:\njobs: {}\n")
+    assert True in workflow and "on" not in workflow
+    assert _workflow_triggers(workflow) == {"push", "pull_request"}
+    assert _workflow_triggers(yaml.safe_load("on: [push, pull_request]\n")) == {
+        "push",
+        "pull_request",
+    }
+
+
+def test_a_missing_checkout_is_reported_as_an_inability_to_gate() -> None:
+    """B3: "the checkout is not where I expected" fails; it does not skip."""
+    outcome, message = _missing_checkout_outcome(
+        Path("/srv/build/git-loopy/python/tests/test_runner_family_gate.py")
+    )
+    assert outcome == FAIL
+    assert "cannot" in message.lower()
+
+
+def test_a_genuine_installed_distribution_is_distinguished_positively() -> None:
+    """B3: the one tolerated context is recognised by the layout it runs from."""
+    outcome, _message = _missing_checkout_outcome(
+        Path("/venv/lib/python3.13/site-packages/git_loopy/tests/gate.py")
+    )
+    assert outcome == SKIP
+
+
+def test_the_pin_fails_closed_when_it_cannot_find_the_workflows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B3: a pin that cannot inspect the gate must be red, never green."""
+    monkeypatch.setattr(sys.modules[__name__], "_find_repo_root", lambda: None)
+    with pytest.raises(pytest.fail.Exception):
+        _loaded_workflows()
+
+
+def _synthetic_gate_job(**overrides: Any) -> _Job:
+    """A minimal job that runs a gate command and can fail the build."""
+    job: _Job = {
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {"uses": "actions/checkout@v4"},
+            {"name": "Rust suite", "run": f"{RUST_SUITE} --manifest-path {RUST_MANIFEST}"},
+        ],
+    }
+    job.update(overrides)
+    return job
+
+
+def test_a_clean_gate_job_carries_no_neutering_reason() -> None:
+    """B1: the shape the pin is meant to accept."""
+    assert _neutering_reasons(_synthetic_gate_job(), (RUST_SUITE,)) == []
+
+
+def test_continue_on_error_neuters_a_gate_job() -> None:
+    """B1: a job allowed to fail cannot fail the build, so it gates nothing."""
+    at_job = _synthetic_gate_job(**{"continue-on-error": True})
+    assert _neutering_reasons(at_job, (RUST_SUITE,))
+
+    at_step = _synthetic_gate_job()
+    at_step["steps"][1]["continue-on-error"] = True
+    assert _neutering_reasons(at_step, (RUST_SUITE,))
+
+
+def test_a_condition_that_can_be_false_neuters_a_gate_job() -> None:
+    """B1: a gate skipped on an ordinary push or pull request is not a gate."""
+    at_job = _synthetic_gate_job(**{"if": "${{ github.event_name == 'schedule' }}"})
+    assert _neutering_reasons(at_job, (RUST_SUITE,))
+
+    at_step = _synthetic_gate_job()
+    at_step["steps"][1]["if"] = "${{ runner.os == 'Linux' }}"
+    assert _neutering_reasons(at_step, (RUST_SUITE,))
+
+
+def test_a_provably_unconditional_condition_is_tolerated() -> None:
+    """B1: ``if: always()`` cannot silence a gate, so it is not a reason."""
+    assert _neutering_reasons(_synthetic_gate_job(**{"if": "always()"}), (RUST_SUITE,)) == []
+
+
+def test_a_swallowed_gate_command_neuters_a_gate_job() -> None:
+    """B1: a command whose non-zero status never reaches the runner."""
+    swallowed = _synthetic_gate_job()
+    swallowed["steps"][1]["run"] = f"{RUST_SUITE} --manifest-path {RUST_MANIFEST} || true"
+    assert _neutering_reasons(swallowed, (RUST_SUITE,))
+
+    relaxed = _synthetic_gate_job()
+    relaxed["steps"][1]["run"] = f"set +e\n{RUST_SUITE} --manifest-path {RUST_MANIFEST}\n"
+    assert _neutering_reasons(relaxed, (RUST_SUITE,))
+
+
+def test_an_unguarded_pipe_neuters_a_gate_command() -> None:
+    """B1: piping without ``pipefail`` reports the *tee*'s status, not the suite's."""
+    piped = _synthetic_gate_job()
+    piped["steps"][1]["run"] = f"{RUST_SUITE} --manifest-path {RUST_MANIFEST} | tee out.log"
+    assert _neutering_reasons(piped, (RUST_SUITE,))
+
+    guarded = _synthetic_gate_job()
+    guarded["steps"][1]["run"] = (
+        f"set -o pipefail\n{RUST_SUITE} --manifest-path {RUST_MANIFEST} | tee out.log\n"
+    )
+    assert _neutering_reasons(guarded, (RUST_SUITE,)) == []
+
+
+def test_a_powershell_gate_that_never_reads_lastexitcode_is_neutered() -> None:
+    """B1: ``shell: pwsh`` propagates only the *last* native command's status."""
+    unread = {
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {
+                "shell": "pwsh",
+                "run": (
+                    f"pwsh -NoLogo -NoProfile -File {POWERSHELL_CONFORMANCE}\n"
+                    f"pwsh -NoLogo -NoProfile -File {POWERSHELL_BOUNDARY}\n"
+                ),
+            }
+        ],
+    }
+    assert _neutering_reasons(unread, (POWERSHELL_CONFORMANCE, POWERSHELL_BOUNDARY))
+
+
+def test_every_family_gate_job_can_fail_the_build() -> None:
+    """B1: no Runner-family gate job is structurally unable to fail the workflow."""
+    workflows = _loaded_workflows()
+
+    for member in FAMILY:
+        jobs = [
+            (path, name)
+            for path, name, job in _all_jobs(workflows)
+            if member.predicate(job)
+        ]
+        assert jobs, f"no CI job gates the {member.name} member"
+        for path, name, job in _all_jobs(workflows):
+            if not member.predicate(job):
+                continue
+            # The census check is itself a gate command: `|| true` on the
+            # line that reads the suite's report would neuter it just as
+            # thoroughly as `|| true` on the suite.
+            reasons = _neutering_reasons(job, (*member.tokens, member.census_marker))
+            assert not reasons, (
+                f"{path.name}:{name} matches the {member.name} gate predicate but "
+                "cannot fail the workflow: " + "; ".join(reasons)
+            )
+
+
+def test_every_family_gate_proves_it_executed_an_assertion() -> None:
+    """B2: a member whose suite ran nothing must not report green."""
+    workflows = _loaded_workflows()
+
+    for member in FAMILY:
+        jobs = [job for _p, _n, job in _all_jobs(workflows) if member.predicate(job)]
+        assert jobs, f"no CI job gates the {member.name} member"
+        for job in jobs:
+            reasons = member.census(job)
+            assert not reasons, (
+                f"the {member.name} gate cannot tell an empty suite from a "
+                "passing one: " + "; ".join(reasons)
+            )
+
+
+def test_a_gate_that_drops_its_non_emptiness_check_is_caught() -> None:
+    """B2 mutation: removing each member's census leaves a reason behind."""
+    workflows = _loaded_workflows()
+    for member in FAMILY:
+        job = next(job for _p, _n, job in _all_jobs(workflows) if member.predicate(job))
+        stripped = _with_run_text_edit(job, member.census_marker, "")
+        assert member.census(stripped), (
+            f"dropping {member.census_marker!r} from the {member.name} gate went "
+            "unnoticed"
+        )
+
+
+def test_pytest_fails_closed_on_a_suite_that_collects_nothing(tmp_path: Path) -> None:
+    """B2 (Python): the reference member's runner already exits non-zero."""
+    empty = tmp_path / "tests"
+    empty.mkdir()
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "pytest", "-q", str(empty)],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+def test_the_rust_census_rejects_cargos_own_empty_suite_report() -> None:
+    """B2 (Rust): ``cargo test`` exits 0 on an empty suite, so read its report."""
+    workflows = _loaded_workflows()
+    job = next(job for _p, _n, job in _all_jobs(workflows) if _is_rust_gate(job))
+    census = _line_containing(_job_run_text(job), RUST_NON_EMPTY_REPORT)
+    pattern = re.compile(RUST_NON_EMPTY_REPORT)
+
+    empty = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored\n"
+    populated = "running 3 tests\n\ntest result: ok. 3 passed; 0 failed; 0 ignored\n"
+    assert census, "the Rust gate carries no report check to verify"
+    assert not pattern.search(empty)
+    assert pattern.search(populated)
+
+
+def test_the_shell_gate_refuses_an_empty_suite_tree_under_nullglob(
+    tmp_path: Path,
+) -> None:
+    """B2 (shell): non-emptiness is asserted, not inherited from glob semantics."""
+    (tmp_path / "git-loopy" / "shell" / "tests").mkdir(parents=True)
+    script = _expand_expressions(
+        _gate_step_run(_gate_job(_is_shell_gate), "shell smoke suite"),
+        {"runner.os": "Linux"},
+    )
+    completed = _run_script(["bash", "-e", "-o", "pipefail"], script, ".sh", tmp_path)
+    assert completed.returncode != 0
+    assert "discovered no suite" in completed.stderr
+    # The census is what stopped the step: nothing downstream got to run and
+    # fail on its own for a different reason.
+    assert "No such file" not in completed.stderr
+
+
+def test_the_powershell_gate_refuses_an_empty_suite_tree(tmp_path: Path) -> None:
+    """B2 (PowerShell): the ``foreach`` runner exits 0 on an empty suite set."""
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("pwsh is not installed on this host")
+    (tmp_path / "git-loopy" / "powershell" / "tests").mkdir(parents=True)
+    script = "$ErrorActionPreference = 'stop'\n" + _gate_step_run(
+        _gate_job(_is_powershell_gate), "PowerShell smoke suite"
+    )
+    completed = _run_script(
+        [pwsh, "-NoLogo", "-NoProfile", "-File"], script, ".ps1", tmp_path
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert "discovered no suite" in output
+    # The census is what stopped the step, not a later missing-file error.
+    assert POWERSHELL_CONFORMANCE not in output
+
+
+def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -> None:
+    """B1: ``shell: pwsh`` returns only the *last* native command's exit code.
+
+    Five suites invoked back to back therefore reported the fifth one's status
+    and nothing else, so a red Conformance adapter followed by a green installer
+    suite left the job green. Each invocation now reads its own status.
+    """
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("pwsh is not installed on this host")
+
+    suites = tmp_path / "git-loopy" / "powershell" / "tests"
+    suites.mkdir(parents=True)
+    for name in (
+        POWERSHELL_CONFORMANCE,
+        POWERSHELL_CONTINUATION,
+        POWERSHELL_BOUNDARY,
+        "test-event-conformance.ps1",
+        "test-tui-install.ps1",
+    ):
+        body = "exit 3\n" if name == POWERSHELL_CONFORMANCE else "exit 0\n"
+        (suites / name).write_text(body, encoding="utf-8")
+
+    script = "$ErrorActionPreference = 'stop'\n" + _gate_step_run(
+        _gate_job(_is_powershell_gate), "PowerShell smoke suite"
+    )
+    completed = _run_script(
+        [pwsh, "-NoLogo", "-NoProfile", "-File"], script, ".ps1", tmp_path
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert POWERSHELL_CONFORMANCE in completed.stdout + completed.stderr
+
+
+def test_a_census_that_only_prints_is_not_a_census() -> None:
+    """B2 mutation: naming the empty case is not the same as failing on it."""
+    defused = {
+        "shell": _with_run_text_edit(
+            _gate_job(_is_shell_gate), "exit 1", "printf 'ignored\\n'"
+        ),
+        "Rust": _with_run_text_edit(
+            _gate_job(_is_rust_gate), "exit 1", "printf 'ignored\\n'"
+        ),
+        "PowerShell": _with_run_text_edit(
+            _gate_job(_is_powershell_gate),
+            'throw "PowerShell gate: discovered no suite',
+            'Write-Output "PowerShell gate: discovered no suite',
+        ),
+    }
+    for member in FAMILY:
+        job = defused.get(member.name)
+        if job is None:
+            continue
+        assert member.census(job), (
+            f"the {member.name} gate kept its census marker but stopped failing "
+            "on an empty suite, and the pin did not notice"
+        )
+
+
+def test_whitespace_and_continuations_do_not_hide_a_swallowed_status() -> None:
+    """B1: the same construct written differently is still the same construct."""
+    spaced = _synthetic_gate_job()
+    spaced["steps"][1]["run"] = f"{RUST_SUITE} --manifest-path x ||  true"
+    assert _neutering_reasons(spaced, (RUST_SUITE,))
+
+    continued = _synthetic_gate_job()
+    continued["steps"][1]["run"] = f"{RUST_SUITE} --manifest-path x \\\n  | tee out.log\n"
+    assert _neutering_reasons(continued, (RUST_SUITE,))
+
+
+def test_pipefail_taken_back_away_is_not_pipefail() -> None:
+    """B1: ``shell: bash`` supplies pipefail, and ``set +o pipefail`` removes it."""
+    revoked = _synthetic_gate_job()
+    revoked["steps"][1]["shell"] = "bash"
+    revoked["steps"][1]["run"] = (
+        f"set +o pipefail\n{RUST_SUITE} --manifest-path x | tee out.log\n"
+    )
+    assert _neutering_reasons(revoked, (RUST_SUITE,))
+
+    supplied = _synthetic_gate_job()
+    supplied["steps"][1]["shell"] = "bash"
+    supplied["steps"][1]["run"] = f"{RUST_SUITE} --manifest-path x | tee out.log\n"
+    assert _neutering_reasons(supplied, (RUST_SUITE,)) == []
+
+
+def test_one_lastexitcode_read_does_not_cover_an_earlier_invocation() -> None:
+    """B1: the check has to sit where the status is produced, not after it."""
+    trailing = {
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {
+                "shell": "pwsh",
+                "run": (
+                    f"pwsh -NoLogo -NoProfile -File {POWERSHELL_CONFORMANCE}\n"
+                    f"pwsh -NoLogo -NoProfile -File {POWERSHELL_BOUNDARY}\n"
+                    "if ($LASTEXITCODE -ne 0) { throw 'failed' }\n"
+                ),
+            }
+        ],
+    }
+    reasons = _neutering_reasons(trailing, (POWERSHELL_CONFORMANCE,))
+    assert any(POWERSHELL_CONFORMANCE in reason for reason in reasons), reasons
+
+
+def test_a_collect_only_python_gate_asserts_nothing() -> None:
+    """B2: pytest's ``--co`` alias collects, exits 0, and executes no assertion."""
+    for flag in ("--collect-only", "--co"):
+        job = {
+            "runs-on": "ubuntu-latest",
+            "steps": [{"run": f"python -m pytest -q {flag} {PYTHON_TEST_TREE}"}],
+        }
+        assert _python_census_reasons(job), flag
+
+    via_env = {
+        "runs-on": "ubuntu-latest",
+        "env": {"PYTEST_ADDOPTS": "--co"},
+        "steps": [{"run": f"python -m pytest -q {PYTHON_TEST_TREE}"}],
+    }
+    assert _python_census_reasons(via_env)
+
+
+def test_a_conditional_prerequisite_step_is_not_a_neutered_gate() -> None:
+    """B1: only the steps carrying a gate command have to be unconditional.
+
+    A prerequisite that does not run leaves the gate command to fail loudly,
+    and CI already reports that; rejecting it would make the pin fight ordinary
+    per-platform setup.
+    """
+    job = _synthetic_gate_job()
+    job["steps"].insert(
+        1,
+        {
+            "name": "Install the toolchain on macOS only",
+            "if": "${{ runner.os == 'macOS' }}",
+            "continue-on-error": True,
+            "run": "brew install something",
+        },
+    )
+    assert _neutering_reasons(job, (RUST_SUITE,)) == []
 
 
 def test_ci_runs_every_native_port_suite() -> None:
@@ -976,108 +1294,3 @@ def test_ci_runs_every_native_port_suite() -> None:
             "suite is part of the family gate; a suite CI never runs cannot refuse "
             "cross-family drift."
         )
-def test_the_pin_fails_closed_when_it_cannot_find_the_workflows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """B3: an inability to gate is red, not a green skip.
-
-    The pin exists to notice a gate that reports success without gating. A skip is
-    a green test, so a pin that skips itself is the very failure mode it was built
-    to catch (ADR-0009: a repository that cannot be gated comes back red).
-    """
-    monkeypatch.setattr("tests.test_runner_family_gate._find_repo_root", lambda: None)
-    monkeypatch.setattr(
-        "tests.test_runner_family_gate._installed_distribution_root", lambda: None
-    )
-
-    with pytest.raises(Failed) as failure:
-        _loaded_workflows()
-    assert "cannot locate" in str(failure.value)
-
-
-def test_the_pin_skips_only_for_a_positively_identified_installed_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """B3: "installed distribution" is proved, never inferred from a failed search."""
-    monkeypatch.setattr("tests.test_runner_family_gate._find_repo_root", lambda: None)
-    monkeypatch.setattr(
-        "tests.test_runner_family_gate._installed_distribution_root",
-        lambda: Path("/venv/lib/python3.11/site-packages"),
-    )
-
-    with pytest.raises(Skipped):
-        _loaded_workflows()
-
-
-def test_installed_distribution_root_is_none_in_this_source_checkout() -> None:
-    """The positive test is a real one: a source checkout is not an installed run."""
-    assert _installed_distribution_root() is None
-    assert _find_repo_root() is not None
-
-
-def test_a_gate_job_carrying_continue_on_error_fails_the_pin() -> None:
-    """B1: a job allowed to fail the build without failing the workflow is neutered."""
-    assert _neutering_reasons({"continue-on-error": True, "steps": []})
-    assert _neutering_reasons(
-        {"steps": [{"run": "cargo test", "continue-on-error": True}]}
-    )
-    assert not _neutering_reasons({"continue-on-error": False, "steps": []})
-
-
-def test_a_conditional_gate_job_fails_the_pin() -> None:
-    """B1: a condition that can be false on an ordinary push or PR disables the gate."""
-    assert _neutering_reasons({"if": "github.event_name == 'schedule'", "steps": []})
-    assert _neutering_reasons(
-        {"steps": [{"run": "cargo test", "if": "github.ref == 'refs/heads/main'"}]}
-    )
-    # `always()` and a literal `true` cannot evaluate false, so they are not neutering.
-    assert not _neutering_reasons({"if": "always()", "steps": []})
-    assert not _neutering_reasons({"if": True, "steps": []})
-
-
-def test_a_swallowed_command_status_fails_the_pin() -> None:
-    """B1: a gate whose command cannot report failure has stopped gating."""
-    assert _neutering_reasons({"steps": [{"run": "cargo test || true"}]})
-    assert _neutering_reasons({"steps": [{"run": "cargo test || :"}]})
-    assert _neutering_reasons({"steps": [{"run": "set +e\ncargo test\n"}]})
-    # A trailing comment hides neither of them, and a mid-line `set +e` is the same
-    # disabling as one at the start of a line.
-    assert _neutering_reasons({"steps": [{"run": "cargo test || true  # for now"}]})
-    assert _neutering_reasons({"steps": [{"run": "set -e; set +e; cargo test"}]})
-    assert _neutering_reasons({"steps": [{"run": "if true; then set +e; cargo test; fi"}]})
-    # An explicit non-zero exit is the opposite of swallowing a failure.
-    assert not _neutering_reasons({"steps": [{"run": "cargo test || exit 1"}]})
-    # ...and a construct that is only *mentioned* -- in a comment, whether the
-    # comment opens after whitespace or straight after a control operator, or
-    # inside a quoted string -- is not one the shell ever executes.
-    assert not _neutering_reasons(
-        {"steps": [{"run": "# never write `cargo test || true` here\ncargo test\n"}]}
-    )
-    assert not _neutering_reasons(
-        {"steps": [{"run": "cargo test;# never append || true\n"}]}
-    )
-    assert not _neutering_reasons(
-        {"steps": [{"run": 'cargo test\necho "cargo test || true is banned"\n'}]}
-    )
-
-
-def test_job_platform_helper_reads_matrix_and_runs_on() -> None:
-    """Guard the guard: platform extraction covers matrix and bare ``runs-on``."""
-    matrixed = {
-        "runs-on": "${{ matrix.os }}",
-        "strategy": {"matrix": {"os": ["ubuntu-latest", "macos-latest"]}},
-    }
-    assert _job_platforms(matrixed) == {LINUX, MACOS}
-    assert _job_platforms({"runs-on": "windows-latest"}) == {WINDOWS}
-    assert _job_platforms({"runs-on": "${{ matrix.os }}"}) == set()
-
-
-def test_trigger_helper_handles_the_yaml_on_boolean_key() -> None:
-    """Guard the guard: ``on:`` is parsed as the YAML 1.1 boolean ``True`` key."""
-    workflow = yaml.safe_load("on:\n  push:\n  pull_request:\njobs: {}\n")
-    assert True in workflow and "on" not in workflow
-    assert _workflow_triggers(workflow) == {"push", "pull_request"}
-    assert _workflow_triggers(yaml.safe_load("on: [push, pull_request]\n")) == {
-        "push",
-        "pull_request",
-    }
