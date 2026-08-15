@@ -288,13 +288,27 @@ run_turn_entrypoint() {
   local stderr_path="$4"
   shift 4
 
+  # `TURN_SIGPIPE_IGNORED=1` starts the Orchestrator the way a Node-based CI
+  # supervisor does: with SIGPIPE already SIG_IGN. `trap '' PIPE` here is
+  # inherited through `exec` as SIG_IGN, and a signal ignored at shell entry is
+  # one the `trap` builtin can never reset (POSIX). Reproducing that here rather
+  # than depending on how the suite itself was launched is what keeps the
+  # boundary contract pinned on a developer machine too.
+  local -a launch=("$bash_bin" "$entrypoint")
+  if [[ "${TURN_SIGPIPE_IGNORED:-0}" == "1" ]]; then
+    launch=(
+      "$bash_bin" -c 'trap "" PIPE; exec "$@"' sigpipe-harness
+      "$bash_bin" "$entrypoint"
+    )
+  fi
+
   (
     cd "$repo"
     PATH="$fake_bin:$real_jq_dir:$real_git_dir:/usr/bin:/bin" \
       HOME="$repo/home" \
       XDG_CONFIG_HOME="$repo/xdg" \
       FAKE_REPO_ROOT="$repo" \
-      "$bash_bin" "$entrypoint" "$@"
+      "${launch[@]}" "$@"
   ) >"$stdout_path" 2>"$stderr_path"
 }
 
@@ -834,6 +848,99 @@ jq -se '
   and .[-1].outcome == "iteration_cap"
 ' "$temp_dir/agent-commits.stdout" >/dev/null ||
   fail "new agent commits were not recorded as contract commit events"
+
+# The Orchestrator/agent boundary hands the agent process a *default* SIGPIPE
+# disposition, whatever disposition the Orchestrator itself was started with. An
+# agent that inherited SIG_IGN does not die when its downstream reader goes away
+# — it collects EPIPE on every write and decides for itself whether to care, and
+# so does every tool it starts. `trap - PIPE` provably cannot deliver this, so
+# the guarantee has to come from outside bash; this pins that it is a property of
+# the boundary and not of how the operator happened to launch the Run.
+sigpipe_disposition=""
+for sigpipe_case in default ignored; do
+  repo="$temp_dir/sigpipe-$sigpipe_case"
+  fake_bin="$temp_dir/sigpipe-$sigpipe_case-bin"
+  make_real_repo "$repo"
+  write_turn_tools "$fake_bin"
+  cp "$temp_dir/github-list.json" "$temp_dir/sigpipe-$sigpipe_case-list.json"
+  export FAKE_GH_LOG="$temp_dir/sigpipe-$sigpipe_case-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/sigpipe-$sigpipe_case-list.count"
+  export FAKE_GH_LIST_JSON="$temp_dir/sigpipe-$sigpipe_case-list.json"
+  export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+  setup_copilot_env "sigpipe-$sigpipe_case"
+  export FAKE_COPILOT_COMMITS=1
+  export FAKE_COPILOT_SIGNALS="$temp_dir/sigpipe-$sigpipe_case-copilot.signals"
+  rm -f "$FAKE_COPILOT_SIGNALS"
+  turn_sigpipe_ignored=0
+  [[ "$sigpipe_case" == "ignored" ]] && turn_sigpipe_ignored=1
+  if ! TURN_SIGPIPE_IGNORED="$turn_sigpipe_ignored" run_turn_entrypoint \
+    "$repo" "$fake_bin" "$temp_dir/sigpipe-$sigpipe_case.stdout" \
+    "$temp_dir/sigpipe-$sigpipe_case.stderr" 1; then
+    fail "the $sigpipe_case-SIGPIPE Run did not exit 0: \
+$(<"$temp_dir/sigpipe-$sigpipe_case.stderr")"
+  fi
+  unset FAKE_COPILOT_COMMITS
+  [[ -e "$FAKE_COPILOT_SIGNALS" ]] ||
+    fail "the $sigpipe_case-SIGPIPE Run never reached the agent process"
+  sigpipe_disposition="$(<"$FAKE_COPILOT_SIGNALS")"
+  unset FAKE_COPILOT_SIGNALS
+  [[ -z "$sigpipe_disposition" ]] ||
+    fail "an Orchestrator whose own SIGPIPE was $sigpipe_case handed the agent \
+process a non-default disposition: $sigpipe_disposition"
+done
+unset sigpipe_case sigpipe_disposition turn_sigpipe_ignored
+
+# Restoring the default is a *repair*, not a requirement. A Run that inherited an
+# ignored SIGPIPE on a host carrying neither GNU coreutils nor perl says so once,
+# on stderr, and carries on — trading a quiet contract breach for a Run that will
+# not start at all is not an improvement, and the JSONL Event stream on stdout
+# stays clean either way.
+repo="$temp_dir/sigpipe-noreset"
+fake_bin="$temp_dir/sigpipe-noreset-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+# BSD `env` semantics for the one option that matters, and no `perl` at all.
+# Shebangs resolve `/usr/bin/env` by absolute path, so shadowing it here reaches
+# the Orchestrator's own lookup and nothing else.
+cat >"$fake_bin/env" <<'EOF'
+#!/bin/sh
+case "${1-}" in
+  --default-signal=*)
+    printf 'env: illegal option -- d\n' >&2
+    exit 1
+    ;;
+esac
+exec /usr/bin/env "$@"
+EOF
+cat >"$fake_bin/perl" <<'EOF'
+#!/bin/sh
+exit 127
+EOF
+chmod +x "$fake_bin/env" "$fake_bin/perl"
+cp "$temp_dir/github-list.json" "$temp_dir/sigpipe-noreset-list.json"
+export FAKE_GH_LOG="$temp_dir/sigpipe-noreset-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/sigpipe-noreset-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/sigpipe-noreset-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "sigpipe-noreset"
+export FAKE_COPILOT_COMMITS=1
+if ! TURN_SIGPIPE_IGNORED=1 run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/sigpipe-noreset.stdout" \
+  "$temp_dir/sigpipe-noreset.stderr" 2; then
+  fail "an unrepairable SIGPIPE must not fail the Run: \
+$(<"$temp_dir/sigpipe-noreset.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS
+assert_contains "$(<"$temp_dir/sigpipe-noreset.stderr")" \
+  "inherited an ignored SIGPIPE and found no way to restore the default" \
+  "an unrepairable SIGPIPE is reported to the operator"
+assert_equal "1" \
+  "$(grep -c "inherited an ignored SIGPIPE" \
+    "$temp_dir/sigpipe-noreset.stderr")" \
+  "the unrepairable-SIGPIPE diagnostic is emitted once per Run"
+jq -se '.[-1].type == "wrapper.run.end"' \
+  "$temp_dir/sigpipe-noreset.stdout" >/dev/null ||
+  fail "the SIGPIPE diagnostic leaked into the JSONL Event stream"
 
 # A non-zero agent process warns and the Run still finishes cleanly
 # (warn-and-continue); the real exit status is preserved, not a pipeline's.

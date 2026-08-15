@@ -1310,6 +1310,68 @@ _git_loopy_stream_agent_output() {
   done
 }
 
+# The Orchestrator/agent boundary owes the agent process a *default* SIGPIPE
+# disposition, so an agent whose downstream reader goes away dies instead of
+# collecting EPIPE on every write and deciding for itself whether to care.
+#
+# `trap - PIPE` cannot deliver that. A signal that is SIG_IGN when the shell
+# starts is unresettable by the `trap` builtin — POSIX-specified shell behaviour,
+# not a bash quirk — and SIG_IGN survives `exec` into the agent and every tool
+# the agent starts. A parent that ignores SIGPIPE process-wide hands the
+# Orchestrator a disposition it cannot give back; the Node-based supervisor
+# GitHub Actions runs `run:` steps from is exactly such a parent, which is why
+# this reproduces on every hosted runner and on no developer terminal.
+#
+# So the reset has to come from outside bash: a launcher that sets SIG_DFL and
+# then `exec`s the turn, keeping the turn's pid (and therefore the watchdog's
+# SIGTERM/SIGKILL escalation) intact. It is resolved once per Run and *only* when
+# the Orchestrator actually inherited an ignore, so a Run started from a terminal
+# — the overwhelmingly common case — spawns nothing extra and depends on nothing
+# beyond git, jq and copilot.
+_GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY=0
+[[ -n "$(trap -p PIPE)" ]] && _GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY=1
+_GIT_LOOPY_SIGPIPE_LAUNCHER=()
+_GIT_LOOPY_SIGPIPE_LAUNCHER_RESOLVED=0
+
+# A candidate is accepted only if it demonstrably delivers SIG_DFL *here*, under
+# this shell's inherited disposition — never on the strength of its name being on
+# PATH. That keeps a candidate whose signal handling differs by build, version or
+# platform from being trusted on reputation.
+_git_loopy_sigpipe_launcher_delivers_default() {
+  local observed
+  observed="$("$@" "${BASH:-bash}" -c 'trap -p PIPE' 2>/dev/null)" || return 1
+  [[ -z "$observed" ]]
+}
+
+_git_loopy_resolve_sigpipe_launcher() {
+  ((_GIT_LOOPY_SIGPIPE_LAUNCHER_RESOLVED == 0)) || return 0
+  _GIT_LOOPY_SIGPIPE_LAUNCHER_RESOLVED=1
+  _GIT_LOOPY_SIGPIPE_LAUNCHER=()
+  ((_GIT_LOOPY_SIGPIPE_IGNORED_AT_ENTRY == 1)) || return 0
+
+  # GNU coreutils `env` first: where it exists this is its documented purpose and
+  # costs no dependency the platform did not already have. BSD `env` rejects the
+  # option and the probe drops it. `perl` second: the shell distribution already
+  # reaches for it in `lib/continuation.sh`, and it is base-system on macOS and
+  # Essential on Debian derivatives.
+  if _git_loopy_sigpipe_launcher_delivers_default env --default-signal=PIPE; then
+    _GIT_LOOPY_SIGPIPE_LAUNCHER=(env --default-signal=PIPE)
+    return 0
+  fi
+  local -a perl_launcher=(
+    perl -e '$SIG{PIPE} = "DEFAULT"; exec {$ARGV[0]} @ARGV or exit 127;' --
+  )
+  if _git_loopy_sigpipe_launcher_delivers_default "${perl_launcher[@]}"; then
+    _GIT_LOOPY_SIGPIPE_LAUNCHER=("${perl_launcher[@]}")
+    return 0
+  fi
+
+  printf 'git-loopy: %s\n' \
+    "this Run inherited an ignored SIGPIPE and found no way to restore the default for the agent process; install perl or GNU coreutils to close the boundary." \
+    >&2
+  return 0
+}
+
 git_loopy_run_bounded_turn() {
   # Run one already-assembled agent turn ("$@") with stdout converted into
   # unclassified Events while the same text remains visible on stderr, bounded by a
@@ -1345,6 +1407,10 @@ git_loopy_run_bounded_turn() {
   flag_dir="$(mktemp -d)" || return 1
   local timed_out_flag="$flag_dir/timed_out"
   local output_pid=""
+  _git_loopy_resolve_sigpipe_launcher
+  local -a turn=(
+    ${_GIT_LOOPY_SIGPIPE_LAUNCHER[@]+"${_GIT_LOOPY_SIGPIPE_LAUNCHER[@]}"} "$@"
+  )
   if [[ -n "$iteration" ]]; then
     local output_fifo="$flag_dir/agent-output"
     mkfifo "$output_fifo" || {
@@ -1353,9 +1419,9 @@ git_loopy_run_bounded_turn() {
     }
     _git_loopy_stream_agent_output "$iteration" "$flag_dir" <"$output_fifo" &
     output_pid=$!
-    "$@" >"$output_fifo" &
+    "${turn[@]}" >"$output_fifo" &
   else
-    "$@" 1>&2 &
+    "${turn[@]}" 1>&2 &
   fi
   local turn_pid=$!
 
