@@ -31,7 +31,11 @@ from git_loopy import continuation as continuation_module
 from git_loopy import verification as verification_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.config import (
+    CONTEXT_TIERS,
+    MODEL_CONTEXT_TIERS,
     MODEL_REASONING_EFFORTS,
+    RoutingLifecyclePosition,
+    RoutingSource,
     TASK_TYPE_KEYS,
     RunConfig,
     SkillPolicyInput,
@@ -2608,6 +2612,25 @@ def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> 
     assert "minimal" in roster["gemini-3.6-flash"]
 
 
+def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
+    """Tier capability lives **on** the roster, not in a parallel table (ADR-0017).
+
+    One lockstep point with the live catalog, not two. The section ships empty
+    because ADR-0017 made verification against the pinned harness a precondition
+    of extending it and ADR-0019 requires a row and the ``cli_version`` stamp to
+    move as one regeneration — so an empty section is the honest statement that
+    no model's tiers have been captured for ``cli_version`` yet, and the gate
+    treats every model as unknown-and-untouched until one is.
+    """
+    tiers = {
+        model: frozenset(offered)
+        for model, offered in _MODEL_ROSTER["context_tiers"].items()
+    }
+    assert tiers == MODEL_CONTEXT_TIERS
+    assert set(tiers) <= set(_MODEL_ROSTER["roster"])
+    assert all(offered <= CONTEXT_TIERS for offered in tiers.values())
+
+
 _EFFORT_GATE = _load_fixture("effort-gate.json")
 
 
@@ -2639,12 +2662,47 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
         model=case["default"]["model"],
         reasoning_effort=case["default"]["effort"],
         routing=routing,
+        context_tier=case.get("context_tier", "default"),
+        routing_suppressed=case.get("routing_suppressed", False),
     )
     warnings: list[str] = []
-    result = resolve_iteration_model(config, case["labels"], warn=warnings.append)
+    escalated = case.get("escalated")
+    result = resolve_iteration_model(
+        config,
+        case["labels"],
+        warn=warnings.append,
+        lifecycle_position=RoutingLifecyclePosition(
+            case["expected"]["lifecycle_position"]
+        ),
+        escalated_pair=(
+            None
+            if escalated is None
+            else (escalated["model"], escalated["effort"])
+        ),
+    )
 
-    assert result == (case["expected"]["model"], case["expected"]["effort"])
+    assert result.model == case["expected"]["model"]
+    assert result.reasoning_effort == case["expected"]["effort"]
+    assert result.context_tier == case["expected"]["context_tier"]
+    assert result.source.value == case["expected"]["source"]
+    assert list(result.task_type_keys) == case["expected"]["task_type_keys"]
+    assert [warning.value for warning in result.gate_warnings] == case["expected"][
+        "gate_warnings"
+    ]
+    assert result.lifecycle_position.value == case["expected"]["lifecycle_position"]
     assert bool(warnings) is case["warns"]
+
+
+def test_routing_resolution_fixture_pins_the_closed_source_vocabulary() -> None:
+    """Every Runner imports the same source names instead of minting its own."""
+    assert [source.value for source in RoutingSource] == _ROUTING_RESOLUTION[
+        "routing_sources"
+    ]
+
+    exercised = {
+        case["expected"]["source"] for case in _ROUTING_RESOLUTION["cases"]
+    }
+    assert exercised == set(_ROUTING_RESOLUTION["routing_sources"])
 
 
 _ROUTING_PRECEDENCE = _ROUTING_RESOLUTION["precedence_cases"]
@@ -3519,7 +3577,10 @@ def test_routing_refusal_fixture(case: dict[str, Any]) -> None:
     would become a real tracker label that routes to the default forever (#375,
     ADR-0029). These cases pin that it is refused rather than absorbed — including
     where routing is suppressed run-wide, which is the one path that returns
-    before consulting the routing map.
+    before consulting the routing map. Widening the return type to a **Routing
+    resolution** does not widen the tracker vocabulary: a refused key never
+    reaches a record, so ``defaulted_unknown_task_type_key`` names a *taxonomy*
+    key the ``[routing]`` table does not configure, never an invalid one.
     """
     routing = {
         key: (entry["model"], entry["effort"]) for key, entry in case["routing"].items()

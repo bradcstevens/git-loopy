@@ -50,8 +50,17 @@ __all__ = [
     "validate_task_type_key",
     "task_type_refusal",
     "EffortGateWarning",
+    "ContextTierGateWarning",
+    "GateWarning",
     "GatedEffort",
     "gate_reasoning_effort",
+    "CONTEXT_TIERS",
+    "DEFAULT_CONTEXT_TIER",
+    "MODEL_CONTEXT_TIERS",
+    "gate_context_tier",
+    "RoutingSource",
+    "RoutingLifecyclePosition",
+    "RoutingResolution",
     "resolve_iteration_model",
 ]
 
@@ -131,6 +140,27 @@ REASONING_EFFORT_ORDER: tuple[str, ...] = (
 #: Membership form of :data:`REASONING_EFFORT_ORDER`, used as the shared
 #: syntactic gate (for example, to reject ``"ultra"``).
 REASONING_EFFORTS: frozenset[str] = frozenset(REASONING_EFFORT_ORDER)
+
+#: The root-session context tiers the Copilot CLI exposes. ``inherit`` is a
+#: subagent-only setting and has no meaning for an Iteration.
+CONTEXT_TIERS: frozenset[str] = frozenset({"default", "long_context"})
+DEFAULT_CONTEXT_TIER = "default"
+
+#: Per-model **context tier** capability, the tier half of the model roster
+#: (:data:`MODEL_REASONING_EFFORTS` is the effort half). Maps a model id to the
+#: root-session tiers it offers. A model **absent** from this table is
+#: "unknown": the tier passes through untouched, exactly as an off-roster model
+#: keeps its effort, because the live Copilot CLI is the authority.
+#:
+#: It ships **empty** on purpose. ADR-0017 put tier capability on the roster
+#: rather than in a parallel table, and made verification against the harness
+#: the kit actually spawns a precondition of extending it — the candidate list
+#: of tier-less models comes from a source whose harness claims have already
+#: been wrong more than once, and ADR-0019 requires a roster row and its
+#: ``cli_version`` stamp to move as one regeneration. Populating it is that
+#: regeneration; the gate below is live and pinned in the meantime, so the data
+#: is the only thing owed.
+MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 
 #: The seven permitted ``task-type`` -> ``(model, effort)`` routes
 #: (decision #110). The guided setup surfaces, seeds, and renders this fixed
@@ -385,6 +415,15 @@ class EffortGateWarning(Enum):
     DROPPED_EFFORT = "dropped_effort"
 
 
+class ContextTierGateWarning(Enum):
+    """Why a requested context tier was downgraded by the model gate."""
+
+    UNSUPPORTED_CONTEXT_TIER = "unsupported_context_tier"
+
+
+GateWarning = EffortGateWarning | ContextTierGateWarning
+
+
 @dataclass(frozen=True)
 class GatedEffort:
     """The result of gating a ``(model, effort)`` pair against the roster.
@@ -440,6 +479,95 @@ def gate_reasoning_effort(model: str, effort: str | None) -> GatedEffort:
     return GatedEffort(
         model=model, effort=None, warning=EffortGateWarning.DROPPED_EFFORT
     )
+
+
+def gate_context_tier(
+    model: str | None, context_tier: str
+) -> tuple[str, ContextTierGateWarning | None]:
+    """Return the root-session context tier the resolved model actually offers.
+
+    The run-level tier (ADR-0017) meets a per-task-type model, so tier validity
+    is model-dependent and can only be settled *after* the model resolves — the
+    same seam where reasoning effort is already gated. A model with no
+    :data:`MODEL_CONTEXT_TIERS` row is left untouched; a model whose row omits
+    the requested tier is **downgraded** to :data:`DEFAULT_CONTEXT_TIER` with a
+    signal the resolver carries on its record, because the harness silently
+    ignores an unavailable tier and erroring would make git-loopy stricter than
+    the thing it wraps.
+    """
+    offered = MODEL_CONTEXT_TIERS.get(model) if model is not None else None
+    if offered is not None and context_tier not in offered:
+        return DEFAULT_CONTEXT_TIER, ContextTierGateWarning.UNSUPPORTED_CONTEXT_TIER
+    return context_tier, None
+
+
+class RoutingSource(Enum):
+    """The closed provenance vocabulary of a :class:`RoutingResolution`.
+
+    Why a pair was selected, and nothing else: it is deliberately silent about
+    whether this is an issue's first attempt (that is
+    :class:`RoutingLifecyclePosition`). ``ESCALATED`` is the one value that makes
+    a rung pair's provenance true, and it cannot express a same-pair crash retry
+    — which is exactly why the two axes are separate fields rather than one
+    merged vocabulary.
+
+    ``DEFAULTED_UNKNOWN_TASK_TYPE_KEY`` is a **Task type** the ``[routing]``
+    table does not configure. A key outside the closed taxonomy never reaches a
+    resolution at all: it is refused (#375, ADR-0029) before a source is chosen,
+    because that key is one an unattended writer could mint as a real tracker
+    label.
+    """
+
+    ROUTED = "routed"
+    DEFAULTED_NO_TASK_TYPE_LABEL = "defaulted_no_task_type_label"
+    DEFAULTED_UNKNOWN_TASK_TYPE_KEY = "defaulted_unknown_task_type_key"
+    DEFAULTED_CONFLICTING_TASK_TYPE_KEYS = "defaulted_conflicting_task_type_keys"
+    DEFAULTED_EXPLICIT_OVERRIDE = "defaulted_explicit_override"
+    ESCALATED = "escalated"
+
+
+class RoutingLifecyclePosition(Enum):
+    """Where a resolution sits in an issue's per-Run attempt lifecycle."""
+
+    FRESH = "fresh"
+    RETRYING = "retrying"
+
+
+@dataclass(frozen=True)
+class RoutingResolution:
+    """What one **Pickup** resolved, and why — the single source of routing truth.
+
+    Every surface that reports a Pickup's model settings reads this record rather
+    than recomputing the decision from labels and config, which is what made the
+    provenance and the gate warnings unavailable everywhere but inside the
+    resolver.
+
+    Attributes:
+        model: The gated model id, or ``None`` where the default defers the
+            choice to the SDK.
+        reasoning_effort: The gated effort, or ``None`` for "let the backend
+            pick" — including where the gate dropped an effort the model rejects.
+        context_tier: The run-level tier (ADR-0017) after gating against
+            ``model``. A **triple** here while ``[routing]`` stays pairs: the
+            tier does not vary by **Task type**, but its validity depends on the
+            model the Task type selected.
+        source: Why these settings were chosen.
+        task_type_keys: The ``task-type`` label suffixes **exactly** as the
+            tracker spelled them, in label order and unnormalised, so a readback
+            shows what arrived rather than what was inferred.
+        gate_warnings: Every signal the effort and tier gates raised. Carried
+            here rather than discarded, which is why per-issue routing had no
+            gate diagnostic in any stream.
+        lifecycle_position: The attempt's position, independent of ``source``.
+    """
+
+    model: str | None
+    reasoning_effort: str | None
+    context_tier: str
+    source: RoutingSource
+    task_type_keys: tuple[str, ...]
+    gate_warnings: tuple[GateWarning, ...]
+    lifecycle_position: RoutingLifecyclePosition
 
 
 @dataclass(frozen=True)
@@ -526,6 +654,16 @@ class RunConfig:
             dataclass stays genuinely immutable across Iterations. The per-issue
             resolver (#147) reads this map and gates each pair; nothing consumes
             it in this slice.
+        context_tier: Root-session context tier (ADR-0017). Run-level rather than
+            a ``[routing]`` entry — it does not vary by **Task type** — and gated
+            per-Iteration once the routed model resolves, because its validity
+            depends on that model. Nothing configures it yet: the operator-facing
+            dial (flag, env, Config) is ADR-0017's own outstanding half, so it
+            holds :data:`DEFAULT_CONTEXT_TIER` for every Run today and the
+            resolver simply reports what it was handed.
+        routing_suppressed: ``True`` only when an explicit model or effort
+            override suppressed routing run-wide. Kept on the effective config
+            so the per-issue resolver can report that distinct fallback source.
         skill_policy: Presence-aware project/global Config values, optional exact
             environment replacement, and temporary enable/disable overlays. These
             remain uncombined until the Effective Skill policy resolver consumes
@@ -568,6 +706,8 @@ class RunConfig:
     parallel: int = 1
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
+    context_tier: str = DEFAULT_CONTEXT_TIER
+    routing_suppressed: bool = False
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
     continuation: ContinuationInputs = field(default_factory=ContinuationInputs)
     classifier_model: str | None = None
@@ -619,6 +759,11 @@ class RunConfig:
                 f"{list(REASONING_EFFORT_ORDER)} or None, got "
                 f"{self.reasoning_effort!r}"
             )
+        if self.context_tier not in CONTEXT_TIERS:
+            raise ValueError(
+                f"context_tier must be one of {sorted(CONTEXT_TIERS)}, got "
+                f"{self.context_tier!r}"
+            )
         # Normalize `routing` to a read-only view over a *private* copy so the
         # frozen dataclass is genuinely immutable (no aliasing back to the
         # caller's dict, no post-construction mutation) and stays safe to reuse
@@ -634,19 +779,29 @@ def _ignore_routing_warning(_message: str) -> None:
 
 
 def _gate_pair(
-    pair: tuple[str | None, str | None],
-) -> tuple[str | None, str | None]:
-    """Pass a ``(model, effort)`` source pair through the shared effort gate.
+    pair: tuple[str | None, str | None], context_tier: str
+) -> tuple[str | None, str | None, str, tuple[GateWarning, ...]]:
+    """Gate a source pair and the run-level context tier against the model roster.
 
     A ``None`` model means "let the SDK pick its default"; it has nothing to gate,
-    so the effort passes through untouched. A concrete model id is gated against
-    :data:`MODEL_REASONING_EFFORTS` via :func:`gate_reasoning_effort`.
+    so the effort and the tier pass through untouched. A concrete model id is
+    gated for effort against :data:`MODEL_REASONING_EFFORTS` and then — the model
+    being settled — for tier against :data:`MODEL_CONTEXT_TIERS`. Both signals are
+    returned rather than dropped; the caller carries them on its record.
     """
     model, effort = pair
     if model is None:
-        return None, effort
-    gated = gate_reasoning_effort(model, effort)
-    return gated.model, gated.effort
+        return None, effort, context_tier, ()
+    gated_effort = gate_reasoning_effort(model, effort)
+    gated_context_tier, context_warning = gate_context_tier(
+        gated_effort.model, context_tier
+    )
+    warnings = tuple(
+        warning
+        for warning in (gated_effort.warning, context_warning)
+        if warning is not None
+    )
+    return gated_effort.model, gated_effort.effort, gated_context_tier, warnings
 
 
 def resolve_iteration_model(
@@ -654,47 +809,75 @@ def resolve_iteration_model(
     issue_labels: Iterable[str],
     *,
     warn: Callable[[str], None] = _ignore_routing_warning,
-) -> tuple[str | None, str | None]:
-    """Resolve the gated ``(model, effort)`` pair an Iteration runs on (issue #147).
+    lifecycle_position: RoutingLifecyclePosition = RoutingLifecyclePosition.FRESH,
+    escalated_pair: tuple[str | None, str | None] | None = None,
+) -> RoutingResolution:
+    """Resolve the **Routing resolution** for one Iteration attempt (issue #147).
 
     The single load-bearing seam per-issue routing hangs off. A call site invokes
     it at **Active-issue pickup**: it filters the issue's ``task-type:<key>`` labels
     (:data:`TASK_TYPE_LABEL_PREFIX` — the runner *reads* the label, it never infers
-    the type), selects a source pair per the locked table below, passes that pair
-    through the shared effort gate (:func:`gate_reasoning_effort`, #145), and returns
-    it. The fixed :data:`TASK_TYPE_KEYS` taxonomy is the source of truth for
-    valid keys; the global default is the run config's top-level ``(model,
-    effort)``.
+    the type), refuses any key outside the fixed :data:`TASK_TYPE_KEYS` taxonomy,
+    selects a source pair per the locked table below, gates that pair
+    (:func:`gate_reasoning_effort`, #145) and the run-level context tier
+    (:func:`gate_context_tier`, ADR-0017), and returns all of it as one record.
+    The global default is the run config's top-level ``(model, effort)``.
+
+    It answers a record rather than a bare pair (#402) because *why* a pair was
+    chosen is not recoverable from the pair: two surfaces reporting the same
+    Pickup would each have to redo the decision, and the gate warnings raised on
+    the way were computed and dropped, which is why per-issue routing had no gate
+    diagnostic anywhere.
 
     Source-pair selection (decision #109):
 
-    ======================================  ===============  =========================
-    ``task-type:`` labels on the issue      Source pair      Warn?
-    ======================================  ===============  =========================
-    none                                    global default   no (silent — normal path)
-    one known key                           that entry       no
-    >=2 keys, differing resolved values     global default   yes — conflict (labels)
-    >=2 keys, all resolving to same value   that pair         no
-    ======================================  ===============  =========================
+    A key the table omits resolves to the global default as a *value*, so it is
+    compared like any other rather than short-circuiting the comparison:
 
-    **Suppression / back-compat.** When :attr:`run_config.routing <RunConfig.routing>`
-    is empty — no ``[routing]`` block, or an explicit ``--model`` /
-    ``--reasoning-effort`` override suppressing routing run-wide — every issue resolves
-    to the single gated global/explicit pair after validating any task-type labels.
+    ======================================  ===============  =============================
+    ``task-type:`` labels on the issue      Source pair      :class:`RoutingSource`
+    ======================================  ===============  =============================
+    none                                    global default   ``DEFAULTED_NO_TASK_TYPE_LABEL``
+    keys agreeing, all configured           that pair        ``ROUTED``
+    keys agreeing, any one omitted          that pair        ``DEFAULTED_UNKNOWN_TASK_TYPE_KEY``
+    >=2 keys, differing resolved values     global default   ``DEFAULTED_CONFLICTING_TASK_TYPE_KEYS``
+    ======================================  ===============  =============================
 
-    **No I/O.** This function is pure and exhaustively unit-testable; warnings surface
-    through the injected ``warn`` callback (default no-op), which a call site wires to
-    its per-issue warning channel.
+    Only the conflict warns: it is the one case where the operator's own labelling
+    is ambiguous. Every other fallback is *stated* on the record instead, and a
+    gate correction is carried as a :data:`GateWarning` rather than narrated —
+    surfacing either is a display decision, and the record is what a display reads.
+
+    An **out-of-taxonomy** key never reaches a source at all: it is refused ahead
+    of selection, including where routing is suppressed run-wide, because the
+    refusal guards the label an unattended writer could mint (#375, ADR-0029).
+
+    **Suppression.** An explicit ``--model`` / ``--reasoning-effort`` override
+    (flag or env) suppresses routing for the whole Run: every issue resolves to
+    the gated explicit pair under ``DEFAULTED_EXPLICIT_OVERRIDE``, which is a
+    different fact from an issue that carried no label, and is recorded as one.
+
+    **No I/O.** This function is pure and exhaustively unit-testable; the one
+    warning it can emit surfaces through the injected ``warn`` callback (default
+    no-op), which a call site wires to its per-issue warning channel.
 
     Args:
-        run_config: The frozen run configuration carrying the routing map and the
-            global-default ``(model, reasoning_effort)``.
+        run_config: The frozen run configuration carrying the routing map, the
+            global-default ``(model, reasoning_effort)``, the run-level context
+            tier, and whether an explicit override suppressed routing.
         issue_labels: The Active issue's labels (only ``task-type:`` ones matter).
-        warn: Sink for non-fatal conflicting-label advisories.
+        warn: Sink for the non-fatal conflicting-label advisory.
+        lifecycle_position: The issue's attempt position, independent of source.
+        escalated_pair: The configured escalation rung when this is an escalated
+            retry. A later lifecycle owner (#408) supplies it; this resolver only
+            gates and records it.
 
     Returns:
-        The gated ``(model, effort)`` pair the Iteration should run on. ``model`` is
-        ``None`` only when the global default itself defers model choice to the SDK.
+        The :class:`RoutingResolution` for this attempt.
+
+    Raises:
+        TaskTypeError: A ``task-type:`` label carries a key outside the closed
+            taxonomy. The message names the key and the permitted set.
     """
     default: tuple[str | None, str | None] = (
         run_config.model,
@@ -702,7 +885,7 @@ def resolve_iteration_model(
     )
     routing = run_config.routing
 
-    keys: list[str] = []
+    raw_keys: list[str] = []
     for label in issue_labels:
         if label.startswith(TASK_TYPE_LABEL_PREFIX):
             key = label[len(TASK_TYPE_LABEL_PREFIX) :]
@@ -715,22 +898,31 @@ def resolve_iteration_model(
                     f"{', '.join(TASK_TYPE_KEYS)}",
                     key=key,
                 ) from None
-            if key not in keys:
-                keys.append(key)
+            raw_keys.append(key)
 
-    # Suppression / back-compat: routing off run-wide -> gated global default.
-    if not routing:
-        return _gate_pair(default)
-
-    source: tuple[str | None, str | None]
-    if not keys:
-        source = default
-    elif len(keys) == 1:
-        source = routing.get(keys[0], default)
+    keys = tuple(dict.fromkeys(raw_keys))
+    if escalated_pair is not None:
+        pair = escalated_pair
+        source = RoutingSource.ESCALATED
+    elif run_config.routing_suppressed:
+        pair = default
+        source = RoutingSource.DEFAULTED_EXPLICIT_OVERRIDE
+    elif not keys:
+        pair = default
+        source = RoutingSource.DEFAULTED_NO_TASK_TYPE_LABEL
     else:
+        # An omitted key resolves to the global default as a *value*, so it takes
+        # part in the comparison rather than short-circuiting it: `docs` routed
+        # somewhere and an unconfigured `chore` disagree, and that ambiguity is
+        # the one thing §14 asks for a warning about.
         resolved = [routing.get(key, default) for key in keys]
-        if all(pair == resolved[0] for pair in resolved[1:]):
-            source = resolved[0]
+        if all(candidate == resolved[0] for candidate in resolved[1:]):
+            pair = resolved[0]
+            source = (
+                RoutingSource.ROUTED
+                if all(key in routing for key in keys)
+                else RoutingSource.DEFAULTED_UNKNOWN_TASK_TYPE_KEY
+            )
         else:
             labels = sorted(TASK_TYPE_LABEL_PREFIX + key for key in keys)
             warn(
@@ -738,6 +930,18 @@ def resolve_iteration_model(
                 f"[routing] entries resolve to different (model, effort) pairs — "
                 f"using the global default."
             )
-            source = default
+            pair = default
+            source = RoutingSource.DEFAULTED_CONFLICTING_TASK_TYPE_KEYS
 
-    return _gate_pair(source)
+    model, effort, context_tier, gate_warnings = _gate_pair(
+        pair, run_config.context_tier
+    )
+    return RoutingResolution(
+        model=model,
+        reasoning_effort=effort,
+        context_tier=context_tier,
+        source=source,
+        task_type_keys=tuple(raw_keys),
+        gate_warnings=gate_warnings,
+        lifecycle_position=lifecycle_position,
+    )

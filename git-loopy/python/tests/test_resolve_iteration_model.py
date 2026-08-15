@@ -26,7 +26,16 @@ from __future__ import annotations
 
 import pytest
 
-from git_loopy.config import RunConfig, resolve_iteration_model
+from git_loopy import config as config_module
+from git_loopy.config import (
+    ContextTierGateWarning,
+    EffortGateWarning,
+    RoutingLifecyclePosition,
+    RoutingResolution,
+    RoutingSource,
+    RunConfig,
+    resolve_iteration_model,
+)
 
 
 def test_no_task_type_label_uses_global_default() -> None:
@@ -37,9 +46,16 @@ def test_no_task_type_label_uses_global_default() -> None:
         routing={"docs": ("gpt-5-mini", "medium")},
     )
 
-    assert resolve_iteration_model(cfg, ["ready-for-agent", "parallel-safe"]) == (
-        "claude-opus-4.8",
-        "max",
+    assert resolve_iteration_model(
+        cfg, ["ready-for-agent", "parallel-safe"]
+    ) == RoutingResolution(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        context_tier="default",
+        source=RoutingSource.DEFAULTED_NO_TASK_TYPE_LABEL,
+        task_type_keys=(),
+        gate_warnings=(),
+        lifecycle_position=RoutingLifecyclePosition.FRESH,
     )
 
 
@@ -54,14 +70,21 @@ def test_one_known_task_type_key_uses_that_entry() -> None:
         },
     )
 
-    assert resolve_iteration_model(cfg, ["task-type:docs", "ready-for-agent"]) == (
-        "gpt-5-mini",
-        "medium",
-    )
+    result = resolve_iteration_model(cfg, ["task-type:docs", "ready-for-agent"])
+
+    assert result.model == "gpt-5-mini"
+    assert result.reasoning_effort == "medium"
+    assert result.source is RoutingSource.ROUTED
+    assert result.task_type_keys == ("docs",)
 
 
-def test_one_unknown_task_type_key_is_refused_with_the_permitted_keys() -> None:
-    """A label outside the closed taxonomy cannot silently select the default."""
+def test_one_out_of_taxonomy_key_is_refused_with_the_permitted_keys() -> None:
+    """A label outside the closed taxonomy cannot silently select the default.
+
+    Widening the return type does not widen the tracker vocabulary: the refusal
+    (#375, ADR-0029) is what stops an unattended writer minting a real label that
+    would route to the default forever, so it survives ahead of the record.
+    """
     cfg = RunConfig(
         model="claude-opus-4.8",
         reasoning_effort="max",
@@ -73,8 +96,81 @@ def test_one_unknown_task_type_key_is_refused_with_the_permitted_keys() -> None:
 
     message = str(exc_info.value)
     assert "task-type:frobnicate" in message
-    for key in ("planning", "review", "implementation", "test", "docs", "chore", "bugfix"):
+    for key in (
+        "planning",
+        "review",
+        "implementation",
+        "test",
+        "docs",
+        "chore",
+        "bugfix",
+    ):
         assert key in message
+
+
+def test_a_taxonomy_key_the_table_omits_defaults_and_keeps_its_raw_spelling() -> None:
+    """An unconfigured key records *why* it fell through, and stays unnormalised."""
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+    )
+
+    warnings: list[str] = []
+    result = resolve_iteration_model(cfg, ["task-type:chore"], warn=warnings.append)
+
+    assert result.model == "claude-opus-4.8"
+    assert result.reasoning_effort == "max"
+    assert result.source is RoutingSource.DEFAULTED_UNKNOWN_TASK_TYPE_KEY
+    assert result.task_type_keys == ("chore",)
+    # Only the conflict case warns; provenance is carried, not narrated.
+    assert warnings == []
+
+
+def test_a_configured_key_beside_an_unconfigured_one_still_conflicts() -> None:
+    """The fallback is a *value*, so it can disagree with a configured route.
+
+    ``chore`` resolving to the global default is exactly as load-bearing as a
+    configured entry when the issue also carries ``docs``: the two keys select
+    different pairs, which is the ambiguity §14 requires a warning for. Treating
+    an unconfigured key as its own short-circuit would silence the one advisory
+    the operator's labelling has earned.
+    """
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+    )
+    warnings: list[str] = []
+
+    result = resolve_iteration_model(
+        cfg, ["task-type:docs", "task-type:chore"], warn=warnings.append
+    )
+
+    assert (result.model, result.reasoning_effort) == ("claude-opus-4.8", "max")
+    assert result.source is RoutingSource.DEFAULTED_CONFLICTING_TASK_TYPE_KEYS
+    assert result.task_type_keys == ("docs", "chore")
+    assert len(warnings) == 1
+    assert "task-type:chore" in warnings[0]
+    assert "task-type:docs" in warnings[0]
+
+
+def test_a_configured_key_beside_an_unconfigured_one_agreeing_is_unconfigured() -> None:
+    """Agreement on the value does not make an omitted key a configured route."""
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("claude-opus-4.8", "max")},
+    )
+    warnings: list[str] = []
+
+    result = resolve_iteration_model(
+        cfg, ["task-type:docs", "task-type:chore"], warn=warnings.append
+    )
+
+    assert (result.model, result.reasoning_effort) == ("claude-opus-4.8", "max")
+    assert result.source is RoutingSource.DEFAULTED_UNKNOWN_TASK_TYPE_KEY
+    assert warnings == []
 
 
 def test_conflicting_keys_warn_naming_labels_and_use_default() -> None:
@@ -95,7 +191,9 @@ def test_conflicting_keys_warn_naming_labels_and_use_default() -> None:
         warn=warnings.append,
     )
 
-    assert result == ("claude-opus-4.8", "max")
+    assert result.model == "claude-opus-4.8"
+    assert result.reasoning_effort == "max"
+    assert result.source is RoutingSource.DEFAULTED_CONFLICTING_TASK_TYPE_KEYS
     assert len(warnings) == 1
     # The conflict warning names the offending labels.
     assert "task-type:docs" in warnings[0]
@@ -120,19 +218,36 @@ def test_duplicate_value_keys_use_that_pair_silently() -> None:
         warn=warnings.append,
     )
 
-    assert result == ("claude-sonnet-5", "high")
+    assert result.model == "claude-sonnet-5"
+    assert result.reasoning_effort == "high"
+    assert result.source is RoutingSource.ROUTED
     assert warnings == []
 
 
-def test_empty_routing_map_still_refuses_an_unknown_task_type() -> None:
-    """An empty routing map resolves every issue to the gated default, silently.
+def test_empty_routing_map_still_refuses_an_out_of_taxonomy_key() -> None:
+    """Routing suppression changes model selection, not the tracker vocabulary.
 
-    Routing suppression changes model selection, not the closed tracker
-    vocabulary: invalid labels remain invalid even when no route is active.
+    An invalid label stays invalid where no route is active, because the refusal
+    guards the label the classifier may *write*, not the pair it resolves to.
     """
     cfg = RunConfig(model="claude-opus-4.8", reasoning_effort="max", routing={})
     with pytest.raises(ValueError, match="task-type:frobnicate"):
         resolve_iteration_model(cfg, ["task-type:docs", "task-type:frobnicate"])
+
+
+def test_empty_routing_map_defaults_a_valid_key_as_unconfigured() -> None:
+    """With no table at all, a valid key is a key the table does not configure."""
+    cfg = RunConfig(model="claude-opus-4.8", reasoning_effort="max", routing={})
+    warnings: list[str] = []
+
+    result = resolve_iteration_model(
+        cfg, ["task-type:docs", "task-type:chore"], warn=warnings.append
+    )
+
+    assert (result.model, result.reasoning_effort) == ("claude-opus-4.8", "max")
+    assert result.source is RoutingSource.DEFAULTED_UNKNOWN_TASK_TYPE_KEY
+    assert result.task_type_keys == ("docs", "chore")
+    assert warnings == []
 
 
 def test_routed_pair_passes_through_the_shared_effort_gate() -> None:
@@ -144,7 +259,11 @@ def test_routed_pair_passes_through_the_shared_effort_gate() -> None:
         routing={"docs": ("gpt-5-mini", "xhigh")},
     )
 
-    assert resolve_iteration_model(cfg, ["task-type:docs"]) == ("gpt-5-mini", None)
+    result = resolve_iteration_model(cfg, ["task-type:docs"])
+
+    assert result.model == "gpt-5-mini"
+    assert result.reasoning_effort is None
+    assert result.gate_warnings == (EffortGateWarning.DROPPED_EFFORT,)
 
 
 def test_default_pair_passes_through_the_shared_effort_gate() -> None:
@@ -157,7 +276,11 @@ def test_default_pair_passes_through_the_shared_effort_gate() -> None:
     )
 
     # No task-type label -> global default -> gated.
-    assert resolve_iteration_model(cfg, ["ready-for-agent"]) == ("gpt-5-mini", None)
+    result = resolve_iteration_model(cfg, ["ready-for-agent"])
+
+    assert result.model == "gpt-5-mini"
+    assert result.reasoning_effort is None
+    assert result.gate_warnings == (EffortGateWarning.DROPPED_EFFORT,)
 
 
 def test_resolver_is_pure_and_performs_no_io() -> None:
@@ -169,7 +292,9 @@ def test_resolver_is_pure_and_performs_no_io() -> None:
     first = resolve_iteration_model(cfg, ["task-type:docs"], warn=warnings.append)
     second = resolve_iteration_model(cfg, ["task-type:docs"], warn=warnings.append)
 
-    assert first == second == ("gpt-5-mini", "medium")
+    assert first == second
+    assert first.model == "gpt-5-mini"
+    assert first.reasoning_effort == "medium"
     # A cleanly-resolving issue emits no warning.
     assert warnings == []
     # The source dict handed to the config is never mutated by resolution.
@@ -177,20 +302,27 @@ def test_resolver_is_pure_and_performs_no_io() -> None:
 
 
 @pytest.mark.parametrize(
-    ("routed", "expected"),
+    ("routed", "expected", "warning"),
     [
         # known model, effort accepted -> unchanged
         pytest.param(
             ("claude-sonnet-5", "high"),
             ("claude-sonnet-5", "high"),
+            None,
             id="known-accepted",
         ),
         # known model, effort NOT accepted -> dropped to None
-        pytest.param(("gpt-5-mini", "xhigh"), ("gpt-5-mini", None), id="known-dropped"),
+        pytest.param(
+            ("gpt-5-mini", "xhigh"),
+            ("gpt-5-mini", None),
+            EffortGateWarning.DROPPED_EFFORT,
+            id="known-dropped",
+        ),
         # reasoning-incapable model (empty effort set) -> effort forced to None
         pytest.param(
             ("claude-sonnet-4.5", "high"),
             ("claude-sonnet-4.5", None),
+            EffortGateWarning.INCAPABLE_MODEL,
             id="incapable-model",
         ),
         # off-roster model -> passed through the gate unchanged (the CLI is the
@@ -199,22 +331,28 @@ def test_resolver_is_pure_and_performs_no_io() -> None:
         pytest.param(
             ("totally-made-up-model-9", "high"),
             ("totally-made-up-model-9", "high"),
+            EffortGateWarning.UNKNOWN_MODEL,
             id="unknown-model",
         ),
         # effort already None on a capable model -> stays None
         pytest.param(
-            ("claude-opus-4.8", None), ("claude-opus-4.8", None), id="none-effort"
+            ("claude-opus-4.8", None),
+            ("claude-opus-4.8", None),
+            None,
+            id="none-effort",
         ),
     ],
 )
 def test_routed_pair_is_gated_across_gate_rows(
     routed: tuple[str, str | None],
     expected: tuple[str, str | None],
+    warning: EffortGateWarning | None,
 ) -> None:
     """A routed pair is run through every row of the shared effort gate.
 
-    The resolver only surfaces routing advisories (unknown key / conflict); a gate
-    correction (drop / incapable / off-roster pass-through) is silent here.
+    The resolver surfaces only routing advisories (the conflict) through ``warn``;
+    a gate correction (drop / incapable / off-roster pass-through) is **carried**
+    on the record instead of being narrated or, as before, discarded.
     """
     cfg = RunConfig(
         model="claude-opus-4.8", reasoning_effort="max", routing={"docs": routed}
@@ -223,5 +361,119 @@ def test_routed_pair_is_gated_across_gate_rows(
 
     result = resolve_iteration_model(cfg, ["task-type:docs"], warn=warnings.append)
 
-    assert result == expected
+    assert (result.model, result.reasoning_effort) == expected
+    assert result.gate_warnings == (() if warning is None else (warning,))
     assert warnings == []
+
+
+def test_explicit_override_has_a_distinct_default_source() -> None:
+    """An explicit run-wide pin does not look like absent routing."""
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={},
+        routing_suppressed=True,
+    )
+
+    result = resolve_iteration_model(cfg, ["task-type:docs"])
+
+    assert result.source is RoutingSource.DEFAULTED_EXPLICIT_OVERRIDE
+    assert result.task_type_keys == ("docs",)
+
+
+def test_escalation_and_lifecycle_position_are_independent_axes() -> None:
+    """A retry can use the escalation source without encoding its position there."""
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+    )
+
+    result = resolve_iteration_model(
+        cfg,
+        ["task-type:docs"],
+        lifecycle_position=RoutingLifecyclePosition.RETRYING,
+        escalated_pair=("claude-opus-5", "high"),
+    )
+
+    assert result.source is RoutingSource.ESCALATED
+    assert result.lifecycle_position is RoutingLifecyclePosition.RETRYING
+    assert (result.model, result.reasoning_effort) == ("claude-opus-5", "high")
+
+
+def test_a_model_with_no_tier_capability_row_keeps_the_run_level_tier() -> None:
+    """Absent capability data is not evidence of absent capability.
+
+    The tier roster (ADR-0017) carries a row only for a model whose tiers were
+    *verified* against the harness the kit spawns (ADR-0019). Everything else is
+    unknown, and the resolver treats unknown exactly as the effort gate does: the
+    live CLI stays the authority and the value passes through.
+    """
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        context_tier="long_context",
+        routing={"docs": ("gpt-5-mini", "medium")},
+    )
+
+    result = resolve_iteration_model(cfg, ["task-type:docs"])
+
+    assert result.context_tier == "long_context"
+    assert result.gate_warnings == ()
+
+
+def test_context_tier_gate_warning_is_carried_on_the_resolution(monkeypatch) -> None:
+    """The run-level tier is gated only after the issue selected its model.
+
+    Synthetic rows keep the case independent of the vendor catalogue: what is
+    pinned is that a model the roster says has no ``long_context`` is downgraded
+    rather than failed (ADR-0017), and that the signal survives on the record.
+    """
+    monkeypatch.setattr(
+        config_module,
+        "MODEL_REASONING_EFFORTS",
+        {"synth-default-only": frozenset({"medium"})},
+    )
+    monkeypatch.setattr(
+        config_module,
+        "MODEL_CONTEXT_TIERS",
+        {"synth-default-only": frozenset({"default"})},
+    )
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        context_tier="long_context",
+        routing={"docs": ("synth-default-only", "medium")},
+    )
+
+    result = resolve_iteration_model(cfg, ["task-type:docs"])
+
+    assert result.context_tier == "default"
+    assert result.gate_warnings == (
+        ContextTierGateWarning.UNSUPPORTED_CONTEXT_TIER,
+    )
+
+
+def test_a_model_the_tier_roster_covers_keeps_a_tier_it_offers(monkeypatch) -> None:
+    """A covered model is not downgraded for being covered."""
+    monkeypatch.setattr(
+        config_module,
+        "MODEL_REASONING_EFFORTS",
+        {"synth-both-tiers": frozenset({"medium"})},
+    )
+    monkeypatch.setattr(
+        config_module,
+        "MODEL_CONTEXT_TIERS",
+        {"synth-both-tiers": frozenset({"default", "long_context"})},
+    )
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        context_tier="long_context",
+        routing={"docs": ("synth-both-tiers", "medium")},
+    )
+
+    result = resolve_iteration_model(cfg, ["task-type:docs"])
+
+    assert result.context_tier == "long_context"
+    assert result.gate_warnings == ()

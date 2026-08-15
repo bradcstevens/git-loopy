@@ -809,10 +809,10 @@ def routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
     from git_loopy.cli import RoutingTier
     from git_loopy.config import resolve_iteration_model
 
-    model, effort = resolve_iteration_model(
+    resolution = resolve_iteration_model(
         resolved.run, [TASK_TYPE_LABEL_PREFIX + key]
     )
-    value = _render_pair(model, effort)
+    value = _render_pair(resolution.model, resolution.reasoning_effort)
     suppressed_by = resolved.routing_suppressed_by
     if suppressed_by is not None:
         return value, f"{suppressed_by} — routing suppressed run-wide"

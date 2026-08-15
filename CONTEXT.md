@@ -861,8 +861,24 @@ Resolving an issue's **Task type** to the model and reasoning effort its work ru
 replacing the single run-wide default with a per-task-type default. A **Config**-file-only
 tier: any explicit model or reasoning-effort flag or environment override suppresses routing
 for the whole run. An unlabelled issue or two keys disagreeing fall back to the run-wide default;
-an unknown key is refused before selection.
+an unknown key is refused before selection, and a **Task type** the table does not configure
+falls back to that default too.
 _Avoid_: model selection (that is the operator-facing picker), dispatch, assignment.
+
+**Routing resolution**:
+The one per-Pickup record **Routing** answers with: a gated model, reasoning effort and context
+tier; the `task-type` keys exactly as the tracker spelled them; the gate warnings raised while
+gating them; a **Routing source**; and the attempt's lifecycle position. Every surface that shows
+what a Pickup chose reads this record rather than recomputing it. Its source and lifecycle
+position are distinct axes so an escalated pair and a same-pair retry stay tellable apart.
+_Avoid_: routed pair (only the model and effort values), routing decision (ambiguous).
+
+**Routing source**:
+The closed provenance vocabulary on a **Routing resolution**: routed, or defaulted for no label,
+for a key the `[routing]` table does not configure, for conflicting keys, or for an explicit
+run-wide override — or escalated. It says why the settings were selected; it does not say whether
+this is the first attempt or a retry.
+_Avoid_: lifecycle position, routing tier.
 
 **Routed pair**:
 The single model and reasoning effort one unit of work runs on, after **Routing** has

@@ -1585,7 +1585,7 @@ class _Loop:
 
         def admit(item: AfkReadyItem) -> str | None:
             try:
-                resolved = resolve_iteration_model(
+                resolution = resolve_iteration_model(
                     self._config,
                     item.labels,
                     warn=lambda message, _ref=item.ref: self._diag.warning(
@@ -1594,6 +1594,7 @@ class _Loop:
                 )
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
+            resolved = (resolution.model, resolution.reasoning_effort)
             self._routes[item.ref] = resolved if in_force else run_wide
             return None
 
@@ -2942,7 +2943,7 @@ class _ParallelLoop:
         # binds the pair onto the Contribution, reused for this Lane's work AND
         # its later auto-resolution sessions.
         try:
-            model, reasoning_effort = resolve_iteration_model(
+            resolution = resolve_iteration_model(
                 self._config,
                 item.labels,
                 warn=lambda message, _ref=ref: self._diag.warning(
@@ -2955,6 +2956,8 @@ class _ParallelLoop:
             scheduler.release(reservation)
             raise
 
+        model = resolution.model
+        reasoning_effort = resolution.reasoning_effort
         base = self._resolve_base_ref()
         branch = git_module.lane_branch_name(self._run_id, ref)
         path = _lane_worktree_path(self._repo_root, self._run_id, ref)

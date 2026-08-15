@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.17 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.18 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -906,26 +906,44 @@ run-wide default:
 - **Read, never infer.** Read the routing key off the issue's `task-type:<key>` labels; the
   `task-type:` prefix is the contract. The Orchestrator MUST NOT infer the type from the title,
   body, or any other heuristic, and MUST ignore non-`task-type:` labels.
-- **Resolve to one pair.** Resolve the label(s) to a single `(model, effort)` via the shared
+- **Resolve to one record.** Resolve the labels to a single **Routing resolution**: the gated
+  model, reasoning effort and run-level context tier; the raw `task-type` keys exactly as read;
+  every gate warning; a **Routing source**; and the attempt's lifecycle position. The source
+  vocabulary is closed to `routed`, `defaulted_no_task_type_label`,
+  `defaulted_unknown_task_type_key`, `defaulted_conflicting_task_type_keys`,
+  `defaulted_explicit_override` and `escalated` — the set `routing-resolution.json` states as
+  `routing_sources`. Source and lifecycle position are **separate axes**: an escalated retry has
+  source `escalated`, while a same-pair crash retry keeps the source it resolved with and moves
+  only its lifecycle position.
+- **Select the pair.** Resolve the labels to a single `(model, effort)` via the shared
   `[routing]` config, honouring the family precedence spine (§11): `[routing]` is a
   **config-file-only** tier that replaces the *single global default* with a per-issue-type
   default — never a flag/env tier — and any explicit `--model` / `--reasoning-effort` (flag or
-  env) suppresses routing run-wide. The taxonomy is closed to `planning`, `review`,
-  `implementation`, `test`, `docs`, `chore`, and `bugfix` — the set
+  env) suppresses routing run-wide (source `defaulted_explicit_override`). The taxonomy is closed
+  to `planning`, `review`, `implementation`, `test`, `docs`, `chore`, and `bugfix` — the set
   `routing-resolution.json` states as `task_type_taxonomy`, matched exactly (a recased key is
   unknown): an unknown `task-type:` key is refused, naming the value and the permitted keys.
   Suppressing routing run-wide does **not** excuse the refusal — an unknown key is refused before
-  the routing map is consulted. Selection among valid labels is fixed: no
-  label, one unconfigured key, or ≥2 keys resolving to different pairs fall back to the global
-  default (only the conflict case warns); one configured key, or ≥2 keys resolving to the same
-  pair, use that pair.
+  the routing map is consulted. Selection among valid labels is fixed, and a key the table
+  **omits** resolves to the global default *as a value* rather than short-circuiting the
+  comparison: no label is `defaulted_no_task_type_label`; keys whose resolved values agree use
+  that pair — `routed` when the table configures every one of them, `defaulted_unknown_task_type_key`
+  when it omits any; ≥2 keys resolving to different pairs fall back to the global default under
+  `defaulted_conflicting_task_type_keys`. Only that last case warns, because it is the only one
+  where the operator's own labelling is ambiguous. The keys are carried on the record
+  **unnormalised**, exactly as the tracker spelled them, so a readback shows what arrived rather
+  than what was inferred.
 - **Gate and fall back.** Pass the resolved effort through the shared effort gate against the
   model roster and apply the fallback (an effort the model does not accept drops to "let the
-  backend pick"; an unknown model passes through). Routed **and** default pairs are gated
-  identically. A **reasoning-incapable** model — one whose roster entry is the empty set — is
-  therefore **unroutable**: an Orchestrator MUST NOT ship a recommended pair naming one, because
-  an effort supplied to such a model *hard-rejects session creation* rather than downgrading, and
-  a pair the gate can only rescue is a pair that fails wherever the gate is not in the path.
+  backend pick"; an unknown model passes through). Then gate the run-level **context tier**
+  against the resolved model, downgrading a tier the model does not offer to `default`
+  ([ADR-0017](adr/0017-context-tier-and-live-context-gauge.md)). Routed, default **and**
+  escalated settings are gated identically, and every gate signal is kept **on the record**
+  instead of being discarded. A **reasoning-incapable** model — one whose roster entry is the
+  empty set — is therefore **unroutable**: an Orchestrator MUST NOT ship a recommended pair
+  naming one, because an effort supplied to such a model *hard-rejects session creation* rather
+  than downgrading, and a pair the gate can only rescue is a pair that fails wherever the gate is
+  not in the path.
 - **Pass to the single invocation.** Feed the gated `(model, effort)` to that Iteration's one
   `--model` agent invocation (§4), reusing the same pair for the Lane's integration /
   auto-resolution session, so the Lane runs entirely on the resolved pair.
@@ -944,9 +962,11 @@ calibration question its own answer.
 This decision is pinned by three language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md):
 [`model-roster.json`](../git-loopy/conformance/model-roster.json) (the canonical
-`model → accepted efforts` sets — its keys are the supported-model set),
+`model → accepted efforts` sets — its keys are the supported-model set — beside `context_tiers`,
+the tier half of the same roster),
 [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (labels + config →
-resolved `(model, effort)` and whether it warns), and
+the **Routing resolution** record and whether it warns, and the closed `routing_sources`
+vocabulary every Runner reads instead of minting its own names), and
 [`effort-gate.json`](../git-loopy/conformance/effort-gate.json) (model + requested effort → gated
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
@@ -959,6 +979,13 @@ of **CLI version** ([ADR-0019](adr/0019-roster-derived-from-the-pinned-harness.m
 unstamped roster cannot distinguish a correction from a defect. The stamp is a statement about the
 fixture, not about the harness an Orchestrator spawns: where the two differ the divergence is
 reportable, and reconciling them is a pinned-harness bump plus a regeneration, made as one change.
+
+The same stamp governs `context_tiers`, the **context tier** capability
+([ADR-0017](adr/0017-context-tier-and-live-context-gauge.md)) that shares the roster rather than
+forming a parallel table, so the family has one lockstep point with the live catalog instead of
+two. A model with **no** `context_tiers` row is unknown and its tier passes through untouched,
+exactly as an off-roster model keeps its effort; a row is added only when that model's tiers were
+captured for the stated `cli_version`, in the same regeneration ADR-0019 requires.
 
 ### 14.1 The measured tier
 

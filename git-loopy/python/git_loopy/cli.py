@@ -2040,6 +2040,7 @@ def resolve_config(
     routing, routing_provenance = _resolve_routing(
         args, env, project, global_, measured, measured_provisional, warn=warn
     )
+    suppressed_by = routing_suppressed_by(args, env)
 
     run = RunConfig(
         continuation=continuation,
@@ -2058,6 +2059,7 @@ def resolve_config(
         parallel=_resolve_parallel(args, env),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
+        routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,
         classifier_effort=classifier_effort,
@@ -2068,7 +2070,7 @@ def resolve_config(
         run=run,
         interactive=interactive,
         routing_provenance=routing_provenance,
-        routing_suppressed_by=routing_suppressed_by(args, env),
+        routing_suppressed_by=suppressed_by,
     )
 
 

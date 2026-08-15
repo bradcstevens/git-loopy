@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "contract_version": "1.17",
+  "contract_version": "1.18",
   "cli_version": "1.0.75",
+  "context_tiers": {},
   "roster": {
     "auto": [],
     "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],

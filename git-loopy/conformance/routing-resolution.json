@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.17",
+  "contract_version": "1.18",
   "task_type_taxonomy": [
     "planning",
     "review",
@@ -10,13 +10,29 @@
     "chore",
     "bugfix"
   ],
+  "routing_sources": [
+    "routed",
+    "defaulted_no_task_type_label",
+    "defaulted_unknown_task_type_key",
+    "defaulted_conflicting_task_type_keys",
+    "defaulted_explicit_override",
+    "escalated"
+  ],
   "cases": [
     {
       "id": "no-task-type-label-uses-global-default",
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
       "labels": ["ready-for-agent", "parallel-safe"],
-      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_no_task_type_label",
+        "task_type_keys": [],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -27,7 +43,15 @@
         "planning": {"model": "claude-opus-4.8", "effort": "max"}
       },
       "labels": ["task-type:docs", "ready-for-agent"],
-      "expected": {"model": "gpt-5-mini", "effort": "medium"},
+      "expected": {
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "context_tier": "default",
+        "source": "routed",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -35,7 +59,15 @@
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
       "labels": ["task-type:chore"],
-      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_unknown_task_type_key",
+        "task_type_keys": ["chore"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -46,7 +78,31 @@
         "implementation": {"model": "claude-sonnet-5", "effort": "high"}
       },
       "labels": ["task-type:docs", "task-type:implementation"],
-      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_conflicting_task_type_keys",
+        "task_type_keys": ["docs", "implementation"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": true
+    },
+    {
+      "id": "a-configured-key-beside-an-unconfigured-one-conflicts-and-warns",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:docs", "task-type:chore"],
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_conflicting_task_type_keys",
+        "task_type_keys": ["docs", "chore"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": true
     },
     {
@@ -57,7 +113,15 @@
         "test": {"model": "claude-sonnet-5", "effort": "high"}
       },
       "labels": ["task-type:implementation", "task-type:test"],
-      "expected": {"model": "claude-sonnet-5", "effort": "high"},
+      "expected": {
+        "model": "claude-sonnet-5",
+        "effort": "high",
+        "context_tier": "default",
+        "source": "routed",
+        "task_type_keys": ["implementation", "test"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -65,7 +129,15 @@
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {},
       "labels": ["task-type:docs", "task-type:chore"],
-      "expected": {"model": "claude-opus-4.8", "effort": "max"},
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_unknown_task_type_key",
+        "task_type_keys": ["docs", "chore"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -73,7 +145,15 @@
       "default": {"model": "claude-opus-4.8", "effort": "max"},
       "routing": {"docs": {"model": "gpt-5-mini", "effort": "xhigh"}},
       "labels": ["task-type:docs"],
-      "expected": {"model": "gpt-5-mini", "effort": null},
+      "expected": {
+        "model": "gpt-5-mini",
+        "effort": null,
+        "context_tier": "default",
+        "source": "routed",
+        "task_type_keys": ["docs"],
+        "gate_warnings": ["dropped_effort"],
+        "lifecycle_position": "fresh"
+      },
       "warns": false
     },
     {
@@ -81,7 +161,82 @@
       "default": {"model": "gpt-5-mini", "effort": "max"},
       "routing": {"docs": {"model": "claude-sonnet-5", "effort": "high"}},
       "labels": ["ready-for-agent"],
-      "expected": {"model": "gpt-5-mini", "effort": null},
+      "expected": {
+        "model": "gpt-5-mini",
+        "effort": null,
+        "context_tier": "default",
+        "source": "defaulted_no_task_type_label",
+        "task_type_keys": [],
+        "gate_warnings": ["dropped_effort"],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
+    },
+    {
+      "id": "routed-pair-keeps-an-explicit-null-effort",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "claude-opus-5", "effort": null}},
+      "labels": ["task-type:docs"],
+      "expected": {
+        "model": "claude-opus-5",
+        "effort": null,
+        "context_tier": "default",
+        "source": "routed",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
+    },
+    {
+      "id": "a-null-default-model-defers-the-choice-and-keeps-its-effort",
+      "default": {"model": null, "effort": "high"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["ready-for-agent"],
+      "expected": {
+        "model": null,
+        "effort": "high",
+        "context_tier": "default",
+        "source": "defaulted_no_task_type_label",
+        "task_type_keys": [],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
+    },
+    {
+      "id": "explicit-override-defaults-every-label-run-wide",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {},
+      "routing_suppressed": true,
+      "labels": ["task-type:docs"],
+      "expected": {
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "default",
+        "source": "defaulted_explicit_override",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
+    },
+    {
+      "id": "escalation-is-a-source-not-a-lifecycle-position",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:docs"],
+      "escalated": {"model": "claude-opus-5", "effort": "high"},
+      "lifecycle_position": "retrying",
+      "expected": {
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tier": "default",
+        "source": "escalated",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "retrying"
+      },
       "warns": false
     }
   ],

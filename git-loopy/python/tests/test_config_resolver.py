@@ -809,6 +809,7 @@ def test_explicit_override_suppresses_the_measured_tier_too(
     """The existing run-wide suppression extends unchanged — measured included."""
     run = _resolve(argv, env=env, measured=_MEASURED, warn=lambda _m: None).run
     assert dict(run.routing) == {}
+    assert run.routing_suppressed is True
 
 
 def test_absent_measured_tier_changes_nothing() -> None:
@@ -832,11 +833,11 @@ def test_measured_entry_beats_the_builtin_default_for_a_labelled_issue() -> None
 
     run = _resolve(measured=_MEASURED, warn=lambda _m: None).run
 
-    assert resolve_iteration_model(run, ["task-type:docs"]) == (
-        "synthetic-cheap-1",
-        "low",
-    )
-    assert resolve_iteration_model(run, ["ready-for-agent"]) == (
+    routed = resolve_iteration_model(run, ["task-type:docs"])
+    defaulted = resolve_iteration_model(run, ["ready-for-agent"])
+
+    assert (routed.model, routed.reasoning_effort) == ("synthetic-cheap-1", "low")
+    assert (defaulted.model, defaulted.reasoning_effort) == (
         run.model,
         run.reasoning_effort,
     )
