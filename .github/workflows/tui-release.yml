@@ -129,7 +129,7 @@ jobs:
             runner: ubuntu-22.04
             build: cross
             container: ghcr.io/rust-cross/manylinux2014-cross:aarch64
-            packages_install: pip3 install cargo-zigbuild
+            packages_install: python3 -m pip install cargo-zigbuild ziglang
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             build: native
@@ -137,7 +137,7 @@ jobs:
             runner: ubuntu-22.04
             build: cross
             container: messense/rust-musl-cross:aarch64-musl
-            packages_install: pip3 install cargo-zigbuild
+            packages_install: python3 -m pip install cargo-zigbuild ziglang
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
             build: native
@@ -153,6 +153,14 @@ jobs:
       # x64 musl needs `musl-tools`. `dist plan` is what says so, and the plan
       # job refuses this list the moment it stops matching. The Rust target
       # itself is not added here — cargo-dist runs rustup for it.
+      #
+      # `ziglang` is named alongside cargo-zigbuild rather than left to it:
+      # cargo-zigbuild is a cargo subcommand and `zig` is the compiler it shells
+      # out to, and `pip3 install cargo-zigbuild` brought the module along in
+      # one cross image but not the other. It is installed through `python3 -m
+      # pip` because in `manylinux2014-cross:aarch64` `pip3` and `python3` are
+      # two different interpreters, and the one cargo-zigbuild asks — `python3
+      # -m ziglang` — is the one that has to be able to answer.
       - name: Provision the target toolchain
         if: matrix.packages_install != ''
         shell: bash
@@ -167,6 +175,41 @@ jobs:
         env:
           CARGO_DIST_VERSION: "0.32.0"
         run: |
+          # A cross container is not obliged to carry Rust at all.
+          # `manylinux2014-cross:aarch64` ships the aarch64 cross toolchain and
+          # nothing else — no `cargo`, no `rustup`, nothing under `~/.cargo` —
+          # so the pinned install had nothing to run and the target never
+          # reached the compiler. Provisioned before it is pinned, and
+          # published on PATH for the steps that build and sign with it.
+          if ! command -v cargo >/dev/null 2>&1; then
+            echo "No Rust toolchain on PATH; provisioning one for this container."
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+            CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+            PATH="$CARGO_HOME/bin:$PATH"
+            export PATH
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          fi
+
+          # Both cross containers describe, in their environment, how to build
+          # the *artifact*: `CARGO_BUILD_TARGET` chooses the architecture and
+          # the `TARGET_*` variables choose the C toolchain. None of it
+          # describes how to build the *tool*, which runs here — and taking it
+          # anyway failed twice over. Unqualified, `cargo install` produced an
+          # aarch64 `dist` that the x86_64 machine holding the container could
+          # not execute (`Exec format error`, exit 126). Qualified by
+          # architecture alone, `aws-lc-sys` — a transitive dependency of the
+          # release tool — still read `TARGET_CC`, which it consults whether or
+          # not it is cross-compiling, and handed `-m64` to an aarch64 gcc.
+          #
+          # Withheld for this step only. `dist build` runs in its own process
+          # and receives the container's environment intact, so the helper is
+          # still cross-built exactly as the proven plan says it is.
+          unset CARGO_BUILD_TARGET
+          for name in $(env | sed -n 's/^\(TARGET_[A-Z0-9_]*\)=.*/\1/p'); do
+            unset "$name"
+          done
+
           cargo install cargo-dist --version "$CARGO_DIST_VERSION" --locked
           dist --version
           dist --version | grep -q "$CARGO_DIST_VERSION"
@@ -176,12 +219,22 @@ jobs:
         working-directory: git-loopy/tui
         env:
           RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          TARGET: ${{ matrix.target }}
           # cargo-dist signs inside this step, which is the only place signing
           # can happen: it writes each `.sha256` afterwards, so a published
           # checksum is a checksum of the *signed* artifact. Both signers
           # degrade to a warning when their credentials are absent — which is
           # what keeps a pull request buildable, and exactly why the trust gate
           # asks the artifact instead of trusting this step's exit code.
+          #
+          # Absent, though, and only absent. Each signer reads its credentials
+          # with `std::env::var(name).ok()`, which answers `Some("")` for a
+          # variable that is set and empty — and an expression for a secret the
+          # entered environment does not hold renders as the empty string
+          # rather than dropping the variable. Supplying them here is therefore
+          # not enough on its own; the script below is what turns "this
+          # environment holds no credential" into "this process has no such
+          # variable", which is the only form cargo-dist can read.
           CODESIGN_CERTIFICATE: ${{ secrets.CODESIGN_CERTIFICATE }}
           CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
@@ -190,7 +243,33 @@ jobs:
           SSLDOTCOM_PASSWORD: ${{ secrets.SSLDOTCOM_PASSWORD }}
           SSLDOTCOM_CREDENTIAL_ID: ${{ secrets.SSLDOTCOM_CREDENTIAL_ID }}
           SSLDOTCOM_TOTP_SECRET: ${{ secrets.SSLDOTCOM_TOTP_SECRET }}
-        run: dist build --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --artifacts=local
+        run: |
+          # Every credential a signer needs, or none of them. A signer holding
+          # some of its credentials cannot sign either, so the partial case is
+          # withheld too rather than half-supplied — and what refuses an
+          # unsigned artifact on a channel that requires a signature is the
+          # trust gate, which asks the artifact, not this step.
+          present() {
+            for name in "$@"; do
+              [ -n "${!name:-}" ] || return 1
+            done
+          }
+
+          if present CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD CODESIGN_IDENTITY; then
+            echo "macOS signing: CODESIGN credentials present; signing will be attempted."
+          else
+            echo "::notice title=Unsigned macOS build::Skipping macOS signing — this environment holds no CODESIGN credentials."
+            unset CODESIGN_CERTIFICATE CODESIGN_CERTIFICATE_PASSWORD CODESIGN_IDENTITY CODESIGN_OPTIONS
+          fi
+
+          if present SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET; then
+            echo "Windows signing: SSLDOTCOM credentials present; signing will be attempted."
+          else
+            echo "::notice title=Unsigned Windows build::Skipping Windows signing — this environment holds no SSLDOTCOM credentials."
+            unset SSLDOTCOM_USERNAME SSLDOTCOM_PASSWORD SSLDOTCOM_CREDENTIAL_ID SSLDOTCOM_TOTP_SECRET
+          fi
+
+          dist build --target "$TARGET" --tag "$RELEASE_TAG" --artifacts=local
 
       - name: Publish the artifact checksum alongside it
         shell: bash

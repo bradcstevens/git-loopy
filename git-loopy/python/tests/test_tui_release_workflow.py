@@ -9,6 +9,9 @@ manifest, and this workflow together or fails.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,22 @@ from git_loopy import tui_release
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/tui-release.yml"
+
+# The credentials each signer requires, named the way cargo-dist reads them.
+# `CODESIGN_OPTIONS` is deliberately not here: cargo-dist treats it as optional
+# and this workflow supplies it as a literal, so it is never a credential whose
+# presence decides anything.
+MACOS_CREDENTIALS = (
+    "CODESIGN_CERTIFICATE",
+    "CODESIGN_CERTIFICATE_PASSWORD",
+    "CODESIGN_IDENTITY",
+)
+WINDOWS_CREDENTIALS = (
+    "SSLDOTCOM_USERNAME",
+    "SSLDOTCOM_PASSWORD",
+    "SSLDOTCOM_CREDENTIAL_ID",
+    "SSLDOTCOM_TOTP_SECRET",
+)
 
 
 def _load_workflow() -> dict[Any, Any]:
@@ -32,6 +51,59 @@ def _run_text(job: dict[str, Any]) -> str:
     return "\n".join(
         step["run"] for step in job["steps"] if isinstance(step, dict) and "run" in step
     )
+
+
+def _build_step(name: str) -> dict[str, Any]:
+    return next(
+        step
+        for step in _load_workflow()["jobs"]["build"]["steps"]
+        if step.get("name") == name
+    )
+
+
+def _step_environment(step: dict[str, Any], **supplied: str) -> dict[str, str]:
+    """The step's own declared environment, with its `${{ }}` expressions supplied.
+
+    Read from the step rather than restated, so a step that grows a variable its
+    script depends on cannot pass here while failing on a runner. The one thing
+    a test must stand in for is an expression, and the default it stands in with
+    is `""` — because that is what an environment holding no such secret
+    actually renders, and mistaking that for an absent variable is this
+    workflow's defect.
+    """
+    declared = {
+        name: supplied.get(name, "")
+        if str(value).startswith("${{")
+        else str(value)
+        for name, value in step.get("env", {}).items()
+    }
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS
+    }
+    return {**inherited, **declared, **supplied}
+
+
+def _stub_dist(directory: Path) -> Path:
+    """A `dist` that records which signing variables actually reached it.
+
+    cargo-dist decides whether to sign with `std::env::var(..).ok()`, which
+    answers `Some("")` for a variable that is set and empty — so "did the
+    variable arrive" is the exact question, and `env` is the only honest way to
+    ask it. A variable absent from this listing is one the signer never sees.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    executable = directory / "dist"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "argv=%s\\n" "$*" >> "$DIST_CALLS"\n'
+        'env | grep -E "^(CODESIGN_|SSLDOTCOM_)" | sort >> "$DIST_CALLS" || true\n'
+        'exit "${DIST_EXIT:-0}"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
 
 
 def test_the_matrix_builds_every_declared_artifact_on_its_declared_runner() -> None:
@@ -234,3 +306,305 @@ def test_the_plan_is_proven_before_any_target_is_built() -> None:
 def test_the_helper_package_opts_back_into_the_release_toolchain() -> None:
     """`publish = false` hides the binary from cargo-dist entirely."""
     assert tui_release.helper_package_is_distributable(REPOSITORY_ROOT) is True
+
+
+def _build_the_artifact(tmp_path: Path, **supplied: str) -> subprocess.CompletedProcess[str]:
+    """Run the build step's own bash, with a `dist` that reports what reached it."""
+    step = _build_step("Build the release artifact")
+    bin_dir = tmp_path / "bin"
+    _stub_dist(bin_dir)
+    return subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", str(step["run"])],
+        cwd=tmp_path,
+        env=_step_environment(
+            step,
+            RELEASE_TAG="v1.2.3",
+            DIST_CALLS=str(tmp_path / "dist.log"),
+            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            **supplied,
+        ),
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_a_signer_without_credentials_is_skipped_rather_than_handed_empty_ones(
+    tmp_path: Path,
+) -> None:
+    """The invariant this step already claims about itself, made true.
+
+    cargo-dist's two signers each gate on `std::env::var(name).ok()`, which
+    answers `Some("")` for a variable that is set and empty. A pull request
+    enters an environment that holds none of these secrets, and an expression
+    for a secret that does not exist renders as the empty string rather than
+    dropping the variable -- so every credential arrived, empty, and the macOS
+    signer handed an empty certificate to `security import` instead of taking
+    the branch that warns and skips. Absent has to mean absent by the time
+    `dist` is executed, which is the only place cargo-dist looks.
+    """
+    completed = _build_the_artifact(tmp_path, TARGET="aarch64-apple-darwin")
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
+    for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS:
+        assert not any(line.startswith(f"{name}=") for line in recorded), (
+            f"{name} reached dist empty; an empty credential is not an absent one"
+        )
+
+
+def test_the_skipped_signature_is_announced_rather_than_silently_dropped(
+    tmp_path: Path,
+) -> None:
+    """An unsigned artifact is a fact about the Release, not an implementation detail."""
+    completed = _build_the_artifact(tmp_path, TARGET="x86_64-pc-windows-msvc")
+
+    assert completed.returncode == 0, completed.stderr
+    log = completed.stdout + completed.stderr
+    assert "CODESIGN" in log and "SSLDOTCOM" in log
+    assert log.lower().count("skip") >= 2, log
+
+
+def test_credentials_that_are_present_still_reach_the_signer_intact(
+    tmp_path: Path,
+) -> None:
+    """The half of the fix that a "just stop signing" change would have lost.
+
+    A tagged Release enters the environment that holds these secrets, and every
+    one of them has to arrive verbatim -- withholding is a response to absence,
+    not a new policy about signing.
+    """
+    granted = {
+        name: f"value-of-{name.lower()}"
+        for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS
+    }
+    completed = _build_the_artifact(
+        tmp_path, TARGET="aarch64-apple-darwin", **granted
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
+    for name, value in granted.items():
+        assert f"{name}={value}" in recorded
+    assert "CODESIGN_OPTIONS=runtime" in recorded
+    assert 'argv=build --target aarch64-apple-darwin --tag v1.2.3 --artifacts=local' in recorded
+
+
+def test_a_signer_that_fails_with_credentials_present_still_fails_the_job(
+    tmp_path: Path,
+) -> None:
+    """Losing the ability to detect a broken signer is not an acceptable trade."""
+    granted = {
+        name: f"value-of-{name.lower()}"
+        for name in MACOS_CREDENTIALS + WINDOWS_CREDENTIALS
+    }
+    completed = _build_the_artifact(
+        tmp_path, TARGET="aarch64-apple-darwin", DIST_EXIT="1", **granted
+    )
+
+    assert completed.returncode != 0
+
+
+def test_a_partial_credential_set_signs_nothing_rather_than_half_of_it(
+    tmp_path: Path,
+) -> None:
+    """cargo-dist needs every variable in a set, so a partial set signs nothing.
+
+    Passing the fragment through would only move the discovery to `security
+    import`, which is where this defect was found in the first place.
+    """
+    completed = _build_the_artifact(
+        tmp_path,
+        TARGET="aarch64-apple-darwin",
+        CODESIGN_CERTIFICATE="a-certificate",
+        CODESIGN_IDENTITY="an-identity",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "dist.log").read_text(encoding="utf-8").splitlines()
+    for name in MACOS_CREDENTIALS:
+        assert not any(line.startswith(f"{name}=") for line in recorded), name
+
+
+def _stub_cargo(directory: Path) -> Path:
+    """A `cargo` that records the build target it was handed, and installs `dist`.
+
+    `cargo install` places the tool it built on `PATH`, so the stub does too --
+    the step's own version check runs against it, and a stub that never
+    appeared would make the check vacuous rather than exercised.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    executable = directory / "cargo"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "argv=%s\\n" "$*" >> "$CARGO_CALLS"\n'
+        'env | grep -E "^(CARGO_BUILD_TARGET|TARGET_)" | sort'
+        ' >> "$CARGO_CALLS" || true\n'
+        'bin="$(cd "$(dirname "$0")" && pwd)"\n'
+        "cat > \"$bin/dist\" <<'INNER'\n"
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--version" ]; then\n'
+        '  echo "dist ${STUB_DIST_VERSION:-$CARGO_DIST_VERSION}"\n'
+        "fi\n"
+        "exit 0\n"
+        "INNER\n"
+        'chmod +x "$bin/dist"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def _stub_rustup_over_curl(directory: Path, cargo: Path) -> Path:
+    """A `curl` serving an installer that provisions a toolchain the way rustup does.
+
+    `manylinux2014-cross:aarch64` ships neither cargo nor rustup, so the step
+    has to fetch one; what a test can check is that it fetches only when it has
+    to, and that what it fetched is on `PATH` for the steps that follow.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    installer = directory / "rustup-init.sh"
+    installer.write_text(
+        "#!/bin/sh\n"
+        'home="${CARGO_HOME:-$HOME/.cargo}"\n'
+        'mkdir -p "$home/bin"\n'
+        f'cp "{cargo}" "$home/bin/cargo"\n',
+        encoding="utf-8",
+    )
+    executable = directory / "curl"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "argv=%s\\n" "$*" >> "$CURL_CALLS"\n'
+        f'cat "{installer}"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def _install_the_toolchain(
+    tmp_path: Path, *, cargo_on_path: bool, **supplied: str
+) -> subprocess.CompletedProcess[str]:
+    step = _build_step("Install the pinned release toolchain")
+    bin_dir = tmp_path / "bin"
+    cargo = _stub_cargo(tmp_path / "toolchain")
+    _stub_rustup_over_curl(bin_dir, cargo)
+    if cargo_on_path:
+        shutil.copy(cargo, bin_dir / "cargo")
+        (bin_dir / "cargo").chmod(0o755)
+
+    return subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", str(step["run"])],
+        cwd=tmp_path,
+        env=_step_environment(
+            step,
+            HOME=str(tmp_path / "home"),
+            CARGO_CALLS=str(tmp_path / "cargo.log"),
+            CURL_CALLS=str(tmp_path / "curl.log"),
+            GITHUB_PATH=str(tmp_path / "github_path"),
+            PATH=f"{bin_dir}{os.pathsep}{os.defpath}",
+            **supplied,
+        ),
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_the_release_tool_is_built_for_the_machine_that_will_execute_it(
+    tmp_path: Path,
+) -> None:
+    """AC3: `Exec format error` is what a cross target's own `dist` looked like.
+
+    Both cross containers bake `CARGO_BUILD_TARGET` to the triple they
+    cross-compile *for* -- `aarch64-unknown-linux-musl` in the musl image,
+    `aarch64-unknown-linux-gnu` in the manylinux one. An unqualified `cargo
+    install` there produces an aarch64 `dist`, which the x86_64 machine holding
+    the container then cannot execute. The helper is cross-built on purpose;
+    the tool that builds it runs here.
+    """
+    completed = _install_the_toolchain(
+        tmp_path,
+        cargo_on_path=True,
+        CARGO_BUILD_TARGET="aarch64-unknown-linux-musl",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("CARGO_BUILD_TARGET=") for line in recorded), recorded
+    assert any(line.startswith("argv=install cargo-dist") for line in recorded)
+
+
+def test_a_container_that_ships_no_rust_is_given_a_toolchain_first(
+    tmp_path: Path,
+) -> None:
+    """AC2: `cargo: command not found` was exit 127, seven steps before the linker.
+
+    `manylinux2014-cross:aarch64` carries the aarch64 cross toolchain and no
+    Rust at all -- no `cargo`, no `rustup`, nothing under `~/.cargo`. The
+    pinned install has to run somewhere, so the toolchain is provisioned before
+    it is pinned, and the provisioned `cargo` is published to the steps that
+    build and sign with it.
+    """
+    completed = _install_the_toolchain(
+        tmp_path,
+        cargo_on_path=False,
+        CARGO_BUILD_TARGET="aarch64-unknown-linux-gnu",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "curl.log").is_file(), "no toolchain was fetched"
+    published = (tmp_path / "github_path").read_text(encoding="utf-8")
+    assert str(tmp_path / "home" / ".cargo" / "bin") in published
+    recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("argv=install cargo-dist") for line in recorded)
+    assert not any(line.startswith("CARGO_BUILD_TARGET=") for line in recorded)
+
+
+def test_a_runner_that_already_has_rust_is_not_given_a_second_one(
+    tmp_path: Path,
+) -> None:
+    """Four of the seven targets build on a bare runner that already has cargo."""
+    completed = _install_the_toolchain(tmp_path, cargo_on_path=True)
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (tmp_path / "curl.log").exists(), "a present toolchain was replaced"
+
+
+def test_a_toolchain_that_is_not_the_pinned_one_is_still_refused(
+    tmp_path: Path,
+) -> None:
+    """A different cargo-dist may plan a different artifact set, so it is refused."""
+    completed = _install_the_toolchain(
+        tmp_path, cargo_on_path=True, STUB_DIST_VERSION="0.1.0-not-the-pin"
+    )
+
+    assert completed.returncode != 0
+
+
+def test_the_release_tool_is_built_with_this_machines_own_c_toolchain(
+    tmp_path: Path,
+) -> None:
+    """The second half of "built for the machine that runs it": built *with* it.
+
+    Choosing the architecture is not enough. Both cross images also describe a
+    C toolchain through `TARGET_CC` and its neighbours, and `aws-lc-sys` -- a
+    transitive dependency of the release tool -- reads `TARGET_CC` whether or
+    not it is cross-compiling. A host build therefore compiled aws-lc's C with
+    the aarch64 gcc and handed it `-m64`, which that compiler does not
+    recognise. A container's cross-compilation environment describes the
+    artifact, not the tool that builds it.
+    """
+    completed = _install_the_toolchain(
+        tmp_path,
+        cargo_on_path=True,
+        CARGO_BUILD_TARGET="aarch64-unknown-linux-musl",
+        TARGET_CC="aarch64-unknown-linux-musl-gcc",
+        TARGET_CXX="aarch64-unknown-linux-musl-g++",
+        TARGET_AR="aarch64-unknown-linux-musl-ar",
+        TARGET_RANLIB="aarch64-unknown-linux-musl-ranlib",
+        TARGET_SYSROOT="/usr/local/musl/aarch64-unknown-linux-musl",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = (tmp_path / "cargo.log").read_text(encoding="utf-8").splitlines()
+    leaked = [line for line in recorded if line.startswith("TARGET_")]
+    assert not leaked, f"the cross toolchain reached the host build: {leaked}"
