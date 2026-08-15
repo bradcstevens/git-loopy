@@ -2606,10 +2606,44 @@ function Invoke-GitLoopyGitHub {
     }
 }
 
+function Get-GitLoopyObservedLineageHead {
+    <#
+        The observed heads this completion may succeed, in observation order.
+
+        Reconciliation observes the whole repository, so `observation.heads`
+        names every live head under every Workstream — including ones this
+        Producer is not advancing. Only the completion's own lineage can be
+        its predecessor, so scoping happens here, at consumption, and both the
+        `parents` comparison and the predecessor proof read the same list.
+    #>
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary]$Observation,
+        [Parameter(Mandatory)][Collections.IDictionary]$Completion
+    )
+
+    $CarrierNumber = [long]$Completion["carrier"]["number"]
+    $Producer = [string]$Completion["producer"]["login"]
+    $AnchorJson = ConvertTo-GitLoopyCanonicalJson `
+        $Completion["workstream"]["anchor"]
+    $Scoped = [Collections.Generic.List[object]]::new()
+    foreach ($Head in $Observation["heads"]) {
+        if (
+            [long]$Head["carrier"] -eq $CarrierNumber -and
+            $Head["producer"] -ceq $Producer -and
+            (ConvertTo-GitLoopyCanonicalJson $Head["workstream_anchor"]) -ceq
+            $AnchorJson
+        ) {
+            $null = $Scoped.Add($Head)
+        }
+    }
+    return [object[]]@($Scoped)
+}
+
 function Test-GitLoopyObservation {
     param(
         [Parameter(Mandatory)][Collections.IDictionary]$Request,
-        [Parameter(Mandatory)][string]$Repository
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][Collections.IDictionary]$Completion
     )
 
     $Observation = Assert-GitLoopyObject $Request["observation"] "observation"
@@ -2620,7 +2654,7 @@ function Test-GitLoopyObservation {
     $Heads = Assert-GitLoopyArray $Observation["heads"] "observation.heads"
     $Validators = Assert-GitLoopyArray `
         $Observation["validators"] "observation.validators"
-    $ParentIds = [Collections.Generic.List[string]]::new()
+    $ObservedIds = [Collections.Generic.List[string]]::new()
     foreach ($Item in $Heads) {
         $Head = Assert-GitLoopyObject $Item "observation.heads item"
         Assert-GitLoopyFields `
@@ -2644,7 +2678,7 @@ function Test-GitLoopyObservation {
             -Value $Head["workstream_anchor"] `
             -Name "observation.heads item.workstream_anchor" `
             -Repository $Repository
-        $ParentIds.Add($RevisionId)
+        $ObservedIds.Add($RevisionId)
     }
     foreach ($Item in $Validators) {
         $Validator = Assert-GitLoopyObject $Item "observation.validators item"
@@ -2662,10 +2696,10 @@ function Test-GitLoopyObservation {
             ))
         }
     }
-    $UniqueParents = [Collections.Generic.HashSet[string]]::new(
-        $ParentIds, [StringComparer]::Ordinal
+    $UniqueHeads = [Collections.Generic.HashSet[string]]::new(
+        $ObservedIds, [StringComparer]::Ordinal
     )
-    if ($UniqueParents.Count -ne $ParentIds.Count) {
+    if ($UniqueHeads.Count -ne $ObservedIds.Count) {
         throw (New-GitLoopyRejection "observation.heads must not contain duplicates")
     }
     $ExpectedToken = "sha256:" + (
@@ -2683,6 +2717,14 @@ function Test-GitLoopyObservation {
         ))
     }
     $Parents = Assert-GitLoopyArray $Request["parents"] "parents"
+    $ParentIds = [Collections.Generic.List[string]]::new()
+    foreach ($Head in (
+        Get-GitLoopyObservedLineageHead `
+            -Observation $Observation `
+            -Completion $Completion
+    )) {
+        $ParentIds.Add([string]$Head["revision_id"])
+    }
     if ($Parents.Count -ne $ParentIds.Count) {
         throw (New-GitLoopyRejection (
             "parents must name the observed heads in order"
@@ -2735,19 +2777,11 @@ function Assert-GitLoopyObservedStateCurrent {
     }
     $CarrierNumber = [long]$Completion["carrier"]["number"]
     $Producer = [string]$Completion["producer"]["login"]
-    $AnchorJson = ConvertTo-GitLoopyCanonicalJson `
-        $Completion["workstream"]["anchor"]
-    foreach ($Head in $Observation["heads"]) {
-        if (
-            [long]$Head["carrier"] -ne $CarrierNumber -or
-            $Head["producer"] -cne $Producer -or
-            (ConvertTo-GitLoopyCanonicalJson $Head["workstream_anchor"]) -cne
-            $AnchorJson
-        ) {
-            throw (New-GitLoopyRejection (
-                "observed heads must belong to the completion Producer lineage"
-            ))
-        }
+    foreach ($Head in (
+        Get-GitLoopyObservedLineageHead `
+            -Observation $Observation `
+            -Completion $Completion
+    )) {
         $Matched = $false
         foreach ($Carrier in $Carriers) {
             if ([long]$Carrier["number"] -ne $CarrierNumber) {
@@ -3242,7 +3276,8 @@ function Invoke-GitLoopyContinuationPublish {
     if ($RevisionProtocol) {
         $ValidatedObservation = Test-GitLoopyObservation `
             -Request $Request `
-            -Repository $Repository
+            -Repository $Repository `
+            -Completion $Completion
         $Parents = $ValidatedObservation.Parents
         Assert-GitLoopyAuthorizedProducer `
             -Request $Request `

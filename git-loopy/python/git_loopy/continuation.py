@@ -656,9 +656,39 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _observed_lineage_heads(
+    observation: dict[str, Any],
+    completion: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The observed heads this completion may succeed, in observation order.
+
+    Reconciliation observes the whole repository, so `observation.heads` names
+    every live head under every Workstream — including ones this Producer is
+    not advancing. Only the completion's own lineage can be its predecessor,
+    so scoping happens here, at consumption, and both the `parents` comparison
+    and the predecessor proof read the same scoped list.
+    """
+    lineage = (
+        int(completion["carrier"]["number"]),
+        str(completion["producer"]["login"]),
+        _canonical_json(completion["workstream"]["anchor"]),
+    )
+    return [
+        head
+        for head in observation["heads"]
+        if (
+            int(head["carrier"]),
+            str(head["producer"]),
+            _canonical_json(head["workstream_anchor"]),
+        )
+        == lineage
+    ]
+
+
 def _validate_observation(
     request: dict[str, Any],
     repository: str,
+    completion: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
     observation = _object(request.get("observation"), "observation")
     _fields(
@@ -668,7 +698,7 @@ def _validate_observation(
     )
     heads = _array(observation["heads"], "observation.heads")
     validators = _array(observation["validators"], "observation.validators")
-    parent_ids: list[str] = []
+    observed_ids: list[str] = []
     for item in heads:
         head = _object(item, "observation.heads item")
         _fields(
@@ -690,7 +720,7 @@ def _validate_observation(
             "observation.heads item.workstream_anchor",
             repository,
         )
-        parent_ids.append(revision_id)
+        observed_ids.append(revision_id)
     for item in validators:
         validator = _object(item, "observation.validators item")
         _fields(
@@ -704,7 +734,7 @@ def _validate_observation(
             raise ContinuationError(
                 "observation.validators item.sha256 must be a lowercase SHA-256 digest"
             )
-    if len(set(parent_ids)) != len(parent_ids):
+    if len(set(observed_ids)) != len(observed_ids):
         raise ContinuationError("observation.heads must not contain duplicates")
     expected_token = "sha256:" + _digest(
         {
@@ -716,6 +746,10 @@ def _validate_observation(
     if observation["token"] != expected_token:
         raise ContinuationError("observation token does not match its bound state")
     parents = _array(request.get("parents"), "parents")
+    parent_ids = [
+        str(head["revision_id"])
+        for head in _observed_lineage_heads(observation, completion)
+    ]
     if parents != parent_ids:
         raise ContinuationError("parents must name the observed heads in order")
     return observation, parent_ids
@@ -792,7 +826,6 @@ def _verify_observed_heads(
 ) -> None:
     carrier_number = int(completion["carrier"]["number"])
     producer = str(completion["producer"]["login"])
-    anchor = completion["workstream"]["anchor"]
     comments = [
         comment
         for carrier in carriers
@@ -800,15 +833,7 @@ def _verify_observed_heads(
         for comment in carrier.comments
         if comment.author == producer
     ]
-    for head in observation["heads"]:
-        if (
-            head["carrier"] != carrier_number
-            or head["producer"] != producer
-            or head["workstream_anchor"] != anchor
-        ):
-            raise ContinuationError(
-                "observed heads must belong to the completion Producer lineage"
-            )
+    for head in _observed_lineage_heads(observation, completion):
         matched = False
         for comment in comments:
             try:
@@ -3974,7 +3999,7 @@ def _publish(
     reattestation: dict[str, Any] | None = None
     protocol_carriers: list[ContinuationCarrier] = []
     if protocol:
-        observation, parents = _validate_observation(request, repository)
+        observation, parents = _validate_observation(request, repository, completion)
         _authorize_actor(
             request,
             repository,

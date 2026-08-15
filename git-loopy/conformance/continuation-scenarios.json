@@ -20803,6 +20803,442 @@
       }
     },
     {
+      "id": "successor-publishes-past-a-second-live-workstream",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "alpha",
+                "summary": "layer zero action",
+                "kind": "Publish spec",
+                "occurrence": "v2",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 240
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 240
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [
+              {
+                "carrier": 237,
+                "producer": "planner",
+                "revision_id": "52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a",
+                "workstream_anchor": {
+                  "kind": "issue",
+                  "number": 237,
+                  "repository": "octo/example"
+                }
+              },
+              {
+                "carrier": 238,
+                "producer": "planner",
+                "revision_id": "bf339a9434fa8de00f3ceea823aaf434ed97fe63ba84b24255d900a297b13a3c",
+                "workstream_anchor": {
+                  "kind": "issue",
+                  "number": 238,
+                  "repository": "octo/example"
+                }
+              }
+            ],
+            "token": "sha256:508c2d387ffd65019fc51fec4578779b6d2e506fa350ba94b2f25e99559aac6b",
+            "validators": [
+              {
+                "comment_id": 9010,
+                "sha256": "f41d834ac0439e3ad33321a9cff3cd5fa3117aefcb859f6ef7208c391255b5d9"
+              },
+              {
+                "comment_id": 9011,
+                "sha256": "2e204338512433aae3d214387630a7b08ab8ce5da4b5b0f5961428a67aa18841"
+              }
+            ]
+          },
+          "parents": [
+            "52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a"
+          ]
+        }
+      },
+      "github_script": [
+        {
+          "command": "api user",
+          "exit_code": 0,
+          "stdout_json": {
+            "login": "planner",
+            "type": "User"
+          }
+        },
+        {
+          "command": "api repos/octo/example/collaborators/planner/permission",
+          "exit_code": 0,
+          "stdout_json": {
+            "permission": "write"
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": [
+            {
+              "number": 237,
+              "state": "open",
+              "html_url": "https://github.com/octo/example/issues/237",
+              "labels": [
+                {
+                  "name": "git-loopy-continuation"
+                }
+              ],
+              "comments": 1
+            },
+            {
+              "number": 238,
+              "state": "open",
+              "html_url": "https://github.com/octo/example/issues/238",
+              "labels": [
+                {
+                  "name": "git-loopy-continuation"
+                }
+              ],
+              "comments": 1
+            }
+          ]
+        },
+        {
+          "command": "api repos/octo/example/issues/237/comments?per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": [
+            {
+              "id": 9010,
+              "html_url": "https://github.com/octo/example/issues/237#issuecomment-9010",
+              "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":243,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"yankee\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[{\"action_key\":\"zulu\",\"kind\":\"action-completed\"}],\"summary\":\"layer two action\",\"target\":{\"kind\":\"issue\",\"number\":243,\"repository\":\"octo/example\"}},{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":242,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"bravo\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[{\"action_key\":\"alpha\",\"kind\":\"action-completed\"}],\"summary\":\"first layer one action\",\"target\":{\"kind\":\"issue\",\"number\":242,\"repository\":\"octo/example\"}},{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":241,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"zulu\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[{\"action_key\":\"alpha\",\"kind\":\"action-completed\"}],\"summary\":\"second layer one action\",\"target\":{\"kind\":\"issue\",\"number\":241,\"repository\":\"octo/example\"}},{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"alpha\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"layer zero action\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a\",\"semantic_fingerprints\":{\"alpha\":\"832b0665cf516a3de311816ee5da150413d8ba0bb8647d44c28721d7902c3ab4\",\"bravo\":\"b913147ce48947ba740d729724efa17bc1c3f4f76b8f9317e1c4224af5359748\",\"yankee\":\"5bb4e41a7c25f6cf896bc078c91ce5063a4376f5d35a405ac9d2beb687919f02\",\"zulu\":\"d9b321f11276a02ba15a299ccc44575c6c7d36c03b1bd121c08ff3ff7df33397\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+              "user": {
+                "login": "planner",
+                "type": "User"
+              }
+            }
+          ]
+        },
+        {
+          "command": "api repos/octo/example/issues/238/comments?per_page=100&page=1",
+          "exit_code": 0,
+          "stdout_json": [
+            {
+              "id": 9011,
+              "html_url": "https://github.com/octo/example/issues/238#issuecomment-9011",
+              "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":238,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":244,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"solo\",\"kind\":\"Publish spec\",\"occurrence\":\"v1\",\"prerequisites\":[],\"summary\":\"other workstream action\",\"target\":{\"kind\":\"issue\",\"number\":244,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":238,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"bf339a9434fa8de00f3ceea823aaf434ed97fe63ba84b24255d900a297b13a3c\",\"semantic_fingerprints\":{\"solo\":\"6da7771999421f51eda8c920b11ea6af36670abf6c9543038fe272ad761b57ff\"},\"transition\":{\"evidence\":[{\"comment_id\":7002,\"issue\":238,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":238,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":238,\"repository\":\"octo/example\"}}}}\n```",
+              "user": {
+                "login": "planner",
+                "type": "User"
+              }
+            }
+          ]
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/7001",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 7001,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-7001",
+            "body": "charted",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "exit_code": 0,
+          "stdout": ""
+        },
+        {
+          "command": "api --method POST repos/octo/example/issues/237/comments --input -",
+          "exit_code": 0,
+          "expected_stdin_json": {
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"alpha\",\"kind\":\"Publish spec\",\"occurrence\":\"v2\",\"prerequisites\":[],\"summary\":\"layer zero action\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[\"52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a\"],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"e4c8a5fa83d7cb3997676adc5e165e31f0369714f27c6811ff084da9681a46fc\",\"semantic_fingerprints\":{\"alpha\":\"832b0665cf516a3de311816ee5da150413d8ba0bb8647d44c28721d7902c3ab4\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```"
+          },
+          "stdout_json": {
+            "id": 9031,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9031",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"alpha\",\"kind\":\"Publish spec\",\"occurrence\":\"v2\",\"prerequisites\":[],\"summary\":\"layer zero action\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[\"52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a\"],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"e4c8a5fa83d7cb3997676adc5e165e31f0369714f27c6811ff084da9681a46fc\",\"semantic_fingerprints\":{\"alpha\":\"832b0665cf516a3de311816ee5da150413d8ba0bb8647d44c28721d7902c3ab4\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        },
+        {
+          "command": "api repos/octo/example/issues/comments/9031",
+          "exit_code": 0,
+          "stdout_json": {
+            "id": 9031,
+            "html_url": "https://github.com/octo/example/issues/237#issuecomment-9031",
+            "body": "<!-- git-loopy-continuation:1 -->\n```json\n{\"actions\":[{\"basis\":[{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}],\"completion_condition\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}},\"instruction\":{\"mode\":\"skill\",\"value\":\"/to-spec 237\"},\"interaction\":{\"classification\":\"AFK-safe\",\"evidence\":{\"kind\":\"transition-owner-attestation\",\"noninteractive\":true,\"owner\":\"wayfinder\"}},\"key\":\"alpha\",\"kind\":\"Publish spec\",\"occurrence\":\"v2\",\"prerequisites\":[],\"summary\":\"layer zero action\",\"target\":{\"kind\":\"issue\",\"number\":240,\"repository\":\"octo/example\"}}],\"carrier\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"continuation_contract_version\":\"1.0\",\"disposition\":\"continue\",\"parents\":[\"52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a\"],\"producer\":{\"login\":\"planner\",\"role\":\"planning\"},\"publication\":\"shared\",\"record_format\":1,\"revision_id\":\"e4c8a5fa83d7cb3997676adc5e165e31f0369714f27c6811ff084da9681a46fc\",\"semantic_fingerprints\":{\"alpha\":\"832b0665cf516a3de311816ee5da150413d8ba0bb8647d44c28721d7902c3ab4\"},\"transition\":{\"evidence\":[{\"comment_id\":7001,\"issue\":237,\"kind\":\"issue-comment\",\"repository\":\"octo/example\"}],\"owner\":\"wayfinder\"},\"workstream\":{\"anchor\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"},\"destination\":{\"kind\":\"issue-closed\",\"target\":{\"kind\":\"issue\",\"number\":237,\"repository\":\"octo/example\"}}}}\n```",
+            "user": {
+              "login": "planner",
+              "type": "User"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "exit_code": 0,
+        "github_calls": [
+          "api user",
+          "api repos/octo/example/collaborators/planner/permission",
+          "api repos/octo/example/issues?state=all&per_page=100&page=1",
+          "api repos/octo/example/issues/237/comments?per_page=100&page=1",
+          "api repos/octo/example/issues/238/comments?per_page=100&page=1",
+          "api repos/octo/example/issues/comments/7001",
+          "label create git-loopy-continuation --repo octo/example --color 5319E7 --description Repairable discovery index for git-loopy Continuation records --force",
+          "issue edit 237 --repo octo/example --add-label git-loopy-continuation",
+          "api --method POST repos/octo/example/issues/237/comments --input -",
+          "api repos/octo/example/issues/comments/9031"
+        ],
+        "stdout_exact": "{\"ok\":true,\"operation\":\"publish\",\"receipt\":{\"status\":\"committed\",\"revision_id\":\"e4c8a5fa83d7cb3997676adc5e165e31f0369714f27c6811ff084da9681a46fc\",\"carrier\":{\"kind\":\"issue\",\"repository\":\"octo/example\",\"number\":237},\"comment\":{\"id\":9031,\"url\":\"https://github.com/octo/example/issues/237#issuecomment-9031\"},\"index_label\":\"git-loopy-continuation\",\"semantic_fingerprints\":{\"alpha\":\"832b0665cf516a3de311816ee5da150413d8ba0bb8647d44c28721d7902c3ab4\"},\"parents\":[\"52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a\"]}}\n",
+        "stderr_exact": ""
+      }
+    },
+    {
+      "id": "parents-naming-another-workstreams-head-are-rejected",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ],
+      "arguments": [
+        "continuation",
+        "publish"
+      ],
+      "request": {
+        "source": "stdin",
+        "json": {
+          "repository": "octo/example",
+          "trusted_producers": [
+            "planner"
+          ],
+          "trusted_apps": [],
+          "completion": {
+            "continuation_contract_version": "1.0",
+            "record_format": 1,
+            "publication": "shared",
+            "disposition": "continue",
+            "workstream": {
+              "anchor": {
+                "kind": "issue",
+                "repository": "octo/example",
+                "number": 237
+              },
+              "destination": {
+                "kind": "issue-closed",
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 237
+                }
+              }
+            },
+            "transition": {
+              "owner": "wayfinder",
+              "evidence": [
+                {
+                  "kind": "issue-comment",
+                  "repository": "octo/example",
+                  "issue": 237,
+                  "comment_id": 7001
+                }
+              ]
+            },
+            "producer": {
+              "login": "planner",
+              "role": "planning"
+            },
+            "carrier": {
+              "kind": "issue",
+              "repository": "octo/example",
+              "number": 237
+            },
+            "actions": [
+              {
+                "key": "alpha",
+                "summary": "layer zero action",
+                "kind": "Publish spec",
+                "occurrence": "v2",
+                "instruction": {
+                  "mode": "skill",
+                  "value": "/to-spec 237"
+                },
+                "target": {
+                  "kind": "issue",
+                  "repository": "octo/example",
+                  "number": 240
+                },
+                "basis": [
+                  {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 237
+                  }
+                ],
+                "prerequisites": [],
+                "interaction": {
+                  "classification": "AFK-safe",
+                  "evidence": {
+                    "kind": "transition-owner-attestation",
+                    "noninteractive": true,
+                    "owner": "wayfinder"
+                  }
+                },
+                "completion_condition": {
+                  "kind": "issue-closed",
+                  "target": {
+                    "kind": "issue",
+                    "repository": "octo/example",
+                    "number": 240
+                  }
+                }
+              }
+            ]
+          },
+          "observation": {
+            "heads": [
+              {
+                "carrier": 237,
+                "producer": "planner",
+                "revision_id": "52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a",
+                "workstream_anchor": {
+                  "kind": "issue",
+                  "number": 237,
+                  "repository": "octo/example"
+                }
+              },
+              {
+                "carrier": 238,
+                "producer": "planner",
+                "revision_id": "bf339a9434fa8de00f3ceea823aaf434ed97fe63ba84b24255d900a297b13a3c",
+                "workstream_anchor": {
+                  "kind": "issue",
+                  "number": 238,
+                  "repository": "octo/example"
+                }
+              }
+            ],
+            "token": "sha256:508c2d387ffd65019fc51fec4578779b6d2e506fa350ba94b2f25e99559aac6b",
+            "validators": [
+              {
+                "comment_id": 9010,
+                "sha256": "f41d834ac0439e3ad33321a9cff3cd5fa3117aefcb859f6ef7208c391255b5d9"
+              },
+              {
+                "comment_id": 9011,
+                "sha256": "2e204338512433aae3d214387630a7b08ab8ce5da4b5b0f5961428a67aa18841"
+              }
+            ]
+          },
+          "parents": [
+            "52feb69311646741bf392c36d41b5f9fb40ead23182c3fb67f1f9a98ac7b911a",
+            "bf339a9434fa8de00f3ceea823aaf434ed97fe63ba84b24255d900a297b13a3c"
+          ]
+        }
+      },
+      "github_script": [],
+      "expected": {
+        "exit_code": 1,
+        "github_calls": [],
+        "stdout_exact": "{\"ok\":false,\"operation\":\"publish\",\"error\":{\"code\":\"invalid_request\",\"message\":\"parents must name the observed heads in order\"}}\n",
+        "stderr_exact": "git-loopy continuation: parents must name the observed heads in order\n"
+      }
+    },
+    {
       "id": "resolved-fork-has-one-live-head",
       "distributions": [
         "python",
