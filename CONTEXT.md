@@ -543,14 +543,6 @@ clean durable branch. It is close-keyword-free (never auto-closes an issue) and 
 not count as Strike progress. Distinct from the agent's own commits.
 _Avoid_: autosave, stash, snapshot.
 
-**Sandbox**:
-The per-Iteration OS permission boundary the agent's shell commands run inside,
-confining which filesystem paths and network they may touch and resetting to a clean
-policy at each **Iteration**. Contains an issue's blast radius so one run cannot leak
-filesystem state into another; a permission boundary, not a container or a fresh
-checkout.
-_Avoid_: container, jail, VM.
-
 ### Issues and attribution
 
 **Active issue**:
@@ -1333,9 +1325,6 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
 - A **Checkpoint** is authored by the runner (not the agent) at a serial
   **Iteration** or Lane-work boundary and is attributed to the **Active issue**, but
   never counts as **Strike** progress.
-- A **Sandbox** is scoped to an **Iteration**: each **Iteration**'s agent shell runs
-  inside a fresh **Sandbox**, so per-issue isolation follows from per-**Iteration**
-  freshness.
 - **Consumption** is attributed to a scope: a serial **Iteration** or parallel
   **Lane contribution** (a **Summary** row's Cost), or an **Active issue** (the
   **Queue**'s per-issue Cost). Both resolve Cost through the same **Cost denomination**,
@@ -1365,9 +1354,6 @@ _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap
   Recovery costs **Integration backlog** capacity, never **Lane cap** capacity.
 - A contribution that never goes green is never published, so base only ever carries
   verified results and the base branch is never observed red.
-- In **Parallel mode** the **Sandbox** is per-**Lane**: each Lane's agent runs in its own
-  **Sandbox** scoped to that Lane's worktree — the parallel analogue of the per-**Iteration**
-  Sandbox.
 
 ## Example dialogue
 
