@@ -931,7 +931,6 @@ def _run(
     runner: object | None = None,
     verifier: object | None = None,
     task_type: str | None = None,
-    parallel: int | None = 4,
     assume_yes: bool = True,
     confirm: object | None = None,
     budget: SearchBudget | None = None,
@@ -947,7 +946,6 @@ def _run(
         repo_root=tmp_path,
         env=env if env is not None else {"XDG_CONFIG_HOME": str(tmp_path / "xdg")},
         task_type=task_type,
-        parallel=parallel,
         assume_yes=assume_yes,
         confirm=confirm,
         out=out,
@@ -965,24 +963,26 @@ def _run(
     return code, out, err, resolved_runner
 
 
-def test_calibrate_refuses_to_spend_when_the_resolved_run_is_serial(
-    tmp_path: Path,
-) -> None:
-    """Nothing a Calibration measured would take effect, so it must not be bought.
+def test_calibrate_measures_for_a_serial_run_too(tmp_path: Path) -> None:
+    """A serial Run applies what a Calibration measured, so it must be buyable.
 
-    The refusal comes from :mod:`git_loopy.routing_scope` rather than a second
-    comparison here, so ``calibrate`` and ``config get`` cannot disagree about
-    whether routing is in force.
+    ``calibrate`` used to refuse outright at ``parallel == 1``, and the refusal
+    was correct on its own terms: the **Routed pair** it measured would have been
+    discarded and the **AI Credits** spent for no change. ADR-0037 inverted the
+    premise — a serial **Iteration** runs on the pair its **Pickup** resolved —
+    so refusing would now withhold the measurement from the *default* mode. The
+    knob is not read at all: nothing here asks how wide the Run will be.
     """
     github = _corpus(tmp_path)
 
-    code, out, err, runner = _run(tmp_path, github, parallel=1)
+    code, out, _err, runner = _run(tmp_path, github, env={
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+        "GIT_LOOPY_MAX_PARALLEL": "1",
+    })
 
-    assert code == 1
-    assert "routing is scoped to Parallel mode" in err.text
-    assert "--parallel" in err.text
-    assert runner.requests == []
-    assert out.lines == []
+    assert code == 0
+    assert runner.requests != []
+    assert "Price staircase" in out.text
 
 
 def test_the_whole_plan_is_printed_before_the_first_trial(tmp_path: Path) -> None:
@@ -1234,7 +1234,9 @@ def test_a_bare_calibrate_dispatches_to_the_spending_path(
     assert cli.main(["calibrate", "docs", "--yes", "--parallel", "3"]) == 0
     assert seen[0]["task_type"] == "docs"
     assert seen[0]["assume_yes"] is True
-    assert seen[0]["parallel"] == 3
+    # `--parallel` is *not* forwarded (ADR-0037): a Calibration measures a pair
+    # that takes effect at every width, so the width is none of its business.
+    assert "parallel" not in seen[0]
 
 
 def test_a_task_type_argument_is_refused_beside_a_reporting_flag(

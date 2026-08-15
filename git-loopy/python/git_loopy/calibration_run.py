@@ -79,7 +79,6 @@ from git_loopy.proving_admission import (
 )
 from git_loopy.proving_set import MinedProvingSet, ProvingCandidate
 from git_loopy.release_version import read_runtime_release_version
-from git_loopy.routing_scope import SERIAL_PARALLELISM, calibration_refusal
 from git_loopy.staircase import Candidate, PriceStaircase, render_pair
 from git_loopy.trial_concurrency import (
     InlineTrialDispatcher,
@@ -115,7 +114,6 @@ __all__ = [
     "render_credits",
     "render_duration",
     "render_trial_progress",
-    "resolve_parallel",
     "run_calibrate",
 ]
 
@@ -751,7 +749,6 @@ def run_calibrate(
     repo_root: Path | None,
     env: Mapping[str, str],
     task_type: str | None = None,
-    parallel: int | None = None,
     assume_yes: bool = False,
     out: Callable[[str], None] = _default_out,
     err: Callable[[str], None] = _default_err,
@@ -768,15 +765,18 @@ def run_calibrate(
     """Measure the eligible **Task types**, and write what was measured.
 
     The only path in this distribution that runs a **Trial**. Every step before
-    the first one is a chance to stop: a serial run is refused, the plan is
-    printed in full, and an interactive operator has to say yes.
+    the first one is a chance to stop: the plan is printed in full, and an
+    interactive operator has to say yes.
+
+    **Parallelism is not one of those steps any more** (ADR-0037). A Calibration
+    used to refuse a serial run outright, because a **Routed pair** took effect
+    only in **Parallel mode** and the measurement would have bought nothing. The
+    pair now applies at the **Pickup** of whatever works the issue, so the
+    measurement is worth the same **AI Credits** at either width and the knob is
+    not read here at all.
     """
     try:
         keys = _requested_task_types(task_type)
-        resolved_parallel = resolve_parallel(parallel, env)
-        refusal = calibration_refusal(resolved_parallel)
-        if refusal is not None:
-            raise CalibrateCommandError(refusal)
         _root, found = gather(repo_root, err, github, git, fetch_staircase)
     except CalibrateCommandError as exc:
         err(f"git-loopy: error: {exc}")
@@ -865,25 +865,6 @@ def run_calibrate(
         now=now if now is not None else _utc_now,
     )
     return INTERRUPTED_EXIT_CODE if outcome.interrupted else 0
-
-
-def resolve_parallel(parallel: int | None, env: Mapping[str, str]) -> int:
-    """The parallelism a Calibration's result would take effect at.
-
-    Flag over env over serial, matching :func:`git_loopy.cli._resolve_parallel` —
-    a Calibration that read the knob differently from the **Run** it is measuring
-    for could refuse a spend the Run would have used, or authorise one it cannot.
-    """
-    if parallel is not None:
-        return max(1, int(parallel))
-    raw = env.get("GIT_LOOPY_MAX_PARALLEL")
-    if raw is None or not raw.strip():
-        return SERIAL_PARALLELISM
-    try:
-        value = int(raw)
-    except ValueError:
-        return SERIAL_PARALLELISM
-    return value if value >= SERIAL_PARALLELISM else SERIAL_PARALLELISM
 
 
 def _requested_task_types(task_type: str | None) -> tuple[str, ...]:

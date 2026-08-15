@@ -925,9 +925,10 @@ is a single committed artifact, `routing.measured.toml` beside the project `conf
 carrying the table and its evidence in the same file and no free-text key for an opinion to
 occupy. Only current state is stored, because git is the ledger: a change arrives as a
 reviewable pull-request diff rather than a cache refresh, `git blame` names the **Calibration**
-that set a **Task type**'s pair, and deleting the file is the entire opt-out. Like all
-**Routing** it is a **Parallel mode** feature, so at `parallel == 1` it is inert — reported as
-inert rather than as a value that quietly has no effect (ADR-0028).
+that set a **Task type**'s pair, and deleting the file is the entire opt-out. It is a committed tier rather than a
+cache for that reason (ADR-0028), and like all **Routing** it takes effect in every mode, a
+serial **Iteration** as much as a **Lane** (ADR-0037) — it was reported as inert at
+`parallel == 1` until the pair a **Pickup** resolves became the pair its session runs on.
 _Avoid_: auto-routing, learned routing, routing cache.
 
 **Calibration**:
@@ -1021,8 +1022,10 @@ re-calibrating and **starts no search** itself, ADR-0028's notify-don't-act rule
 unchanged and for the same reason: an implicit trigger would turn an unattended Run into a
 benchmark suite. It reaches the measured tier only — a hand-written `[routing]` entry is **never
 demoted**, however badly its pair performs, because it is the operator's decision and this system
-does not overrule those — and being part of **Routing** it is a **Parallel mode** feature, so at
-`parallel == 1` nothing routes and nothing demotes.
+does not overrule those — and being part of **Routing** the replacement it installs is in force
+in every mode (ADR-0037), a serial **Iteration** as much as a **Lane**. A serial Run nonetheless
+demotes nothing, for a narrower reason than the **Parallel mode** scope it used to inherit: a
+**Lane contribution** is a Lane's record and serial opens none, so the tally is empty.
 _Avoid_: rollback, regression.
 
 ### The runner family

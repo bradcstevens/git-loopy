@@ -21,11 +21,12 @@ Design notes:
   Observability is not a precondition for doing work: the same terms
   :func:`~git_loopy.rate_card.resolve_rate_card` already sets for the listing it
   shares with this module.
-* **Silent in serial**, through :func:`~git_loopy.routing_scope.routing_in_force`
-  rather than a fourth comparison of ``parallel``. At ``parallel == 1`` the whole
-  precedence chain is inert, so a re-calibration recommended there would change
-  nothing an operator could observe — which is the warning trap stated in the
-  other direction.
+* **It asks the scope question rather than answering it**, through
+  :func:`~git_loopy.routing_scope.routing_in_force` rather than a fourth
+  comparison of ``parallel``. That answer is now ``True`` in every mode
+  (ADR-0037), so a serial operator hears the same recommendation a Parallel one
+  does — and can act on it, because the pair a re-calibration would fix is the
+  pair their next Run picks up on.
 * **It reads the pin; it never runs the classifier.** ``resolve_classifier_pair``
   is a Config question over the staircase. Invoking the **Task-type classifier**
   is a different act with a different cost, and it belongs to the write-back path
@@ -53,8 +54,7 @@ __all__ = ["RECALIBRATE_HINT", "notify_roster_drift"]
 
 #: The one thing to do about however many facts preceded it. A notification that
 #: says re-calibrating could save money without naming the command that would
-#: leaves the operator exactly as stuck — the same rule
-#: :data:`~git_loopy.routing_scope.PARALLEL_MODE_HINT` states for the refusal.
+#: leaves the operator exactly as stuck.
 #:
 #: ``--status`` leads deliberately: it is the mode that spends nothing, and a
 #: Calibration is always an explicit act.
@@ -79,8 +79,11 @@ async def notify_roster_drift(
     Args:
         repo_root: The repository the Run works in, or ``None`` outside one. The
             artifact is a tracked file, so off-repo there is nothing to compare.
-        parallel: The Run's resolved **Lane** count. Routing is scoped to
-            Parallel mode, so a serial Run is told nothing it could act on.
+        parallel: The Run's resolved **Lane** count, asked of
+            :func:`~git_loopy.routing_scope.routing_in_force` rather than
+            compared here. Since ADR-0037 a **Routed pair** takes effect at
+            every width, so this silences nobody — it is the seam a future
+            narrowing of the scope would act through.
         listing: The Run's single live model listing — the *same* object
             :func:`~git_loopy.rate_card.resolve_rate_card` already read, so this
             costs no additional round trip and cannot order one listing's rungs

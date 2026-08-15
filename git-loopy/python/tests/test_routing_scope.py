@@ -1,9 +1,10 @@
-"""``git_loopy.routing_scope`` — Routing is a Parallel-mode feature (#379, ADR-0027).
+"""``git_loopy.routing_scope`` — a **Routed pair** takes effect in every mode (#404).
 
-The rule under test is one sentence: **Routing** resolves at **Pickup**, only
-**Parallel mode** has a pickup, so at ``parallel == 1`` the whole chain — the
-**Measured routing** tier included — is inert, and a **Calibration** that
-measured a **Routed pair** would change nothing.
+The rule under test is one sentence, and it is the **reversal** of the one #379
+shipped: **Routing** resolves at **Pickup**, every unit of work has a pickup, so
+the pair a Pickup resolved is the pair its session runs on — a serial
+**Iteration** exactly as much as a **Lane**. Nothing about routing, the
+**Measured routing** tier included, is inert at ``parallel == 1`` any more.
 """
 
 from __future__ import annotations
@@ -49,111 +50,83 @@ def _passage_around(flat: str, anchor: str) -> str | None:
     return flat[max(0, found - _PASSAGE_WINDOW) : found + _PASSAGE_WINDOW]
 
 
+def test_routing_is_in_force_in_serial_and_in_parallel_mode() -> None:
+    """The one comparison, asked in isolation at both ends of the range (#404).
 
-def test_a_serial_run_refuses_a_calibration() -> None:
-    """The refusal names Parallel mode as the requirement (#379).
-
-    An operator can otherwise spend hours calibrating, commit a fully-evidenced
-    artifact, and observe nothing at all — the feature that appears to work is
-    the worst option available (ADR-0027).
+    ``1`` is the default, so the serial answer is the answer the out-of-the-box
+    Run gets — and it is now the same answer a **Lane** gets. An operator who
+    configures a ``[routing]`` table and types ``git-loopy`` sees it take
+    effect, which is the whole of ADR-0037.
     """
-    refusal = routing_scope.calibration_refusal(routing_scope.SERIAL_PARALLELISM)
-
-    assert refusal is not None
-    assert "Parallel mode" in refusal
-
-
-def test_the_refusal_says_how_to_enable_parallel_mode() -> None:
-    """A refusal with no way forward is only a more legible silence.
-
-    Parallel mode is opt-in and has no Config key, so the flag and the env var
-    are the whole of the answer — an operator told only *that* it is required
-    is left exactly as stuck.
-    """
-    refusal = routing_scope.calibration_refusal(routing_scope.SERIAL_PARALLELISM)
-
-    assert refusal is not None
-    assert "--parallel" in refusal
-    assert "GIT_LOOPY_MAX_PARALLEL" in refusal
-
-
-def test_a_parallel_run_is_not_refused() -> None:
-    """``None`` is the permission to proceed, so the caller compares nothing."""
-    assert routing_scope.calibration_refusal(2) is None
-
-
-def test_routing_is_in_force_only_in_parallel_mode() -> None:
-    """The one comparison. Everything built on Routing asks it here.
-
-    ``1`` is the default, so the inert case is the out-of-the-box run rather
-    than an unusual one.
-    """
-    assert not routing_scope.routing_in_force(routing_scope.SERIAL_PARALLELISM)
+    assert routing_scope.routing_in_force(routing_scope.SERIAL_PARALLELISM)
     assert routing_scope.routing_in_force(2)
     assert routing_scope.routing_in_force(9)
 
 
-def test_the_note_and_the_refusal_share_their_reason() -> None:
-    """Two surfaces saying the same thing must not drift into two reasons.
+def test_nothing_here_refuses_or_notes_a_serial_run() -> None:
+    """The refusal and the inert note are **gone**, not merely quiet (#404).
 
-    The **Measured routing** tier is reported inert by ``config get`` and
-    refused by ``calibrate`` (#372) because of one fact — one serial session
-    works the whole **Pool** on one pair — and an operator who meets both should
-    recognise it as one fact.
+    Both existed to say a **Routed pair** would have no effect. That statement
+    is now false, and a constant holding a false statement is a constant a
+    surface can print. Deleting them is what makes the reversal structural: the
+    words cannot come back by a caller forgetting to compare ``parallel``.
     """
-    refusal = routing_scope.calibration_refusal(routing_scope.SERIAL_PARALLELISM)
-
-    assert refusal is not None
-    for message in (refusal, routing_scope.SERIAL_INERT_NOTE):
-        assert routing_scope.ROUTING_SCOPE_REASON in message
-        assert routing_scope.PARALLEL_MODE_HINT in message
+    assert not hasattr(routing_scope, "calibration_refusal")
+    assert not hasattr(routing_scope, "SERIAL_INERT_NOTE")
+    assert routing_scope.__all__ == ["SERIAL_PARALLELISM", "routing_in_force"]
 
 
-def test_the_reason_is_not_that_serial_has_no_pickup() -> None:
-    """ADR-0032 moved **Pickup** underneath the wording #364 shipped.
+def test_the_operator_reference_declares_that_routing_applies_in_serial() -> None:
+    """Declared, never discovered (ADR-0027) — including the reversal.
 
-    ``CONTEXT.md`` now defines pickup as universal — *"every unit of work has a
-    pickup, a serial Iteration as much as a Lane"* — so scoping routing by the
-    absence of one contradicts the glossary and becomes actively false when
-    ADR-0032 lands. The durable fact is narrower: one session, many issues, one
-    pair.
-    """
-    refusal = routing_scope.calibration_refusal(routing_scope.SERIAL_PARALLELISM)
+    The README told the operator the whole chain was inert in the default mode.
+    Leaving that in place after ADR-0037 is worse than never having said it: an
+    operator would read a documented reason not to expect the behaviour they are
+    now getting. Prose has no feedback loop of its own, which is why this one is
+    pinned here.
 
-    assert refusal is not None
-    for message in (refusal, routing_scope.SERIAL_INERT_NOTE):
-        assert "Pickup" not in message and "pickup" not in message
-
-
-def test_the_operator_reference_declares_the_scoping() -> None:
-    """Declared, never discovered (ADR-0027) — including to the operator.
-
-    The README documents the **Measured routing** tier rung by rung and never
-    said the whole chain is inert in the default mode, so an operator could
-    read the tier's every property and still expect a **Calibration** to change
-    a serial Run. Prose has no feedback loop of its own, which is why this one
-    is pinned here.
-
-    The check is **bounded to one passage**. Every token below already appeared
-    somewhere in a 500-line README, so a whole-document search would pass on a
-    coincidence — the declaration has to be one thing an operator reads in one
-    place, not four words scattered across four sections.
+    The check is **bounded to one passage**, the same idiom the note's own guard
+    used: every token below already appears somewhere in a 500-line README, so a
+    whole-document search would pass on a coincidence.
     """
     readme = (_repo_root_or_skip() / PYTHON_README).read_text(encoding="utf-8")
     flat = " ".join(readme.split())
 
-    declaration = _passage_around(flat, "inert")
+    assert "inert" not in flat, (
+        f"{PYTHON_README} must not describe the routing chain as inert — "
+        "ADR-0037 made a Routed pair take effect in every mode"
+    )
+    declaration = _passage_around(flat, "Routing takes effect in every mode")
     assert declaration is not None, (
-        f"{PYTHON_README} must say the routing chain is inert in serial mode, "
+        f"{PYTHON_README} must say routing takes effect in serial mode too, "
         "beside the tiers it already documents"
     )
-    required = ["Parallel mode", "serial", "Routed pair"]
-    required += re.findall(
-        r"--parallel|GIT_LOOPY_[A-Z_]+", routing_scope.PARALLEL_MODE_HINT
-    )
-    missing = [term for term in required if term not in declaration]
+    missing = [
+        term
+        for term in ("serial", "Parallel mode", "Routed pair")
+        if term not in declaration
+    ]
     assert not missing, (
-        f"{PYTHON_README}'s inertness passage must connect routing, serial mode "
-        f"and the switch that enables Parallel mode. Missing from the passage: "
-        f"{missing}"
+        f"{PYTHON_README}'s scope passage must connect routing, serial mode and "
+        f"Parallel mode. Missing from the passage: {missing}"
+    )
+
+
+def test_the_reversal_is_recorded_as_a_decision() -> None:
+    """A reversal of a shipped ADR is an ADR, not a diff (#404).
+
+    ADR-0027 declared routing a Parallel-mode feature and three modules were
+    built on that declaration. Undoing it silently would leave four documents
+    stating a scope the code no longer has, and the next reader would have to
+    guess which one won.
+    """
+    root = _repo_root_or_skip()
+    adr = root / "docs" / "adr" / "0037-routing-takes-effect-in-every-mode.md"
+
+    assert adr.is_file(), "the reversal of ADR-0027's scope owes its own ADR"
+    text = " ".join(adr.read_text(encoding="utf-8").split())
+    for term in ("ADR-0027", "serial", "Pickup"):
+        assert term in text
+    assert re.search(r"[Rr]evers", text), (
+        "the ADR must say it reverses the scope ADR-0027 declared"
     )

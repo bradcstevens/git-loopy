@@ -419,8 +419,9 @@ def demote_after_run(
     Args:
         repo_root: The repository, or ``None`` off one — the artifact is a
             tracked file, so off-repo there is nothing to rewrite.
-        config: The Run's resolved config, read for ``parallel``, ``routing`` and
-            ``demotion_threshold``.
+        config: The Run's resolved config, read for ``parallel`` (through
+            :func:`~git_loopy.routing_scope.routing_in_force`, the family's one
+            routing-scope answer), ``routing`` and ``demotion_threshold``.
         staircase: The Run's price staircase, or a refused one.
         contributions: The finalized **Lane contributions** — in Parallel mode,
             :attr:`~git_loopy.rolling_scheduler.RollingScheduler.finalized`.

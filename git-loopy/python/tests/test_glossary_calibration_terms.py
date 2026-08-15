@@ -570,16 +570,20 @@ def test_measured_routing_records_the_two_properties_a_cache_would_lose() -> Non
     assert "routing cache" in entry, "the avoid-list names what it is not"
 
 
-def test_measured_routing_records_that_it_is_inert_in_serial_mode() -> None:
-    """**Routing** is a Parallel-mode feature, so the tier changes nothing at 1.
+def test_measured_routing_records_that_it_takes_effect_in_every_mode() -> None:
+    """The tier applies wherever the work is picked up (#404, ADR-0037).
 
-    ADR-0027 calls silence *"the worst option available"* here: a feature that
-    appears to work, commits evidence, and has no effect.
+    ADR-0027 calls silence *"the worst option available"* here, and the entry
+    that said *inert* was the record of the scope that made the default
+    invocation the one place a configured table changed nothing. Now that the
+    pair a **Pickup** resolves is the pair its session runs on, an entry still
+    saying *inert* would be the same silence pointed the other way.
     """
     entry = _entry("Measured routing")
 
-    assert "inert" in entry
-    assert "**Parallel mode**" in entry
+    assert "inert" in entry, "the entry must say what it stopped being"
+    assert "every mode" in entry
+    assert "ADR-0037" in entry
 
 
 def test_the_glossary_names_provisional_as_a_pair_in_force_and_unmeasured() -> None:
@@ -832,27 +836,29 @@ def test_the_demotion_entry_records_that_it_notifies_and_never_searches() -> Non
     assert "starts no search" in entry
 
 
-def test_the_demotion_entry_records_the_two_entries_it_will_not_touch() -> None:
-    """A hand-written entry, and a mode where nothing routes, are both immune.
+def test_the_demotion_entry_records_the_entry_it_will_not_touch_and_the_run_that_has_none() -> None:
+    """A hand-written entry is immune; a serial Run has nothing to count.
 
     :func:`~git_loopy.demotion.plan_demotions` acts on the **measured** tier
     only: a hand-written ``[routing]`` entry is the operator's decision and this
-    system does not overrule those, and at ``parallel == 1`` nothing routes so
-    nothing can demote. Both are refusals an operator has to be able to rely on
-    before leaving a Run unattended over their own routing table — and a Run
-    rewrites that table without being asked, so the entry owes them plainly.
+    system does not overrule those. That is a refusal an operator has to be able
+    to rely on before leaving a Run unattended over their own routing table — a
+    Run rewrites that table without being asked — so the entry owes it plainly.
 
-    Spelled **Parallel mode** and ``parallel == 1`` to match the **Measured
-    routing** entry making the same claim; *"serial mode"* is on the **Serial
-    fallback** entry's own avoid-list, and the tier it would name here is the
-    one that does not route rather than a degraded Lane.
+    The second half changed with ADR-0037. It used to be *"at ``parallel == 1``
+    nothing routes, so nothing can demote"*; a serial Run's pair is now the one
+    its **Pickup** resolved, so what stops a Demotion there is narrower and must
+    be said as such — a **Lane contribution** is a **Lane**'s record and serial
+    opens none, so the tally is empty. Naming the wider reason would tell an
+    operator their serial routing is inert, which is exactly what it is not.
     """
     entry = _entry("Demotion")
 
     assert "hand-written" in entry
     assert "never demoted" in entry
-    assert "**Parallel mode**" in entry
-    assert "`parallel == 1`" in entry
+    assert "every mode" in entry
+    assert "**Lane contribution**" in entry
+    assert "tally is empty" in entry
     assert "Serial mode" not in entry
 
 

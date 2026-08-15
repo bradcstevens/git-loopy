@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.19 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.20 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -955,18 +955,22 @@ run-wide default:
   not in the path.
 - **Pass to the single invocation.** Feed the gated `(model, effort)` to that Iteration's one
   `--model` agent invocation (§4), reusing the same pair for the Lane's integration /
-  auto-resolution session, so the Lane runs entirely on the resolved pair.
+  auto-resolution session, so the Lane runs entirely on the resolved pair. A serial Iteration
+  feeds its own single session the same way; a pair is never resolved and then dropped.
 - **Resolve once.** Resolve **once** per issue at pickup; the Orchestrator MUST NOT switch model
   or effort mid-session.
 
-Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), so the premise
-that scoped this section to the **Lane** — that a serial Iteration is handed the whole Pool and
-the agent picks mid-session — is no longer true. The scope has deliberately **not** moved with
-it: a serial Iteration resolves its Routed pair at Pickup, so an unknown `task-type:` key is
-refused there and the candidate is skipped (§3.3), but the Iteration then runs on the run-wide
-pair (`claude-opus-5 @ xhigh`) — zero-regression. Applying the resolved pair in serial mode is a
-separate decision about ADR-0027's scope, not a consequence of moving the pickup, and it owes the
-calibration question its own answer.
+Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), and contract 1.20
+applies what that seam resolves. In between, the scope deliberately did **not** move with it: a
+serial Iteration resolved its Routed pair at Pickup, refused an unknown `task-type:` key there
+and skipped the candidate (§3.3), but then ran on the run-wide pair — the pair it had just
+resolved was discarded. That reservation is now **withdrawn**
+([ADR-0037](adr/0037-routing-takes-effect-in-every-mode.md), reversing
+[ADR-0027](adr/0027-routing-is-calibrated-by-measurement.md)'s *"Calibration only affects Parallel
+mode"*): **the pair a Pickup resolves is the pair its session runs on, at every parallelism a Run
+can have.** `git-loopy` with no flags is serial, so the old scope made the *default* invocation
+the one invocation where a configured `[routing]` table changed nothing, and an Orchestrator MUST
+NOT reintroduce it.
 
 This decision is pinned by three language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md):
@@ -979,7 +983,16 @@ vocabulary every Runner reads instead of minting its own names), and
 [`effort-gate.json`](../git-loopy/conformance/effort-gate.json) (model + requested effort → gated
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
-constant equals `model-roster.json`. Native-port implementation of routing is future phase-3 work.
+constant equals `model-roster.json`.
+
+**Routing is Python-only today**, and that is a *recorded decision* rather than an omission: the
+shell and PowerShell Orchestrators implement no part of this section, so neither resolves a Routed
+pair and neither has one to apply or to discard. A port that routes nothing is conforming, not
+behind, and MUST NOT be held to §14 until it reaches Config parity (§11, phase 3). What such a
+port MUST NOT do is arrive carrying the **Parallel-only scope** contract 1.20 withdrew: a native
+port that implements routing acquires the rule above with it, and applies the resolved pair to a
+serial Iteration exactly as to a Lane. Cross-language routing is deferred, not discharged; this
+paragraph is the deferral.
 
 `model-roster.json` MUST carry a **`cli_version`** stamp naming the Copilot CLI its content was
 captured against. Reasoning-effort capability is not vendor data: `models.list` discards CAPI's

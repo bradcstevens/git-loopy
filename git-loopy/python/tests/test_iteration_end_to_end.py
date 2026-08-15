@@ -2664,13 +2664,12 @@ def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
     Routed pair resolves."* Until #394 a serial Iteration had no per-issue pair
     to resolve, because it had no per-issue anything.
 
-    What the pair is *allowed* to be is still ADR-0027's call, and in serial it
-    is the run-wide one — see :mod:`git_loopy.routing_scope`. So this pins the
-    seam, not a reversal of #379: the ``[routing]`` entry is present, the
-    Pickup resolves through it, and the gate hands the session the run-wide
-    pair anyway. The day :func:`routing_scope.routing_in_force` stops scoping
-    routing to Parallel mode, this expectation flips to ``gpt-5-mini`` and
-    nothing else in the loop has to move.
+    And since ADR-0037 the resolved pair is also the pair the session **runs
+    on** in serial, not merely the pair the Pickup computed and discarded. The
+    issue carries ``task-type:docs``, the ``[routing]`` table sends that key to
+    ``gpt-5-mini``, and the run-wide ``gpt-5.4`` is what the routed pair
+    replaces — which is what an operator who configures a table and types
+    ``git-loopy`` with no flags has always expected to happen.
     """
     fake_client, _ = _wire_multi_issue_github(
         tmp_path,
@@ -2695,8 +2694,8 @@ def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
         )
     )
 
-    assert fake_client.create_calls[0]["model"] == "gpt-5.4"
-    assert not routing_scope.routing_in_force(1)
+    assert fake_client.create_calls[0]["model"] == "gpt-5-mini"
+    assert routing_scope.routing_in_force(1)
 
 
 def test_a_working_marker_naming_another_issue_does_not_rebind(

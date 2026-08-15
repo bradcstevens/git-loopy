@@ -135,7 +135,6 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
-from git_loopy import routing_scope
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import worktree as worktree_module
@@ -1025,11 +1024,14 @@ class _Loop:
         **Demotion** silently off there too, and the only symptom would be a
         tally that is always empty.
 
-        Serial has nothing to offer even in principle. The **Routed pair** the
-        rows carry is bound at **Pickup**, and
-        :func:`~git_loopy.routing_scope.routing_in_force` reserves routing for
-        Parallel — so a serial Run's every Iteration ran the operator's single
-        configured pair, which no Calibration chose and no Demotion may replace.
+        Serial has nothing to offer even in principle, and since ADR-0037 that
+        is a fact about the *record* rather than about the pair. A
+        :class:`~git_loopy.rolling_scheduler.Contribution` is a **Lane
+        contribution** — opened when a Lane's session starts and closed at its
+        terminal disposition — and a serial Run opens none. The **Routed pair**
+        a serial **Iteration** runs on is now genuinely the one its **Pickup**
+        resolved, so a **Demotion** would have something true to measure; what
+        it lacks is the row to measure it on. Building one is its own slice.
         """
         return ()
 
@@ -1659,17 +1661,16 @@ class _Loop:
         pure — it decides *which* issue, and what that issue costs to run is the
         loop's business.
 
-        **What the pair is allowed to be is still ADR-0027's decision.** The
-        resolution happens unconditionally, because that is what validates the
-        candidate's ``task-type:`` labels and what turns a bad one into a skip.
-        Whether the *result* displaces the run-wide pair is
-        :func:`~git_loopy.routing_scope.routing_in_force`'s call, and in serial
-        it is still ``False`` — see that module for why this slice falsified its
-        stated reason without flipping it.
+        **What the pair is allowed to be is ADR-0037's decision, and it is now
+        the pair itself.** The resolution happens unconditionally, because that
+        is what validates the candidate's ``task-type:`` labels and what turns a
+        bad one into a skip; and what it resolves to is what the session below is
+        constructed with, in serial exactly as in Parallel.
+        :func:`~git_loopy.routing_scope.routing_in_force` is still where that is
+        decided, and it now answers ``True`` in both — see that module for the
+        reversal and why the reason it replaced had already been falsified.
         """
         self._routes = {}
-        in_force = routing_scope.routing_in_force(self._config.parallel)
-        run_wide = (self._config.model, self._config.reasoning_effort)
 
         def admit(item: AfkReadyItem) -> str | None:
             try:
@@ -1682,8 +1683,7 @@ class _Loop:
                 )
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
-            resolved = (resolution.model, resolution.reasoning_effort)
-            self._routes[item.ref] = resolved if in_force else run_wide
+            self._routes[item.ref] = (resolution.model, resolution.reasoning_effort)
             return None
 
         pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)

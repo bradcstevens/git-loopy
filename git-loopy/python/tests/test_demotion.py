@@ -636,12 +636,21 @@ def test_a_demotion_rewrites_and_commits_the_artifact_once(tmp_path: Path) -> No
     assert "bugfix" in message
 
 
-def test_nothing_demotes_in_serial_mode(tmp_path: Path) -> None:
-    """Nothing routes there, so nothing measured is in force to be wrong.
+def test_a_serial_run_is_no_longer_refused_a_demotion(tmp_path: Path) -> None:
+    """Parallelism stopped being the question (#404, ADR-0037).
 
-    Read through :func:`~git_loopy.routing_scope.routing_in_force` rather than
-    comparing ``parallel`` here, so the scope rule has one author across the
-    **Calibration**'s refusal, the reporting surfaces and this.
+    ``demote_after_run`` refused at ``parallel == 1`` because nothing routed
+    there, so nothing measured was in force to be wrong. A serial **Iteration**
+    now runs on the pair its **Pickup** resolved, so a failing pair *is* in force
+    and rewriting it is exactly as correct as it is in Parallel mode. Read
+    through :func:`~git_loopy.routing_scope.routing_in_force` rather than
+    comparing ``parallel`` here, so the scope rule keeps one author across the
+    **Calibration**, the reporting surfaces and this.
+
+    What a serial Run still lacks is the **row**: it finalizes no **Lane
+    contribution** (``_Loop.finalized_contributions``), so in production the
+    tally is empty. That is a gap in the record, not a scope — which is why this
+    passes the contributions in explicitly.
     """
     _seed_artifact(tmp_path, {"bugfix": _measured("cheap", "low")})
     git = _RecordingGit(tmp_path)
@@ -653,10 +662,10 @@ def test_nothing_demotes_in_serial_mode(tmp_path: Path) -> None:
         git=git,
     )
 
-    assert plan == demotion.DemotionPlan()
-    assert git.commits == []
+    assert [item.task_type for item in plan.demotions] == ["bugfix"]
+    assert len(git.commits) == 1
     entry = load_measured_routing(measured_routing_path(tmp_path)).entries["bugfix"]
-    assert entry.status is MeasuredStatus.MEASURED
+    assert entry.status is MeasuredStatus.PROVISIONAL
 
 
 def test_a_run_that_demotes_nothing_writes_nothing(tmp_path: Path) -> None:
@@ -808,9 +817,10 @@ def test_the_serial_loop_finalizes_no_contribution_to_demote() -> None:
     and a ``getattr`` default would make *"serial demotes nothing"* an accident
     of spelling — a later rename would silently switch Demotion off in Parallel
     too, and the tally would just be empty rather than the Run being wrong in a
-    way anything notices. There is a second, independent refusal downstream
-    (:func:`~git_loopy.demotion.demote_after_run` checks
-    :func:`~git_loopy.routing_scope.routing_in_force`); this is the first.
+    way anything notices. Since ADR-0037 it is also the *only* refusal: routing
+    is in force in every mode, so :func:`~git_loopy.demotion.demote_after_run`
+    no longer declines a serial Run — a serial Run simply hands it nothing,
+    because a **Lane contribution** is a Lane's record and serial opens none.
     """
 
     class _Serial:

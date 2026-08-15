@@ -340,12 +340,15 @@ def test_a_dearer_new_model_notifies_nothing(tmp_path: Path) -> None:
     assert warnings == []
 
 
-def test_serial_mode_notifies_nothing(tmp_path: Path) -> None:
-    """Routing is inert at ``parallel == 1``, so re-calibrating would change nothing.
+def test_serial_mode_is_notified_like_any_other(tmp_path: Path) -> None:
+    """Routing is in force at ``parallel == 1``, so the news is actionable (#404).
 
-    ``routing_scope.routing_in_force`` is the one place ``parallel`` is compared
-    for a routing purpose, and this is the fourth asker of it rather than a
-    fourth comparison.
+    This preflight stayed silent in serial because a re-calibration recommended
+    there would have changed nothing an operator could observe. ADR-0037 made a
+    **Routed pair** take effect in every mode, so withholding it would now hide
+    a saving from the *default* mode. ``routing_scope.routing_in_force`` is
+    still the one place ``parallel`` is asked a routing question, and this is
+    the fourth asker of it rather than a fourth comparison.
     """
     _write_artifact(
         tmp_path,
@@ -354,8 +357,10 @@ def test_serial_mode_notifies_nothing(tmp_path: Path) -> None:
 
     warnings, found = _notify(tmp_path, parallel=1)
 
-    assert found == ()
-    assert warnings == []
+    assert [notification.drift for notification in found] == [
+        RosterDrift.CHEAPER_UNMEASURED_PAIR
+    ]
+    assert any("task-type:docs" in line for line in warnings)
 
 
 def test_running_outside_a_repository_notifies_nothing() -> None:

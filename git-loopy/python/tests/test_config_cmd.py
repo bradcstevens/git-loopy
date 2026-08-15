@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy import configcmd, measured_routing, routing_scope, settings
+from git_loopy import configcmd, measured_routing, settings
 from git_loopy.config import RECOMMENDED_ROUTING
 
 
@@ -1112,15 +1112,17 @@ def test_no_scope_op_accepts_a_measured_scope(tmp_path: Path, op: str) -> None:
     assert not (tmp_path / "git-loopy" / "routing.measured.toml").exists()
 
 
-def test_get_on_a_routing_key_notes_that_routing_is_inert_in_serial_mode(
+def test_get_on_a_routing_key_qualifies_nothing_in_serial_mode(
     tmp_path: Path,
 ) -> None:
-    """A tier with no effect in the default mode must say so (ADR-0028).
+    """The tier has effect in the default mode, so there is nothing to note (#404).
 
-    **Routing** resolves at **Pickup**, and a serial **Iteration** has no
-    pickup — so at ``parallel == 1`` the whole chain, measured tier included, is
-    inert. Reporting a winning tier without that is reporting a value that has
-    no effect. The note goes to stderr so the value stays scriptable.
+    ``config get`` used to add an inertness note on stderr, because a serial
+    **Iteration** ran on the run-wide pair whatever the chain resolved. ADR-0037
+    made the resolved pair the pair the session runs on, so the note would now
+    tell an operator their configuration has no effect on the very Run where it
+    does — the same unexplainability #364 exists to remove, pointed the other
+    way.
     """
     env = _env(tmp_path)
     _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
@@ -1132,33 +1134,20 @@ def test_get_on_a_routing_key_notes_that_routing_is_inert_in_serial_mode(
 
     assert rc == 0
     assert out.text == "synthetic-cheap-1 @ low (measured)"
-    assert "inert" in err.text and "serial" in err.text
-
-
-def test_no_inert_note_when_the_run_is_parallel(tmp_path: Path) -> None:
-    env = _env(tmp_path, GIT_LOOPY_MAX_PARALLEL="3")
-    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
-    err = _Sink()
-
-    rc = configcmd.run_get(
-        "task-type:docs", repo_root=tmp_path, env=env, out=_Sink(), err=err
-    )
-
-    assert rc == 0
-    assert "inert" not in err.text
+    assert "note:" not in err.text
 
 
 @pytest.mark.parametrize("surface", ["get", "list", "routing_list"])
-def test_every_reporting_surface_notes_inertness_in_the_shared_words(
+def test_no_reporting_surface_qualifies_a_routed_pair_by_parallelism(
     tmp_path: Path, surface: str
 ) -> None:
-    """One rule, one wording, three surfaces (#379).
+    """One rule, three surfaces, and the rule reversed once (#404).
 
-    ``config get``, ``config list`` and ``config routing list`` each print a
-    **Measured routing** value that has no effect in serial, and each says so
-    from :mod:`git_loopy.routing_scope` rather than restating ``parallel == 1``
-    itself — so the note cannot drift from the refusal ``git-loopy calibrate``
-    (#372) will print for the same reason.
+    ``config get``, ``config list`` and ``config routing list`` each printed the
+    same inertness note from :mod:`git_loopy.routing_scope`, so that they could
+    not drift from the refusal ``git-loopy calibrate`` printed for the same
+    reason. The reason is gone from all four at once — which is what reading one
+    rule from one module bought.
     """
     env = _env(tmp_path)
     _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
@@ -1175,22 +1164,8 @@ def test_every_reporting_surface_notes_inertness_in_the_shared_words(
     rc = getattr(configcmd, f"run_{surface}")(**kwargs)
 
     assert rc == 0
-    assert routing_scope.SERIAL_INERT_NOTE in err.text
-
-
-def test_the_inert_note_says_how_to_enable_parallel_mode(tmp_path: Path) -> None:
-    """Naming a value as inert without naming the switch leaves it inert.
-
-    The measured tier is the case that matters: it is machine-written, so an
-    operator who did not type it has no other place to learn what turns it on.
-    """
-    env = _env(tmp_path)
-    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
-    err = _Sink()
-
-    configcmd.run_get("task-type:docs", repo_root=tmp_path, env=env, out=_Sink(), err=err)
-
-    assert "--parallel" in err.text and "GIT_LOOPY_MAX_PARALLEL" in err.text
+    assert "inert" not in err.text
+    assert "--parallel" not in err.text
 
 
 def test_list_reports_suppression_rather_than_dropping_the_routing_map(

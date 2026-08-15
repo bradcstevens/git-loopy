@@ -46,7 +46,7 @@ $Script:ContinuationContractVersion = "1.3"
 $Script:SupportedContinuationContractVersions = @("1.0", "1.1", "1.2", "1.3")
 $Script:SafetyCaseContractVersion = "1.2"
 $Script:RecordFormat = 1
-$Script:WrapperContractVersion = "1.19"
+$Script:WrapperContractVersion = "1.20"
 $Script:EventSchemaVersion = "1.1"
 
 $Script:IndexLabel = "git-loopy-continuation"

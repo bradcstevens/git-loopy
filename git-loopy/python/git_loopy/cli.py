@@ -1106,7 +1106,6 @@ def _run_calibrate(args: argparse.Namespace) -> int:
         repo_root=repo_root,
         env=os.environ,
         task_type=args.task_type,
-        parallel=args.parallel,
         assume_yes=args.assume_yes,
         # An interactive terminal is asked; a pipe is refused unless --yes said
         # so in advance. Resolved here rather than inside the handler so the
@@ -2555,8 +2554,10 @@ async def _resolve_staircase(
     reason: a staircase the loop went and got for itself would be a second round
     trip, and would order one listing's rungs by another listing's prices.
 
-    Short-circuited outside Parallel mode, where nothing routes and so nothing
-    demotes — a serial Run pays nothing for a staircase it could not use. Every
+    Short-circuited where routing is out of force, which since ADR-0037 is
+    nowhere: a serial Run resolves one too, because the **Routed pair** it steps
+    is now the pair its Iterations run on. The listing is fetched at most once
+    and held fixed for the Run, so asking in serial costs no round trip. Every
     failure degrades to ``None``, which reads downstream as a refused staircase:
     Demotion declines to step into an ordering it cannot measure, exactly as a
     **Calibration** declines to walk one.

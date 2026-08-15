@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
-from git_loopy import measured_routing, routing_scope, settings
+from git_loopy import measured_routing, settings
 from git_loopy.config import (
     RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
@@ -597,8 +597,6 @@ def run_routing_list(
     for key in sorted(walked):
         tier, (model, effort) = walked[key]
         out(f"task-type:{key} = {model} @ {effort} ({tier})")
-    if walked:
-        _note_routing_inert_in_serial(resolved, err)
     return 0
 
 
@@ -820,34 +818,6 @@ def routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
     return value, str(tier)
 
 
-def _note_routing_inert_in_serial(
-    resolved: "ResolvedConfig", err: Callable[[str], None]
-) -> None:
-    """Note that routing has no effect at ``parallel == 1`` (ADR-0028).
-
-    A **Routed pair** is resolved per issue, and only a **Lane** works one issue
-    per session — the serial loop hands the whole **Pool** to one **Iteration**
-    on the run-wide pair — so the whole chain, the **Measured routing** tier
-    included, is inert in the default serial mode. Naming a winning tier without
-    saying that reports a value that has no effect, which is the same
-    unexplainability #364 exists to remove. It goes to stderr so
-    ``$(git-loopy config get task-type:docs)`` still captures only the value.
-
-    Both the rule and the wording come from :mod:`git_loopy.routing_scope`, so
-    this note and the refusal ``git-loopy calibrate`` prints for the same reason
-    (#372, #379) cannot drift into two accounts of one fact. Run-wide
-    suppression is the one case that stays silent here: ``routing_report`` has
-    already said routing is off entirely, and a second note would explain the
-    inertness of a chain the operator has already been told is not running.
-    """
-    if (
-        routing_scope.routing_in_force(resolved.run.parallel)
-        or resolved.routing_suppressed_by is not None
-    ):
-        return
-    err(f"git-loopy: note: {routing_scope.SERIAL_INERT_NOTE}")
-
-
 def _note_unadopted_recommended_route(
     key: str, tier: str, err: Callable[[str], None]
 ) -> None:
@@ -915,7 +885,6 @@ def run_get(
         value, tier = routing_report(resolved, task_type)
         out(f"{value} ({tier})")
         _note_unadopted_recommended_route(task_type, tier, err)
-        _note_routing_inert_in_serial(resolved, err)
         return 0
     assert entry is not None  # guarded above
     out(_display_value(entry.read(resolved)))
@@ -960,8 +929,6 @@ def run_list(
     for task_type in sorted(walked):
         value, tier = routing_report(resolved, task_type)
         out(f"{TASK_TYPE_LABEL_PREFIX}{task_type} = {value} ({tier})")
-    if walked:
-        _note_routing_inert_in_serial(resolved, err)
     return 0
 
 

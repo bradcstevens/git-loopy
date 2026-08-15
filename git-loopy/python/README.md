@@ -485,18 +485,18 @@ git-loopy config edit --global
   the report says so rather than naming a tier whose value is not in force. A
   hand-written `[routing]` entry beats a provisional one exactly as it beats a
   measured one — the fourth status changes what is *reported*, never the chain.
-- **Routing is a Parallel-mode feature, and the report says so.** A **Routed
-  pair** is resolved *per issue*, and only a Parallel **Lane** works one issue
-  per session — the serial loop hands the whole Pool to a single Iteration that
-  runs on the run-wide pair. At `parallel = 1` (the default) the whole chain,
-  the `measured` tier included, is therefore **inert**, and `get` / `list` say
-  so on **stderr** beside the value rather than reporting a pair that has no
-  effect. The value is still printed — an absence would answer "why is this
-  model set?" with silence — and stdout stays scriptable. Enable Parallel mode
-  with `--parallel N` (or `GIT_LOOPY_MAX_PARALLEL=N`) and the same table takes
-  effect unchanged. A **Calibration** is scoped the same way, for the same
-  reason: measuring a pair that nothing resolves would spend AI Credits for no
-  change.
+- **Routing takes effect in every mode.** A **Routed pair** is resolved *per
+  issue* at **Pickup**, and every unit of work has a pickup: a serial Iteration
+  binds one issue before its session starts exactly as a **Parallel mode**
+  **Lane** does, so the pair the Pickup resolved is the pair the session runs on
+  at `parallel = 1` (the default) and at any width. The whole chain, the
+  `measured` tier included, is live out of the box, so `get` / `list` report a
+  winning tier with nothing to qualify it. Until ADR-0037 routing was scoped to
+  Parallel mode and the serial loop discarded the pair it had just resolved —
+  which
+  made the default invocation the one invocation where a configured `[routing]`
+  table changed nothing. A **Calibration** is scoped the same way, for the same
+  reason: what it measures now takes effect wherever the Run is worked.
 - **The Task-type taxonomy is closed** to `planning`, `review`,
   `implementation`, `test`, `docs`, `chore`, and `bugfix`. Anything else is
   **refused**, naming the value and the permitted keys — never warned about and
@@ -636,10 +636,10 @@ through the *same* renderer `--dry-run` uses, and then asks:
   typed the command; a script that inherited it did not, and the two are
   indistinguishable from inside the process.
 
-**It refuses to spend in serial mode.** Routing is a Parallel-mode feature, so
-at `parallel = 1` the whole precedence chain — measured tier included — is inert
-and nothing a Calibration measured would take effect. Resolve it with
-`--parallel N` or `GIT_LOOPY_MAX_PARALLEL=N`.
+**It measures for every mode.** A pair a Calibration fixes is applied at the
+**Pickup** of whatever works the issue, so a serial Run spends the measurement
+exactly as a Parallel one does (ADR-0037). Until then `calibrate` refused a
+serial run outright, because the pair it measured would have been discarded.
 
 Progress is printed as rungs are walked and Trials complete — plain lines with
 no cursor control, so `git-loopy calibrate --yes | tee calibration.log` is a
