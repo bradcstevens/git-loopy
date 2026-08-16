@@ -142,12 +142,20 @@ def did_iteration_make_progress(
     wrapper closed an issue, or a PR head advanced. Runner Checkpoints and the
     legacy no-more-tasks sentinel are explicitly informational.
 
+    The sentinel is now *detected* — :class:`~git_loopy.session_outcome.SessionOutcomeWatch`
+    reads it off the Agent's own message and it reaches
+    :class:`~git_loopy.session_outcome.SessionOutcome` as an ending (#405) — and
+    this predicate still ignores it, deliberately: an ending records what
+    happened, and progress is what the contract (§6) says the Strike counter is
+    made of.
+
     Args:
         commits_in_iter: Number of new agent commits the iteration produced.
         auto_closures_in_iter: Number of issues the wrapper auto-closed.
         checkpoints_in_iter: Number of runner Checkpoints produced.
         pr_advances_in_iter: Number of PR heads the wrapper observed advance.
         saw_nmt_sentinel: Whether the legacy no-more-tasks sentinel appeared.
+            Informational, and never progress either way.
 
     Returns:
         ``True`` if an agent commit, issue closure, or PR advance occurred.
@@ -307,10 +315,11 @@ class NMTStrikeStateMachine:
                 ``<promise>NO MORE TASKS</promise>`` sentinel this
                 iteration. Informational only — the state machine never
                 consults it. The renderer uses it to pick which warning
-                line to print for progress vs no-progress. Accepted as a
-                keyword arg so future
-                consumers can be wired in via :func:`asdict`-style
-                passing without changing call sites.
+                line to print for progress vs no-progress. The sentinel's
+                own reader is
+                :class:`~git_loopy.session_outcome.SessionOutcomeWatch`,
+                which turns it into a **Session outcome** (#405) rather
+                than into a Strike decision.
 
         Returns:
             The new outcome (``"running"`` or ``"aborted"``).

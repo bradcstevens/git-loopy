@@ -527,7 +527,9 @@ _Avoid_: failure, miss.
 How one **Agent**'s session ended, as data the loop keeps rather than a sentence it
 logs. Five endings and the absence of one are the whole vocabulary: silent no-progress,
 timeout, crash, an explicit declaration that no tasks remain, and content-filtered — and
-a session that advanced its issue reached none of them. Distinct from a **Strike**,
+a session that advanced its issue reached none of the three that are claims about the
+work, because a commit refutes each. A timeout and a crash are facts about a session the
+Orchestrator lost, which progress does not launder. Distinct from a **Strike**,
 which is the Run's *accounting* of a result: several endings tick the same strike, and
 the ending is what says which. Distinct too from an Iteration's outcome in the Run
 summary, which reports what the work produced rather than how the session finished.

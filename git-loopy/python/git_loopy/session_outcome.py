@@ -55,9 +55,14 @@ class SessionOutcome(Enum):
     watched.
 
     ``NO_PROGRESS`` is the *silent* ending: the session ran to the end, said
-    nothing about failing, and the Iteration observed no progress from it. It is
-    the only member that is a joint fact about the session and the Iteration
-    around it; the other four are facts about the session alone.
+    nothing about failing, and the Iteration observed no progress from it.
+
+    Three of the five are joint facts about the session and the Iteration around
+    it: the silent ending, the declaration that no tasks remain, and the refused
+    turn are all claims about the work, and an Iteration that committed refutes
+    each of them. ``TIMEOUT`` and ``CRASH`` are facts about the session alone —
+    the Orchestrator lost it, and a commit that landed first does not launder
+    that.
     """
 
     NO_PROGRESS = "no_progress"
@@ -471,13 +476,20 @@ def resolve_session_outcome(
        lost the session, and that is a harder fact than anything the stream said.
     2. A session that ran past its send timeout **timed out**, for the same
        reason: the wait ended before the work did.
-    3. An Agent that said it had nothing left to do is taken at its word.
-    4. A filtered turn is an ending **only** where the Iteration also got nowhere
-       (#400): the harness reports filtering per API call, so a Run that
-       committed after a refused call did not end in a refusal.
-    5. Anything that advanced its issue reached no ending.
+    3. Anything that advanced its issue reached no ending. It outranks both
+       observations below because both are claims about the *work*, and an
+       Iteration that committed refutes either: a refused API call it recovered
+       from (#400), and a declaration the Wrapper contract §6 has always called
+       informational and ignored where there was progress.
+    4. An Agent that got nowhere and said it had nothing left to do is taken at
+       its word.
+    5. A turn that got nowhere and had a call refused ended in that refusal.
     6. Everything else is the silent one — ran to the end, said nothing, did
        nothing.
+
+    The declaration outranks the refusal where a stalled turn shows both: an
+    Agent that could still reach a conclusion and state it was not the call the
+    filter ended, so its own account of why it stopped is the better answer.
 
     ``error`` is carried through whatever the ending: a quota refused mid-turn is
     worth recording on a session that then ended politely, and that case is
@@ -487,12 +499,12 @@ def resolve_session_outcome(
         outcome: SessionOutcome | None = SessionOutcome.CRASH
     elif termination is SessionTermination.TIMED_OUT:
         outcome = SessionOutcome.TIMEOUT
-    elif no_more_tasks:
-        outcome = SessionOutcome.NO_MORE_TASKS
-    elif content_filtered and not progressed:
-        outcome = SessionOutcome.CONTENT_FILTERED
     elif progressed:
         outcome = None
+    elif no_more_tasks:
+        outcome = SessionOutcome.NO_MORE_TASKS
+    elif content_filtered:
+        outcome = SessionOutcome.CONTENT_FILTERED
     else:
         outcome = SessionOutcome.NO_PROGRESS
     return SessionOutcomeRecord(

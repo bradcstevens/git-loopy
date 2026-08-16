@@ -380,8 +380,9 @@ def test_a_crash_after_a_commit_is_still_a_crash() -> None:
 
     An Iteration that committed and *then* lost its session has two facts worth
     keeping, and the record keeps both rather than letting either overwrite the
-    other. Only content-filtering is conditioned on progress, and only because
-    the harness reports it per API call.
+    other. Progress refutes only the endings that are claims about the work — a
+    refused call and a declaration that nothing remains — never a session the
+    Orchestrator lost.
     """
     record = resolve_session_outcome(
         termination=SessionTermination.CRASHED, progressed=True
@@ -403,6 +404,36 @@ def test_a_filtered_call_on_an_iteration_that_committed_is_not_an_ending() -> No
         content_filtered=True,
     )
     assert record.outcome is None
+
+
+def test_a_declaration_from_an_iteration_that_committed_is_not_an_ending() -> None:
+    """The Wrapper contract's own treatment of the sentinel, at the resolver.
+
+    §6 has said since phase 1 that ``<promise>NO MORE TASKS</promise>`` is
+    *informational only*: a **Strike** where the Iteration made no progress, and
+    **ignored** otherwise — and ``PROMPT.md`` tells the Agent in as many words
+    that emitting it after doing work reads as confusion, not as a clean
+    termination. An ending resolved from the declaration alone would overturn
+    that from a new direction: an Iteration that committed would be filed under
+    "nothing left to do", and a lifecycle reading the endings would take the
+    word of the one Agent the contract says not to believe.
+
+    It is also the ending most easily said by accident. An Agent working on the
+    detector itself quotes the sentinel — in a commit message, in a test it is
+    writing — and the tag is the tag wherever it appears; conditioning the
+    ending on an Iteration that produced nothing is what keeps that mention from
+    ending a productive Run's issue.
+
+    Unlike a crash or a timeout, which are facts about a session the
+    Orchestrator lost and which progress cannot launder.
+    """
+    record = resolve_session_outcome(
+        termination=SessionTermination.COMPLETED,
+        progressed=True,
+        no_more_tasks=True,
+    )
+    assert record.outcome is None
+    assert record.progressed is True
 
 
 def test_a_named_condition_outranks_an_unplaceable_one() -> None:
