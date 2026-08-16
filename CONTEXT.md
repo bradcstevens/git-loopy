@@ -916,7 +916,7 @@ _Avoid_: model override, effective model.
 
 **Default pair**:
 The kit's built-in model and reasoning effort — the pair a unit of work runs on when
-**Routing** resolved nothing, which is every unit while the corpus carries no **Task type**.
+**Routing** resolved nothing, which is every unit whose issue carries no **Task type**.
 **Atomic**: naming a model opts out of the kit's effort too, and the pair becomes "let the
 backend pick". It sits deliberately one rung *below* the escalation rung, so the default
 **reserves** the ceiling instead of spending it and work that stalls has somewhere to escalate
