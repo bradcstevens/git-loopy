@@ -582,8 +582,9 @@ on a second Event, because it is settled at the same instant, for the same issue
 _Avoid_: assignment, dispatch, selection.
 
 **Pickup skip**:
-A candidate the runner walked past at **Pickup** without binding — today, one whose
-`task-type:` label refuses to resolve a **Routed pair**. Distinct from a **Pool
+A candidate the runner walked past at **Pickup** without binding — one whose
+`task-type:` label refuses to resolve a **Routed pair**, or one the **Attempt lifecycle** has
+already defeated this run. Distinct from a **Pool
 exclusion**, which happens at collection and is a human's mistake to fix: a skip is the
 runner declining work it could not start, and it carries a `wrapper.pickup.skipped`
 **Event** so that being passed over leaves a trace. An issue passed over fifty times
@@ -954,6 +955,36 @@ one ledger. It is configurable from the **Config** file only and on by default a
 **Routing**. It is blind to work that ran expensively and produced nothing usable, because
 progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
+
+**Attempt lifecycle**:
+How many attempts one issue gets in one **Run**, as a single monotonic state per issue: **fresh**
+(not yet worked, or worked and advancing), **retrying** (one failed attempt spent) and
+**skipped** (out of contention for the rest of the Run). Each **Session outcome** disposes of the
+issue: silent no-progress and a crash move it one step, while a timeout, an explicit
+no-more-tasks and a content-filtered turn defeat it outright — and an **Iteration** that advanced
+its issue reached no ending, so it spends no attempt and refunds none. It is the other dial the
+**Escalation rung** shares an ending with: the rung decides whether the *pair* changes, this
+decides whether the issue is worked again, and the two disagree on a crash. Per Run and in memory
+like the rung, and for the same reason with a sharper edge — it is **never written to the
+tracker**, because a demotion there would outlive the Run that made it and would put the runner
+inside the triage state machine it is only ever a consumer of. It is what a **Routing
+resolution**'s lifecycle position reports, which is how a same-pair crash retry reads as a retry.
+_Avoid_: retry count, attempt budget, issue status (that is **Status**, which is a run's
+*reporting* vocabulary and has no bearing on eligibility).
+
+**Skip**:
+The disposition an **Attempt lifecycle** reaches when an issue has spent every attempt this
+**Run** has to offer. A skipped issue is filtered out of the **Pickup** candidate list and never
+out of the **Pool** — the closure whitelist, the collection **Event** and the emptiness test all
+still see it — so an **Iteration** working something else can still close it by commit keyword
+and a run with open work in front of it never tests as empty. Every **Pickup** seam honours it,
+reading the one lifecycle: a serial pickup declines the candidate it had chosen and leaves a
+**Pickup skip** naming the ending that defeated the issue, because a candidate that vanished
+silently would be the indefinite passing-over that record exists to make visible. A **Lane**
+pickup, whose only decline hands the candidate straight back to the list it came from, narrows
+that list instead — one skip record per turn forever is not more visible than one, and the seam
+that defeated the issue already wrote the one.
+_Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at collection).
 
 **Run readback**:
 The block a **Run** prints at start and publishes on its own start Event, stating **Config** as

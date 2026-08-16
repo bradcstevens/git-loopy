@@ -45,6 +45,9 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
+from git_loopy.escalation import EscalationLedger
+from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.run_readback import run_start_payload
 from git_loopy.gh import (
@@ -820,7 +823,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.25"
+    assert _EVENT_SCHEMA["contract_version"] == "1.26"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -4213,3 +4216,105 @@ def test_both_dashboard_reducers_render_one_pickup_record() -> None:
         )
     # Vacuously true over an empty inventory is not a parity claim.
     assert any(texts for texts in expected.values())
+
+
+# ---------------------------------------------------------------------------
+# The **Attempt lifecycle** (#412): how many attempts one issue gets, and which
+# ending spends them.
+# ---------------------------------------------------------------------------
+
+_ATTEMPT_LIFECYCLE = _load_fixture("attempt-lifecycle.json")
+
+
+def test_attempt_states_fixture_is_the_closed_ordered_vocabulary() -> None:
+    """The three states are a contract, not one Orchestrator's enum.
+
+    Stated in order, because the order *is* the machine: "monotonic" is only
+    checkable from outside a language if the sequence an issue may move along is
+    written down.
+    """
+    assert [state.value for state in AttemptState] == _ATTEMPT_LIFECYCLE[
+        "attempt_states"
+    ]
+
+
+def test_every_session_outcome_has_exactly_one_disposition() -> None:
+    """A closed vocabulary needs a total table, or an ending disposes of itself.
+
+    An ending with no row would arrive at the lifecycle with nothing to do, and
+    the state it fell through to would be a guess about work nobody watched —
+    the same argument that closed :class:`SessionOutcome` to five members in the
+    first place (#403).
+    """
+    assert [row["ending"] for row in _ATTEMPT_LIFECYCLE["dispositions"]] == [
+        outcome.value for outcome in SessionOutcome
+    ]
+
+
+@pytest.mark.parametrize(
+    "row",
+    _ATTEMPT_LIFECYCLE["dispositions"] + [_ATTEMPT_LIFECYCLE["advance_disposition"]],
+    ids=lambda row: row["ending"] or "advanced",
+)
+def test_each_ending_disposes_as_the_fixture_states(row: dict[str, Any]) -> None:
+    """The ending-to-disposition table, driven through both production ledgers.
+
+    Two dials, two seams, one ending: :class:`AttemptLedger` answers whether the
+    issue advances and :class:`EscalationLedger` answers whether the pair
+    changes. Driving them from one row is what keeps them from drifting apart —
+    a crash that started escalating, or a stall that stopped, would fail here
+    rather than in whichever Run first paid for it.
+    """
+    outcome = (
+        None if row["ending"] is None else SessionOutcome(row["ending"])
+    )
+    rung = ("claude-opus-5", "max")
+
+    for start, expected in (
+        (AttemptState.FRESH, row["from_fresh"]),
+        (AttemptState.RETRYING, row["from_retrying"]),
+    ):
+        attempts = AttemptLedger()
+        if start is AttemptState.RETRYING:
+            attempts.observe(412, SessionOutcome.CRASH)
+        assert attempts.state(412) is start
+        assert attempts.observe(412, outcome).value == expected
+
+    escalation = EscalationLedger(rung=rung)
+    escalation.observe(412, outcome)
+    assert (escalation.owed(412) == rung) is row["escalates"]
+
+
+@pytest.mark.parametrize(
+    "case", _ATTEMPT_LIFECYCLE["cases"], ids=lambda case: case["id"]
+)
+def test_attempt_lifecycle_walks(case: dict[str, Any]) -> None:
+    """Each scripted Run of endings, step by step, through both ledgers.
+
+    ``admitted_at_next_pickup`` is the fact the whole ticket exists for, and it
+    is asked of :meth:`AttemptLedger.skipped` — the predicate a **Pickup**'s own
+    admission calls — rather than recomputed from the state, so a filter that
+    read the state and decided what it meant could not pass this while
+    disagreeing with production.
+    """
+    ref = case["issue"]
+    rung = (
+        None if case["escalation_rung"] is None else tuple(case["escalation_rung"])
+    )
+    attempts = AttemptLedger()
+    escalation = EscalationLedger(rung=rung)
+
+    for index, step in enumerate(case["steps"]):
+        outcome = (
+            None if step["outcome"] is None else SessionOutcome(step["outcome"])
+        )
+        attempts.observe(ref, outcome)
+        escalation.observe(ref, outcome)
+
+        assert attempts.state(ref).value == step["state"], f"step {index}"
+        assert (escalation.owed(ref) == rung and rung is not None) is step[
+            "owed_rung"
+        ], f"step {index}"
+        assert attempts.skipped(ref) is not step[
+            "admitted_at_next_pickup"
+        ], f"step {index}"

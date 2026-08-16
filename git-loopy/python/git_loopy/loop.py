@@ -140,8 +140,8 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
+from git_loopy.attempt_lifecycle import AttemptLedger
 from git_loopy.config import (
-    RoutingLifecyclePosition,
     RoutingResolution,
     RunConfig,
     TaskTypeError,
@@ -173,7 +173,7 @@ from git_loopy.skill_install import (
     installed_catalog_dir,
     refresh_installed_catalog,
 )
-from git_loopy.rolling_pool import RollingPool
+from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.serial_pickup import (
@@ -188,6 +188,7 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
+    PoolCandidate,
     PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
@@ -1049,6 +1050,14 @@ class _Loop:
         # an explicit model pin suppressed it, so *"does this Run escalate?"* is
         # answered once here rather than at each Pickup.
         self._escalation = EscalationLedger(rung=config.escalation_rung)
+        # How many attempts each issue has left this Run (#412). The second dial
+        # one **Session outcome** turns: the ledger above decides whether the
+        # *pair* changes, and this one decides whether the issue is worked at
+        # all. Run-scoped and in memory for the same reason and with the same
+        # consequence — a bad night must never permanently demote an issue, and
+        # a **Status** the runner wrote back to the tracker would put it inside
+        # the triage state machine it is only ever a consumer of.
+        self._attempts = AttemptLedger()
         # The **Task-type classifier**, as this Run's Pickups call it (#409,
         # ADR-0029). Assembled here rather than injected whole because the one
         # thing it must not get wrong is where its **Consumption** goes: the
@@ -1772,24 +1781,32 @@ class _Loop:
         issue's second attempt whether or not there was anywhere to escalate
         to, and source and position are separate axes precisely so that a
         same-pair retry stays tellable from an escalated one.
+
+        **The position comes from the Attempt lifecycle, not from the rung**
+        (#412). Both ledgers read the same ending, but only the lifecycle sees
+        every ending — a crash retries the issue on the pair it already had, and
+        a position derived from the rung would report that second attempt as a
+        first one. It is asked once, before either branch, so the escalated and
+        the unescalated resolution state the same fact about the same issue.
         """
         routed = resolve_iteration_model(self._config, item.labels, warn=warn)
+        position = self._attempts.lifecycle_position(item.ref)
         rung = self._escalation.owed(item.ref)
         if rung is None:
-            return routed
+            if position is routed.lifecycle_position:
+                return routed
+            return dataclass_replace(routed, lifecycle_position=position)
         escalated = resolve_iteration_model(
             self._config,
             item.labels,
-            lifecycle_position=RoutingLifecyclePosition.RETRYING,
+            lifecycle_position=position,
             escalated_pair=rung,
         )
         if (escalated.model, escalated.reasoning_effort) == (
             routed.model,
             routed.reasoning_effort,
         ):
-            return dataclass_replace(
-                routed, lifecycle_position=RoutingLifecyclePosition.RETRYING
-            )
+            return dataclass_replace(routed, lifecycle_position=position)
         self._diag.info(
             "issue #%s escalated to %s @ %s after a no-progress session",
             item.ref,
@@ -1910,6 +1927,16 @@ class _Loop:
         self._routes = {}
 
         def admit(item: AfkReadyItem) -> str | None:
+            defeated = self._attempts.defeated_by(item.ref)
+            if defeated is not None:
+                # The **Attempt lifecycle** filter (#412), asked before routing
+                # so a defeated candidate costs nothing to pass over. It sits in
+                # `admit` rather than narrowing the Pool handed to `pick_serial`:
+                # a candidate the runner *declines* is a **Pickup skip** with a
+                # record, and one that silently vanished from consideration
+                # would be exactly the indefinite passing-over ADR-0032 exists
+                # to make visible.
+                return f"already attempted this Run ({defeated.value})"
             try:
                 resolution = self._resolve_route(
                     item,
@@ -2108,17 +2135,20 @@ class _Loop:
         ref: int | str,
         record: session_outcome_module.SessionOutcomeRecord,
     ) -> None:
-        """Offer one ending to the **Escalation rung**'s ledger (#408).
+        """Offer one ending to the two ledgers that read one (#408, #412).
 
         Called from a serial **Iteration** and from a **Lane** alike, because
-        the ledger is per issue rather than per mode: the pair a stalled issue
-        is next picked up on must not depend on which mode stalled it.
+        both ledgers are per issue rather than per mode: neither the pair a
+        stalled issue is next picked up on nor whether it is picked up at all
+        may depend on which mode stalled it.
 
-        Whether the ending buys an escalation is the ledger's decision and not
-        this call site's — the trigger is silent no-progress only, and a
-        condition duplicated here could disagree with the one that matters.
+        The ending is offered whole to each, and neither decision is duplicated
+        here: escalation triggers on silent no-progress alone, the **Attempt
+        lifecycle** disposes of all five endings, and a condition restated at
+        this call site could disagree with the ones that matter.
         """
         self._escalation.observe(ref, record.outcome)
+        self._attempts.observe(ref, record.outcome)
 
     def _finish_iteration(
         self,
@@ -2705,7 +2735,12 @@ class _ParallelLoop:
             rate_limits=rolling_pressure.rate_limit_reader(source),
         )
         if isinstance(source, RollingIssueSource):
-            self._pool = RollingPool(diag=diag, source=source, clock=time.monotonic)
+            self._pool = RollingPool(
+                diag=diag,
+                source=source,
+                clock=time.monotonic,
+                eligible=self._lane_candidate_eligible,
+            )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
                 pool=self._pool,
@@ -2785,6 +2820,38 @@ class _ParallelLoop:
             continuation=continuation,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+        )
+
+    def _lane_candidate_eligible(self, candidate: PoolCandidate) -> bool:
+        """Is this candidate **Lane** work *and* still owed an attempt (#412)?
+
+        The **Lane** half of the **Attempt lifecycle** skip. A Lane Pickup is a
+        Pickup, so a defeated issue must not reach one — but the Lane path
+        cannot express the refusal the serial ``admit`` closure does. Passing a
+        reserved candidate over releases its reservation and leaves it eligible,
+        so a defeated issue would be reserved, skipped and released once per
+        turn for the rest of the Run. Refusing it *candidacy* says the same
+        thing once, and the serial Pickup that defeated it has already left the
+        record.
+
+        Composed here rather than written into the scheduler's own collision
+        guard (:attr:`~git_loopy.rolling_scheduler.RollingScheduler._worked`),
+        which ADR-0040 keeps untouched: that guard answers "is one issue about
+        to take two Lanes at once", a worktree question with its own lifetime,
+        and a lifecycle answer smuggled into it would be indistinguishable from
+        a collision afterwards. The scheduler composes its guard onto whatever
+        predicate it is handed, so both hold.
+
+        The guard alone would look sufficient — it latches at session start, so
+        every Lane-defeated issue is already behind it. The order it does not
+        cover is the other one: a **Parallel-safe** issue defeated by a *serial*
+        Iteration of a Parallel Run (a serial fallback taken while Lane
+        concurrency is throttled to nothing works whatever sits at the Pool's
+        head) was never in the guard, and nothing else would stop a Lane
+        reserving it once concurrency recovered.
+        """
+        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
+            candidate.ref
         )
 
     def _alloc_iter_num(self) -> int:

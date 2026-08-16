@@ -40,6 +40,7 @@ After ``loop.run`` returns, the test asserts:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import shutil
@@ -1382,9 +1383,13 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 1, "loop must abort after max strikes"
-    # 3 sessions = 3 iterations until strike machine fires.
-    assert len(fake_client.created) == 3, (
-        f"expected 3 SDK sessions before abort; got {len(fake_client.created)}"
+    # Two sessions, not three: the **Attempt lifecycle** (#412) defeats issue 42
+    # after its second silent stall, so the third Iteration has no candidate left
+    # to bind and works no issue. It still ticks the strike that aborts the Run —
+    # an unworked Iteration always did — so what the Run *charges* is unchanged
+    # and what it *spends* is one fewer session.
+    assert len(fake_client.created) == 2, (
+        f"expected 2 SDK sessions before abort; got {len(fake_client.created)}"
     )
 
 
@@ -3078,11 +3083,22 @@ def test_the_rung_is_sticky_for_the_rest_of_the_run(tmp_path, monkeypatch) -> No
     Re-testing the cheap pair on an issue the last Iteration just proved it
     cannot work pays to relearn what was already learned, and the oscillation it
     admits spends half its sessions at the ceiling without ever tripping a
-    **Strike**. One rung means one escalation: the third attempt is the second's
-    pair, not a further one.
+    **Strike**. Here the escalated Iteration *lands* — so the issue keeps its
+    attempts (#412) and is picked up a third time, which is the one shape in
+    which stickiness is still observable inside a Run: the ledger only grows, so
+    a productive Iteration at the rung does not hand the issue back to the pair
+    that stalled on it.
     """
-    _wire_multi_issue_github(
+    fake_client, _ = _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    sends = itertools.count(1)
+    fake_client.on_send = lambda: (
+        fake_git.simulate_agent_commit(subject="chore: the rung got somewhere")
+        if next(sends) == 2
+        else None
     )
 
     asyncio.run(
@@ -3180,7 +3196,10 @@ def test_an_agent_that_declares_no_more_tasks_does_not_escalate(
 
     The declaration is the one ending most easily said by accident, and
     answering it with the ceiling would spend the Run's most expensive pair on
-    an issue whose worker said there was nothing to do.
+    an issue whose worker said there was nothing to do. It buys no second
+    attempt either (#412): the issue is out of contention on the strength of the
+    same declaration, so the second Iteration passes it over rather than
+    re-picking it at either pair.
     """
     _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
@@ -3208,9 +3227,11 @@ def test_an_agent_that_declares_no_more_tasks_does_not_escalate(
         )
     )
 
-    assert [e["routing_source"] for e in _bound_pickups(tmp_path)] == [
-        "defaulted_no_task_type_label",
-        "defaulted_no_task_type_label",
+    assert [
+        (e["type"], e.get("routing_source")) for e in _pickup_events(tmp_path)
+    ] == [
+        ("wrapper.pickup.bound", "defaulted_no_task_type_label"),
+        ("wrapper.pickup.skipped", None),
     ]
 
 
@@ -3249,6 +3270,216 @@ def test_escalation_ticks_no_strike_of_its_own(tmp_path, monkeypatch) -> None:
         path.mkdir()
 
     assert strikes_for(("claude-opus-5", "max"), escalating) == strikes_for(None, flat)
+
+
+# ---------------------------------------------------------------------------
+# The **Attempt lifecycle** (#412): a defeated issue is skipped for the rest of
+# the Run. A **Pickup** filter, never a Pool one.
+# ---------------------------------------------------------------------------
+
+
+def test_a_twice_stalled_issue_is_skipped_and_the_run_moves_on(
+    tmp_path, monkeypatch
+) -> None:
+    """The whole ticket (#412), through the records an operator reads.
+
+    Issue 7 is the head of the order and stalls silently twice — once on the
+    pair it routed to and once on the **Escalation rung** that stall bought it.
+    That is every attempt the Run has to offer, so the third **Pickup** passes
+    it over with a **Pickup skip** and binds the work behind it. Before this,
+    the same issue came back on the same pair every Iteration until the
+    **Strike** ceiling ended the Run, and the issues behind it were never
+    reached at all.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=3,
+                max_nmt_strikes=9,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [(e["type"], e["issue"]) for e in _pickup_events(tmp_path)] == [
+        ("wrapper.pickup.bound", 7),
+        ("wrapper.pickup.bound", 7),
+        ("wrapper.pickup.skipped", 7),
+        ("wrapper.pickup.bound", 31),
+    ]
+
+
+def test_a_defeated_issue_leaves_the_pool_whole(tmp_path, monkeypatch) -> None:
+    """Skipping narrows the candidate list, never the Pool it is drawn from.
+
+    Filtering at collection would repeal the Pool-wide closure whitelist as a
+    side effect: an Iteration working issue 31 could no longer close issue 7 by
+    commit keyword, and the emptiness test would end a Run that still has open
+    work in front of it. So the collection Event still names both issues on
+    every Iteration, and only the walk over them declines one.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=3,
+                max_nmt_strikes=9,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    collected = [
+        event["issues"]
+        for raw in _log_lines(tmp_path)
+        if (event := json.loads(raw))["type"] == "wrapper.afk_ready.collected"
+    ]
+    assert collected == [[7, 31], [7, 31], [7, 31]]
+
+
+def test_the_skip_names_the_ending_that_defeated_the_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """A candidate passed over silently is the starvation ADR-0032 exists to end.
+
+    The skip reason is what tells an operator that the runner *declined* work it
+    could have reached, and which ending made it decline — so the record names
+    the **Session outcome** rather than merely saying the issue is unavailable.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    fake_client = loop_module._make_client()
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="nothing to do here.\n<promise>NO MORE TASKS</promise>",
+                message_id="m1",
+            ),
+        )
+    ]
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                max_nmt_strikes=9,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+            )
+        )
+    )
+
+    (skip,) = [
+        e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skip["issue"] == 7
+    assert skip["reason"] == "already attempted this Run (no_more_tasks)"
+
+
+def test_an_advancing_iteration_spends_no_attempt(tmp_path, monkeypatch) -> None:
+    """Work that lands is not a failure to advance, however many Iterations it takes.
+
+    The ledger counts *failures to advance*, so an issue that commits every
+    Iteration stays fresh and is worked as long as it keeps committing. A
+    lifecycle that stepped on every ending would defeat any issue whose work
+    honestly takes three Iterations.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+        subject="chore: a step forward"
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=3,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+            )
+        )
+    )
+
+    assert [
+        (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
+    ] == [(7, "fresh"), (7, "fresh"), (7, "fresh")]
+
+
+def _raise_a_transport_failure() -> None:
+    """The harness losing the session — a **Session outcome** of ``crash``.
+
+    Raised from the SDK stub's ``on_send`` hook, which is where a real transport
+    failure surfaces: the loop contains it and accounts the Iteration as
+    no-progress, and :func:`~git_loopy.session_outcome.resolve_session_outcome`
+    reads the crashed termination off it.
+    """
+    raise ConnectionError("the harness went away mid-send")
+
+
+def test_a_same_pair_crash_retry_says_it_is_a_retry(tmp_path, monkeypatch) -> None:
+    """The two axes, on the ending that moves only one of them (contract §14).
+
+    A crash is evidence about the harness, not about the pair, so the **Routing
+    source** stays what it routed with and the pair does not move. What does
+    move is the **lifecycle position**: something was spent, and this is the
+    second attempt. Reading the position off the **Escalation rung**'s ledger
+    could only ever have reported the escalated half of that.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    fake_client.on_send = _raise_a_transport_failure
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=3,
+                max_nmt_strikes=9,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [
+        (e["issue"], e["model"], e["routing_source"], e["lifecycle_position"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        (7, "claude-sonnet-5", "defaulted_no_task_type_label", "fresh"),
+        (7, "claude-sonnet-5", "defaulted_no_task_type_label", "retrying"),
+    ]
 
 
 # ---------------------------------------------------------------------------

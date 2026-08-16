@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.26",
+  "attempt_states": [
+    "fresh",
+    "retrying",
+    "skipped"
+  ],
+  "states_note": "The per-issue, per-Run **Attempt lifecycle**, in order. Monotonic: an issue only ever moves forward along this list, and only a new Run puts it back at the start. It is never written to the tracker -- a Run that demoted an issue there would be writing into the triage state machine it is only ever a consumer of, and one bad night would outlive the Run that had it.",
+  "dispositions": [
+    {
+      "ending": "no_progress",
+      "escalates": true,
+      "from_fresh": "retrying",
+      "from_retrying": "skipped",
+      "note": "The silent ending -- ran to the end, claimed no failure, left nothing behind -- is the shape a pair too cheap for the work fails in, so it is the one ending that buys both a harder pair and the attempt to spend it on."
+    },
+    {
+      "ending": "timeout",
+      "escalates": false,
+      "from_fresh": "skipped",
+      "from_retrying": "skipped",
+      "note": "No second attempt, because nothing about it would differ: the same pair against the same clock. Escalating instead would answer a wait that ran out with a slower, higher-reasoning pair, which near-guarantees a second timeout."
+    },
+    {
+      "ending": "crash",
+      "escalates": false,
+      "from_fresh": "retrying",
+      "from_retrying": "skipped",
+      "note": "Evidence about the harness rather than about the work, so the pair does not move and the retry runs on the pair the issue already had. It still costs an attempt: something was spent, and a second crash on one issue in one Run is a pattern rather than an accident."
+    },
+    {
+      "ending": "no_more_tasks",
+      "escalates": false,
+      "from_fresh": "skipped",
+      "from_retrying": "skipped",
+      "note": "The Agent stating there is nothing to do. Taken at its word on both dials -- re-picking the issue would ask the same question of the same worker, and escalating would spend the Run's dearest pair on work its worker says is absent."
+    },
+    {
+      "ending": "content_filtered",
+      "escalates": false,
+      "from_fresh": "skipped",
+      "from_retrying": "skipped",
+      "note": "A refused turn is a claim about the work, not about the pair. Routing a filtered session to a *different* model is deliberately out of scope: the generic rung would escalate a filtered turn into the model that filtered it."
+    }
+  ],
+  "advance_disposition": {
+    "ending": null,
+    "escalates": false,
+    "from_fresh": "fresh",
+    "from_retrying": "retrying",
+    "note": "An Iteration that advanced its issue reached no ending at all, and the absence of one is not a sixth row. It spends no attempt, because the ledger counts failures to advance and work that lands is the opposite of one -- a lifecycle that stepped on every Iteration would defeat any issue whose work honestly takes three of them. It does not move the issue *back* either: an issue that advanced once under a Run that cannot finish it is the ordinary shape of a Run grinding, not evidence the Run recovered."
+  },
+  "pickup_filter_note": "A `skipped` issue is filtered out of the **Pickup** candidate list and never out of the **Pool**. The Pool stays whole -- the closure whitelist, the collection Event and the emptiness test are all computed over every eligible issue -- because filtering at collection would repeal the Pool-wide closure whitelist as a side effect: an Iteration working another issue could no longer close a defeated one by commit keyword, and a Run with open work in front of it would test as empty. Every Pickup seam an Orchestrator has honours it, reading the one lifecycle. Where a seam declines a candidate it had already chosen, the candidate is *declined*, so it leaves a `wrapper.pickup.skipped` record rather than silently vanishing. Where a seam's only decline returns the candidate to the list it was chosen from -- a released reservation, re-offered next turn -- the lifecycle narrows that list instead, because a decline re-taken every turn would emit one skip record per turn forever; the record the Run owes was already left by the seam that defeated the issue.",
+  "cases": [
+    {
+      "id": "two-silent-stalls-defeat-an-issue",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "The whole ticket: a stall buys the rung and the attempt to spend it on, and a second stall at the rung has nowhere further to go on either dial.",
+      "steps": [
+        {
+          "outcome": "no_progress",
+          "state": "retrying",
+          "owed_rung": true,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": "no_progress",
+          "state": "skipped",
+          "owed_rung": true,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-crash-retries-on-the-pair-it-already-had",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "The ending that moves one dial and not the other -- which is why the two are separate ledgers reading one ending, rather than one ledger answering both.",
+      "steps": [
+        {
+          "outcome": "crash",
+          "state": "retrying",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": "crash",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-timeout-defeats-a-fresh-issue-outright",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "steps": [
+        {
+          "outcome": "timeout",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-declaration-that-no-tasks-remain-defeats-a-fresh-issue-outright",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "steps": [
+        {
+          "outcome": "no_more_tasks",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-filtered-turn-defeats-a-fresh-issue-outright",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "steps": [
+        {
+          "outcome": "content_filtered",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-crash-then-a-stall-defeats-an-issue-between-them",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "The two retryable endings share one budget rather than each carrying their own, so an issue cannot alternate between them forever.",
+      "steps": [
+        {
+          "outcome": "crash",
+          "state": "retrying",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": "no_progress",
+          "state": "skipped",
+          "owed_rung": true,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "an-advancing-iteration-spends-no-attempt",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "Three productive Iterations in a row leave the issue exactly where it started, so an issue is worked as long as it keeps advancing.",
+      "steps": [
+        {
+          "outcome": null,
+          "state": "fresh",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": null,
+          "state": "fresh",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": null,
+          "state": "fresh",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        }
+      ]
+    },
+    {
+      "id": "an-advance-between-two-stalls-does-not-refund-the-attempt",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "Monotonic in the one shape where a refund would look reasonable: the escalated Iteration landed something, and the issue still has exactly one attempt left rather than a fresh pair of them.",
+      "steps": [
+        {
+          "outcome": "no_progress",
+          "state": "retrying",
+          "owed_rung": true,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": null,
+          "state": "retrying",
+          "owed_rung": true,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": "no_progress",
+          "state": "skipped",
+          "owed_rung": true,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "a-defeated-issue-never-comes-back",
+      "issue": 412,
+      "escalation_rung": [
+        "claude-opus-5",
+        "max"
+      ],
+      "note": "Including against the ending that means the work landed. The lifecycle is a claim about this Run, and only a new Run withdraws it.",
+      "steps": [
+        {
+          "outcome": "timeout",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        },
+        {
+          "outcome": null,
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        },
+        {
+          "outcome": "no_progress",
+          "state": "skipped",
+          "owed_rung": true,
+          "admitted_at_next_pickup": false
+        },
+        {
+          "outcome": "crash",
+          "state": "skipped",
+          "owed_rung": true,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    },
+    {
+      "id": "escalation-off-still-defeats-a-stalled-issue",
+      "issue": 412,
+      "escalation_rung": null,
+      "note": "The two dials are independent in both directions. A Run whose rung is off -- disabled, or suppressed by an explicit model pin -- still stops re-picking an issue it cannot finish; it simply has no harder pair to try in between.",
+      "steps": [
+        {
+          "outcome": "no_progress",
+          "state": "retrying",
+          "owed_rung": false,
+          "admitted_at_next_pickup": true
+        },
+        {
+          "outcome": "no_progress",
+          "state": "skipped",
+          "owed_rung": false,
+          "admitted_at_next_pickup": false
+        }
+      ]
+    }
+  ]
+}

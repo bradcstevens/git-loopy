@@ -124,7 +124,9 @@ from git_loopy.interactive.driver import (
 )
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
+from git_loopy.session_outcome import SessionOutcome
 from git_loopy.skill_catalog import build_skill_catalog
+from git_loopy.sources import PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
@@ -5096,6 +5098,127 @@ def test_a_lane_that_stalled_escalates_at_its_next_pickup(
         (42, "claude-sonnet-5", "defaulted_no_task_type_label"),
         (42, "claude-opus-5", "escalated"),
     ]
+
+
+def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
+    tmp_path, monkeypatch
+) -> None:
+    """The **Attempt lifecycle** is per issue, not per mode either (#412).
+
+    A **Lane** stall and the serial stall that follows it are two attempts on
+    one issue, and the ledger that counts them is the one ledger both **Pickup**
+    seams feed. A per-mode count would give every issue two attempts *per mode*
+    and defeat nothing on the path that matters.
+
+    The Parallel scheduler's own collision guard is untouched by this and must
+    stay so: it latches at session start to stop one issue taking two **Lanes**
+    at once, which is a worktree-and-re-work question. The skip here is a
+    lifecycle question, and the serial Pickup — the one seam the guard does not
+    cover — is where it is asked.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _NoProgressFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("claude-sonnet-5")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                issue_source="github",
+                parallel=2,
+                max_iterations=3,
+                max_nmt_strikes=9,
+                verbosity=0,
+                render_reasoning=False,
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    pickups = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] in ("wrapper.pickup.bound", "wrapper.pickup.skipped")
+    ]
+    assert [(e["type"], e["issue"]) for e in pickups] == [
+        ("wrapper.pickup.bound", 42),
+        ("wrapper.pickup.bound", 42),
+        ("wrapper.pickup.skipped", 42),
+        ("wrapper.pickup.bound", 43),
+    ]
+
+
+def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) -> None:
+    """A **Lane** Pickup is a Pickup, so the **Skip** has to reach it too (#412).
+
+    The Parallel scheduler's collision guard latches at session *start*, so
+    every issue a Lane defeated is already behind it and could not take a
+    second Lane anyway. The gap it does not cover is the other order: an issue
+    defeated by a *serial* Iteration of a Parallel Run — a serial fallback
+    while Lane concurrency is throttled to nothing works whatever sits at the
+    Pool's head, and a **Parallel-safe** issue defeated there was never in the
+    guard. Nothing would then stop a Lane reserving it the moment concurrency
+    recovered.
+
+    So the filter narrows the *Lane candidate list* as well, as a second and
+    separate predicate composed alongside the guard rather than as an entry
+    written into it: the guard answers "is one issue about to take two Lanes",
+    which is a worktree question with its own lifetime, and a lifecycle answer
+    smuggled into it would be indistinguishable from a collision afterwards.
+
+    It is a candidate filter and not a **Pickup skip** for the reason the Lane
+    path has no other refusal shape: passing a candidate over releases its
+    reservation, and a defeated issue released is re-reserved on the next turn
+    — a skip Event per turn, forever. Refusing it a reservation costs one
+    predicate and says the same thing once, where the serial Pickup that
+    defeated it already left the record.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _capture(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _capture)
+
+    asyncio.run(loop_module.run(cfg))
+
+    assert len(built) == 1
+    pool = built[0]._pool
+    assert pool is not None
+
+    def _candidate(ref: int) -> PoolCandidate:
+        return PoolCandidate(
+            ref=ref, title=f"#{ref}", labels=("ready-for-agent", "parallel-safe")
+        )
+
+    # Neither issue was ever worked, so the collision guard admits both.
+    assert pool.eligible(_candidate(98)) is True
+    assert pool.eligible(_candidate(99)) is True
+
+    built[0]._serial._attempts.observe(98, SessionOutcome.TIMEOUT)
+
+    assert pool.eligible(_candidate(98)) is False
+    assert pool.eligible(_candidate(99)) is True
 
 
 class _ClassifyingLaneSession(_ParallelFakeSession):

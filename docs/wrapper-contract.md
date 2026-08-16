@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.25 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.26 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1024,6 +1024,35 @@ run-wide default:
   Orchestrator with more than one pickup seam MUST feed and read one ledger from all of them.
   A mid-session switch is still forbidden — escalation is a **second pickup**, which is why it is
   stated here and not in the bullet above.
+- **Give an issue a bounded number of attempts (contract 1.26).** An Orchestrator MUST hold one
+  monotonic per-issue, per-**Run** **Attempt lifecycle** — `fresh` → `retrying` → `skipped`, the
+  states [`attempt-lifecycle.json`](../git-loopy/conformance/attempt-lifecycle.json) declares —
+  and MUST dispose of each of the five **Session outcomes** as that fixture's table states: a
+  silent no-progress and a crash move the issue one step, and a timeout, an explicit
+  no-more-tasks and a content-filtered turn move it straight to `skipped`. An Iteration that
+  advanced its issue reached no ending and MUST move it neither forward nor back. The lifecycle
+  MUST NOT regress — including on an advancing Iteration between two failures, because an issue
+  that landed something once under a Run that cannot finish it is the ordinary shape of a Run
+  grinding rather than evidence the Run recovered.
+  It is **per Run and in memory**: an Orchestrator MUST NOT write it to the tracker, because a
+  demotion there would outlive the Run that made it and would put the runner inside the triage
+  state machine it is only ever a consumer of (§2).
+  Skipping is a **pickup filter, never a Pool filter**: the Pool MUST stay whole — the Pool-wide
+  closure whitelist (§5), the collection Event (§12) and the emptiness test (§6) are all computed
+  over every eligible issue — and only the candidate list narrows. Where a pickup seam declines a
+  candidate it had already chosen, that decline MUST leave a `wrapper.pickup.skipped` record (§12)
+  rather than the candidate vanishing from consideration. Where a seam's only decline returns the
+  candidate to the very list it was chosen from — a released reservation, which is re-offered on
+  the next turn — the lifecycle MUST instead narrow that list, because a decline re-taken every
+  turn would emit one skip record per turn forever; the record the Run owes is the one the seam
+  that defeated the issue already left. Like the rung above, it is a property of the *issue*: an
+  Orchestrator with more than one pickup seam MUST feed and read one lifecycle from all of them,
+  and every one of those seams MUST honour it. It MUST NOT be carried by repurposing a mode-local
+  scheduling guard — a concurrency or re-work guard is a different question with a different
+  lifetime, and a lifecycle defeat written into one is indistinguishable from a collision
+  afterwards. The lifecycle is what a resolution's **lifecycle position** reports (`fresh` is
+  `fresh`; everything past it is `retrying`), which is how a same-pair crash retry reads as a
+  retry at all.
 - **Publish what it resolved (contract 1.21).** An Orchestrator that resolves a Routing resolution
   MUST carry it on that Pickup's own `wrapper.pickup.bound` (§12) — the pair, the tier, the raw
   keys, the gate warnings, the source and the lifecycle position — and MUST NOT mint a second
@@ -1088,6 +1117,10 @@ vocabulary every Runner reads instead of minting its own names), and
 result and whether it warns). The Python reference adapter drives all three against the production
 `resolve_iteration_model` and `gate_reasoning_effort` seams and asserts its in-language roster
 constant equals `model-roster.json`.
+[`attempt-lifecycle.json`](../git-loopy/conformance/attempt-lifecycle.json) is the fourth, and
+pins the two dials one ending turns together — the **Attempt lifecycle**'s states and per-ending
+disposition beside whether the same ending owes the **Escalation rung** — because the two are
+separate ledgers reading one record, and a fixture that pinned either alone would let them drift.
 
 **Routing is Python-only today**, and that is a *recorded decision* rather than an omission: the
 shell and PowerShell Orchestrators implement no part of this section, so neither resolves a Routed
