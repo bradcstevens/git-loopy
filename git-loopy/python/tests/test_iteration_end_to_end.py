@@ -2519,6 +2519,10 @@ def test_a_serial_pickup_records_what_it_bound_and_why(tmp_path, monkeypatch) ->
     ``position`` and ``considered`` travel together because position 1 alone
     cannot tell "the runner took the oldest" from "the runner took the only one
     left" — which is the question the Event exists to answer.
+
+    Pinned as a whole payload rather than field by field, so a key that arrives
+    on this record without a contract has to arrive here too (#407 added seven
+    of them, and this is what made it say so).
     """
     _wire_multi_issue_github(
         tmp_path,
@@ -2541,6 +2545,13 @@ def test_a_serial_pickup_records_what_it_bound_and_why(tmp_path, monkeypatch) ->
             "reason": "order",
             "position": 1,
             "considered": 2,
+            "model": None,
+            "effort": None,
+            "context_tier": "default",
+            "routing_source": "defaulted_no_task_type_label",
+            "task_type_keys": [],
+            "gate_warnings": [],
+            "lifecycle_position": "fresh",
         }
     ]
 
@@ -2913,3 +2924,68 @@ def test_loop_records_the_session_ending_and_its_error_identity(
     diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
     assert "no_progress" in diagnostics
     assert "quota_exhausted" in diagnostics
+
+
+def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
+    tmp_path, monkeypatch
+) -> None:
+    """#407: an operator could not tell which model worked an issue.
+
+    The Pickup is where the pair resolves, so the Pickup is the one record that
+    can say what it resolved to — extended rather than joined by a second event,
+    which would put two records with the same key on the wire at the same
+    instant. The trace is the audit surface: after the fact, this is what names
+    the model that worked the issue and whether a label chose it.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:docs"],
+            )
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                routing={"docs": ("gpt-5-mini", "medium")},
+            )
+        )
+    )
+
+    (bound,) = _pickup_events(tmp_path)
+    assert bound["type"] == "wrapper.pickup.bound"
+    assert bound["model"] == "gpt-5-mini"
+    assert bound["effort"] == "medium"
+    assert bound["routing_source"] == "routed"
+    assert bound["task_type_keys"] == ["docs"]
+    assert bound["gate_warnings"] == []
+    assert bound["context_tier"] == "default"
+    assert bound["lifecycle_position"] == "fresh"
+
+
+def test_an_unlabelled_binding_says_the_fallback_rather_than_staying_silent(
+    tmp_path, monkeypatch
+) -> None:
+    """A silent fallback and a deliberate route are the two things to tell apart.
+
+    An unlabelled issue is the overwhelmingly common case while the corpus
+    carries no **Task type**, and it is precisely the case an operator suspects:
+    the record states the fallback rather than omitting the provenance, because
+    an absent field would read as a Runner that does not route at all.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    (bound,) = _pickup_events(tmp_path)
+    assert bound["routing_source"] == "defaulted_no_task_type_label"
+    assert bound["task_type_keys"] == []

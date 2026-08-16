@@ -569,6 +569,37 @@ class RoutingResolution:
     gate_warnings: tuple[GateWarning, ...]
     lifecycle_position: RoutingLifecyclePosition
 
+    def as_pickup_payload(self) -> dict[str, Any]:
+        """This record as the routing half of a ``wrapper.pickup.bound`` payload.
+
+        The record projects itself (#407) because a serial **Iteration** and a
+        **Lane** both publish the pair they resolved, and two hand-written
+        projections of one record is how the same Pickup ends up described two
+        ways on one wire.
+
+        The pair travels as ``model`` / ``effort``, the family's existing wire
+        vocabulary for a **Routed pair** — a reader that can read a
+        Contribution's pair reads a Pickup's the same way. The provenance
+        travels as ``routing_source`` rather than ``source`` because the same
+        payload's ``reason`` already answers "why" in the unrelated Pickup
+        vocabulary (``order`` / ``priority`` / ``pin``), and one record
+        carrying two differently-scoped answers to one word is unreadable.
+
+        Every value is a JSON scalar or a list of them, and ``None`` is
+        **kept** rather than dropped: a null ``effort`` is the gate having left
+        the choice to the backend, which is a fact about the Pickup and not an
+        absent field.
+        """
+        return {
+            "model": self.model,
+            "effort": self.reasoning_effort,
+            "context_tier": self.context_tier,
+            "routing_source": self.source.value,
+            "task_type_keys": list(self.task_type_keys),
+            "gate_warnings": [warning.value for warning in self.gate_warnings],
+            "lifecycle_position": self.lifecycle_position.value,
+        }
+
 
 @dataclass(frozen=True)
 class RunConfig:

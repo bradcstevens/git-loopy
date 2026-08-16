@@ -63,6 +63,7 @@ from git_loopy.events import (
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
+    WRAPPER_PICKUP_BOUND,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
@@ -466,6 +467,30 @@ class Renderer:
             text.append(f" — {str(reason).replace('_', ' ')}", style=STYLES["meta"])
         self.console.print(text)
 
+    def _on_pickup_bound(self, event: dict[str, Any]) -> None:
+        # The **Routed pair** an operator can finally see (#407). Pickup had no
+        # handler at all, so the one decision that fixes what an Iteration costs
+        # was invisible on stdout and readable only in the replay log.
+        #
+        # Printed at default verbosity because it is a wrapper outcome in the
+        # sense the ladder already means: one line per unit of work, stating
+        # what the runner decided before the agent spoke.
+        ref = event.get("issue")
+        text = Text()
+        text.append("▸ ", style=STYLES["meta"])
+        text.append("pickup ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        pair = _routed_pair_phrase(event)
+        if pair:
+            text.append(f"  {pair}")
+        provenance = _routing_source_phrase(event)
+        if provenance:
+            text.append(f"  {provenance}", style=STYLES["meta"])
+        tier = _context_tier_phrase(event)
+        if tier:
+            text.append(f"  {tier}", style=STYLES["meta"])
+        self.console.print(text)
+
     def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:
         # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an
         # agent commit (different glyph, "checkpoint" label) and deliberately
@@ -745,6 +770,119 @@ def _short_repr(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pickup phrases — the routed pair, its provenance, and its tier (#407)
+# ---------------------------------------------------------------------------
+
+
+#: The gate warnings that mean "the effort the operator asked for did not
+#: happen". Two of them, because a model that accepts no effort at all and a
+#: model that accepts other efforts refuse the request for different reasons —
+#: a distinction about the roster, not about what became of the effort. A line
+#: that recognised only one would report the other as a plain backend choice.
+_EFFORT_DROPPED_WARNINGS: frozenset[str] = frozenset(
+    {"dropped_effort", "incapable_model"}
+)
+
+#: How each :class:`~git_loopy.config.RoutingSource` reads on a Pickup line.
+#: The no-label fallback is deliberately the shortest of the six: it is the
+#: overwhelmingly common case while the corpus carries no **Task type**, so
+#: spelling it out would nag every Iteration — and rendering *nothing* would
+#: collapse it into the suppressed case, which states the opposite (an operator
+#: who pinned a model on purpose).
+_ROUTING_SOURCE_PHRASES: dict[str, str] = {
+    "defaulted_no_task_type_label": "unlabelled",
+    "routed": "routed",
+    "escalated": "escalated",
+    "defaulted_unknown_task_type_key": "unconfigured",
+    "defaulted_conflicting_task_type_keys": "conflicting",
+    "defaulted_explicit_override": "routing suppressed",
+}
+
+#: The sources whose phrase is completed by the keys the tracker actually
+#: carried. "routed docs" and "unconfigured chore" are claims about a label;
+#: "unlabelled" and "routing suppressed" are claims about its absence.
+_KEY_NAMING_SOURCES: frozenset[str] = frozenset(
+    {
+        "routed",
+        "escalated",
+        "defaulted_unknown_task_type_key",
+        "defaulted_conflicting_task_type_keys",
+    }
+)
+
+
+def _routed_pair_phrase(event: dict[str, Any]) -> str:
+    """``model @ effort`` for one Pickup, keeping the three effort states apart.
+
+    An explicit ``none``, a backend-chosen effort, and a backend-chosen effort
+    that followed a **dropped** one are three different facts wearing two
+    values: the first is a string, and the other two are both ``None``. The
+    gate warning beside the null is the entire difference, and saying so here
+    is the only place per-issue routing has a gate diagnostic on stdout.
+
+    Returns the empty string when the record carries no routing at all — a
+    Runner that does not implement §14 emits the binding without it, and the
+    fields are optional-when-present precisely so it stays conformant.
+    """
+    if "model" not in event and "effort" not in event:
+        return ""
+    model = event.get("model")
+    effort = event.get("effort")
+    warnings = _string_list(event.get("gate_warnings"))
+    rendered = str(model) if isinstance(model, str) and model else "(backend default)"
+    if isinstance(effort, str) and effort:
+        return f"{rendered} @ {effort}"
+    if _EFFORT_DROPPED_WARNINGS & set(warnings):
+        return f"{rendered} @ (backend default, effort dropped)"
+    return f"{rendered} @ (backend default)"
+
+
+def _routing_source_phrase(event: dict[str, Any]) -> str:
+    """Why this pair was chosen, in the **Routing source**'s own vocabulary.
+
+    An unrecognised source renders verbatim rather than as nothing: a Runner
+    ahead of this reader is better read approximately than silently dropped,
+    and the source vocabulary is closed in the contract, not in this renderer.
+    """
+    source = event.get("routing_source")
+    if not isinstance(source, str) or not source:
+        return ""
+    phrase = _ROUTING_SOURCE_PHRASES.get(source, source.replace("_", " "))
+    if source in _KEY_NAMING_SOURCES:
+        keys = _string_list(event.get("task_type_keys"))
+        if keys:
+            phrase += " " + ", ".join(f"task-type:{key}" for key in keys)
+    return phrase
+
+
+def _context_tier_phrase(event: dict[str, Any]) -> str:
+    """The tier, but only where it is not a constant.
+
+    The run-level tier (ADR-0017) holds its default on every Run today, so
+    printing it on every Pickup would be noise by construction. A tier that is
+    not the default, or one the model gate **downgraded** to it, is news.
+    """
+    tier = event.get("context_tier")
+    if not isinstance(tier, str) or not tier:
+        return ""
+    downgraded = "unsupported_context_tier" in _string_list(
+        event.get("gate_warnings")
+    )
+    if downgraded:
+        return f"tier {tier} (downgraded)"
+    if tier == "default":
+        return ""
+    return f"tier {tier}"
+
+
+def _string_list(value: Any) -> list[str]:
+    """The string members of a list-shaped payload field, or nothing."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table — keyed on event-type literals from ``git_loopy.events``
 # ---------------------------------------------------------------------------
 
@@ -759,6 +897,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_CONTRIBUTION_START: Renderer._on_contribution_start,
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
+    WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
     WRAPPER_SERIAL_REQUESTED: Renderer._on_serial_requested,

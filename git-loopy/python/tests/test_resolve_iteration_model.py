@@ -477,3 +477,76 @@ def test_a_model_the_tier_roster_covers_keeps_a_tier_it_offers(monkeypatch) -> N
 
     assert result.context_tier == "long_context"
     assert result.gate_warnings == ()
+
+
+def test_the_resolution_projects_itself_onto_a_pickup_payload() -> None:
+    """#407: the record owns its wire form, so two call sites cannot drift.
+
+    A serial **Iteration** and a **Lane** both publish the pair they resolved on
+    their own ``wrapper.pickup.bound``. Two hand-written projections of one
+    record is exactly how the same Pickup ends up described two ways, so the
+    record projects itself and both call sites spread the one mapping.
+
+    The pair travels as ``model`` / ``effort`` because that is already the
+    family's wire vocabulary for a **Routed pair** — a reader that can read a
+    Contribution's pair reads a Pickup's the same way — and the provenance
+    travels as ``routing_source`` rather than ``source`` because ``reason`` on
+    this same record already answers "why" in the unrelated Pickup vocabulary
+    (``order`` / ``priority`` / ``pin``).
+    """
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("gpt-5-mini", "medium")},
+    )
+
+    payload = resolve_iteration_model(cfg, ["task-type:docs"]).as_pickup_payload()
+
+    assert payload == {
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "context_tier": "default",
+        "routing_source": "routed",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh",
+    }
+
+
+def test_a_dropped_effort_reaches_the_payload_as_a_null_beside_its_warning(
+    monkeypatch,
+) -> None:
+    """A backend-chosen effort and a *dropped* one are one null and one warning.
+
+    Both leave ``effort`` null, so the null alone cannot tell "the operator
+    asked for nothing" from "the operator asked for something the model
+    refuses". The gate warning beside it is the whole difference, which is why
+    it is carried onto the wire rather than left inside the resolver — and both
+    of the gate's drop-shaped warnings reach it, because a model that accepts
+    no effort at all and a model that accepts other efforts drop the operator's
+    request equally.
+    """
+    monkeypatch.setattr(
+        config_module,
+        "MODEL_REASONING_EFFORTS",
+        {
+            "synth-no-effort": frozenset(),
+            "synth-some-effort": frozenset({"low"}),
+        },
+    )
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={
+            "docs": ("synth-no-effort", "high"),
+            "chore": ("synth-some-effort", "high"),
+        },
+    )
+
+    incapable = resolve_iteration_model(cfg, ["task-type:docs"]).as_pickup_payload()
+    dropped = resolve_iteration_model(cfg, ["task-type:chore"]).as_pickup_payload()
+
+    assert incapable["effort"] is None
+    assert incapable["gate_warnings"] == ["incapable_model"]
+    assert dropped["effort"] is None
+    assert dropped["gate_warnings"] == ["dropped_effort"]

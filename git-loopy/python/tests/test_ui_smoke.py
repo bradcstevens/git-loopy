@@ -2369,3 +2369,188 @@ def test_an_unfinalized_contribution_contributes_no_summary_row() -> None:
     assert summary.completed == []
     assert set(summary.open_contributions) == {"c-42"}
     assert list(summary.build_run_table().rows) == []
+
+
+# ---------------------------------------------------------------------------
+# Pickup — the routed pair an operator can see (#407)
+# ---------------------------------------------------------------------------
+
+
+def _pickup_event(**payload: Any) -> dict[str, Any]:
+    """A ``wrapper.pickup.bound`` envelope with the routing half filled in.
+
+    Rendering is exercised through the **Event** rather than through a renderer
+    helper: the Event is what a replay, the Dashboard and a native port all
+    read, so a test that called a formatter directly would pin a seam no
+    consumer has.
+    """
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_PICKUP_BOUND,
+        "issue": 7,
+        "reason": "order",
+        "position": 1,
+        "considered": 3,
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "context_tier": "default",
+        "routing_source": "routed",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh",
+    }
+    event.update(payload)
+    return event
+
+
+def test_pickup_renders_the_routed_pair_at_default_verbosity() -> None:
+    """The Pickup Event had no handler at all, so Pickup was invisible on stdout.
+
+    An operator watching a Run could not tell which model was working an issue
+    without reading the replay log. This is the line that answers it.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event())
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "gpt-5-mini @ medium" in out
+    assert "task-type:docs" in out
+
+
+def test_pickup_renders_the_no_label_fallback_most_compactly_of_all() -> None:
+    """The overwhelmingly common case while the corpus carries no **Task type**.
+
+    Spelling the fallback out in full would nag on every Iteration; rendering
+    nothing at all would collapse it into the suppressed case, which means the
+    opposite thing. So it renders — and renders shorter than every other
+    source.
+    """
+    sources = {
+        "defaulted_no_task_type_label": {"task_type_keys": []},
+        "routed": {"task_type_keys": ["docs"]},
+        "defaulted_unknown_task_type_key": {"task_type_keys": ["chore"]},
+        "defaulted_conflicting_task_type_keys": {"task_type_keys": ["docs", "chore"]},
+        "defaulted_explicit_override": {"task_type_keys": []},
+        "escalated": {"task_type_keys": ["docs"]},
+    }
+    rendered: dict[str, str] = {}
+    for source, extra in sources.items():
+        renderer, _summary, buf = _make_renderer()
+        renderer.render(_pickup_event(routing_source=source, **extra))
+        rendered[source] = buf.getvalue().strip()
+
+    unlabelled = rendered.pop("defaulted_no_task_type_label")
+    assert unlabelled
+    assert all(len(unlabelled) < len(other) for other in rendered.values())
+
+
+def test_every_routing_source_renders_distinctly() -> None:
+    """Six sources, six lines: a source that rendered like another would lie.
+
+    The pair to keep apart above all is the no-label fallback and the run-wide
+    **suppression** — one says the operator labelled nothing, the other says
+    the operator pinned a model deliberately.
+    """
+    rendered: dict[str, str] = {}
+    for source in (
+        "routed",
+        "defaulted_no_task_type_label",
+        "defaulted_unknown_task_type_key",
+        "defaulted_conflicting_task_type_keys",
+        "defaulted_explicit_override",
+        "escalated",
+    ):
+        renderer, _summary, buf = _make_renderer()
+        renderer.render(_pickup_event(routing_source=source))
+        rendered[source] = buf.getvalue().strip()
+
+    assert len(set(rendered.values())) == len(rendered)
+    assert (
+        rendered["defaulted_no_task_type_label"]
+        != rendered["defaulted_explicit_override"]
+    )
+
+
+def test_the_three_effort_states_stay_distinct() -> None:
+    """An explicit ``none`` is not the same fact as "the backend chose".
+
+    And a backend choice that followed a **dropped** effort is a third fact
+    again: the operator asked for something the model refuses, and learning
+    that from the line is the only place per-issue routing has a gate
+    diagnostic on stdout.
+    """
+    lines = []
+    for payload in (
+        {"effort": "none", "gate_warnings": []},
+        {"effort": None, "gate_warnings": []},
+        {"effort": None, "gate_warnings": ["dropped_effort"]},
+    ):
+        renderer, _summary, buf = _make_renderer()
+        renderer.render(_pickup_event(**payload))
+        lines.append(buf.getvalue().strip())
+
+    assert len(set(lines)) == 3
+    assert "@ none" in lines[0]
+    assert "dropped" in lines[2]
+    assert "dropped" not in lines[1]
+
+
+def test_an_effort_dropped_for_an_incapable_model_reads_as_dropped_too() -> None:
+    """The gate has two drop-shaped warnings and they mean one thing to a reader.
+
+    ``incapable_model`` and ``dropped_effort`` differ in *why* the model refused
+    the effort, not in what happened to it, and a line that recognised only one
+    would report the other as a plain backend choice.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event(effort=None, gate_warnings=["incapable_model"]))
+
+    assert "dropped" in buf.getvalue()
+
+
+def test_the_context_tier_is_silent_until_it_is_worth_saying() -> None:
+    """A run-level knob that holds its default on every Run today.
+
+    Printing ``tier default`` on every Pickup would be a constant, which is the
+    definition of noise. A tier that is *not* the default, or one the model gate
+    **downgraded**, is neither.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(_pickup_event())
+    assert "tier" not in buf.getvalue()
+
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(_pickup_event(context_tier="long_context"))
+    assert "tier long_context" in buf.getvalue()
+
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        _pickup_event(gate_warnings=["unsupported_context_tier"])
+    )
+    out = buf.getvalue()
+    assert "tier default" in out
+    assert "downgraded" in out
+
+
+def test_a_pickup_carrying_no_routing_still_renders_its_issue() -> None:
+    """The routing half is optional-when-present, so a reader must tolerate none.
+
+    A native port implements no routing at all and emits the binding without it;
+    a renderer that crashed or printed nothing would make that Runner's Pickup
+    worse than invisible.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        {
+            "type": events_module.WRAPPER_PICKUP_BOUND,
+            "issue": 7,
+            "reason": "order",
+            "position": 1,
+            "considered": 3,
+        }
+    )
+
+    assert "#7" in buf.getvalue()

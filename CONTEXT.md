@@ -575,7 +575,9 @@ The instant the runner binds one issue to a unit of work, before that unit's age
 session begins. Because the issue is known first, pickup is where its **Routed pair**
 resolves and where its **Lease** is taken. Every unit of work has a pickup — a serial
 **Iteration** as much as a **Lane** — and every pickup is carried as a
-`wrapper.pickup.bound` **Event** naming which issue, why, and where it sat in the order.
+`wrapper.pickup.bound` **Event** naming which issue, why, where it sat in the order, and
+the **Routing resolution** it reached. The resolution rides on that one record rather than
+on a second Event, because it is settled at the same instant, for the same issue.
 _Avoid_: assignment, dispatch, selection.
 
 **Pickup skip**:
@@ -897,7 +899,9 @@ The one per-Pickup record **Routing** answers with: a gated model, reasoning eff
 tier; the `task-type` keys exactly as the tracker spelled them; the gate warnings raised while
 gating them; a **Routing source**; and the attempt's lifecycle position. Every surface that shows
 what a Pickup chose reads this record rather than recomputing it. Its source and lifecycle
-position are distinct axes so an escalated pair and a same-pair retry stay tellable apart.
+position are distinct axes so an escalated pair and a same-pair retry stay tellable apart. It is
+published on the **Pickup**'s own Event and as one line on stdout, so which model worked an issue
+is answerable live and after the fact from the same record (ADR-0039).
 _Avoid_: routed pair (only the model and effort values), routing decision (ambiguous).
 
 **Routing source**:

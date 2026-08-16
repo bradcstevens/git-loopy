@@ -140,7 +140,12 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
-from git_loopy.config import RunConfig, TaskTypeError, resolve_iteration_model
+from git_loopy.config import (
+    RoutingResolution,
+    RunConfig,
+    TaskTypeError,
+    resolve_iteration_model,
+)
 from git_loopy.continuation import (
     CapabilityUnsupported as ContinuationCapabilityUnsupported,
 )
@@ -1001,12 +1006,15 @@ class _Loop:
         self._last_session_outcome: (
             session_outcome_module.SessionOutcomeRecord | None
         ) = None
-        # The **Routed pair** each candidate resolved to at the last serial
+        # The **Routing resolution** each candidate reached at the last serial
         # **Pickup** (#394). Refreshed per Iteration by ``_pick_active_issue``:
         # a pair is a fact about one Pool's admission pass, and carrying one
         # across Iterations would run a session on a pair resolved from labels
-        # the issue may no longer have.
-        self._routes: dict[int | str, tuple[str | None, str | None]] = {}
+        # the issue may no longer have. The whole record rather than the bare
+        # pair since #407 — the Pickup publishes *why* it resolved what it did,
+        # and provenance recomputed at the emit site is provenance that can
+        # disagree with the pair the session was built with.
+        self._routes: dict[int | str, RoutingResolution] = {}
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
         # write the replay JSONL + fan out to the sinks. Built here so ``_emit``
         # is a one-line delegator and the sinks receive the *scrubbed* envelope
@@ -1095,6 +1103,7 @@ class _Loop:
         reason: str,
         position: int,
         considered: int,
+        resolution: RoutingResolution | None = None,
     ) -> None:
         """Record which issue a **Pickup** bound, why, and out of what (#397).
 
@@ -1108,6 +1117,15 @@ class _Loop:
         operator actually asks is "did the runner take the oldest, or was this
         the only one left?" — which needs both. Neither is recoverable later:
         afterwards the order that gave them meaning is gone.
+
+        ``resolution`` carries the **Routing resolution** onto the same record
+        (#407) rather than onto a second Event: the pair resolves *at* this
+        instant, for *this* key, so a second record would be one Pickup
+        described twice. It is optional here because the payload is
+        optional-when-present on the wire — a Runner that implements no routing
+        has nothing to say and stays conformant by saying nothing — and because
+        an emit-site default of "no routing" is the only honest one for a
+        caller that has not resolved a pair.
         """
         self._emit(
             events_module.WRAPPER_PICKUP_BOUND,
@@ -1116,6 +1134,7 @@ class _Loop:
             reason=reason,
             position=position,
             considered=considered,
+            **(resolution.as_pickup_payload() if resolution is not None else {}),
         )
 
     def _emit_pickup_skipped(
@@ -1337,7 +1356,8 @@ class _Loop:
                 )
                 return self._finish_unworked_iteration(iter_num)
             active = pickup.item
-            model, reasoning_effort = self._routes[active.ref]
+            resolution = self._routes[active.ref]
+            model, reasoning_effort = resolution.model, resolution.reasoning_effort
             iteration_span.set_attribute("issue", active.ref)
             issue_binding = self._new_active_issue_binding(
                 iter_num, allowed_refs=(item.ref for item in pool)
@@ -1698,7 +1718,7 @@ class _Loop:
                 )
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
-            self._routes[item.ref] = (resolution.model, resolution.reasoning_effort)
+            self._routes[item.ref] = resolution
             return None
 
         pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
@@ -1726,6 +1746,7 @@ class _Loop:
                 reason=pickup.reason,
                 position=pickup.position,
                 considered=considered,
+                resolution=self._routes.get(pickup.item.ref),
             )
         return pickup
 
@@ -3151,13 +3172,17 @@ class _ParallelLoop:
         # points can still pass the candidate over, and a Lane that emitted
         # "bound" and then a skip for the same issue would be two facts where
         # there is one. So the binding record is emitted only once the Lane
-        # genuinely holds the issue, and every skip precedes it.
+        # genuinely holds the issue, and every skip precedes it — the
+        # resolution resolved above rides along on it (#407), because the pair
+        # a Lane runs on is the same fact whether it is being carried to the
+        # session or to a reader.
         self._serial._emit_pickup_bound(
             iter_num=None,
             issue=ref,
             reason=reason_for(item.ref, item.labels, pin=self._config.issue_pin),
             position=reservation.position,
             considered=reservation.considered,
+            resolution=resolution,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
 

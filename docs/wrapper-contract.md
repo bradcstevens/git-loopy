@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.20 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.21 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -293,6 +293,8 @@ An Orchestrator running serially MUST:
   precisely because being passed over left no trace. The record is emitted *after* the
   `wrapper.issue.activated` that publishes the binding, so it never describes a binding the rest
   of the stream does not contain, and every skip that ended in this binding MUST precede it.
+  An Orchestrator that resolved a **Routing resolution** at this Pickup MUST carry it on the same
+  record (contract 1.21, §14) rather than on an Event of its own.
 - **Select and publish are two steps.** The prompt renders the candidate the Pickup *selected*,
   even when publishing its activation fails. An Orchestrator MUST NOT fall back to rendering the
   whole Pool on a failed activation: that restores the menu this section removes, on the one path
@@ -498,6 +500,19 @@ rate limit, and a rejected credential apart from a session that merely produced 
 Mapping them is recording, not reacting: an Orchestrator MUST NOT abort a **Run**, back off, or
 withhold an issue on the strength of one. As with every SDK-mapped type, a port that streams no
 SDK events declares the literals and emits neither.
+
+Contract-1.21 addition within compatibility schema 1, and an **extension of an existing record**
+rather than a new type: `wrapper.pickup.bound` carries the **Routing resolution** its Pickup
+reached (§14) as `model`, `effort`, `context_tier`, `routing_source`, `task_type_keys`,
+`gate_warnings` and `lifecycle_position`. `model` and `effort` are the family's existing
+routed-pair vocabulary — the same two words a Contribution's `summary` already uses — so a
+consumer reads a Pickup's pair the way it reads a Lane's. `routing_source` is spelled in full
+rather than as `source` because the same payload's `reason` answers "why" in the unrelated Pickup
+vocabulary (`order` / `priority` / `pin`), and one record cannot carry two differently-scoped
+answers to one word. Every one of the seven is optional-when-present, so a Runner that implements
+no routing emits the binding exactly as before and stays conforming; `null` is a *value* (the
+backend chooses) and not an absence. `event_schema_version` does not move: the seven are additive
+payload fields, which every schema-1 consumer already ignores when unknown.
 
 Every `wrapper.run.start` MUST carry the exact distribution `release_version`, numeric
 `schema_version: 1`, and an
@@ -959,6 +974,16 @@ run-wide default:
   feeds its own single session the same way; a pair is never resolved and then dropped.
 - **Resolve once.** Resolve **once** per issue at pickup; the Orchestrator MUST NOT switch model
   or effort mid-session.
+- **Publish what it resolved (contract 1.21).** An Orchestrator that resolves a Routing resolution
+  MUST carry it on that Pickup's own `wrapper.pickup.bound` (§12) — the pair, the tier, the raw
+  keys, the gate warnings, the source and the lifecycle position — and MUST NOT mint a second
+  Event for it. The resolution happens *at* the Pickup, for the Pickup's key, so a second record
+  would be one instant described twice with the same cardinality. The fields are
+  **optional-when-present**: a port that resolves nothing (see the Python-only note below) says
+  nothing and stays conforming, and a consumer MUST treat their absence as "this Runner does not
+  route" rather than as a route it failed to report. A `null` `model` or `effort` is *present*
+  and means the backend chooses — for `effort`, the accompanying gate warning is what separates
+  an operator who asked for nothing from one whose effort was dropped.
 
 Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), and contract 1.20
 applies what that seam resolves. In between, the scope deliberately did **not** move with it: a

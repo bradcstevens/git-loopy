@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.19",
+  "contract_version": "1.21",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -195,6 +195,27 @@
     "wrapper.pickup.bound": {
       "required_when_present": ["issue", "reason", "position", "considered"],
       "reason_values": ["order", "priority", "pin"],
+      "routing_optional": [
+        "model",
+        "effort",
+        "context_tier",
+        "routing_source",
+        "task_type_keys",
+        "gate_warnings",
+        "lifecycle_position"
+      ],
+      "routing_source_values": [
+        "routed",
+        "defaulted_no_task_type_label",
+        "defaulted_unknown_task_type_key",
+        "defaulted_conflicting_task_type_keys",
+        "defaulted_explicit_override",
+        "escalated"
+      ],
+      "lifecycle_position_values": ["fresh", "retrying"],
+      "routing_note": "Contract 1.21. The Routing resolution section 14 reaches at this Pickup, carried on the Pickup rather than on an Event of its own: the pair resolves AT this instant, for THIS key, so a second record would be one Pickup described twice with the same cardinality. Every field is optional-when-present, so a Runner that resolves no Routed pair emits the binding exactly as before and stays conforming; a consumer reads their absence as 'this Runner does not route', never as a route it failed to report.",
+      "routing_nullable": "model and effort are nullable, and a null is a VALUE rather than an absence: the backend chooses. For effort the gate warning beside it is the whole difference between an operator who asked for nothing and one whose effort was dropped, which is why gate_warnings travels instead of being consumed inside the resolver.",
+      "routing_vocabulary": "model and effort are the family's existing routed-pair words — the same two wrapper.contribution.end's summary carries — so one reader reads both. routing_source is spelled in full because this payload's own reason already answers 'why' in the unrelated Pickup vocabulary (order / priority / pin), and one record cannot carry two differently-scoped answers to one word.",
       "emitted": "Once per Pickup that bound an issue, before the unit of work's agent session starts — a serial Iteration and a Lane alike, because ADR-0032 gave every unit of work a Pickup. A walk that bound nothing emits its skips and no binding.",
       "position": "The bound candidate's 1-based place in the selection order it was chosen from; considered is the length of that order. Both are required together: position 1 alone cannot tell 'the runner took the oldest' from 'the runner took the only one left', which is the question this Event exists to answer.",
       "reason_note": "pin is declared here ahead of its producer. #396 owns git-loopy run --issue N and is the only thing that may emit it; a reader that learns the value only when a stream first carries it renders an operator's first pin as an unknown string.",
@@ -2065,6 +2086,31 @@
         ]
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:08.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [{\"number\": 80, \"title\": \"Refill a Lane\", \"state\": \"open\", \"labels\": [\"ready-for-agent\", \"parallel-safe\"]}, {\"number\": 42, \"title\": \"Drain the frontier\", \"state\": \"open\", \"labels\": [\"ready-for-agent\", \"parallel-safe\"]}]}\n"
+    },
+    {
+      "id": "pickup-bound-carries-its-routing-resolution",
+      "event": {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "01HXR0000000000000000000AA",
+        "iter": 3,
+        "type": "wrapper.pickup.bound",
+        "issue": 42,
+        "reason": "order",
+        "position": 1,
+        "considered": 2,
+        "model": "gpt-5-mini",
+        "effort": null,
+        "context_tier": "default",
+        "routing_source": "routed",
+        "task_type_keys": [
+          "docs"
+        ],
+        "gate_warnings": [
+          "dropped_effort"
+        ],
+        "lifecycle_position": "fresh"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000AA\", \"iter\": 3, \"type\": \"wrapper.pickup.bound\", \"considered\": 2, \"context_tier\": \"default\", \"effort\": null, \"gate_warnings\": [\"dropped_effort\"], \"issue\": 42, \"lifecycle_position\": \"fresh\", \"model\": \"gpt-5-mini\", \"position\": 1, \"reason\": \"order\", \"routing_source\": \"routed\", \"task_type_keys\": [\"docs\"]}\n"
     }
   ]
 }

@@ -4979,3 +4979,57 @@ class _ObservingDriver:
 
     async def run(self, drive: Callable[[], Any]) -> int:
         return await drive()
+
+
+def test_a_lane_binding_publishes_the_same_routing_record_serial_does(
+    tmp_path, monkeypatch
+) -> None:
+    """#407: one Pickup vocabulary, whichever unit of work produced it.
+
+    A **Lane** resolves its pair at the same seam a serial **Iteration** does,
+    so the record it publishes is the same record — a replay that had to read
+    the pair one way in serial and another in Parallel would be two contracts
+    wearing one Event literal.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]
+            ),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+                routing={"docs": ("gpt-5-mini", "medium")},
+            )
+        )
+    ) == 0
+
+    (bound,) = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"
+    ]
+    assert bound["model"] == "gpt-5-mini"
+    assert bound["effort"] == "medium"
+    assert bound["routing_source"] == "routed"
+    assert bound["task_type_keys"] == ["docs"]
+    assert bound["lifecycle_position"] == "fresh"

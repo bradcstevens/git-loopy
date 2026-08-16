@@ -560,6 +560,86 @@ def test_pickup_reason_vocabulary_has_one_declaration() -> None:
     assert skip["reason_values"] is None
 
 
+def test_pickup_carries_the_routing_resolution_and_mints_no_second_event() -> None:
+    """#407: one Pickup, one record — extended rather than joined by a sibling.
+
+    A second Event would put two records on the wire at the same instant, with
+    the same key and the same cardinality, and a consumer would have to join
+    them to answer one question. So the fixture pins the resolution as *this*
+    payload's, and pins its two closed vocabularies against the enums that
+    declare them — a Runner cannot invent a source name any more than it can
+    invent a Pickup reason.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.pickup.bound"]
+
+    assert contract["routing_optional"] == [
+        "model",
+        "effort",
+        "context_tier",
+        "routing_source",
+        "task_type_keys",
+        "gate_warnings",
+        "lifecycle_position",
+    ]
+    assert contract["routing_source_values"] == [
+        source.value for source in RoutingSource
+    ]
+    assert contract["lifecycle_position_values"] == [
+        position.value for position in RoutingLifecyclePosition
+    ]
+
+    # Optional, never required: a Runner that resolves no Routed pair emits
+    # the binding exactly as it did at contract 1.13 and stays conforming.
+    assert not set(contract["routing_optional"]) & set(
+        contract["required_when_present"]
+    )
+    assert "wrapper.pickup.routed" not in _EVENT_SCHEMA["event_types"].values()
+
+
+def test_the_production_resolver_projects_the_pinned_pickup_payload() -> None:
+    """The fixture is the contract only while the code actually produces it.
+
+    Driven through ``resolve_iteration_model`` — the one seam every surface
+    reads — so a routing key renamed in Python without the fixture moving
+    fails here rather than in a native port's replay six months later.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.pickup.bound"]
+    resolution = resolve_iteration_model(
+        RunConfig(
+            model="claude-opus-4.8",
+            reasoning_effort="max",
+            routing={"docs": ("gpt-5-mini", "medium")},
+        ),
+        ["task-type:docs"],
+    )
+
+    payload = resolution.as_pickup_payload()
+
+    assert list(payload) == contract["routing_optional"]
+    assert payload["routing_source"] in contract["routing_source_values"]
+    assert payload["lifecycle_position"] in contract["lifecycle_position_values"]
+
+
+def test_a_pinned_stream_carries_a_pickup_that_says_what_it_routed_to() -> None:
+    """A vocabulary nothing exercises is a vocabulary no port has to read.
+
+    ``payload_contracts`` states the shape; this is the sample that makes a
+    native port's serializer produce the bytes, arrays and nulls included.
+    """
+    routed = [
+        case["event"]
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["event"]["type"] == "wrapper.pickup.bound"
+    ]
+    assert routed, "no serialization case pins a routed Pickup"
+    for event in routed:
+        assert event["routing_source"] in (
+            _EVENT_SCHEMA["payload_contracts"]["wrapper.pickup.bound"][
+                "routing_source_values"
+            ]
+        )
+
+
 def test_pickup_events_are_run_scoped_not_contribution_scoped() -> None:
     """A Pickup precedes the work it binds, so it can name no contribution."""
     identity = _EVENT_SCHEMA["contribution_identity"]
@@ -625,19 +705,27 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
-    ``contract_version`` moved to 1.19 with the two SDK-mapped failure literals
-    (§12, #403): ``session.error`` and ``model.call_failure``, a pair the
-    harness has always emitted and the family has always dropped, reserved
-    within compatibility schema 1 exactly as the **Calibration records** were at
-    1.16 and the rolling-dispatch family before them. ``event_schema_version``
-    deliberately did not move, for the same reason it did not at 1.15 or 1.16:
-    no *existing* record gained, lost or re-typed a field, so a consumer pinned
-    to 1.1 reads a 1.19 stream unchanged — an unmodelled type is the additive
-    extension every reader already tolerates.
+    ``contract_version`` moved to 1.21 with the **Routing resolution** riding on
+    ``wrapper.pickup.bound`` (§14, #407), and to 1.19 before it with the two
+    SDK-mapped failure literals — a pair the harness has always emitted and the
+    family has always dropped — reserved within compatibility schema 1 exactly
+    as the **Calibration records** were at 1.16 and the rolling-dispatch family
+    before them.
+
+    ``event_schema_version`` deliberately did not move at any of them, and 1.21
+    is the one that sharpens *why*. Up to 1.19 nothing touched an existing
+    record at all, so the easy formulation held: an unmodelled type is the
+    additive extension every reader already tolerates. 1.21 does touch one — an
+    existing record gains seven optional payload fields — and it still does not
+    move it, because what breaks a pinned consumer is a field that **changes**,
+    not one that **appears**. §12 already requires an unknown payload field to
+    be ignored, no existing key changed name, type or meaning, and every added
+    one is optional-when-present. A consumer pinned to 1.1 therefore reads a
+    1.21 stream exactly as it read a 1.19 one.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.19"
+    assert _EVENT_SCHEMA["contract_version"] == "1.21"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
